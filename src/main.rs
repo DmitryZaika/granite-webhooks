@@ -10,6 +10,7 @@ use axum::{
 use lambda_http::{run, tracing, Error};
 use std::env::set_var;
 use schemas::documenso::WebhookEvent;
+use schemas::add_customer::WordpressContactForm;
 use stripe::{Event, EventObject, EventType};
 use sqlx::{MySqlPool, query};
 
@@ -20,7 +21,7 @@ async fn documenso(payload: Json<WebhookEvent>) -> impl IntoResponse {
     StatusCode::OK
 }
 
-pub async fn stripe(
+async fn stripe(
     State(pool): State<MySqlPool>,
     Json(event): Json<Event>,
 ) -> Response {
@@ -53,6 +54,28 @@ pub async fn stripe(
     }
 }
 
+async fn wordpress_contact_form(
+    State(pool): State<MySqlPool>,
+    Json(contact_form): Json<WordpressContactForm>,
+) -> Response {
+    let result = query!(
+        r#"INSERT INTO customers
+           (name, email, phone, postal_code)
+           VALUES (?, ?, ?, ?)"#,
+        contact_form.your_name,
+        contact_form.your_email,
+        contact_form.phone,
+        contact_form.your_zip,
+    )
+    .execute(&pool)
+    .await;
+
+    match result {
+        Ok(_)  => (StatusCode::CREATED, "created").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     // If you use API Gateway stages, the Rust Runtime will include the stage name
@@ -71,6 +94,7 @@ async fn main() -> Result<(), Error> {
     let app = Router::new()
         .route("/documenso", post(documenso))
         .route("/stripe", post(stripe))
+        .route("/wordpress-contact-form", post(wordpress_contact_form))
         .with_state(pool);
 
     run(app).await
