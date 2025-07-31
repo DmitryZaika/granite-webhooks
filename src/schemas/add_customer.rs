@@ -15,14 +15,14 @@ pub struct WordpressContactForm {
     pub your_zip: String,
 
     #[serde(rename = "your-message")]
-    your_message: String,
+    your_message: Option<String>,
 
     #[serde(rename = "file-506")]
-    file: String,
+    file: Option<String>,
 
     #[serde(rename = "menu-395")]
-    checked_competitor: String,
+    checked_competitor: Option<String>,
 
     #[serde(rename = "Wishlist")]
-    wishlist: String,
+    wishlist: Option<String>,
 }

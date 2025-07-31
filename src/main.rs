@@ -60,12 +60,13 @@ async fn wordpress_contact_form(
 ) -> Response {
     let result = query!(
         r#"INSERT INTO customers
-           (name, email, phone, postal_code)
-           VALUES (?, ?, ?, ?)"#,
+           (name, email, phone, postal_code, company_id)
+           VALUES (?, ?, ?, ?, ?)"#,
         contact_form.your_name,
         contact_form.your_email,
         contact_form.phone,
         contact_form.your_zip,
+        1
     )
     .execute(&pool)
     .await;
