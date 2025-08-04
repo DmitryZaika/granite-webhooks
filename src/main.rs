@@ -1,4 +1,4 @@
-use axum::http::{StatusCode, Request, Method, Uri};
+use axum::http::{StatusCode, Request};
 use axum::{
     extract::{
         State, Json
@@ -12,7 +12,6 @@ use lambda_http::{run, tracing, Error};
 use std::env::set_var;
 use schemas::documenso::WebhookEvent;
 use schemas::add_customer::WordpressContactForm;
-use stripe::{Event, EventObject, EventType};
 use sqlx::{MySqlPool, query};
 
 pub mod schemas;
@@ -24,39 +23,6 @@ async fn health_check() -> impl IntoResponse {
 async fn documenso(payload: Json<WebhookEvent>) -> impl IntoResponse {
     println!("Received documenso webhook event: {:?}", payload);
     StatusCode::OK
-}
-
-async fn stripe(
-    State(pool): State<MySqlPool>,
-    Json(event): Json<Event>,
-) -> Response {
-    let session = match (&event.type_, &event.data.object) {
-        (EventType::PaymentIntentSucceeded, EventObject::PaymentIntent(s)) => s,
-        _ => return (StatusCode::ACCEPTED, "ignored").into_response(),
-    };
-
-
-    let sale_id = match session.metadata.get("saleId") {
-        Some(id) => id.as_str(),
-        None => return (StatusCode::UNPROCESSABLE_ENTITY, "saleId missing").into_response(),
-    };
-
-    let result = query!(
-        r#"INSERT INTO stripe_payments
-           (sale_id, stripe_payment_intent_id, amount_total)
-           VALUES (?, ?, ?)"#,
-        sale_id,
-        session.id.as_str(),
-        session.amount
-    )
-    .execute(&pool)
-    .await;
-
-    // всегда возвращаем текст
-    match result {
-        Ok(_)  => (StatusCode::CREATED,               "created").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
 }
 
 async fn wordpress_contact_form(
@@ -116,14 +82,10 @@ async fn main() -> Result<(), Error> {
     // required to enable CloudWatch error logging by the runtime
     tracing::init_default_subscriber();
 
-    let lambda_routes = Router::new()
+    let app = Router::new()
         .route("/", get(health_check))
         .route("/documenso", post(documenso))
-        .route("/stripe", post(stripe))
-        .route("/wordpress-contact-form", post(wordpress_contact_form));
-
-    let app = Router::new()
-        .nest("/granite-webhooks", lambda_routes)
+        .route("/wordpress-contact-form", post(wordpress_contact_form))
         .layer(middleware::from_fn(logging_middleware))
         .with_state(pool);
 
