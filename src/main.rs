@@ -1,18 +1,17 @@
-use axum::http::{StatusCode, Request};
+use axum::extract::Path;
+use axum::http::{Request, StatusCode};
 use axum::{
-    extract::{
-        State, Json
-    },
+    extract::{Json, State},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Router,
-    response::{IntoResponse, Response},
-    middleware::{self, Next}
 };
 use lambda_http::{run, tracing, Error};
-use std::env::set_var;
-use schemas::documenso::WebhookEvent;
 use schemas::add_customer::WordpressContactForm;
-use sqlx::{MySqlPool, query};
+use schemas::documenso::WebhookEvent;
+use sqlx::{query, MySqlPool};
+use std::env::set_var;
 
 pub mod schemas;
 
@@ -26,6 +25,7 @@ async fn documenso(payload: Json<WebhookEvent>) -> impl IntoResponse {
 }
 
 async fn wordpress_contact_form(
+    Path(user_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<WordpressContactForm>,
 ) -> Response {
@@ -37,33 +37,35 @@ async fn wordpress_contact_form(
         contact_form.your_email,
         contact_form.phone,
         contact_form.your_zip,
-        1
+        user_id
     )
     .execute(&pool)
     .await;
 
     match result {
-        Ok(_)  => (StatusCode::CREATED, "created").into_response(),
+        Ok(_) => (StatusCode::CREATED, "created").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
-async fn logging_middleware(
-    request: Request<axum::body::Body>,
-    next: Next,
-) -> Response {
+async fn logging_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
     let method = request.method().clone();
     let uri = request.uri().clone();
     let path = uri.path();
-    
+
     // Log the incoming request with both full URI and routing path
-    tracing::info!("Incoming request: {} {} (routing path: {})", method, uri, path);
-    
+    tracing::info!(
+        "Incoming request: {} {} (routing path: {})",
+        method,
+        uri,
+        path
+    );
+
     let response = next.run(request).await;
-    
+
     // Optionally log the response status
     tracing::info!("Response status: {}", response.status());
-    
+
     response
 }
 
@@ -85,7 +87,10 @@ async fn main() -> Result<(), Error> {
     let app = Router::new()
         .route("/", get(health_check))
         .route("/documenso", post(documenso))
-        .route("/wordpress-contact-form", post(wordpress_contact_form))
+        .route(
+            "/wordpress-contact-form/{company_id}",
+            post(wordpress_contact_form),
+        )
         .layer(middleware::from_fn(logging_middleware))
         .with_state(pool);
 
