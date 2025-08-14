@@ -33,8 +33,8 @@ async fn wordpress_contact_form(
         r#"INSERT INTO customers
            (name, email, phone, postal_code, company_id)
            VALUES (?, ?, ?, ?, ?)"#,
-        contact_form.your_name,
-        contact_form.your_email,
+        contact_form.name,
+        contact_form.email,
         contact_form.phone,
         contact_form.your_zip,
         user_id
