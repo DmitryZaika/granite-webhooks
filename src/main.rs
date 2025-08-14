@@ -25,19 +25,59 @@ async fn documenso(payload: Json<WebhookEvent>) -> impl IntoResponse {
 }
 
 async fn wordpress_contact_form(
-    Path(user_id): Path<i32>,
+    Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<WordpressContactForm>,
 ) -> Response {
     let result = query!(
         r#"INSERT INTO customers
-           (name, email, phone, postal_code, company_id)
-           VALUES (?, ?, ?, ?, ?)"#,
-        contact_form.your_name,
-        contact_form.your_email,
+           (name, email, phone, postal_code, address, address, remodal_type, project_size, contact_time, remove_and_dispose, improve_offer, sink, company_id, referral_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        contact_form.name,
+        contact_form.email,
         contact_form.phone,
-        contact_form.your_zip,
-        user_id
+        contact_form.postal_code,
+        contact_form.address,
+        contact_form.address,
+        contact_form.remodal_type,
+        contact_form.project_size,
+        contact_form.contact_time,
+        contact_form.remove_and_dispose,
+        contact_form.improve_offer,
+        contact_form.sink,
+        company_id,
+        "wordpress-form"
+    )
+    .execute(&pool)
+    .await;
+
+    match result {
+        Ok(_) => (StatusCode::CREATED, "created").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn facebook_contact_form(
+    Path(company_id): Path<i32>,
+    State(pool): State<MySqlPool>,
+    Json(contact_form): Json<WordpressContactForm>,
+) -> Response {
+    let result = query!(
+        r#"INSERT INTO customers
+           (name,  phone, when_start, details, email, city,  postal_code, compaign_name, adset_name, ad_name, company_id, referral_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        contact_form.name,
+        contact_form.phone,
+        contact_form.when_start,
+        contact_form.details,
+        contact_form.email,
+        contact_form.city,
+        contact_form.postal_code,
+        contact_form.compaign_name,
+        contact_form.adset_name,
+        contact_form.ad_name,
+        company_id,
+        "facebook-form"
     )
     .execute(&pool)
     .await;
