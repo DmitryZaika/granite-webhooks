@@ -31,8 +31,8 @@ async fn wordpress_contact_form(
 ) -> Response {
     let result = query!(
         r#"INSERT INTO customers
-           (name, email, phone, postal_code, address, remodal_type, project_size, contact_time, remove_and_dispose, improve_offer, sink, company_id, referral_source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+           (name, email, phone, postal_code, address, remodal_type, project_size, contact_time, remove_and_dispose, improve_offer, sink, company_id, referral_source, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         contact_form.name,
         contact_form.email,
         contact_form.phone,
@@ -45,7 +45,8 @@ async fn wordpress_contact_form(
         contact_form.improve_offer,
         contact_form.sink,
         company_id,
-        "wordpress-form"
+        "wordpress-form",
+        "leads"
     )
     .execute(&pool)
     .await;
@@ -63,8 +64,8 @@ async fn facebook_contact_form(
 ) -> Response {
     let result = query!(
         r#"INSERT INTO customers
-           (name,  phone, when_start, details, email, city,  postal_code, compaign_name, adset_name, ad_name, company_id, referral_source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+           (name,  phone, when_start, details, email, city,  postal_code, compaign_name, adset_name, ad_name, company_id, referral_source, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         contact_form.name,
         contact_form.phone,
         contact_form.when_start,
@@ -76,7 +77,8 @@ async fn facebook_contact_form(
         contact_form.adset_name,
         contact_form.ad_name,
         company_id,
-        "facebook-form"
+        "facebook-form",
+        "leads"
     )
     .execute(&pool)
     .await;
