@@ -2,16 +2,14 @@
 
 grante-webhooks is a Rust project that implements an AWS Lambda function in Rust.
 
-## Building
+## Deploying
 
-To build the project for production, run `cargo lambda build --release`. Remove the `--release` flag to build for development.
-
-Read more about building your lambda function in [the Cargo Lambda documentation](https://www.cargo-lambda.info/commands/build.html).
+uvx cargo-lambda lambda build --release
+uvx cargo-lambda lambda deploy --iam-role arn:aws:iam::741448943665:role/cargo-lambda-role-2ed5069c-8882-460d-bdc8-192d9b724756
 
 ## Testing
 
 uvx cargo-lambda lambda watch --env-file .env
-
 
 ## Functions
 
