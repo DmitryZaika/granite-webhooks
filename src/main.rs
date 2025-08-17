@@ -8,7 +8,7 @@ use axum::{
     Router,
 };
 use lambda_http::{run, tracing, Error};
-use schemas::add_customer::WordpressContactForm;
+use schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
 use schemas::documenso::WebhookEvent;
 use sqlx::{query, MySqlPool};
 use std::env::set_var;
@@ -31,13 +31,12 @@ async fn wordpress_contact_form(
 ) -> Response {
     let result = query!(
         r#"INSERT INTO customers
-           (name, email, phone, postal_code, address, address, remodal_type, project_size, contact_time, remove_and_dispose, improve_offer, sink, company_id, referral_source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+           (name, email, phone, postal_code, address, remodal_type, project_size, contact_time, remove_and_dispose, improve_offer, sink, company_id, referral_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         contact_form.name,
         contact_form.email,
         contact_form.phone,
         contact_form.postal_code,
-        contact_form.address,
         contact_form.address,
         contact_form.remodal_type,
         contact_form.project_size,
@@ -60,7 +59,7 @@ async fn wordpress_contact_form(
 async fn facebook_contact_form(
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
-    Json(contact_form): Json<WordpressContactForm>,
+    Json(contact_form): Json<FaceBookContactForm>,
 ) -> Response {
     let result = query!(
         r#"INSERT INTO customers
@@ -118,7 +117,7 @@ async fn main() -> Result<(), Error> {
     // you can remove it if you don't use them.
     // i.e with: `GET /test-stage/todo/id/123` without: `GET /todo/id/123`
     set_var("AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH", "true");
-    let database_url = std::env::var("DATABASE_URL")?;
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = MySqlPool::connect(&database_url).await?;
 
     // required to enable CloudWatch error logging by the runtime
@@ -130,6 +129,10 @@ async fn main() -> Result<(), Error> {
         .route(
             "/wordpress-contact-form/{company_id}",
             post(wordpress_contact_form),
+        )
+        .route(
+            "/facebook-contact-form/{company_id}",
+            post(facebook_contact_form),
         )
         .layer(middleware::from_fn(logging_middleware))
         .with_state(pool);
