@@ -2,20 +2,30 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WordpressContactForm {
+<<<<<<< HEAD
     #[serde(rename = "your-name")]
     pub name: String,
 
     #[serde(rename = "your-email")]
     pub email: Option<String>,
+=======
+    pub name: String,
+    pub email: String,
+    message: Option<String>,
+>>>>>>> 1155f55723d22b93bb4638a64a54162c7d4d2c31
 
     #[serde(rename = "mask-277")]
     pub phone: String,
 
     #[serde(rename = "your-zip")]
+<<<<<<< HEAD
     pub postal_code: Option<String>,
 
     #[serde(rename = "your-address")]
     pub address: Option<String>,
+=======
+    pub your_zip: Option<String>,
+>>>>>>> 1155f55723d22b93bb4638a64a54162c7d4d2c31
 
     #[serde(rename = "menu-185")]
     remodal_type: Option<String>,
