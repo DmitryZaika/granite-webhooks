@@ -34,6 +34,18 @@ pub struct WordpressContactForm {
 
     #[serde(rename = "menu-189")]
     pub sink: Option<String>,
+
+    #[serde(rename = "menu-177")]
+    pub backsplash: Option<String>,
+
+    #[serde(rename = "menu-175")]
+    pub kitchen_stove: Option<String>,
+
+    #[serde(rename = "your-message")]
+    pub your_message: Option<String>,
+
+    #[serde(rename = "file-507")]
+    pub attached_file: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

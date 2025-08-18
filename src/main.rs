@@ -31,8 +31,8 @@ async fn wordpress_contact_form(
 ) -> Response {
     let result = query!(
         r#"INSERT INTO customers
-           (name, email, phone, postal_code, address, remodal_type, project_size, contact_time, remove_and_dispose, improve_offer, sink, company_id, referral_source, source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+           (name, email, phone, postal_code, address, remodal_type, project_size, contact_time, remove_and_dispose, improve_offer, sink, backsplash, kitchen_stove, your_message, attached_file, company_id, referral_source, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         contact_form.name,
         contact_form.email,
         contact_form.phone,
@@ -44,6 +44,10 @@ async fn wordpress_contact_form(
         contact_form.remove_and_dispose,
         contact_form.improve_offer,
         contact_form.sink,
+        contact_form.backsplash,
+        contact_form.kitchen_stove,
+        contact_form.your_message,
+        contact_form.attached_file,
         company_id,
         "wordpress-form",
         "leads"
