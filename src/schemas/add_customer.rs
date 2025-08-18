@@ -38,33 +38,33 @@ pub struct WordpressContactForm {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FaceBookContactForm {
-    #[serde(rename = "your-name")]
+    #[serde(rename = "1.data.full_name")]
     pub name: String,
 
-    #[serde(rename = "your-phone")]
+    #[serde(rename = "1.data.phone_number")]
     pub phone: String,
 
-    #[serde(rename = "your-date????")]
-    pub when_start: Option<String>,
+    #[serde(rename = "1.data.would_you_like_us_to_remove_and_dispose_of_your_old_countertops?")]
+    pub remove_and_dispose: Option<String>,
 
-    #[serde(rename = "your-details???")]
-    pub details: Option<String>,
-
-    #[serde(rename = "your-email")]
+    #[serde(rename = "1.data.email")]
     pub email: Option<String>,
 
-    #[serde(rename = "your-city????")]
+    #[serde(rename = "1.data.city")]
     pub city: Option<String>,
 
-    #[serde(rename = "zip-code????")]
+    #[serde(rename = "1.data.zip_code")]
     pub postal_code: Option<String>,
 
-    #[serde(rename = "compaign_name???")]
+    #[serde(rename = "1.data.what_other_information_you'd_like_to_share?_(e.g_sqft,_state_etc.)")]
+    pub details: Option<String>,
+
+    #[serde(rename = "1.campaignName")]
     pub compaign_name: Option<String>,
 
-    #[serde(rename = "adset_name???")]
+    #[serde(rename = "1.adsetName")]
     pub adset_name: Option<String>,
 
-    #[serde(rename = "ad_name???")]
+    #[serde(rename = "1.adName")]
     pub ad_name: Option<String>,
 }

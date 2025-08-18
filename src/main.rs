@@ -64,11 +64,11 @@ async fn facebook_contact_form(
 ) -> Response {
     let result = query!(
         r#"INSERT INTO customers
-           (name,  phone, when_start, details, email, city,  postal_code, compaign_name, adset_name, ad_name, company_id, referral_source, source)
+           (name, phone, remove_and_dispose, details, email, city, postal_code, compaign_name, adset_name, ad_name, company_id, referral_source, source)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         contact_form.name,
         contact_form.phone,
-        contact_form.when_start,
+        contact_form.remove_and_dispose,
         contact_form.details,
         contact_form.email,
         contact_form.city,
