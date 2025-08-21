@@ -11,7 +11,13 @@ uvx cargo-lambda lambda deploy --iam-role arn:aws:iam::741448943665:role/cargo-l
 
 uvx cargo-lambda lambda watch --env-file .env
 
+When server dies instantly:
+1. Find server: sudo lsof -i :9000
+2. Kill that server: kill -9 <PID>
+
 ## Functions
+
+
 
 ### Documenso
 
