@@ -7,7 +7,7 @@ use axum::{
     Router,
 };
 use lambda_http::{run, tracing, Error};
-use middleware::request_logger::logging_middleware;
+use middleware::request_logger::print_request_body;
 use schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
 use schemas::documenso::WebhookEvent;
 use sqlx::{query, MySqlPool};
@@ -120,7 +120,7 @@ async fn main() -> Result<(), Error> {
             "/facebook-contact-form/{company_id}",
             post(facebook_contact_form),
         )
-        .layer(axum::middleware::from_fn(logging_middleware))
+        .layer(axum::middleware::from_fn(print_request_body))
         .with_state(pool);
 
     run(app).await

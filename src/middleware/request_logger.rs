@@ -1,25 +1,40 @@
-use axum::http::Request;
-use axum::middleware::Next;
-use axum::response::Response;
+use axum::{
+    body::{Body, Bytes},
+    extract::Request,
+    http::StatusCode,
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use http_body_util::BodyExt;
 use lambda_http::tracing;
 
-pub async fn logging_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
-    let method = request.method().clone();
-    let uri = request.uri().clone();
-    let path = uri.path();
+// middleware that shows how to consume the request body upfront
+pub async fn print_request_body(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, Response> {
+    let request = buffer_request_body(request).await?;
 
-    // Log the incoming request with both full URI and routing path
-    tracing::info!(
-        "Incoming request: {} {} (routing path: {})",
-        method,
-        uri,
-        path
-    );
+    Ok(next.run(request).await)
+}
 
-    let response = next.run(request).await;
+// the trick is to take the request apart, buffer the body, do what you need to do, then put
+// the request back together
+async fn buffer_request_body(request: Request) -> Result<Request, Response> {
+    let (parts, body) = request.into_parts();
 
-    // Optionally log the response status
-    tracing::info!("Response status: {}", response.status());
+    // this won't work if the body is an long running stream
+    let bytes = body
+        .collect()
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response())?
+        .to_bytes();
 
-    response
+    do_thing_with_request_body(bytes.clone());
+
+    Ok(Request::from_parts(parts, Body::from(bytes)))
+}
+
+fn do_thing_with_request_body(bytes: Bytes) {
+    tracing::info!(body = ?bytes);
 }
