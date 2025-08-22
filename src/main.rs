@@ -1,18 +1,19 @@
 use axum::extract::Path;
-use axum::http::{Request, StatusCode};
+use axum::http::StatusCode;
 use axum::{
     extract::{Json, State},
-    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
 use lambda_http::{run, tracing, Error};
+use middleware::request_logger::logging_middleware;
 use schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
 use schemas::documenso::WebhookEvent;
 use sqlx::{query, MySqlPool};
 use std::env::set_var;
 
+pub mod middleware;
 pub mod schemas;
 
 async fn health_check() -> impl IntoResponse {
@@ -93,27 +94,6 @@ async fn facebook_contact_form(
     }
 }
 
-async fn logging_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
-    let method = request.method().clone();
-    let uri = request.uri().clone();
-    let path = uri.path();
-
-    // Log the incoming request with both full URI and routing path
-    tracing::info!(
-        "Incoming request: {} {} (routing path: {})",
-        method,
-        uri,
-        path
-    );
-
-    let response = next.run(request).await;
-
-    // Optionally log the response status
-    tracing::info!("Response status: {}", response.status());
-
-    response
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     // If you use API Gateway stages, the Rust Runtime will include the stage name
@@ -140,7 +120,7 @@ async fn main() -> Result<(), Error> {
             "/facebook-contact-form/{company_id}",
             post(facebook_contact_form),
         )
-        .layer(middleware::from_fn(logging_middleware))
+        .layer(axum::middleware::from_fn(logging_middleware))
         .with_state(pool);
 
     run(app).await
