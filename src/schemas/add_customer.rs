@@ -3,13 +3,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WordpressContactForm {
     #[serde(rename = "name")]
-    pub name: String,
+    pub name: Option<String>,
 
     #[serde(rename = "Email")]
     pub email: Option<String>,
 
     #[serde(rename = "Phone")]
-    pub phone: String,
+    pub phone: Option<String>,
 
     #[serde(rename = "Zip")]
     pub postal_code: Option<String>,
@@ -17,7 +17,7 @@ pub struct WordpressContactForm {
     #[serde(rename = "Address")]
     pub address: Option<String>,
 
-    #[serde(rename = "Remodal")]
+    #[serde(rename = "Remodel")]
     pub remodal_type: Option<String>,
 
     #[serde(rename = "project")]
