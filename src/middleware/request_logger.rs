@@ -13,7 +13,16 @@ pub async fn print_request_body(
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, Response> {
+    let method = request.method().clone();
+    let uri = request.uri().clone();
+    let path = uri.path();
     let request = buffer_request_body(request).await?;
+    tracing::info!(
+        "Incoming request: {} {} (routing path: {})",
+        method,
+        uri,
+        path
+    );
 
     Ok(next.run(request).await)
 }
