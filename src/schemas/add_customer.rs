@@ -2,49 +2,49 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WordpressContactForm {
-    #[serde(rename = "7.your-name")]
+    #[serde(rename = "name")]
     pub name: String,
 
-    #[serde(rename = "7.your-email")]
+    #[serde(rename = "Email")]
     pub email: Option<String>,
 
-    #[serde(rename = "7.mask-277")]
+    #[serde(rename = "Phone")]
     pub phone: String,
 
-    #[serde(rename = "7.your-zip")]
+    #[serde(rename = "Zip")]
     pub postal_code: Option<String>,
 
-    #[serde(rename = "7.your-address")]
+    #[serde(rename = "Address")]
     pub address: Option<String>,
 
-    #[serde(rename = "7.menu-185")]
+    #[serde(rename = "Remodal")]
     pub remodal_type: Option<String>,
 
-    #[serde(rename = "7.number-629")]
+    #[serde(rename = "project")]
     pub project_size: Option<String>,
 
-    #[serde(rename = "7.contacttime")]
+    #[serde(rename = "Contacted")]
     pub contact_time: Option<String>,
 
-    #[serde(rename = "7.menu-186")]
+    #[serde(rename = "Remove")]
     pub remove_and_dispose: Option<String>,
 
-    #[serde(rename = "7.menu-395")]
+    #[serde(rename = "Improve")]
     pub improve_offer: Option<String>,
 
-    #[serde(rename = "7.menu-189")]
+    #[serde(rename = "Sink")]
     pub sink: Option<String>,
 
-    #[serde(rename = "7.menu-177")]
+    #[serde(rename = "Backsplash")]
     pub backsplash: Option<String>,
 
-    #[serde(rename = "7.menu-175")]
+    #[serde(rename = "Stove")]
     pub kitchen_stove: Option<String>,
 
-    #[serde(rename = "7.your-message")]
+    #[serde(rename = "Message")]
     pub your_message: Option<String>,
 
-    #[serde(rename = "7.file-507")]
+    #[serde(rename = "File")]
     pub attached_file: Option<String>,
 }
 
