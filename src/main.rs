@@ -60,7 +60,7 @@ async fn wordpress_contact_form(
     .await;
 
     match result {
-        Ok(_) => (StatusCode::CREATED, "created").into_response(),
+        Ok(_) => (StatusCode::CREATED, contact_form.to_string()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -92,7 +92,7 @@ async fn facebook_contact_form(
     .await;
 
     match result {
-        Ok(_) => (StatusCode::CREATED, "created").into_response(),
+        Ok(_) => (StatusCode::CREATED, contact_form.to_string()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
