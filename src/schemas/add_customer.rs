@@ -51,16 +51,30 @@ pub struct WordpressContactForm {
 
 impl fmt::Display for WordpressContactForm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let message = format!("New lead received.\n\nName: {}\nPhone: {}\nEmail: {}\nPostal Code: {}\nRemove and Dispose: {}\nImprove Offer: {}\nSink: {}\nBacksplash: {}\nKitchen Stove: {}\nYour Message: {}\nAttached File: {}",
-            self.name, self.phone, self.email.clone().unwrap_or("N/A".into()),
-            self.postal_code.clone().unwrap_or("N/A".into()),
-            self.remove_and_dispose.clone().unwrap_or("N/A".into()),
-            self.improve_offer.clone().unwrap_or("N/A".into()),
-            self.sink.clone().unwrap_or("N/A".into()),
-            self.backsplash.clone().unwrap_or("N/A".into()),
-            self.kitchen_stove.clone().unwrap_or("N/A".into()),
-            self.your_message.clone().unwrap_or("N/A".into()),
-            self.attached_file.clone().unwrap_or("N/A".into())
+        let message = format!(
+            "New lead received.\n\n\
+           Name: {}\n\
+           Phone: {}\n\
+           Email: {}\n\
+           City: {}\n\
+           Zip: {}\n\
+           Details: {}\n\
+           Campaign: {}\n\
+           Adset: {}\n\
+           Adset: {}\n\
+           Adset: {}\n\
+           Ad: {}",
+            self.name,
+            self.phone,
+            self.email.as_deref().unwrap_or("N/A"),
+            self.postal_code.as_deref().unwrap_or("N/A"),
+            self.remove_and_dispose.as_deref().unwrap_or("N/A"),
+            self.improve_offer.as_deref().unwrap_or("N/A"),
+            self.sink.as_deref().unwrap_or("N/A"),
+            self.backsplash.as_deref().unwrap_or("N/A"),
+            self.kitchen_stove.as_deref().unwrap_or("N/A"),
+            self.your_message.as_deref().unwrap_or("N/A"),
+            self.attached_file.as_deref().unwrap_or("N/A")
         );
         write!(f, "{message}")
     }
