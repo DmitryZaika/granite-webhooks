@@ -1,3 +1,5 @@
+#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![allow(clippy::option_if_let_else, clippy::missing_errors_doc)]
 use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::{
@@ -15,13 +17,14 @@ use std::env::set_var;
 
 pub mod middleware;
 pub mod schemas;
+pub mod telegram;
 
 async fn health_check() -> impl IntoResponse {
     StatusCode::OK
 }
 
 async fn documenso(payload: Json<WebhookEvent>) -> impl IntoResponse {
-    println!("Received documenso webhook event: {:?}", payload);
+    println!("Received documenso webhook event: {payload:?}");
     StatusCode::OK
 }
 
@@ -96,17 +99,10 @@ async fn facebook_contact_form(
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    // If you use API Gateway stages, the Rust Runtime will include the stage name
-    // as part of the path that your application receives.
-    // Setting the following environment variable, you can remove the stage from the path.
-    // This variable only applies to API Gateway stages,
-    // you can remove it if you don't use them.
-    // i.e with: `GET /test-stage/todo/id/123` without: `GET /todo/id/123`
     set_var("AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH", "true");
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = MySqlPool::connect(&database_url).await?;
 
-    // required to enable CloudWatch error logging by the runtime
     tracing::init_default_subscriber();
 
     let app = Router::new()

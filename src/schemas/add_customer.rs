@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WordpressContactForm {
@@ -48,6 +49,23 @@ pub struct WordpressContactForm {
     pub attached_file: Option<String>,
 }
 
+impl fmt::Display for WordpressContactForm {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let message = format!("New lead received.\n\nName: {}\nPhone: {}\nEmail: {}\nPostal Code: {}\nRemove and Dispose: {}\nImprove Offer: {}\nSink: {}\nBacksplash: {}\nKitchen Stove: {}\nYour Message: {}\nAttached File: {}",
+            self.name, self.phone, self.email.clone().unwrap_or("N/A".into()),
+            self.postal_code.clone().unwrap_or("N/A".into()),
+            self.remove_and_dispose.clone().unwrap_or("N/A".into()),
+            self.improve_offer.clone().unwrap_or("N/A".into()),
+            self.sink.clone().unwrap_or("N/A".into()),
+            self.backsplash.clone().unwrap_or("N/A".into()),
+            self.kitchen_stove.clone().unwrap_or("N/A".into()),
+            self.your_message.clone().unwrap_or("N/A".into()),
+            self.attached_file.clone().unwrap_or("N/A".into())
+        );
+        write!(f, "{message}")
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FaceBookContactForm {
     #[serde(rename = "name")]
@@ -79,4 +97,11 @@ pub struct FaceBookContactForm {
 
     #[serde(rename = "adname")]
     pub ad_name: Option<String>,
+}
+
+impl fmt::Display for FaceBookContactForm {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let message = format!("New lead received.\n\nName: {}", self.name,);
+        write!(f, "{message}")
+    }
 }

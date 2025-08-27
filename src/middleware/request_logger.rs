@@ -39,11 +39,11 @@ async fn buffer_request_body(request: Request) -> Result<Request, Response> {
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response())?
         .to_bytes();
 
-    do_thing_with_request_body(bytes.clone());
+    do_thing_with_request_body(&bytes);
 
     Ok(Request::from_parts(parts, Body::from(bytes)))
 }
 
-fn do_thing_with_request_body(bytes: Bytes) {
+fn do_thing_with_request_body(bytes: &Bytes) {
     tracing::info!(body = ?bytes);
 }
