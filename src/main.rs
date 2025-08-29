@@ -18,7 +18,7 @@ use schemas::state::AppState;
 use sqlx::MySqlPool;
 use std::env::set_var;
 use std::sync::Arc;
-use telegram::receive::webhook_sales_button;
+use telegram::receive::webhook_handler;
 
 pub mod crud;
 pub mod middleware;
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Error> {
             "/facebook-contact-form/{company_id}",
             post(facebook_contact_form),
         )
-        .route("/telegram/webhook", post(webhook_sales_button))
+        .route("/telegram/webhook", post(webhook_handler))
         .layer(axum::middleware::from_fn(print_request_body))
         .with_state(app_state);
 
