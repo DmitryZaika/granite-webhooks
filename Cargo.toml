@@ -1,7 +1,7 @@
 [package]
 name = "granite-webhooks"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 axum = "0.8"
@@ -9,9 +9,11 @@ chrono = { version = "0.4", features = ["serde"] }
 lambda_http = "0.16.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1", features = ["macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "mysql"] }
 
 openssl-sys = { version = "0.9", features = ["vendored"] }
 http-body-util = "0.1.3"
-teloxide = "0.17.0"
+teloxide = { version = "0.17", features = ["macros"] }
+log = "0.4"
+pretty_env_logger = "0.5"

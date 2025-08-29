@@ -3,18 +3,20 @@
 use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::{
+    Router,
     extract::{Json, State},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Router,
 };
 use crud::leads::{create_lead_from_facebook, create_lead_from_wordpress};
-use lambda_http::{run, tracing, Error};
+use lambda_http::{Error, run, tracing};
 use middleware::request_logger::print_request_body;
 use schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
 use schemas::documenso::WebhookEvent;
+use schemas::state::AppState;
 use sqlx::MySqlPool;
 use std::env::set_var;
+use telegram::receive::webhook_sales_button;
 
 pub mod crud;
 pub mod middleware;
@@ -32,10 +34,11 @@ async fn documenso(payload: Json<WebhookEvent>) -> impl IntoResponse {
 
 async fn wordpress_contact_form(
     Path(company_id): Path<i32>,
-    State(pool): State<MySqlPool>,
+    State(app_state): State<AppState>,
     Json(contact_form): Json<WordpressContactForm>,
 ) -> Response {
-    let result = create_lead_from_wordpress(&pool, &contact_form, company_id).await;
+    let result = create_lead_from_wordpress(&app_state.pool, &contact_form, company_id).await;
+    // THis will send the messsage that triggers webhook_sales_button, ignore for now
     match result {
         Ok(_) => (StatusCode::CREATED, contact_form.to_string()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -44,10 +47,11 @@ async fn wordpress_contact_form(
 
 async fn facebook_contact_form(
     Path(company_id): Path<i32>,
-    State(pool): State<MySqlPool>,
+    State(app_state): State<AppState>,
     Json(contact_form): Json<FaceBookContactForm>,
 ) -> Response {
-    let result = create_lead_from_facebook(&pool, &contact_form, company_id).await;
+    let result = create_lead_from_facebook(&app_state.pool, &contact_form, company_id).await;
+    // THis will send the messsage that triggers webhook_sales_button, ignore for now
 
     match result {
         Ok(_) => (StatusCode::CREATED, contact_form.to_string()).into_response(),
@@ -57,11 +61,18 @@ async fn facebook_contact_form(
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    set_var("AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH", "true");
+    unsafe {
+        set_var("AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH", "true");
+    }
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = MySqlPool::connect(&database_url).await?;
 
     tracing::init_default_subscriber();
+    let app_state = AppState {
+        webhook_secret: "1234567890".to_string(),
+        bot: teloxide::Bot::from_env(),
+        pool,
+    };
 
     let app = Router::new()
         .route("/", get(health_check))
@@ -74,8 +85,9 @@ async fn main() -> Result<(), Error> {
             "/facebook-contact-form/{company_id}",
             post(facebook_contact_form),
         )
+        .route("/telegram/webhook", post(webhook_sales_button))
         .layer(axum::middleware::from_fn(print_request_body))
-        .with_state(pool);
+        .with_state(app_state);
 
     run(app).await
 }

@@ -1,61 +1,78 @@
+use crate::crud::leads;
+use crate::schemas::state::AppState;
 use axum::http::StatusCode;
-use axum::{
-    extract::{Json, State},
-    response::IntoResponse,
-};
+use axum::http::header::HeaderMap;
+use axum::{extract::State, response::IntoResponse};
 use teloxide::{
     prelude::*,
-    types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, Update},
+    types::{ChatId, Update, UpdateKind},
 };
+fn parse_assign(data: &str) -> Option<(i32, i64)> {
+    let parts: Vec<&str> = data.split(':').collect();
+    if parts.len() == 3 && parts[0] == "assign" {
+        let lead_id = parts[1].parse().ok()?;
+        let user_id = parts[2].parse().ok()?;
+        Some((lead_id, user_id))
+    } else {
+        None
+    }
+}
 
-/*
-async fn webhook(
-    // State(state): State<AppState>,
+fn lead_url(lead_id: i32) -> String {
+    format!(
+        "https://granite-manager.com/employee/deals/edit/{}/project",
+        lead_id
+    )
+}
+
+pub async fn webhook_sales_button(
+    State(ctx): State<AppState>, // одно общее состояние
     headers: HeaderMap,
-    Json(update): Json<Update>,
+    axum::extract::Json(update): axum::extract::Json<Update>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    // Проверка секрета, если задан
-    if let Some(expected) = &state.webhook_secret {
-        if let Some(got) = headers.get("x-telegram-bot-api-secret-token") {
-            if got != expected {
-                return Err((StatusCode::FORBIDDEN, "forbidden".into()));
-            }
-        } else {
-            return Err((StatusCode::FORBIDDEN, "forbidden".into()));
-        }
+    // Проверка секрета
+    let secret = headers
+        .get("x-telegram-bot-api-secret-token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or((StatusCode::FORBIDDEN, "forbidden".to_string()))?;
+
+    if secret != ctx.webhook_secret {
+        return Err((StatusCode::FORBIDDEN, "forbidden".to_string()));
     }
 
-    if let Some(cb) = update.callback_query() {
-        if let Some(data) = &cb.data {
-            if let Some((lead_id, user_chat_id)) = parse_assign(data) {
-                // Быстрый ACK колбэка
-                let _ = state.bot.answer_callback_query(cb.id.clone()).await;
+    let bot = &ctx.bot;
 
-                // Сообщение выбранному пользователю
-                state
-                    .bot
-                    .send_message(
-                        ChatId(user_chat_id),
-                        format!("Вам назначен лид #{}", lead_id),
+    // Разбираем update.kind
+    if let UpdateKind::CallbackQuery(cb) = update.kind
+        && let Some(data) = cb.data
+    {
+        if let Some((lead_id, user_chat_id)) = parse_assign(&data) {
+            // ACK callback
+            let _ = bot.answer_callback_query(cb.id.clone()).await;
+
+            // Сообщение выбранному пользователю
+            let lead_link = lead_url(lead_id);
+            bot.send_message(
+                ChatId(user_chat_id),
+                format!("You were assigned a lead. Click here: \n#{}", lead_link),
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+            // Опционально: обновить исходное сообщение
+            if let Some(msg) = cb.message {
+                let chat_id = msg.chat().id;
+                let message_id = msg.id();
+                let _ = bot
+                    .edit_message_text(
+                        chat_id,
+                        message_id,
+                        format!("Lead #{} assigned to {}", lead_id, user_chat_id),
                     )
-                    .await
-                    .map_err(internal)?;
-
-                // (опционально) уведомить инициатора/отредактировать исходное сообщение
-                if let Some(msg) = &cb.message {
-                    let _ = state
-                        .bot
-                        .edit_message_text(
-                            msg.chat.id,
-                            msg.id,
-                            format!("Назначено пользователю {}", user_chat_id),
-                        )
-                        .await;
-                }
+                    .await;
             }
         }
     }
 
     Ok((StatusCode::OK, "ok"))
 }
- */
