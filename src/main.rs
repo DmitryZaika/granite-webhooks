@@ -20,6 +20,7 @@ pub mod crud;
 pub mod middleware;
 pub mod schemas;
 pub mod telegram;
+pub mod amazon;
 
 async fn health_check() -> impl IntoResponse {
     StatusCode::OK
