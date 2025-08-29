@@ -56,18 +56,26 @@ impl fmt::Display for WordpressContactForm {
            Name: {}\n\
            Phone: {}\n\
            Email: {}\n\
-           City: {}\n\
+           Address: {}\n\
            Zip: {}\n\
-           Details: {}\n\
-           Campaign: {}\n\
-           Adset: {}\n\
-           Adset: {}\n\
-           Adset: {}\n\
-           Ad: {}",
+           Remodeling Type: {}\n\
+           Project Size: {}\n\
+           Contacted: {}\n\
+           Remove and Dispose: {}\n\
+           Improve Offer: {}\n\
+           Sink: {}\n\
+           Backsplash: {}\n\
+           Stove: {}\n\
+           Your Message: {}\n\
+           Attached File: {}",
             self.name,
             self.phone,
             self.email.as_deref().unwrap_or("N/A"),
+            self.address.as_deref().unwrap_or("N/A"),
             self.postal_code.as_deref().unwrap_or("N/A"),
+            self.remodal_type.as_deref().unwrap_or("N/A"),
+            self.project_size.as_deref().unwrap_or("N/A"),
+            self.contact_time.as_deref().unwrap_or("N/A"),
             self.remove_and_dispose.as_deref().unwrap_or("N/A"),
             self.improve_offer.as_deref().unwrap_or("N/A"),
             self.sink.as_deref().unwrap_or("N/A"),
@@ -115,7 +123,29 @@ pub struct FaceBookContactForm {
 
 impl fmt::Display for FaceBookContactForm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let message = format!("New lead received.\n\nName: {}", self.name,);
+        let message = format!(
+                "New lead received.\n\n\
+               Name: {}\n\
+               Phone: {}\n\
+               Remove and Dispose: {}\n\
+               Email: {}\n\
+               City: {}\n\
+               Zip: {}\n\
+               Details: {}\n\
+               Campaign: {}\n\
+               Adset: {}\n\
+               Ad: {}",
+            self.name,
+            self.phone,
+            self.remove_and_dispose.as_deref().unwrap_or("N/A"),
+            self.email.as_deref().unwrap_or("N/A"),
+            self.city.as_deref().unwrap_or("N/A"),
+            self.postal_code.as_deref().unwrap_or("N/A"),
+            self.details.as_deref().unwrap_or("N/A"),
+            self.compaign_name.as_deref().unwrap_or("N/A"),
+            self.adset_name.as_deref().unwrap_or("N/A"),
+            self.ad_name.as_deref().unwrap_or("N/A")
+        );
         write!(f, "{message}")
     }
 }

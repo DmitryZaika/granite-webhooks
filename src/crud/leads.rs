@@ -59,3 +59,19 @@ pub async fn create_lead_from_facebook(
         .execute(pool)
         .await;
 }
+
+pub async fn update_lead_asignee(
+    pool: &MySqlPool,
+    sales_rep: i32,
+    id: i32,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    return query!(
+            r#"UPDATE customers
+               SET sales_rep = ?
+               WHERE id = ?"#,
+            sales_rep,
+            id,
+        )
+        .execute(pool)
+        .await;
+}
