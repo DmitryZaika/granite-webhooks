@@ -9,6 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use crud::leads::{create_lead_from_facebook, create_lead_from_wordpress};
+use dashmap::DashMap;
 use lambda_http::{Error, run, tracing};
 use middleware::request_logger::print_request_body;
 use schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
@@ -16,6 +17,7 @@ use schemas::documenso::WebhookEvent;
 use schemas::state::AppState;
 use sqlx::MySqlPool;
 use std::env::set_var;
+use std::sync::Arc;
 use telegram::receive::webhook_sales_button;
 
 pub mod crud;
@@ -72,6 +74,7 @@ async fn main() -> Result<(), Error> {
         webhook_secret: "1234567890".to_string(),
         bot: teloxide::Bot::from_env(),
         pool,
+        verifications: Arc::new(DashMap::new()),
     };
 
     let app = Router::new()
