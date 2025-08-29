@@ -1,0 +1,31 @@
+use sqlx::{MySqlPool};
+
+#[derive(Debug)]
+pub struct SalesUser {
+    pub id: i32,
+    pub telegram_id: Option<String>,
+    pub name: Option<String>,
+}
+
+pub async fn get_sales_users(
+    pool: &MySqlPool,
+    company_id: i32,
+) -> Result<Vec<SalesUser>, sqlx::Error> {
+    let users = sqlx::query_as!(
+        SalesUser,
+        r#"
+        SELECT 
+            id,
+            telegram_id,
+            name
+        FROM users 
+        WHERE company_id = ? 
+        AND position_id = 1 OR position_id = 2
+        "#, 
+        company_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(users)
+}
