@@ -11,6 +11,15 @@ uvx cargo-lambda lambda deploy --iam-role arn:aws:iam::741448943665:role/cargo-l
 
 uvx cargo-lambda lambda watch --env-file .env
 
+Connect to internet: ngrok http 9000
+
+Conntect to telegram: 
+```
+curl -X POST "https://api.telegram.org/bot<token>/setWebhook" \
+      -d "url=https://c0bf99f7c2a8.ngrok-free.app" \
+      -d "secret_token=fake"
+```
+
 When server dies instantly:
 1. Find server: sudo lsof -i :9000
 2. Kill that server: kill -9 <PID>

@@ -1,3 +1,5 @@
+use crate::amazon::email::send_message;
+use crate::crud::users::set_telegram_id;
 use crate::schemas::state::{AppState, VerificationState};
 use axum::http::{StatusCode, header::HeaderMap};
 use axum::{extract::State, response::IntoResponse};
@@ -48,31 +50,36 @@ fn new_resend_keyboard(email: &str) -> InlineKeyboardMarkup {
 
 async fn handle_start_command(msg: Message, ctx: &AppState) -> Option<(StatusCode, String)> {
     let bot = &ctx.bot;
-    {
-        let chat_id = msg.chat.id; // ChatId
-        let chat_i64 = chat_id.0;
+    let chat_id = msg.chat.id; // ChatId
+    let chat_i64 = chat_id.0;
 
-        if let Some(text) = msg.text() {
-            // 1) /start <email> — регистрируемся, шлём код
-            if let Some(email) = parse_start_email(text) {
-                // генерим код
-                let code = gen_code();
+    if let Some(text) = msg.text() {
+        // 1) /start <email> — регистрируемся, шлём код
+        if let Some(email) = parse_start_email(text) {
+            // генерим код
+            let code = gen_code();
 
-                // сохраняем состояние (3 попытки)
-                ctx.verifications.insert(
-                    chat_i64,
-                    VerificationState {
-                        email: email.clone(),
-                        code: code.clone(),
-                        attempts_left: 3,
-                    },
-                );
+            // сохраняем состояние (3 попытки)
+            ctx.verifications.insert(
+                chat_i64,
+                VerificationState {
+                    email: email.clone(),
+                    code: code.clone(),
+                    attempts_left: 3,
+                },
+            );
 
-                // отправляем письмо (заглушка/реальная интеграция)
-                send_code_email(&ctx.pool, &email, &code).await;
+            // отправляем письмо (заглушка/реальная интеграция)
+            send_message(
+                &[&email],
+                &format!("Graninte Manager Code"),
+                &format!("Your code is: {code}"),
+            )
+            .await.unwrap();
 
-                // пишем пользователю
-                let result = bot.send_message(
+            // пишем пользователю
+            let result = bot
+                .send_message(
                     chat_id,
                     format!(
                         "You are now registering for {}, please enter the code sent to your email",
@@ -80,54 +87,66 @@ async fn handle_start_command(msg: Message, ctx: &AppState) -> Option<(StatusCod
                     ),
                 )
                 .await;
+            if let Err(e) = result {
+                return Some((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+            }
+
+            return Some((StatusCode::OK, "ok".to_string()));
+        }
+
+        // 2) Если есть незавершённая верификация — пробуем интерпретировать текст как код
+        if let Some(entry) = ctx.verifications.get(&chat_i64) {
+            let user_code = text.trim();
+            if user_code.trim() == entry.code.trim() {
+                // успех
+                let email = entry.email.clone();
+                // можно здесь записать в БД связь chat_id <-> email
+                // ctx.verifications.remove(&chat_i64);
+                set_telegram_id(&ctx.pool, &email, &chat_i64.to_string()).await.unwrap();
+                let result = bot
+                    .send_message(chat_id, "Accepted, you are now registered")
+                    .await;
                 if let Err(e) = result {
                     return Some((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
                 }
 
-                return Some((StatusCode::OK, "ok".to_string()));
-            }
-
-            // 2) Если есть незавершённая верификация — пробуем интерпретировать текст как код
-            if let Some(mut entry) = ctx.verifications.get_mut(&chat_i64) {
-                let user_code = text.trim();
-                if user_code == entry.code {
-                    // успех
-                    let email = entry.email.clone();
-                    // можно здесь записать в БД связь chat_id <-> email
-                    ctx.verifications.remove(&chat_i64);
-
+            } else {
+                if entry.attempts_left > 1 {
+                    let new_attempts = entry.attempts_left - 1;
+                    ctx.verifications.insert(
+                        chat_i64,
+                        VerificationState {
+                            email: entry.email.clone(),
+                            code: entry.code.clone(),
+                            attempts_left: new_attempts,
+                        },
+                    );
                     let result = bot
-                        .send_message(chat_id, "Accepted, you are now registered")
+                        .send_message(
+                            chat_id,
+                            format!("Incorrect code. {} attempt(s) left.", new_attempts),
+                        )
                         .await;
                     if let Err(e) = result {
                         return Some((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
                     }
-
-                    println!("User {chat_i64} verified as {email}");
                 } else {
-                    if entry.attempts_left > 1 {
-                        entry.attempts_left -= 1;
-                        let left = entry.attempts_left;
-                        let result = bot
-                            .send_message(
-                                chat_id,
-                                format!("Incorrect code. {} attempt(s) left.", left),
-                            )
-                            .await;
-                        if let Err(e) = result {
-                            return Some((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-                        }
-                    } else {
-                        // попытки закончились — предлагаем отправить новый код
-                        let email = entry.email.clone();
-                        entry.attempts_left = 0;
-                        let result = bot
-                            .send_message(chat_id, "No attempts left.")
-                            .reply_markup(new_resend_keyboard(&email))
-                            .await;
-                        if let Err(e) = result {
-                            return Some((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-                        }
+                    // попытки закончились — предлагаем отправить новый код
+                    let email = entry.email.clone();
+                    ctx.verifications.insert(
+                        chat_i64,
+                        VerificationState {
+                            email: email.clone(),
+                            code: entry.code.clone(),
+                            attempts_left: 0,
+                        },
+                    );
+                    let result = bot
+                        .send_message(chat_id, "No attempts left.")
+                        .reply_markup(new_resend_keyboard(&email))
+                        .await;
+                    if let Err(e) = result {
+                        return Some((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
                     }
                 }
             }
@@ -165,7 +184,12 @@ async fn handle_button(cb: CallbackQuery, ctx: &AppState) -> Option<(StatusCode,
             let _ = bot.answer_callback_query(cb.id.clone()).await;
 
             // отправка письма
-            send_code_email(&ctx.pool, email, &code).await;
+            send_message(
+                &[&email],
+                &format!("Your code is: {code}"),
+                &format!("Your code is: {code}"),
+            )
+            .await.unwrap();
 
             // уведомляем
             let result = bot

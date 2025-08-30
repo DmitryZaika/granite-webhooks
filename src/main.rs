@@ -16,15 +16,15 @@ use schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
 use schemas::documenso::WebhookEvent;
 use schemas::state::AppState;
 use sqlx::MySqlPool;
-use std::env::set_var;
+use std::env::{set_var, var};
 use std::sync::Arc;
 use telegram::receive::webhook_handler;
 
+pub mod amazon;
 pub mod crud;
 pub mod middleware;
 pub mod schemas;
 pub mod telegram;
-pub mod amazon;
 
 async fn health_check() -> impl IntoResponse {
     StatusCode::OK
@@ -71,8 +71,9 @@ async fn main() -> Result<(), Error> {
     let pool = MySqlPool::connect(&database_url).await?;
 
     tracing::init_default_subscriber();
+    let webhook_secret = var("WEBHOOK_SECRET").expect("WEBHOOK_SECRET must be set");
     let app_state = AppState {
-        webhook_secret: "1234567890".to_string(),
+        webhook_secret,
         bot: teloxide::Bot::from_env(),
         pool,
         verifications: Arc::new(DashMap::new()),

@@ -1,6 +1,6 @@
 use crate::schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
 use sqlx::mysql::MySqlQueryResult;
-use sqlx::{query, MySqlPool};
+use sqlx::{MySqlPool, query};
 
 pub async fn create_lead_from_wordpress(
     pool: &MySqlPool,
@@ -66,12 +66,12 @@ pub async fn update_lead_asignee(
     id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     return query!(
-            r#"UPDATE customers
+        r#"UPDATE customers
                SET sales_rep = ?
                WHERE id = ?"#,
-            sales_rep,
-            id,
-        )
-        .execute(pool)
-        .await;
+        sales_rep,
+        id,
+    )
+    .execute(pool)
+    .await;
 }

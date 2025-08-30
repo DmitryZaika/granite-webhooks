@@ -124,7 +124,7 @@ pub struct FaceBookContactForm {
 impl fmt::Display for FaceBookContactForm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let message = format!(
-                "New lead received.\n\n\
+            "New lead received.\n\n\
                Name: {}\n\
                Phone: {}\n\
                Remove and Dispose: {}\n\

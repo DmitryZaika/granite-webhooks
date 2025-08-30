@@ -1,4 +1,4 @@
-use sqlx::{MySqlPool};
+use sqlx::MySqlPool;
 
 #[derive(Debug)]
 pub struct SalesUser {
@@ -21,11 +21,26 @@ pub async fn get_sales_users(
         FROM users 
         WHERE company_id = ? 
         AND position_id = 1 OR position_id = 2
-        "#, 
+        "#,
         company_id
     )
     .fetch_all(pool)
     .await?;
 
     Ok(users)
+}
+
+
+pub async fn set_telegram_id(pool: &MySqlPool, email: &str, telegram_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+        UPDATE users SET telegram_id = ? WHERE email = ?
+        "#,
+        telegram_id,
+        email
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
