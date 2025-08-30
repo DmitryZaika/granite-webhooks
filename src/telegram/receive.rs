@@ -156,6 +156,7 @@ async fn handle_start_command(msg: Message, ctx: &AppState) -> Option<(StatusCod
 }
 
 async fn handle_button(cb: CallbackQuery, ctx: &AppState) -> Option<(StatusCode, String)> {
+    println!("handle_button: {:?}", cb);
     let bot = ctx.bot.clone();
     if let Some(data) = cb.data {
         // A) Resend-кнопка после 3 неудачных попыток
@@ -251,6 +252,7 @@ pub async fn webhook_handler(
     headers: HeaderMap,
     axum::extract::Json(update): axum::extract::Json<Update>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    println!("STARTING WEBHOOK HANDLER");
     // Проверка секрета
     let secret = headers
         .get("x-telegram-bot-api-secret-token")

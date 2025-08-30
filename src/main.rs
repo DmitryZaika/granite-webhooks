@@ -19,6 +19,8 @@ use sqlx::MySqlPool;
 use std::env::{set_var, var};
 use std::sync::Arc;
 use telegram::receive::webhook_handler;
+use crate::telegram::send::send_lead_manager_message;
+use crate::crud::users::get_sales_users;
 
 pub mod amazon;
 pub mod crud;
@@ -40,12 +42,14 @@ async fn wordpress_contact_form(
     State(app_state): State<AppState>,
     Json(contact_form): Json<WordpressContactForm>,
 ) -> Response {
-    let result = create_lead_from_wordpress(&app_state.pool, &contact_form, company_id).await;
-    // THis will send the messsage that triggers webhook_sales_button, ignore for now
-    match result {
-        Ok(_) => (StatusCode::CREATED, contact_form.to_string()).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    let result = create_lead_from_wordpress(&app_state.pool, &contact_form, company_id).await.unwrap();
+    let all_users = get_sales_users(&app_state.pool, company_id).await.unwrap();
+    let candidates: Vec<(String, i32)> = all_users.iter().map(|user| (user.name.clone().unwrap(), user.id.clone())).collect();
+    let sales_manager = all_users.iter().find(|item| item.position_id == Some(2));
+    let sales_manager_id = sales_manager.unwrap().telegram_id.clone().unwrap();
+    send_lead_manager_message(&contact_form.to_string(), result.last_insert_id(), sales_manager_id, &candidates).await.unwrap();
+
+    (StatusCode::CREATED, "created").into_response()
 }
 
 async fn facebook_contact_form(

@@ -3,8 +3,9 @@ use sqlx::MySqlPool;
 #[derive(Debug)]
 pub struct SalesUser {
     pub id: i32,
-    pub telegram_id: Option<String>,
+    pub telegram_id: Option<i64>, // BIGINT in DB recommended
     pub name: Option<String>,
+    pub position_id: Option<i32>, // match INT column
 }
 
 pub async fn get_sales_users(
@@ -17,7 +18,8 @@ pub async fn get_sales_users(
         SELECT 
             id,
             telegram_id,
-            name
+            name,
+            position_id
         FROM users 
         WHERE company_id = ? 
         AND position_id = 1 OR position_id = 2
