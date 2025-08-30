@@ -1,5 +1,9 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
-#![allow(clippy::option_if_let_else, clippy::missing_errors_doc)]
+#![allow(
+    clippy::option_if_let_else,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate
+)]
 use crate::crud::users::get_sales_users;
 use crate::telegram::send::send_lead_manager_message;
 use axum::extract::Path;
@@ -46,10 +50,10 @@ async fn wordpress_contact_form(
     let all_users = get_sales_users(&pool, company_id).await.unwrap();
     let candidates: Vec<(String, i32)> = all_users
         .iter()
-        .map(|user| (user.name.clone().unwrap(), user.id.clone()))
+        .map(|user| (user.name.clone().unwrap(), user.id))
         .collect();
     let sales_manager = all_users.iter().find(|item| item.position_id == Some(2));
-    let sales_manager_id = sales_manager.unwrap().telegram_id.clone().unwrap();
+    let sales_manager_id = sales_manager.unwrap().telegram_id.unwrap();
     send_lead_manager_message(
         &contact_form.to_string(),
         result.last_insert_id(),

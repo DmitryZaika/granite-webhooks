@@ -18,13 +18,13 @@ where
             .headers
             .get("x-telegram-bot-api-secret-token")
             .and_then(|v| v.to_str().ok())
-            .ok_or((StatusCode::FORBIDDEN, "forbidden".to_string()))?;
+            .ok_or_else(|| (StatusCode::FORBIDDEN, "forbidden".to_string()))?;
 
         if secret != webhook_secret {
             return Err((StatusCode::FORBIDDEN, "forbidden".to_string()));
         }
-        return Ok(Self {
+        Ok(Self {
             bot: teloxide::Bot::from_env(),
-        });
+        })
     }
 }

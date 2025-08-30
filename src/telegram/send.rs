@@ -13,7 +13,7 @@ fn kb_for_users(
         for (name, chat_id) in chunk {
             row.push(InlineKeyboardButton::callback(
                 name.clone(),
-                format!("assign:{lead}:{user}", lead = lead_id, user = chat_id),
+                format!("assign:{lead_id}:{chat_id}"),
             ));
         }
         rows.push(row);
@@ -30,6 +30,6 @@ pub async fn send_lead_manager_message<T: Display>(
 ) -> Result<teloxide::prelude::Message, teloxide::RequestError> {
     let bot = Bot::from_env();
     bot.send_message(ChatId(user_id), format!("{message}. Choose a salesperson."))
-        .reply_markup(kb_for_users(lead_id, &candidates))
+        .reply_markup(kb_for_users(lead_id, candidates))
         .await
 }

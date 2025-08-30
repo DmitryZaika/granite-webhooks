@@ -34,7 +34,7 @@ async fn handle_start_command(
         // отправляем письмо (заглушка/реальная интеграция)
         send_message(
             &[&email],
-            &format!("Graninte Manager Code"),
+            "Graninte Manager Code",
             &format!("Your code is: {code}"),
         )
         .await
@@ -46,8 +46,7 @@ async fn handle_start_command(
             .send_message(
                 chat_id,
                 format!(
-                    "You are now registering for {}, please enter the code sent to your email",
-                    email
+                    "You are now registering for {email}, please enter the code sent to your email"
                 ),
             )
             .await;
@@ -64,10 +63,10 @@ async fn handle_start_command(
     let user_code = text.trim();
     if user_code.trim() == code.trim() {
         // успех
-        let email = email.clone();
+        let email = email;
         // можно здесь записать в БД связь chat_id <-> email
         // ctx.verifications.remove(&chat_i64);
-        set_telegram_id(pool, &email, &chat_i64.to_string())
+        set_telegram_id(pool, email, &chat_i64.to_string())
             .await
             .unwrap();
         let result = bot
@@ -77,8 +76,7 @@ async fn handle_start_command(
         if let Err(e) = result {
             return Some((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
         }
-    } else {
-    }
+    } 
     None
 }
 
@@ -87,7 +85,7 @@ async fn handle_button(
     pool: &MySqlPool,
     bot: &TelegramBot,
 ) -> Option<(StatusCode, String)> {
-    println!("handle_button: {:?}", cb);
+    println!("handle_button: {cb:?}");
     let bot = bot.bot.clone();
     let data = cb.data?;
     // A) Resend-кнопка после 3 неудачных попыток
@@ -109,7 +107,7 @@ async fn handle_button(
 
         // отправка письма
         send_message(
-            &[&email],
+            &[email],
             &format!("Your code is: {code}"),
             &format!("Your code is: {code}"),
         )
@@ -120,7 +118,7 @@ async fn handle_button(
         let result = bot
             .send_message(
                 chat_id,
-                format!("A new code was sent to {}. Please enter it here.", email),
+                format!("A new code was sent to {email}. Please enter it here."),
             )
             .await;
         if let Err(e) = result {
@@ -149,7 +147,7 @@ async fn handle_button(
         let result = bot
             .send_message(
                 ChatId(user_chat_id),
-                format!("You were assigned a lead. Click here: \n#{}", lead_link),
+                format!("You were assigned a lead. Click here: \n#{lead_link}"),
             )
             .await;
         if let Err(e) = result {
@@ -161,7 +159,7 @@ async fn handle_button(
             .edit_message_text(
                 msg.chat().id,
                 msg.id(),
-                format!("Lead #{} assigned to {}", lead_id, user_chat_id),
+                format!("Lead #{lead_id} assigned to {user_chat_id}"),
             )
             .await;
     }

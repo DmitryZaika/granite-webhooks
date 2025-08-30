@@ -8,7 +8,7 @@ pub async fn send_message(to: &[&str], subject: &str, message: &str) -> Result<(
     let client = Client::new(&shared_config);
 
     let mut dest: Destination = Destination::builder().build();
-    dest.to_addresses = Some(to.iter().map(|s| s.to_string()).collect());
+    dest.to_addresses = Some(to.iter().map(|s| (*s).to_string()).collect());
     let subject_content = Content::builder()
         .data(subject)
         .charset("UTF-8")
