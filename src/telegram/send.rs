@@ -22,19 +22,14 @@ fn kb_for_users(
     InlineKeyboardMarkup::new(rows)
 }
 
-
-
 pub async fn send_lead_manager_message<T: Display>(
     message: &T,
     lead_id: u64,
     user_id: i64,
     candidates: &[(String /*name*/, i32 /*tg_chat_id*/)],
-) -> Result<teloxide::prelude::Message, teloxide::RequestError>{
+) -> Result<teloxide::prelude::Message, teloxide::RequestError> {
     let bot = Bot::from_env();
-    bot.send_message(
-        ChatId(user_id),
-        format!("{message}. Choose a salesperson."),
-    )
-    .reply_markup(kb_for_users(lead_id, &candidates))
-    .await
+    bot.send_message(ChatId(user_id), format!("{message}. Choose a salesperson."))
+        .reply_markup(kb_for_users(lead_id, &candidates))
+        .await
 }
