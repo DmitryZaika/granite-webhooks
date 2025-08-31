@@ -24,10 +24,10 @@ pub fn is_email(text: &str) -> bool {
 }
 
 /// Из /start <email> вытаскиваем email (поддерживает /start@YourBot)
-pub fn parse_start_email(text: &str) -> Option<String> {
+pub fn parse_slash_email(text: &str) -> Option<String> {
     let mut it = text.split_whitespace();
     let cmd = it.next()?;
-    if !(cmd == "/start" || cmd.starts_with("/start@")) {
+    if !(cmd == "/email" || cmd.starts_with("/email@")) {
         return None;
     }
     let email = it.next()?; // ожидание: /start user@example.com

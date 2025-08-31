@@ -6,13 +6,19 @@ use crate::crud::users::get_user_tg_info;
 use crate::crud::users::user_has_telegram_id;
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
 use crate::telegram::utils::parse_code;
-use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_start_email};
+use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
 use axum::extract::State;
 use axum::http::StatusCode;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
 use teloxide::types::MaybeInaccessibleMessage;
 use teloxide::types::{ChatId, Update, UpdateKind};
+
+const MESSAGE: &str = r"
+Invalid message. Please send one of the following commands:
+/email <email>
+<code>
+";
 
 async fn handle_start_command(
     pool: &MySqlPool,
@@ -86,7 +92,12 @@ async fn handle_message(msg: Message, pool: &MySqlPool, bot: &TelegramBot) -> (S
         None => return (StatusCode::OK, "ok".to_string()),
     };
 
-    if let Some(email) = parse_start_email(text) {
+    if text.starts_with("/start") {
+        let full_message = "Welcome to our bot! Please send: /email <email>";
+        bot.bot.send_message(chat_id, full_message).await.unwrap();
+    }
+
+    if let Some(email) = parse_slash_email(text) {
         return handle_start_command(pool, bot, &email, chat_id).await;
     }
 
@@ -94,11 +105,6 @@ async fn handle_message(msg: Message, pool: &MySqlPool, bot: &TelegramBot) -> (S
         return handle_telegram_code(pool, bot, chat_id, code).await;
     }
 
-    const MESSAGE: &str = r"
-    Invalid message. Please send one of the following commands:
-    /start <email>
-    <code>
-    ";
     match bot.bot.send_message(chat_id, MESSAGE).await {
         Ok(_) => (StatusCode::OK, "ok".to_string()),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -150,7 +156,7 @@ async fn handle_assign_lead(
             r"
     You were assigned a lead. Click here:
     {lead_link}
-    
+
     Please link to telegram bot:
     {bot_link}
 
@@ -158,7 +164,9 @@ async fn handle_assign_lead(
     ",
             tg_info.email
         );
-        send_message(&[&tg_info.email], "Lead assigned", &message).await.unwrap();
+        send_message(&[&tg_info.email], "Lead assigned", &message)
+            .await
+            .unwrap();
     }
 
     (StatusCode::OK, "ok".to_string())
