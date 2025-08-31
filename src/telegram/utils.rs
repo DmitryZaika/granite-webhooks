@@ -15,6 +15,15 @@ pub fn lead_url(lead_id: i32) -> String {
     format!("https://granite-manager.com/employee/deals/edit/{lead_id}/project")
 }
 
+pub fn is_email(text: &str) -> bool {
+    let email = text.trim();
+    if email.len() < 3 || email.len() > 254 {
+        return false;
+    }
+    email.contains('@')
+
+}
+
 /// Из /start <email> вытаскиваем email (поддерживает /start@YourBot)
 pub fn parse_start_email(text: &str) -> Option<String> {
     let mut it = text.split_whitespace();
@@ -23,10 +32,21 @@ pub fn parse_start_email(text: &str) -> Option<String> {
         return None;
     }
     let email = it.next()?; // ожидание: /start user@example.com
+    if !is_email(email) {
+        return None;
+    }
     Some(email.to_string())
 }
 
-pub fn gen_code() -> String {
-    let n: u32 = rand::rng().random_range(0..=999_999);
-    format!("{n:06}")
+pub fn parse_code(text: &str) -> Option<i32> {
+    let code = text.trim();
+    if code.len() != 6 {
+        return None
+    }
+    code.parse().ok()
 }
+
+pub fn gen_code() -> i32 {
+    rand::rng().random_range(100_000..=999_999)
+}
+

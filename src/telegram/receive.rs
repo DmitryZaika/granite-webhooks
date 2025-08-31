@@ -1,83 +1,86 @@
 use crate::amazon::email::send_message;
 use crate::axum_helpers::guards::TelegramBot;
-use crate::crud::users::set_telegram_id;
+use crate::crud::users::{set_telegram_id, set_user_telegram_token, get_user_telegram_token};
 use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_start_email};
 use axum::http::StatusCode;
 use axum::{extract::State, response::IntoResponse};
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, Update, UpdateKind};
+use teloxide::types::{ChatId, Update, UpdateKind};
+use crate::crud::users::user_has_telegram_id;
+use crate::telegram::utils::parse_code;
 
-fn new_resend_keyboard(email: &str) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new([vec![InlineKeyboardButton::callback(
-        "Send new code",
-        format!("resend:{email}"),
-    )]])
+async fn handle_start_command(pool: &MySqlPool, bot: &TelegramBot, email: &str, chat_id: ChatId) -> (StatusCode, String) {
+    if user_has_telegram_id(pool, chat_id.0).await.unwrap() {
+        bot.bot.send_message(chat_id, "You are already registered").await.unwrap();
+        return (StatusCode::OK, "User already has a telegram id".to_string());
+    }
+    let code = gen_code();
+    set_user_telegram_token(pool, chat_id.0, code, email).await.unwrap();
+   let message_result = send_message(
+        &[&email],
+        "Graninte Manager Code",
+        &format!("Your code is: {code}"),
+    )
+    .await;
+    if let Err(e) = message_result {
+        let format_error = format!("Error 1: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, format_error);
+    }
+
+    let message =format!(
+        "You are now registering for {email}, please enter the code sent to your email"
+    );
+    let result = bot.bot.send_message(chat_id, message).await;
+    if let Err(e) = result {
+        let format_error = format!("Error 2: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, format_error);
+    }
+
+    return (StatusCode::OK, "ok".to_string());
 }
 
-async fn handle_start_command(
+async fn handle_telegram_code(pool: &MySqlPool, bot: &TelegramBot, chat_id: ChatId, code: i32) -> (StatusCode, String) {
+    if user_has_telegram_id(pool, chat_id.0).await.unwrap() {
+        bot.bot.send_message(chat_id, "You are already registered").await.unwrap();
+        return (StatusCode::OK, "User already has a telegram id".to_string());
+    }
+   let db_code = get_user_telegram_token(pool, chat_id.0).await.unwrap();
+   if db_code.unwrap() == code {
+    set_telegram_id(pool, chat_id.0).await.unwrap();
+    bot.bot.send_message(chat_id, "Accepted, you are now registered").await.unwrap();
+        return (StatusCode::OK, "ok".to_string());
+   } 
+   bot.bot.send_message(chat_id, "Invalid code").await.unwrap();
+   return (StatusCode::OK, "ok".to_string());
+}
+
+async fn handle_message(
     msg: Message,
     pool: &MySqlPool,
     bot: &TelegramBot,
-) -> Option<(StatusCode, String)> {
+) -> (StatusCode, String) {
     let chat_id = msg.chat.id; // ChatId
-    let chat_i64 = chat_id.0;
-    let text = msg.text()?;
+    let text = match msg.text() {
+        Some(text) => text,
+        None => return (StatusCode::OK, "ok".to_string())
+    };
 
-    // 1) /start <email> — регистрируемся, шлём код
     if let Some(email) = parse_start_email(text) {
-        // генерим код
-        let code = gen_code();
-
-        // сохраняем состояние (3 попытки)
-
-        // отправляем письмо (заглушка/реальная интеграция)
-        send_message(
-            &[&email],
-            "Graninte Manager Code",
-            &format!("Your code is: {code}"),
-        )
-        .await
-        .unwrap();
-
-        // пишем пользователю
-        let result = bot
-            .bot
-            .send_message(
-                chat_id,
-                format!(
-                    "You are now registering for {email}, please enter the code sent to your email"
-                ),
-            )
-            .await;
-        if let Err(e) = result {
-            return Some((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-        }
-
-        return Some((StatusCode::OK, "ok".to_string()));
+        return handle_start_command(pool, bot, &email, chat_id).await;
     }
 
-    // 2) Если есть незавершённая верификация — пробуем интерпретировать текст как код
-    let code = "123456";
-    let email = "colin@gmail.com";
-    let user_code = text.trim();
-    if user_code.trim() == code.trim() {
-        // успех
-        let email = email;
-        // можно здесь записать в БД связь chat_id <-> email
-        // ctx.verifications.remove(&chat_i64);
-        set_telegram_id(pool, email, &chat_i64.to_string())
-            .await
-            .unwrap();
-        let result = bot
-            .bot
-            .send_message(chat_id, "Accepted, you are now registered")
-            .await;
-        if let Err(e) = result {
-            return Some((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-        }
-    } 
-    None
+    if let Some(code) = parse_code(text) {
+        return handle_telegram_code(pool, bot, chat_id, code).await;
+    }
+
+    const MESSAGE: &str = r#"
+    Invalid message. Please send one of the following commands:
+    /start <email>
+    <code>
+    "#;
+    bot.bot.send_message(chat_id, MESSAGE).await.unwrap();
+    (StatusCode::OK, "ok".to_string())
 }
 
 async fn handle_button(
@@ -172,7 +175,7 @@ pub async fn webhook_handler(
     axum::extract::Json(update): axum::extract::Json<Update>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let result = match update.kind {
-        UpdateKind::Message(msg) => handle_start_command(msg, &pool, &tg_bot).await,
+        UpdateKind::Message(msg) => Some(handle_message(msg, &pool, &tg_bot).await),
         UpdateKind::CallbackQuery(cb) => handle_button(cb, &pool, &tg_bot).await,
         _ => None,
     };
