@@ -11,8 +11,8 @@ pub fn parse_assign(data: &str) -> Option<(i32, i64)> {
     }
 }
 
-pub fn lead_url(lead_id: i32) -> String {
-    format!("https://granite-manager.com/employee/deals/edit/{lead_id}/project")
+pub fn lead_url(deal_id: u64) -> String {
+    format!("https://granite-manager.com/employee/deals/edit/{deal_id}/project")
 }
 
 pub fn is_email(text: &str) -> bool {
@@ -21,7 +21,6 @@ pub fn is_email(text: &str) -> bool {
         return false;
     }
     email.contains('@')
-
 }
 
 /// Из /start <email> вытаскиваем email (поддерживает /start@YourBot)
@@ -41,7 +40,7 @@ pub fn parse_start_email(text: &str) -> Option<String> {
 pub fn parse_code(text: &str) -> Option<i32> {
     let code = text.trim();
     if code.len() != 6 {
-        return None
+        return None;
     }
     code.parse().ok()
 }
@@ -49,4 +48,3 @@ pub fn parse_code(text: &str) -> Option<i32> {
 pub fn gen_code() -> i32 {
     rand::rng().random_range(100_000..=999_999)
 }
-

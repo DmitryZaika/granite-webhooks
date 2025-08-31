@@ -25,9 +25,9 @@ pub async fn wordpress_contact_form(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let all_users = get_sales_users(&pool, company_id).await.unwrap();
-    let candidates: Vec<(String, i32)> = all_users
+    let candidates: Vec<(String, i32, i64)> = all_users
         .iter()
-        .map(|user| (user.name.clone().unwrap(), user.id))
+        .map(|user| (user.name.clone().unwrap(), user.id, user.mtd_lead_count))
         .collect();
     let sales_manager = all_users.iter().find(|item| item.position_id == Some(2));
     let sales_manager_id = sales_manager.unwrap().telegram_id.unwrap();

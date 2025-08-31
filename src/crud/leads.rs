@@ -75,3 +75,36 @@ pub async fn update_lead_asignee(
     .execute(pool)
     .await;
 }
+
+pub async fn assign_lead(
+    pool: &MySqlPool,
+    lead_id: i32,
+    user_id: i64,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    return query!(
+        r#"UPDATE customers SET sales_rep = ?, assigned_date = NOW() WHERE id = ?"#,
+        user_id,
+        lead_id,
+    )
+    .execute(pool)
+    .await;
+}
+
+pub async fn create_deal(
+    pool: &MySqlPool,
+    customer_id: i32,
+    list_id: i32,
+    next_pos: i32,
+    sales_rep: i64,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    return query!(
+        r#"INSERT INTO deals (customer_id, status, list_id, position, user_id) VALUES (?,?,?,?,?)"#,
+        customer_id,
+        "new",
+        list_id,
+        next_pos,
+        sales_rep,
+    )
+    .execute(pool)
+    .await;
+}
