@@ -12,6 +12,7 @@ pub struct SalesUser {
 pub struct UserTgInfo {
     pub telegram_id: Option<i64>,
     pub name: Option<String>,
+    pub email: String,
 }
 
 pub async fn get_sales_users(
@@ -108,7 +109,7 @@ pub async fn get_user_tg_info(
 ) -> Result<Option<UserTgInfo>, sqlx::Error> {
     sqlx::query_as!(
         UserTgInfo,
-        r#"SELECT telegram_id, name FROM users WHERE id = ?"#,
+        r#"SELECT telegram_id, email, name FROM users WHERE id = ?"#,
         user_id
     )
     .fetch_optional(pool)

@@ -99,8 +99,10 @@ async fn handle_message(msg: Message, pool: &MySqlPool, bot: &TelegramBot) -> (S
     /start <email>
     <code>
     ";
-    bot.bot.send_message(chat_id, MESSAGE).await.unwrap();
-    (StatusCode::OK, "ok".to_string())
+    match bot.bot.send_message(chat_id, MESSAGE).await {
+        Ok(_) => (StatusCode::OK, "ok".to_string()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 async fn handle_assign_lead(
@@ -116,9 +118,10 @@ async fn handle_assign_lead(
     let mut former_message = "Unknown";
     let msg = cb.message.unwrap();
     if let MaybeInaccessibleMessage::Regular(msg) = &msg
-        && let Some(text) = msg.text() {
-            former_message = text;
-        }
+        && let Some(text) = msg.text()
+    {
+        former_message = text;
+    }
 
     let user_name = tg_info.name.unwrap_or("Unknown".to_string());
     let full_content = format!("{former_message}\n\nLead assigned to {user_name}");
@@ -130,15 +133,32 @@ async fn handle_assign_lead(
     let result = create_deal(pool, lead_id, 1, 0, user_id).await.unwrap();
     let deal_id = result.last_insert_id();
     let lead_link = lead_url(deal_id);
-    let result = bot
-        .bot
-        .send_message(
-            ChatId(tg_info.telegram_id.unwrap()),
-            format!("You were assigned a lead. Click here: \n{lead_link}"),
-        )
-        .await;
-    if let Err(e) = result {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    if let Some(telegram_id) = tg_info.telegram_id {
+        let result = bot
+            .bot
+            .send_message(
+                ChatId(telegram_id),
+                format!("You were assigned a lead. Click here: \n{lead_link}"),
+            )
+            .await;
+        if let Err(e) = result {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+    } else {
+        let bot_link = "https://t.me/granitemanager_bot?start";
+        let message = format!(
+            r"
+    You were assigned a lead. Click here:
+    {lead_link}
+    
+    Please link to telegram bot:
+    {bot_link}
+
+    Paste this command into the bot: \start {}
+    ",
+            tg_info.email
+        );
+        send_message(&[&tg_info.email], "Lead assigned", &message).await.unwrap();
     }
 
     (StatusCode::OK, "ok".to_string())

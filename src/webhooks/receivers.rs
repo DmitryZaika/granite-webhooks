@@ -27,18 +27,27 @@ pub async fn wordpress_contact_form(
     let all_users = get_sales_users(&pool, company_id).await.unwrap();
     let candidates: Vec<(String, i32, i64)> = all_users
         .iter()
-        .map(|user| (user.name.clone().unwrap(), user.id, user.mtd_lead_count))
+        .map(|user| {
+            (
+                user.name.clone().unwrap_or("Unknown".to_string()),
+                user.id,
+                user.mtd_lead_count,
+            )
+        })
         .collect();
-    let sales_manager = all_users.iter().find(|item| item.position_id == Some(2));
-    let sales_manager_id = sales_manager.unwrap().telegram_id.unwrap();
-    send_lead_manager_message(
-        &contact_form.to_string(),
-        result.last_insert_id(),
-        sales_manager_id,
-        &candidates,
-    )
-    .await
-    .unwrap();
+    let sales_manager = all_users
+        .iter()
+        .find(|item| item.position_id == Some(2) && item.telegram_id.is_some());
+    if let Some(manager) = sales_manager {
+        send_lead_manager_message(
+            &contact_form.to_string(),
+            result.last_insert_id(),
+            manager.telegram_id.unwrap(),
+            &candidates,
+        )
+        .await
+        .unwrap();
+    }
 
     Ok((StatusCode::CREATED, "created").into_response())
 }
