@@ -2,19 +2,20 @@ use std::fmt::Display;
 
 use crate::crud::leads::{create_lead_from_facebook, create_lead_from_wordpress};
 use crate::crud::users::get_sales_users;
-use crate::libs::constants::OK_RESPONSE;
+use crate::libs::constants::{CREATED_RESPONSE, OK_RESPONSE, internal_error};
+use crate::libs::types::BasicResponse;
 use crate::schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
 use crate::schemas::documenso::WebhookEvent;
 use crate::telegram::send::send_lead_manager_message;
 use axum::extract::Path;
-use axum::http::StatusCode;
 use axum::{
     extract::{Json, State},
     response::IntoResponse,
 };
+use lambda_http::tracing;
 use sqlx::MySqlPool;
 
-pub async fn documenso(payload: Json<WebhookEvent>) -> impl IntoResponse {
+pub async fn documenso(payload: Json<WebhookEvent>) -> BasicResponse {
     println!("Received documenso webhook event: {payload:?}");
     OK_RESPONSE
 }
@@ -55,10 +56,14 @@ pub async fn wordpress_contact_form(
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<WordpressContactForm>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let result = create_lead_from_wordpress(&pool, &contact_form, company_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+) -> BasicResponse {
+    let result = match create_lead_from_wordpress(&pool, &contact_form, company_id).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(?e, "Error creating lead from WordPress");
+            return internal_error("Error creating lead from WordPress");
+        }
+    };
     handle_telegram_send(
         &pool,
         company_id,
@@ -67,17 +72,21 @@ pub async fn wordpress_contact_form(
     )
     .await;
 
-    Ok((StatusCode::CREATED, "created").into_response())
+    CREATED_RESPONSE
 }
 
 pub async fn facebook_contact_form(
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<FaceBookContactForm>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let result = create_lead_from_facebook(&pool, &contact_form, company_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+) -> BasicResponse {
+    let result = match create_lead_from_facebook(&pool, &contact_form, company_id).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(?e, "Error creating lead from Facebook");
+            return internal_error("Error creating lead from Facebook");
+        }
+    };
 
     handle_telegram_send(
         &pool,
@@ -87,5 +96,5 @@ pub async fn facebook_contact_form(
     )
     .await;
 
-    Ok((StatusCode::CREATED, "created").into_response())
+    CREATED_RESPONSE
 }

@@ -5,7 +5,9 @@ use crate::crud::leads::create_deal;
 use crate::crud::users::get_user_tg_info;
 use crate::crud::users::user_has_telegram_id;
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
-use crate::libs::constants::OK_RESPONSE;
+use crate::libs::constants::internal_error;
+use crate::libs::constants::{ERR_SEND_EMAIL, ERR_SEND_TELEGRAM, OK_RESPONSE};
+use crate::libs::types::BasicResponse;
 use crate::telegram::utils::parse_code;
 use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
 use axum::extract::State;
@@ -22,15 +24,12 @@ Invalid message. Please send one of the following commands:
 <code>
 ";
 
-const ERR_SEND_EMAIL: &str = "send_email_failed";
-const ERR_SEND_TELEGRAM: &str = "telegram_send_failed";
-
 async fn handle_start_command(
     pool: &MySqlPool,
     bot: &TelegramBot,
     email: &str,
     chat_id: ChatId,
-) -> (StatusCode, &'static str) {
+) -> BasicResponse {
     if user_has_telegram_id(pool, chat_id.0).await.unwrap() {
         bot.bot
             .send_message(chat_id, "You are already registered")
@@ -50,7 +49,7 @@ async fn handle_start_command(
     .await;
     if let Err(e) = message_result {
         tracing::error!(?e, %email, "email send failed");
-        return (StatusCode::INTERNAL_SERVER_ERROR, ERR_SEND_EMAIL);
+        return internal_error(ERR_SEND_EMAIL);
     }
 
     let message =
@@ -58,7 +57,7 @@ async fn handle_start_command(
     let result = bot.bot.send_message(chat_id, message).await;
     if let Err(e) = result {
         tracing::error!(?e, chat_id = chat_id.0, "telegram send failed");
-        return (StatusCode::INTERNAL_SERVER_ERROR, ERR_SEND_TELEGRAM);
+        return internal_error(ERR_SEND_TELEGRAM);
     }
 
     OK_RESPONSE
@@ -69,7 +68,7 @@ async fn handle_telegram_code(
     bot: &TelegramBot,
     chat_id: ChatId,
     code: i32,
-) -> (StatusCode, &'static str) {
+) -> BasicResponse {
     if user_has_telegram_id(pool, chat_id.0).await.unwrap() {
         bot.bot
             .send_message(chat_id, "You are already registered")
@@ -90,11 +89,7 @@ async fn handle_telegram_code(
     OK_RESPONSE
 }
 
-async fn handle_message(
-    msg: Message,
-    pool: &MySqlPool,
-    bot: &TelegramBot,
-) -> (StatusCode, &'static str) {
+async fn handle_message(msg: Message, pool: &MySqlPool, bot: &TelegramBot) -> BasicResponse {
     let chat_id = msg.chat.id; // ChatId
     let Some(text) = msg.text() else {
         return OK_RESPONSE;
@@ -117,7 +112,7 @@ async fn handle_message(
         Ok(_) => OK_RESPONSE,
         Err(e) => {
             tracing::error!(?e, %chat_id, "failed to send telegram");
-            (StatusCode::INTERNAL_SERVER_ERROR, ERR_SEND_TELEGRAM)
+            internal_error(ERR_SEND_TELEGRAM)
         }
     }
 }
@@ -128,7 +123,7 @@ async fn handle_assign_lead(
     user_id: i64,
     bot: &TelegramBot,
     cb: CallbackQuery,
-) -> (StatusCode, &'static str) {
+) -> BasicResponse {
     // let _ = bot.bot.answer_callback_query(cb.id.clone()).await;
     assign_lead(pool, lead_id, user_id).await.unwrap();
     let tg_info = get_user_tg_info(pool, user_id).await.unwrap().unwrap();
@@ -160,7 +155,7 @@ async fn handle_assign_lead(
             .await;
         if let Err(e) = result {
             tracing::error!(?e, %telegram_id, "failed to send telegram");
-            return (StatusCode::INTERNAL_SERVER_ERROR, ERR_SEND_TELEGRAM);
+            return internal_error(ERR_SEND_TELEGRAM);
         }
     } else {
         let bot_link = "https://t.me/granitemanager_bot?start";
@@ -184,11 +179,7 @@ async fn handle_assign_lead(
     OK_RESPONSE
 }
 
-async fn handle_callback(
-    cb: CallbackQuery,
-    pool: &MySqlPool,
-    bot: &TelegramBot,
-) -> (StatusCode, &'static str) {
+async fn handle_callback(cb: CallbackQuery, pool: &MySqlPool, bot: &TelegramBot) -> BasicResponse {
     let Some(data) = &cb.data else {
         return OK_RESPONSE;
     };
@@ -203,7 +194,7 @@ pub async fn webhook_handler(
     State(pool): State<MySqlPool>,
     tg_bot: TelegramBot,
     axum::extract::Json(update): axum::extract::Json<Update>,
-) -> (StatusCode, &'static str) {
+) -> BasicResponse {
     match update.kind {
         UpdateKind::Message(msg) => handle_message(msg, &pool, &tg_bot).await,
         UpdateKind::CallbackQuery(cb) => handle_callback(cb, &pool, &tg_bot).await,
