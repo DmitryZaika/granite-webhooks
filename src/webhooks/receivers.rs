@@ -8,10 +8,7 @@ use crate::schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
 use crate::schemas::documenso::WebhookEvent;
 use crate::telegram::send::send_lead_manager_message;
 use axum::extract::Path;
-use axum::{
-    extract::{Json, State},
-    response::IntoResponse,
-};
+use axum::extract::{Json, State};
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 

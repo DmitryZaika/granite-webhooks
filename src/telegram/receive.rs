@@ -6,8 +6,9 @@ use crate::crud::users::get_user_tg_info;
 use crate::crud::users::user_has_telegram_id;
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
 use crate::libs::constants::internal_error;
-use crate::libs::constants::{ERR_SEND_EMAIL, ERR_SEND_TELEGRAM, OK_RESPONSE};
+use crate::libs::constants::{ERR_SEND_EMAIL, OK_RESPONSE};
 use crate::libs::types::BasicResponse;
+use crate::telegram::utils::extract_message;
 use crate::telegram::utils::parse_code;
 use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
 use axum::extract::State;
@@ -15,7 +16,6 @@ use axum::http::StatusCode;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
-use teloxide::types::MaybeInaccessibleMessage;
 use teloxide::types::{ChatId, Update, UpdateKind};
 
 const MESSAGE: &str = r"
@@ -31,11 +31,13 @@ async fn handle_start_command(
     chat_id: ChatId,
 ) -> BasicResponse {
     if user_has_telegram_id(pool, chat_id.0).await.unwrap() {
-        bot.bot
+        return bot
             .send_message(chat_id, "You are already registered")
             .await
-            .unwrap();
-        return OK_RESPONSE;
+            .map_or_else(
+                |e| e,
+                |_| (StatusCode::OK, "User already has a telegram id"),
+            );
     }
     let code = gen_code();
     set_user_telegram_token(pool, chat_id.0, code, email)
@@ -54,13 +56,9 @@ async fn handle_start_command(
 
     let message =
         format!("You are now registering for {email}, please enter the code sent to your email");
-    let result = bot.bot.send_message(chat_id, message).await;
-    if let Err(e) = result {
-        tracing::error!(?e, chat_id = chat_id.0, "telegram send failed");
-        return internal_error(ERR_SEND_TELEGRAM);
-    }
-
-    OK_RESPONSE
+    bot.send_message(chat_id, message)
+        .await
+        .map_or_else(|e| e, |_| OK_RESPONSE)
 }
 
 async fn handle_telegram_code(
@@ -70,23 +68,25 @@ async fn handle_telegram_code(
     code: i32,
 ) -> BasicResponse {
     if user_has_telegram_id(pool, chat_id.0).await.unwrap() {
-        bot.bot
+        return bot
             .send_message(chat_id, "You are already registered")
             .await
-            .unwrap();
-        return (StatusCode::OK, "User already has a telegram id");
+            .map_or_else(
+                |e| e,
+                |_| (StatusCode::OK, "User already has a telegram id"),
+            );
     }
     let db_code = get_user_telegram_token(pool, chat_id.0).await.unwrap();
     if db_code.unwrap() == code {
         set_telegram_id(pool, chat_id.0).await.unwrap();
-        bot.bot
+        return bot
             .send_message(chat_id, "Accepted, you are now registered")
             .await
-            .unwrap();
-        return OK_RESPONSE;
+            .map_or_else(|e| e, |_| OK_RESPONSE);
     }
-    bot.bot.send_message(chat_id, "Invalid code").await.unwrap();
-    OK_RESPONSE
+    bot.send_message(chat_id, "Invalid code")
+        .await
+        .map_or_else(|e| e, |_| (StatusCode::OK, "Invalid code"))
 }
 
 async fn handle_message(msg: Message, pool: &MySqlPool, bot: &TelegramBot) -> BasicResponse {
@@ -97,7 +97,10 @@ async fn handle_message(msg: Message, pool: &MySqlPool, bot: &TelegramBot) -> Ba
 
     if text.starts_with("/start") {
         let full_message = "Welcome to our bot! Please send: /email <email>";
-        bot.bot.send_message(chat_id, full_message).await.unwrap();
+        return bot
+            .send_message(chat_id, full_message)
+            .await
+            .map_or_else(|e| e, |_| (StatusCode::OK, "Invalid code"));
     }
 
     if let Some(email) = parse_slash_email(text) {
@@ -108,13 +111,9 @@ async fn handle_message(msg: Message, pool: &MySqlPool, bot: &TelegramBot) -> Ba
         return handle_telegram_code(pool, bot, chat_id, code).await;
     }
 
-    match bot.bot.send_message(chat_id, MESSAGE).await {
-        Ok(_) => OK_RESPONSE,
-        Err(e) => {
-            tracing::error!(?e, %chat_id, "failed to send telegram");
-            internal_error(ERR_SEND_TELEGRAM)
-        }
-    }
+    bot.send_message(chat_id, MESSAGE)
+        .await
+        .map_or_else(|e| e, |_| (StatusCode::OK, "Invalid code"))
 }
 
 async fn handle_assign_lead(
@@ -124,43 +123,33 @@ async fn handle_assign_lead(
     bot: &TelegramBot,
     cb: CallbackQuery,
 ) -> BasicResponse {
-    // let _ = bot.bot.answer_callback_query(cb.id.clone()).await;
+    let Some(message) = cb.message else {
+        return (StatusCode::NOT_FOUND, "Invalid message");
+    };
     assign_lead(pool, lead_id, user_id).await.unwrap();
     let tg_info = get_user_tg_info(pool, user_id).await.unwrap().unwrap();
-    let mut former_message = "Unknown";
-    let msg = cb.message.unwrap();
-    if let MaybeInaccessibleMessage::Regular(msg) = &msg
-        && let Some(text) = msg.text()
-    {
-        former_message = text;
-    }
+    let former_message = extract_message(&message).unwrap_or_default();
 
     let user_name = tg_info.name.unwrap_or_else(|| "Unknown".to_string());
     let full_content = format!("{former_message}\n\nLead assigned to {user_name}");
-    bot.bot
-        .edit_message_text(msg.chat().id, msg.id(), full_content)
-        .await
-        .unwrap();
+    let edit_result = bot.edit_message_text(&message, full_content).await;
+    if let Err(e) = edit_result {
+        return e;
+    }
 
     let result = create_deal(pool, lead_id, 1, 0, user_id).await.unwrap();
     let deal_id = result.last_insert_id();
     let lead_link = lead_url(deal_id);
     if let Some(telegram_id) = tg_info.telegram_id {
-        let result = bot
-            .bot
-            .send_message(
-                ChatId(telegram_id),
-                format!("You were assigned a lead. Click here: \n{lead_link}"),
-            )
-            .await;
-        if let Err(e) = result {
-            tracing::error!(?e, %telegram_id, "failed to send telegram");
-            return internal_error(ERR_SEND_TELEGRAM);
-        }
-    } else {
-        let bot_link = "https://t.me/granitemanager_bot?start";
-        let message = format!(
-            r"
+        let final_message = format!("You were assigned a lead. Click here: \n{lead_link}");
+        return bot
+            .send_message(ChatId(telegram_id), final_message)
+            .await
+            .map_or_else(|e| e, |_| (StatusCode::OK, "Invalid code"));
+    }
+    let bot_link = "https://t.me/granitemanager_bot?start";
+    let message = format!(
+        r"
     You were assigned a lead. Click here:
     {lead_link}
 
@@ -169,12 +158,11 @@ async fn handle_assign_lead(
 
     Paste this command into the bot: \start {}
     ",
-            tg_info.email
-        );
-        send_message(&[&tg_info.email], "Lead assigned", &message)
-            .await
-            .unwrap();
-    }
+        tg_info.email
+    );
+    send_message(&[&tg_info.email], "Lead assigned", &message)
+        .await
+        .unwrap();
 
     OK_RESPONSE
 }
