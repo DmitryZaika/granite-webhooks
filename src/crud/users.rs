@@ -5,7 +5,7 @@ pub struct SalesUser {
     pub id: i32,
     pub telegram_id: Option<i64>,
     pub name: Option<String>,
-    pub position_id: Option<i32>,
+    pub position_id: Option<u64>,
     pub mtd_lead_count: i64,
 }
 
@@ -17,7 +17,7 @@ pub struct UserTgInfo {
 
 pub async fn get_sales_users(
     pool: &MySqlPool,
-    company_id: i32,
+    user_id: i32,
 ) -> Result<Vec<SalesUser>, sqlx::Error> {
     let users = sqlx::query_as!(
         SalesUser,
@@ -26,18 +26,17 @@ pub async fn get_sales_users(
             u.id,
             u.telegram_id,
             u.name,
-            u.position_id,
+            up.position_id as position_id,
             COUNT(c.id) as mtd_lead_count
         FROM users u
         LEFT JOIN customers c ON u.id = c.sales_rep 
             AND c.source = 'leads' 
             AND c.assigned_date >= DATE_FORMAT(NOW(), '%Y-%m-01')
-            AND c.company_id = u.company_id
-        WHERE u.company_id = ? 
-        AND (u.position_id = 1 OR u.position_id = 2)
-        GROUP BY u.id, u.telegram_id, u.name, u.position_id
+        INNER JOIN users_positions up ON u.id = up.user_id
+        WHERE (up.position_id = 1 OR up.position_id = 2) AND u.id = ?
+        GROUP BY u.id, u.telegram_id, u.name, up.position_id
         "#,
-        company_id
+        user_id
     )
     .fetch_all(pool)
     .await?;
