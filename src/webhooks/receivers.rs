@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use crate::crud::leads::{create_lead_from_facebook, create_lead_from_wordpress};
 use crate::crud::users::get_sales_users;
+use crate::libs::constants::OK_RESPONSE;
 use crate::schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
 use crate::schemas::documenso::WebhookEvent;
 use crate::telegram::send::send_lead_manager_message;
@@ -15,7 +16,7 @@ use sqlx::MySqlPool;
 
 pub async fn documenso(payload: Json<WebhookEvent>) -> impl IntoResponse {
     println!("Received documenso webhook event: {payload:?}");
-    StatusCode::OK
+    OK_RESPONSE
 }
 
 async fn handle_telegram_send<T: Display>(

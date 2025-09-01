@@ -5,10 +5,12 @@ use crate::crud::leads::create_deal;
 use crate::crud::users::get_user_tg_info;
 use crate::crud::users::user_has_telegram_id;
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
+use crate::libs::constants::OK_RESPONSE;
 use crate::telegram::utils::parse_code;
 use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
 use axum::extract::State;
 use axum::http::StatusCode;
+use lambda_http::tracing;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
 use teloxide::types::MaybeInaccessibleMessage;
@@ -20,18 +22,21 @@ Invalid message. Please send one of the following commands:
 <code>
 ";
 
+const ERR_SEND_EMAIL: &str = "send_email_failed";
+const ERR_SEND_TELEGRAM: &str = "telegram_send_failed";
+
 async fn handle_start_command(
     pool: &MySqlPool,
     bot: &TelegramBot,
     email: &str,
     chat_id: ChatId,
-) -> (StatusCode, String) {
+) -> (StatusCode, &'static str) {
     if user_has_telegram_id(pool, chat_id.0).await.unwrap() {
         bot.bot
             .send_message(chat_id, "You are already registered")
             .await
             .unwrap();
-        return (StatusCode::OK, "User already has a telegram id".to_string());
+        return OK_RESPONSE;
     }
     let code = gen_code();
     set_user_telegram_token(pool, chat_id.0, code, email)
@@ -44,19 +49,19 @@ async fn handle_start_command(
     )
     .await;
     if let Err(e) = message_result {
-        let format_error = format!("Error 1: {e}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, format_error);
+        tracing::error!(?e, %email, "email send failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, ERR_SEND_EMAIL);
     }
 
     let message =
         format!("You are now registering for {email}, please enter the code sent to your email");
     let result = bot.bot.send_message(chat_id, message).await;
     if let Err(e) = result {
-        let format_error = format!("Error 2: {e}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, format_error);
+        tracing::error!(?e, chat_id = chat_id.0, "telegram send failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, ERR_SEND_TELEGRAM);
     }
 
-    (StatusCode::OK, "ok".to_string())
+    OK_RESPONSE
 }
 
 async fn handle_telegram_code(
@@ -64,13 +69,13 @@ async fn handle_telegram_code(
     bot: &TelegramBot,
     chat_id: ChatId,
     code: i32,
-) -> (StatusCode, String) {
+) -> (StatusCode, &'static str) {
     if user_has_telegram_id(pool, chat_id.0).await.unwrap() {
         bot.bot
             .send_message(chat_id, "You are already registered")
             .await
             .unwrap();
-        return (StatusCode::OK, "User already has a telegram id".to_string());
+        return (StatusCode::OK, "User already has a telegram id");
     }
     let db_code = get_user_telegram_token(pool, chat_id.0).await.unwrap();
     if db_code.unwrap() == code {
@@ -79,17 +84,21 @@ async fn handle_telegram_code(
             .send_message(chat_id, "Accepted, you are now registered")
             .await
             .unwrap();
-        return (StatusCode::OK, "ok".to_string());
+        return OK_RESPONSE;
     }
     bot.bot.send_message(chat_id, "Invalid code").await.unwrap();
-    (StatusCode::OK, "ok".to_string())
+    OK_RESPONSE
 }
 
-async fn handle_message(msg: Message, pool: &MySqlPool, bot: &TelegramBot) -> (StatusCode, String) {
+async fn handle_message(
+    msg: Message,
+    pool: &MySqlPool,
+    bot: &TelegramBot,
+) -> (StatusCode, &'static str) {
     let chat_id = msg.chat.id; // ChatId
     let text = match msg.text() {
         Some(text) => text,
-        None => return (StatusCode::OK, "ok".to_string()),
+        None => return OK_RESPONSE,
     };
 
     if text.starts_with("/start") {
@@ -106,8 +115,11 @@ async fn handle_message(msg: Message, pool: &MySqlPool, bot: &TelegramBot) -> (S
     }
 
     match bot.bot.send_message(chat_id, MESSAGE).await {
-        Ok(_) => (StatusCode::OK, "ok".to_string()),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Ok(_) => OK_RESPONSE,
+        Err(e) => {
+            tracing::error!(?e, %chat_id, "failed to send telegram");
+            return (StatusCode::INTERNAL_SERVER_ERROR, ERR_SEND_TELEGRAM);
+        }
     }
 }
 
@@ -117,7 +129,7 @@ async fn handle_assign_lead(
     user_id: i64,
     bot: &TelegramBot,
     cb: CallbackQuery,
-) -> (StatusCode, String) {
+) -> (StatusCode, &'static str) {
     // let _ = bot.bot.answer_callback_query(cb.id.clone()).await;
     assign_lead(pool, lead_id, user_id).await.unwrap();
     let tg_info = get_user_tg_info(pool, user_id).await.unwrap().unwrap();
@@ -148,7 +160,8 @@ async fn handle_assign_lead(
             )
             .await;
         if let Err(e) = result {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+            tracing::error!(?e, %telegram_id, "failed to send telegram");
+            return (StatusCode::INTERNAL_SERVER_ERROR, ERR_SEND_TELEGRAM);
         }
     } else {
         let bot_link = "https://t.me/granitemanager_bot?start";
@@ -169,33 +182,33 @@ async fn handle_assign_lead(
             .unwrap();
     }
 
-    (StatusCode::OK, "ok".to_string())
+    OK_RESPONSE
 }
 
 async fn handle_callback(
     cb: CallbackQuery,
     pool: &MySqlPool,
     bot: &TelegramBot,
-) -> (StatusCode, String) {
+) -> (StatusCode, &'static str) {
     let data = match &cb.data {
         Some(data) => data,
-        None => return (StatusCode::OK, "ok".to_string()),
+        None => return OK_RESPONSE,
     };
 
     if let Some((lead_id, user_id)) = parse_assign(data) {
         return handle_assign_lead(pool, lead_id, user_id, bot, cb).await;
     }
-    (StatusCode::OK, "ok".to_string())
+    OK_RESPONSE
 }
 
 pub async fn webhook_handler(
     State(pool): State<MySqlPool>,
     tg_bot: TelegramBot,
     axum::extract::Json(update): axum::extract::Json<Update>,
-) -> (StatusCode, String) {
+) -> (StatusCode, &'static str) {
     match update.kind {
         UpdateKind::Message(msg) => handle_message(msg, &pool, &tg_bot).await,
         UpdateKind::CallbackQuery(cb) => handle_callback(cb, &pool, &tg_bot).await,
-        _ => (StatusCode::OK, "ok".to_string()),
+        _ => OK_RESPONSE,
     }
 }

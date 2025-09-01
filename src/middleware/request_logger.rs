@@ -36,7 +36,7 @@ async fn buffer_request_body(request: Request) -> Result<Request, Response> {
     let bytes = body
         .collect()
         .await
-        .map_err(|err| {
+        .map_err(|_err| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Middleware could not parse request body".to_string(),

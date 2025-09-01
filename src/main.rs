@@ -4,13 +4,13 @@
     clippy::missing_errors_doc,
     clippy::must_use_candidate
 )]
-use axum::http::StatusCode;
 use axum::{
     Router,
     response::IntoResponse,
     routing::{get, post},
 };
 use lambda_http::{Error, run, tracing};
+use libs::constants::OK_RESPONSE;
 use middleware::request_logger::print_request_body;
 use sqlx::MySqlPool;
 use std::env::set_var;
@@ -20,13 +20,14 @@ use webhooks::receivers::{documenso, facebook_contact_form, wordpress_contact_fo
 pub mod amazon;
 pub mod axum_helpers;
 pub mod crud;
+pub mod libs;
 pub mod middleware;
 pub mod schemas;
 pub mod telegram;
 pub mod webhooks;
 
 async fn health_check() -> impl IntoResponse {
-    StatusCode::OK
+    OK_RESPONSE
 }
 
 #[tokio::main]
