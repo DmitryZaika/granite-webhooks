@@ -1,5 +1,6 @@
 use axum::extract::FromRequestParts;
 use axum::http::{StatusCode, request::Parts};
+use lambda_http::tracing;
 use std::env::var;
 
 pub struct TelegramBot {
@@ -13,7 +14,14 @@ where
     type Rejection = (StatusCode, String);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let webhook_secret = var("WEBHOOK_SECRET").expect("WEBHOOK_SECRET must be set");
+        let webhook_secret = var("WEBHOOK_SECRET").map_err(|e| {
+            tracing::error!(?e, "failed to read WEBHOOK_SECRET environment variable");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to get webhook secret".to_string(),
+            )
+        })?;
+
         let secret = parts
             .headers
             .get("x-telegram-bot-api-secret-token")
