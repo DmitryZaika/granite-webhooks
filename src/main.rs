@@ -2,7 +2,8 @@
 #![allow(
     clippy::option_if_let_else,
     clippy::missing_errors_doc,
-    clippy::must_use_candidate
+    clippy::must_use_candidate,
+    clippy::missing_panics_doc
 )]
 use axum::{
     Router,

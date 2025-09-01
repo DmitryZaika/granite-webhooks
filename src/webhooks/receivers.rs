@@ -30,7 +30,7 @@ async fn handle_telegram_send<T: Display>(
         .iter()
         .map(|user| {
             (
-                user.name.clone().unwrap_or("Unknown".to_string()),
+                user.name.clone().unwrap_or_else(|| "Unknown".to_string()),
                 user.id,
                 user.mtd_lead_count,
             )

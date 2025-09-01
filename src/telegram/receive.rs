@@ -96,9 +96,8 @@ async fn handle_message(
     bot: &TelegramBot,
 ) -> (StatusCode, &'static str) {
     let chat_id = msg.chat.id; // ChatId
-    let text = match msg.text() {
-        Some(text) => text,
-        None => return OK_RESPONSE,
+    let Some(text) = msg.text() else {
+        return OK_RESPONSE;
     };
 
     if text.starts_with("/start") {
@@ -118,7 +117,7 @@ async fn handle_message(
         Ok(_) => OK_RESPONSE,
         Err(e) => {
             tracing::error!(?e, %chat_id, "failed to send telegram");
-            return (StatusCode::INTERNAL_SERVER_ERROR, ERR_SEND_TELEGRAM);
+            (StatusCode::INTERNAL_SERVER_ERROR, ERR_SEND_TELEGRAM)
         }
     }
 }
@@ -141,7 +140,7 @@ async fn handle_assign_lead(
         former_message = text;
     }
 
-    let user_name = tg_info.name.unwrap_or("Unknown".to_string());
+    let user_name = tg_info.name.unwrap_or_else(|| "Unknown".to_string());
     let full_content = format!("{former_message}\n\nLead assigned to {user_name}");
     bot.bot
         .edit_message_text(msg.chat().id, msg.id(), full_content)
@@ -190,9 +189,8 @@ async fn handle_callback(
     pool: &MySqlPool,
     bot: &TelegramBot,
 ) -> (StatusCode, &'static str) {
-    let data = match &cb.data {
-        Some(data) => data,
-        None => return OK_RESPONSE,
+    let Some(data) = &cb.data else {
+        return OK_RESPONSE;
     };
 
     if let Some((lead_id, user_id)) = parse_assign(data) {
