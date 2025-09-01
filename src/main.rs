@@ -23,6 +23,7 @@ pub mod axum_helpers;
 pub mod crud;
 pub mod libs;
 pub mod middleware;
+pub mod posthog;
 pub mod schemas;
 pub mod telegram;
 pub mod webhooks;
