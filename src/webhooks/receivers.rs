@@ -26,6 +26,7 @@ async fn handle_telegram_send<T: Display>(
     let all_users = get_sales_users(pool, company_id).await.unwrap();
     let candidates: Vec<(String, i32, i64)> = all_users
         .iter()
+        .filter(|item| item.position_id == Some(1))
         .map(|user| {
             (
                 user.name.clone().unwrap_or_else(|| "Unknown".to_string()),

@@ -5,7 +5,7 @@ pub struct SalesUser {
     pub id: i32,
     pub telegram_id: Option<i64>,
     pub name: Option<String>,
-    pub position_id: Option<i32>,
+    pub position_id: Option<u64>,
     pub mtd_lead_count: i64,
 }
 
@@ -26,22 +26,23 @@ pub async fn get_sales_users(
             u.id,
             u.telegram_id,
             u.name,
-            u.position_id,
+            up.position_id,
             COUNT(c.id) as mtd_lead_count
         FROM users u
+        INNER JOIN users_positions up ON u.id = up.user_id
         LEFT JOIN customers c ON u.id = c.sales_rep 
             AND c.source = 'leads' 
             AND c.assigned_date >= DATE_FORMAT(NOW(), '%Y-%m-01')
             AND c.company_id = u.company_id
         WHERE u.company_id = ? 
-        AND (u.position_id = 1 OR u.position_id = 2)
-        GROUP BY u.id, u.telegram_id, u.name, u.position_id
+        AND (up.position_id = 1 OR up.position_id = 2)
+        GROUP BY u.id, u.telegram_id, u.name, up.position_id
         "#,
         company_id
     )
     .fetch_all(pool)
     .await?;
-
+    println!("users: {:?}", users);
     Ok(users)
 }
 
