@@ -1,5 +1,5 @@
 use axum::body::Bytes;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, Uri};
 use axum::{
     body::Body,
     extract::Request,
@@ -11,7 +11,7 @@ use lambda_http::tracing;
 
 use crate::libs::constants::internal_error;
 use crate::libs::types::BasicResponse;
-use crate::posthog::{Event, client};
+use crate::posthog::{PostHogEvent, client};
 
 // middleware that shows how to consume the request body upfront
 pub async fn print_request_body(
@@ -32,8 +32,7 @@ pub async fn print_request_body(
     let response = next.run(request).await;
 
     if !response.status().is_success() {
-        println!("Error response received: SENDING TO POSTHOG");
-        return log_response_body(response).await;
+        return log_response_body(response, &uri).await;
     }
 
     Ok(response)
@@ -57,6 +56,7 @@ async fn log_request_body(request: Request) -> Result<Request, BasicResponse> {
 
 async fn log_response_body(
     response: Response,
+    uri: &Uri,
 ) -> Result<lambda_http::Response<axum::body::Body>, BasicResponse> {
     let (parts, body) = response.into_parts();
 
@@ -68,28 +68,16 @@ async fn log_response_body(
         .to_bytes();
 
     // We just want to log the body for debugging purposes
-    posthog_capture_request(parts.status, &bytes).await;
+    posthog_capture_request(parts.status, uri, &bytes).await;
 
     Ok(Response::from_parts(parts, Body::from(bytes)))
 }
 
-async fn posthog_capture_request(status: StatusCode, body: &Bytes) {
+async fn posthog_capture_request(status: StatusCode, uri: &Uri, body: &Bytes) {
     let api_key = std::env::var("POSTHOG_API_KEY").unwrap();
-    let mut event = Event::new_anon("$exception");
-    event.insert_prop("$exception_type", "HTTPError").unwrap();
-    event.insert_prop("status", status.as_u16()).unwrap();
-    event.insert_prop("path", "/telegram/webhook").unwrap();
     let body_str = String::from_utf8_lossy(body);
-    let exp_message = format!("status={} body={}", status.as_u16(), body_str);
-    event
-        .insert_prop("$exception_message", exp_message)
-        .unwrap();
-    let posthog_client = client(api_key).await;
-    let ph_client = posthog_client.capture(event).await.unwrap();
-    println!(
-        "{}, {}",
-        ph_client.status().as_u16(),
-        ph_client.text().await.unwrap()
-    );
+    let event = PostHogEvent::new_http_exception(api_key, body_str, status, uri);
+    let posthog_client = client().await;
+    posthog_client.capture(event).await.unwrap();
     println!("Error response received: SENT TO POSTHOG");
 }

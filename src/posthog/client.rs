@@ -1,24 +1,22 @@
+use std::default::Default;
 use std::time::Duration;
 
 use reqwest::{Client as HttpClient, header::CONTENT_TYPE};
 
-use crate::posthog::error::Error;
-use crate::posthog::event::{Event, InnerEvent};
+use crate::posthog::{Error, PostHogEvent};
 
 const API_ENDPOINT: &str = "https://us.i.posthog.com/i/v0/e/";
 
 pub struct ClientOptions {
     api_endpoint: &'static str,
-    api_key: String,
 
     request_timeout_seconds: u64,
 }
 
-impl ClientOptions {
-    pub const fn from(api_key: String) -> Self {
+impl Default for ClientOptions {
+    fn default() -> Self {
         Self {
             api_endpoint: API_ENDPOINT,
-            api_key,
             request_timeout_seconds: 30,
         }
     }
@@ -31,8 +29,8 @@ pub struct Client {
 }
 
 /// This function constructs a new client using the options provided.
-pub async fn client(api_key: String) -> Client {
-    let options = ClientOptions::from(api_key);
+pub async fn client() -> Client {
+    let options = ClientOptions::default();
     let client = HttpClient::builder()
         .timeout(Duration::from_secs(options.request_timeout_seconds))
         .build()
@@ -42,12 +40,10 @@ pub async fn client(api_key: String) -> Client {
 
 impl Client {
     /// Capture the provided event, sending it to `PostHog`.
-    pub async fn capture(&self, event: Event) -> Result<reqwest::Response, Error> {
-        let inner_event = InnerEvent::new(event, self.options.api_key.clone());
-
+    pub async fn capture(&self, event: PostHogEvent) -> Result<reqwest::Response, Error> {
         let payload =
-            serde_json::to_string(&inner_event).map_err(|e| Error::Serialization(e.to_string()))?;
-        println!("Payload: {}", payload);
+            serde_json::to_string(&event).map_err(|e| Error::Serialization(e.to_string()))?;
+        println!("Payload: {payload}");
 
         self.client
             .post(self.options.api_endpoint)

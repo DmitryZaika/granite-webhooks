@@ -1,215 +1,96 @@
+use axum::http::{StatusCode, Uri};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
-use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
-use semver::Version;
 use serde::Serialize;
-use uuid::Uuid;
 
-use crate::posthog::error::Error;
-
-/// An [`Event`] represents an interaction a user has with your app or
-/// website. Examples include button clicks, pageviews, query completions, and signups.
-/// See the [PostHog documentation](https://posthog.com/docs/data/events)
-/// for a detailed explanation of `PostHog` Events.
-#[derive(Serialize, Debug, PartialEq, Eq)]
-pub struct Event {
-    event: String,
-    #[serde(rename = "$distinct_id")]
-    distinct_id: String,
-    properties: HashMap<String, serde_json::Value>,
-    groups: HashMap<String, String>,
-    timestamp: Option<NaiveDateTime>,
-}
-
-impl Event {
-    /// Capture a new identified [`Event`]. Unless you have a distinct ID you can
-    /// associate with a user, you probably want to use [`new_anon`] instead.
-    pub fn new<S: Into<String>>(event: S, distinct_id: S) -> Self {
-        Self {
-            event: event.into(),
-            distinct_id: distinct_id.into(),
-            properties: HashMap::new(),
-            groups: HashMap::new(),
-            timestamp: None,
-        }
-    }
-
-    /// Capture a new anonymous event.
-    /// See <https://posthog.com/docs/data/anonymous-vs-identified-events#how-to-capture-anonymous-events>
-    pub fn new_anon<S: Into<String>>(event: S) -> Self {
-        let mut res = Self {
-            event: event.into(),
-            distinct_id: Uuid::now_v7().to_string(),
-            properties: HashMap::new(),
-            groups: HashMap::new(),
-            timestamp: None,
-        };
-        res.insert_prop("$process_person_profile", false)
-            .expect("bools are safe for serde");
-        res
-    }
-
-    /// Add a property to the event
-    ///
-    /// Errors if `prop` fails to serialize
-    pub fn insert_prop<K: Into<String>, P: Serialize>(
-        &mut self,
-        key: K,
-        prop: P,
-    ) -> Result<(), Error> {
-        let as_json =
-            serde_json::to_value(prop).map_err(|e| Error::Serialization(e.to_string()))?;
-        let _ = self.properties.insert(key.into(), as_json);
-        Ok(())
-    }
-
-    /// Capture this as a group event. See <https://posthog.com/docs/product-analytics/group-analytics#how-to-capture-group-events>
-    /// Note that group events cannot be personless, and will be automatically upgraded to include person profile processing if
-    /// they were anonymous. This might lead to "empty" person profiles being created.
-    pub fn add_group(&mut self, group_name: &str, group_id: &str) {
-        // You cannot disable person profile processing for groups
-        self.insert_prop("$process_person_profile", true)
-            .expect("bools are safe for serde");
-        self.groups.insert(group_name.into(), group_id.into());
-    }
-
-    /// Set the event timestamp, for events that happened in the past.
-    ///
-    /// Errors if the timestamp is in the future.
-    pub fn set_timestamp<Tz>(&mut self, timestamp: DateTime<Tz>) -> Result<(), Error>
-    where
-        Tz: TimeZone,
-    {
-        if timestamp > Utc::now() + Duration::seconds(1) {
-            return Err(Error::InvalidTimestamp(String::from(
-                "Events cannot occur in the future",
-            )));
-        }
-        self.timestamp = Some(timestamp.naive_utc());
-        Ok(())
-    }
-}
-
-// This exists so that the client doesn't have to specify the API key over and over
-#[derive(Serialize)]
-pub struct InnerEvent {
-    api_key: String,
+#[derive(Serialize, Debug)]
+pub struct PostHogEvent {
+    pub api_key: String,
+    pub event: String,       // "$exception" и т.п.
+    pub distinct_id: String, // ВЕРХНИЙ УРОВЕНЬ
     #[serde(skip_serializing_if = "Option::is_none")]
-    uuid: Option<Uuid>,
-    event: String,
-    distinct_id: String,
-    properties: HashMap<String, serde_json::Value>,
-    timestamp: Option<NaiveDateTime>,
+    pub properties: Option<Properties>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>, // опускаем, если None
 }
 
-impl InnerEvent {
-    pub fn new(event: Event, api_key: String) -> Self {
-        Self::new_with_uuid(event, api_key, None)
-    }
+#[derive(Serialize, Debug, Default)]
+pub struct Properties {
+    #[serde(rename = "$exception_list", skip_serializing_if = "Option::is_none")]
+    pub exception_list: Option<Vec<ExceptionItem>>,
+    #[serde(rename = "$exception_fingerprint")]
+    pub exception_fingerprint: String,
 
-    pub fn new_with_uuid(event: Event, api_key: String, uuid: Option<Uuid>) -> Self {
-        let mut properties = event.properties;
+    pub status: u16,
+    pub path: String,
 
-        // Add $lib_name and $lib_version to the properties
-        properties.insert(
-            "$lib".into(),
-            serde_json::Value::String("posthog-rs".into()),
-        );
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
 
-        let version_str = env!("CARGO_PKG_VERSION");
-        properties.insert(
-            "$lib_version".into(),
-            serde_json::Value::String(version_str.into()),
-        );
+#[derive(Serialize, Debug)]
+pub struct ExceptionItem {
+    #[serde(rename = "type")]
+    pub exception_type: String,
+    #[serde(rename = "value")]
+    pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stacktrace: Option<StackTrace>,
+}
 
-        if let Ok(version) = version_str.parse::<Version>() {
-            properties.insert(
-                "$lib_version__major".into(),
-                serde_json::Value::Number(version.major.into()),
-            );
-            properties.insert(
-                "$lib_version__minor".into(),
-                serde_json::Value::Number(version.minor.into()),
-            );
-            properties.insert(
-                "$lib_version__patch".into(),
-                serde_json::Value::Number(version.patch.into()),
-            );
-        }
+#[derive(Serialize, Debug)]
+pub struct StackTrace {
+    #[serde(rename = "type")]
+    pub kind: String, // "raw" | "resolved"
+    pub frames: Vec<Frame>,
+}
 
-        if !event.groups.is_empty() {
-            properties.insert(
-                "$groups".into(),
-                serde_json::Value::Object(
-                    event
-                        .groups
-                        .into_iter()
-                        .map(|(k, v)| (k, serde_json::Value::String(v)))
-                        .collect(),
-                ),
-            );
-        }
+#[derive(Serialize, Debug)]
+pub struct Frame {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lineno: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub colno: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_app: Option<bool>,
+}
 
+impl PostHogEvent {
+    pub fn new_http_exception(
+        api_key: impl Into<String>,
+        value: impl Into<String>,
+        status: StatusCode,
+        uri: &Uri,
+    ) -> Self {
+        let item = ExceptionItem {
+            exception_type: "HTTPError".into(),
+            value: value.into(),
+            stacktrace: Some(StackTrace {
+                kind: "raw".into(),
+                frames: vec![],
+            }),
+        };
+
+        let mut hasher = Sha256::new();
+        hasher.update(format!("HTTPError|{}|{}", status.as_u16(), uri));
+        let fingerprint = format!("{:x}", hasher.finalize());
         Self {
-            api_key,
-            uuid,
-            event: event.event,
-            distinct_id: event.distinct_id,
-            properties,
-            timestamp: event.timestamp,
+            api_key: api_key.into(),
+            event: "$exception".into(),
+            distinct_id: "server-webhooks".into(),
+            properties: Some(Properties {
+                exception_list: Some(vec![item]),
+                exception_fingerprint: fingerprint,
+                status: status.as_u16(),
+                path: uri.to_string(),
+                extra: HashMap::new(),
+            }),
+            timestamp: None,
         }
-    }
-}
-
-#[cfg(test)]
-pub mod tests {
-    use crate::posthog::event::{Event, InnerEvent};
-
-    #[test]
-    fn inner_event_adds_lib_properties_correctly() {
-        // Arrange
-        let mut event = Event::new("unit test event", "1234");
-        event.insert_prop("key1", "value1").unwrap();
-
-        // Act
-        let inner_event = InnerEvent::new(event, "test_api_key".to_string());
-
-        // Assert
-        let props = &inner_event.properties;
-        assert_eq!(
-            props.get("$lib"),
-            Some(&serde_json::Value::String("posthog-rs".to_string()))
-        );
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::time::Duration;
-
-    use chrono::{DateTime, Utc};
-
-    use super::Event;
-
-    #[test]
-    fn test_timestamp_is_correctly_set() {
-        let mut event = Event::new_anon("test");
-        let ts = DateTime::parse_from_rfc3339("2023-01-01T10:00:00+03:00").unwrap();
-        event
-            .set_timestamp(ts.clone())
-            .expect("Date is not in the future");
-        let expected = DateTime::parse_from_rfc3339("2023-01-01T07:00:00Z").unwrap();
-        assert_eq!(event.timestamp.unwrap(), expected.naive_utc())
-    }
-
-    #[test]
-    fn test_timestamp_is_correctly_set_with_future_date() {
-        let mut event = Event::new_anon("test");
-        let ts = Utc::now() + Duration::from_secs(60);
-        event
-            .set_timestamp(ts.clone())
-            .expect_err("Date is in the future, should be rejected");
-
-        assert!(event.timestamp.is_none())
     }
 }

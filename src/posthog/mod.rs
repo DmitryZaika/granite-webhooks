@@ -3,4 +3,5 @@ mod error;
 mod event;
 
 pub use client::client;
-pub use event::Event;
+pub use error::Error;
+pub use event::PostHogEvent;
