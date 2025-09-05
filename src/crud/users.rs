@@ -42,7 +42,7 @@ pub async fn get_sales_users(
     )
     .fetch_all(pool)
     .await?;
-    println!("users: {:?}", users);
+    println!("users: {users:?}");
     Ok(users)
 }
 

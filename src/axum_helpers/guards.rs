@@ -46,7 +46,7 @@ impl TelegramBot {
             Ok(message) => Ok(message),
             Err(err) => {
                 let message_id = format!("Message ID: {msg_id}");
-                tracing::error!(?err, message_id, ERR_SEND_TELEGRAM);
+                tracing::error!(?err, message_id = message_id, ERR_SEND_TELEGRAM);
                 Err(internal_error(ERR_SEND_TELEGRAM))
             }
         }

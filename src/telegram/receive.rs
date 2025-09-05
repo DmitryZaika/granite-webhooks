@@ -6,7 +6,7 @@ use crate::crud::users::get_user_tg_info;
 use crate::crud::users::user_has_telegram_id;
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
 use crate::libs::constants::internal_error;
-use crate::libs::constants::{ERR_SEND_EMAIL, OK_RESPONSE};
+use crate::libs::constants::{ERR_DB, ERR_SEND_EMAIL, OK_RESPONSE};
 use crate::libs::types::BasicResponse;
 use crate::telegram::utils::extract_message;
 use crate::telegram::utils::parse_code;
@@ -30,7 +30,14 @@ async fn handle_start_command(
     email: &str,
     chat_id: ChatId,
 ) -> BasicResponse {
-    if user_has_telegram_id(pool, chat_id.0).await.unwrap() {
+    let has_tg_id = match user_has_telegram_id(pool, chat_id.0).await {
+        Ok(has_tg_id) => has_tg_id,
+        Err(e) => {
+            tracing::error!(?e, "Failed to check if user has telegram id");
+            return internal_error(ERR_DB);
+        }
+    };
+    if has_tg_id {
         return bot
             .send_message(chat_id, "You are already registered")
             .await
@@ -40,9 +47,16 @@ async fn handle_start_command(
             );
     }
     let code = gen_code();
-    set_user_telegram_token(pool, chat_id.0, code, email)
-        .await
-        .unwrap();
+    let db_result = set_user_telegram_token(pool, chat_id.0, code, email).await;
+    if db_result.is_err() {
+        tracing::error!(
+            ?db_result,
+            chat_id = chat_id.0,
+            email = email,
+            "Failed to set user telegram token"
+        );
+        return internal_error(ERR_DB);
+    }
     let message_result = send_message(
         &[email],
         "Graninte Manager Code",
@@ -50,7 +64,7 @@ async fn handle_start_command(
     )
     .await;
     if let Err(e) = message_result {
-        tracing::error!(?e, %email, "email send failed");
+        tracing::error!(?e, email = email, "email send failed");
         return internal_error(ERR_SEND_EMAIL);
     }
 
@@ -67,7 +81,18 @@ async fn handle_telegram_code(
     chat_id: ChatId,
     code: i32,
 ) -> BasicResponse {
-    if user_has_telegram_id(pool, chat_id.0).await.unwrap() {
+    let has_tg_id = match user_has_telegram_id(pool, chat_id.0).await {
+        Ok(has_tg_id) => has_tg_id,
+        Err(e) => {
+            tracing::error!(
+                ?e,
+                chat_id = chat_id.0,
+                "Failed to check if user has telegram id"
+            );
+            return internal_error(ERR_DB);
+        }
+    };
+    if has_tg_id {
         return bot
             .send_message(chat_id, "You are already registered")
             .await
@@ -76,9 +101,18 @@ async fn handle_telegram_code(
                 |_| (StatusCode::OK, "User already has a telegram id"),
             );
     }
-    let db_code = get_user_telegram_token(pool, chat_id.0).await.unwrap();
+    let db_code = match get_user_telegram_token(pool, chat_id.0).await {
+        Ok(db_code) => db_code,
+        Err(e) => {
+            tracing::error!(?e, chat_id = chat_id.0, "Failed to get user telegram token");
+            return internal_error(ERR_DB);
+        }
+    };
     if db_code.unwrap() == code {
-        set_telegram_id(pool, chat_id.0).await.unwrap();
+        if let Err(e) = set_telegram_id(pool, chat_id.0).await {
+            tracing::error!(?e, chat_id = chat_id.0, "Failed to set telegram id");
+            return internal_error(ERR_DB);
+        }
         return bot
             .send_message(chat_id, "Accepted, you are now registered")
             .await
@@ -126,8 +160,28 @@ async fn handle_assign_lead(
     let Some(message) = cb.message else {
         return (StatusCode::NOT_FOUND, "Invalid message");
     };
-    assign_lead(pool, lead_id, user_id).await.unwrap();
-    let tg_info = get_user_tg_info(pool, user_id).await.unwrap().unwrap();
+    let lead_result = assign_lead(pool, lead_id, user_id).await;
+    if let Err(e) = lead_result {
+        tracing::error!(
+            ?e,
+            lead_id = lead_id,
+            user_id = user_id,
+            "Failed to assign lead"
+        );
+        return internal_error(ERR_DB);
+    }
+
+    let tg_info = match get_user_tg_info(pool, user_id).await {
+        Ok(Some(info)) => info,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, "User not found");
+        }
+        Err(e) => {
+            tracing::error!(?e, user_id = user_id, "Failed to get user info");
+            return internal_error(ERR_DB);
+        }
+    };
+
     let former_message = extract_message(&message).unwrap_or_default();
 
     let user_name = tg_info.name.unwrap_or_else(|| "Unknown".to_string());
@@ -160,9 +214,16 @@ async fn handle_assign_lead(
     ",
         tg_info.email
     );
-    send_message(&[&tg_info.email], "Lead assigned", &message)
-        .await
-        .unwrap();
+    let message_result = send_message(&[&tg_info.email], "Lead assigned", &message).await;
+
+    if message_result.is_err() {
+        tracing::error!(
+            ?message_result,
+            email = tg_info.email,
+            "Error sending email"
+        );
+        return internal_error(ERR_SEND_EMAIL);
+    }
 
     OK_RESPONSE
 }

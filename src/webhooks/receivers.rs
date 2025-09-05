@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::crud::leads::{create_lead_from_facebook, create_lead_from_wordpress};
 use crate::crud::users::get_sales_users;
-use crate::libs::constants::{CREATED_RESPONSE, OK_RESPONSE, internal_error};
+use crate::libs::constants::{CREATED_RESPONSE, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use crate::schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
 use crate::schemas::documenso::WebhookEvent;
@@ -22,8 +22,14 @@ async fn handle_telegram_send<T: Display>(
     company_id: i32,
     data: T,
     customer_id: u64,
-) {
-    let all_users = get_sales_users(pool, company_id).await.unwrap();
+) -> Result<(), BasicResponse> {
+    let all_users = match get_sales_users(pool, company_id).await {
+        Ok(users) => users,
+        Err(e) => {
+            tracing::error!(?e, company_id = company_id, "Error fetching users");
+            return Err(internal_error(ERR_DB));
+        }
+    };
     let candidates: Vec<(String, i32, i64)> = all_users
         .iter()
         .filter(|item| item.position_id == Some(1))
@@ -39,15 +45,22 @@ async fn handle_telegram_send<T: Display>(
         .iter()
         .find(|item| item.position_id == Some(2) && item.telegram_id.is_some());
     if let Some(manager) = sales_manager {
-        send_lead_manager_message(
+        let send_message = send_lead_manager_message(
             &data.to_string(),
             customer_id,
             manager.telegram_id.unwrap(),
             &candidates,
         )
-        .await
-        .unwrap();
+        .await;
+        if send_message.is_err() {
+            tracing::error!(
+                ?send_message,
+                manager_id = manager.id,
+                "Error sending message to lead manager"
+            );
+        }
     }
+    Ok(())
 }
 
 pub async fn wordpress_contact_form(
@@ -62,13 +75,22 @@ pub async fn wordpress_contact_form(
             return internal_error("Error creating lead from WordPress");
         }
     };
-    handle_telegram_send(
+    let tg_result = handle_telegram_send(
         &pool,
         company_id,
         &contact_form.to_string(),
         result.last_insert_id(),
     )
     .await;
+
+    if tg_result.is_err() {
+        tracing::error!(
+            ?tg_result,
+            company_id = company_id,
+            "Error sending message to Telegram"
+        );
+        return internal_error("Error sending message to Telegram");
+    }
 
     CREATED_RESPONSE
 }
@@ -86,13 +108,22 @@ pub async fn facebook_contact_form(
         }
     };
 
-    handle_telegram_send(
+    let tg_result = handle_telegram_send(
         &pool,
         company_id,
         &contact_form.to_string(),
         result.last_insert_id(),
     )
     .await;
+
+    if tg_result.is_err() {
+        tracing::error!(
+            ?tg_result,
+            company_id = company_id,
+            "Error sending message to Telegram"
+        );
+        return internal_error("Error sending message to Telegram");
+    }
 
     CREATED_RESPONSE
 }
