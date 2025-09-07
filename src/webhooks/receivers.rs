@@ -1,10 +1,10 @@
 use std::fmt::Display;
 
-use crate::crud::leads::{create_lead_from_facebook, create_lead_from_wordpress};
+use crate::crud::leads::{create_lead_from_facebook, create_lead_from_new_lead_form, create_lead_from_wordpress};
 use crate::crud::users::get_sales_users;
 use crate::libs::constants::{CREATED_RESPONSE, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
-use crate::schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
+use crate::schemas::add_customer::{FaceBookContactForm, NewLeadForm, WordpressContactForm};
 use crate::schemas::documenso::WebhookEvent;
 use crate::telegram::send::send_lead_manager_message;
 use axum::extract::Path;
@@ -102,6 +102,39 @@ pub async fn facebook_contact_form(
         Err(e) => {
             tracing::error!(?e, "Error creating lead from Facebook");
             return internal_error("Error creating lead from Facebook");
+        }
+    };
+
+    let tg_result = handle_telegram_send(
+        &pool,
+        company_id,
+        &contact_form.to_string(),
+        result.last_insert_id(),
+    )
+    .await;
+
+    if tg_result.is_err() {
+        tracing::error!(
+            ?tg_result,
+            company_id = company_id,
+            "Error sending message to Telegram"
+        );
+        return internal_error("Error sending message to Telegram");
+    }
+
+    CREATED_RESPONSE
+}
+
+pub async fn new_lead_form(
+    Path(company_id): Path<i32>,
+    State(pool): State<MySqlPool>,
+    Json(contact_form): Json<NewLeadForm>,
+) -> BasicResponse {
+    let result = match create_lead_from_new_lead_form(&pool, &contact_form, company_id).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(?e, "Error creating lead from New Lead Form");
+            return internal_error("Error creating lead from New Lead Form");
         }
     };
 

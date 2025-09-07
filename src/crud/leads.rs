@@ -1,4 +1,4 @@
-use crate::schemas::add_customer::{FaceBookContactForm, WordpressContactForm};
+use crate::schemas::add_customer::{FaceBookContactForm, NewLeadForm, WordpressContactForm};
 use sqlx::mysql::MySqlQueryResult;
 use sqlx::{MySqlPool, query};
 
@@ -107,4 +107,41 @@ pub async fn create_deal(
     )
     .execute(pool)
     .await;
+}
+
+pub async fn create_lead_from_new_lead_form(
+    pool: &MySqlPool,
+    data: &NewLeadForm,
+    company_id: i32,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    return query!(
+            r#"INSERT INTO customers
+               (name, phone, remove_and_dispose, details, email, city, postal_code, compaign_name, adset_name, ad_name, remodal_type, project_size, contact_time, when_start, improve_offer, sink, kitchen_stove, backsplash, your_message, attached_file, company_id, referral_source, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            data.name,
+            data.phone,
+            data.remove_and_dispose,
+            data.details,
+            data.email,
+            data.city,
+            data.postal_code,
+            data.compaign_name,
+            data.adset_name,
+            data.ad_name,
+            data.remodal_type,
+            data.project_size,
+            data.contact_time,
+            data.when_start,
+            data.improve_offer,
+            data.sink,
+            data.kitchen_stove,
+            data.backsplash,
+            data.your_message,
+            data.attached_file,
+            company_id,
+            "new-lead-form",
+            data.source
+        )
+        .execute(pool)
+        .await;
 }

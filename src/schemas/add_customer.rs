@@ -3,7 +3,6 @@ use std::fmt;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WordpressContactForm {
-    #[serde(rename = "name")]
     pub name: String,
 
     #[serde(rename = "Email")]
@@ -146,6 +145,133 @@ impl fmt::Display for FaceBookContactForm {
             self.adset_name.as_deref().unwrap_or("N/A"),
             self.ad_name.as_deref().unwrap_or("N/A")
         );
+        write!(f, "{message}")
+    }
+}
+
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NewLeadForm {
+    pub name: String,
+
+    pub email: Option<String>,
+
+    pub phone: Option<String>,
+
+    pub postal_code: Option<String>,
+
+    pub address: Option<String>,
+
+    pub city: Option<String>,
+
+    #[serde(rename = "remodel_type")]
+    pub remodal_type: Option<String>,
+   
+    pub project_size: Option<String>,
+    
+    pub contact_time: Option<String>,
+
+    #[serde(rename = "start_date")]
+    pub when_start: Option<String>,
+
+    #[serde(rename = "tear_out")]
+    pub remove_and_dispose: Option<String>,
+
+    pub improve_offer: Option<String>,
+
+    pub sink: Option<String>,
+
+    #[serde(rename = "stove_type")]
+    pub kitchen_stove: Option<String>,
+
+    pub backsplash: Option<String>,
+
+    pub your_message: Option<String>,
+
+    pub details: Option<String>,
+
+    pub ad_name: Option<String>,
+
+    pub adset_name: Option<String>,
+
+    #[serde(rename = "campaign_name")]
+    pub compaign_name: Option<String>,
+
+    #[serde(rename ="file")]
+    pub attached_file: Option<String>,
+
+    pub source: Option<String>,
+}
+
+
+
+impl fmt::Display for NewLeadForm {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut message = String::from("New lead received.\n\n");
+
+        message += &format!("Name: {}\n", self.name);
+
+        if let Some(phone) = &self.phone {
+            message += &format!("Phone: {}\n", phone);
+        }
+        if let Some(email) = &self.email {
+            message += &format!("Email: {}\n", email);
+        }
+        if let Some(postal_code) = &self.postal_code {
+            message += &format!("Postal Code: {}\n", postal_code);
+        }
+        if let Some(address) = &self.address {
+            message += &format!("Address: {}\n", address);
+        }
+        if let Some(city) = &self.city {
+            message += &format!("City: {}\n", city);
+        }
+        if let Some(remodal_type) = &self.remodal_type {
+            message += &format!("Remodel Type: {}\n", remodal_type);
+        }
+        if let Some(project_size) = &self.project_size {
+            message += &format!("Project Size: {}\n", project_size);
+        }
+        if let Some(contact_time) = &self.contact_time {
+            message += &format!("Best Time to Contact: {}\n", contact_time);
+        }
+        if let Some(when_start) = &self.when_start {
+            message += &format!("Start Date: {}\n", when_start);
+        }
+        if let Some(remove_and_dispose) = &self.remove_and_dispose {
+            message += &format!("Tear Out: {}\n", remove_and_dispose);
+        }
+        if let Some(improve_offer) = &self.improve_offer {
+            message += &format!("Improve Offer: {}\n", improve_offer);
+        }
+        if let Some(sink) = &self.sink {
+            message += &format!("Sink: {}\n", sink);
+        }
+        if let Some(kitchen_stove) = &self.kitchen_stove {
+            message += &format!("Stove Type: {}\n", kitchen_stove);
+        }
+        if let Some(backsplash) = &self.backsplash {
+            message += &format!("Backsplash: {}\n", backsplash);
+        }
+        if let Some(your_message) = &self.your_message {
+            message += &format!("Message: {}\n", your_message);
+        }
+        if let Some(details) = &self.details {
+            message += &format!("Details: {}\n", details);
+        }
+        if let Some(ad_name) = &self.ad_name {
+            message += &format!("Ad Name: {}\n", ad_name);
+        }
+        if let Some(adset_name) = &self.adset_name {
+            message += &format!("Adset Name: {}\n", adset_name);
+        }
+        if let Some(compaign_name) = &self.compaign_name {
+            message += &format!("Campaign Name: {}\n", compaign_name);
+        }
+        if let Some(attached_file) = &self.attached_file {
+            message += &format!("File: {}\n", attached_file);
+        }
+
         write!(f, "{message}")
     }
 }
