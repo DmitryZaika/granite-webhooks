@@ -140,8 +140,8 @@ pub async fn create_lead_from_new_lead_form(
             data.your_message,
             data.attached_file,
             company_id,
-            "new-lead-form",
-            data.source
+            data.referral_source,
+            "leads"
         )
         .execute(pool)
         .await;

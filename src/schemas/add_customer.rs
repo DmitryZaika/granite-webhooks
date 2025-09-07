@@ -200,7 +200,7 @@ pub struct NewLeadForm {
     #[serde(rename = "file")]
     pub attached_file: Option<String>,
 
-    pub source: Option<String>,
+    pub referral_source: Option<String>,
 }
 
 impl fmt::Display for NewLeadForm {
