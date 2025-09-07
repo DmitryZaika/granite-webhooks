@@ -43,7 +43,6 @@ impl Client {
     pub async fn capture(&self, event: PostHogEvent) -> Result<reqwest::Response, Error> {
         let payload =
             serde_json::to_string(&event).map_err(|e| Error::Serialization(e.to_string()))?;
-        println!("Payload: {payload}");
 
         self.client
             .post(self.options.api_endpoint)

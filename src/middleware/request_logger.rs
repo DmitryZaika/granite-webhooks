@@ -78,7 +78,8 @@ async fn posthog_capture_request(status: StatusCode, uri: &Uri, body: &Bytes) {
         let body_str = String::from_utf8_lossy(body);
         let event = PostHogEvent::new_http_exception(api_key, body_str, status, uri);
         let posthog_client = client().await;
-        posthog_client.capture(event).await.unwrap();
-        println!("Error response received: SENT TO POSTHOG");
+        if let Err(err) = posthog_client.capture(event).await {
+            tracing::error!("Error sending event to PostHog: {}", err);
+        }
     }
 }

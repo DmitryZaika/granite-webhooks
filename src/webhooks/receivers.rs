@@ -1,6 +1,8 @@
 use std::fmt::Display;
 
-use crate::crud::leads::{create_lead_from_facebook, create_lead_from_new_lead_form, create_lead_from_wordpress};
+use crate::crud::leads::{
+    create_lead_from_facebook, create_lead_from_new_lead_form, create_lead_from_wordpress,
+};
 use crate::crud::users::get_sales_users;
 use crate::libs::constants::{CREATED_RESPONSE, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
@@ -13,7 +15,6 @@ use lambda_http::tracing;
 use sqlx::MySqlPool;
 
 pub async fn documenso(payload: Json<WebhookEvent>) -> BasicResponse {
-    println!("Received documenso webhook event: {payload:?}");
     OK_RESPONSE
 }
 
