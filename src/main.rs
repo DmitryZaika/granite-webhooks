@@ -18,6 +18,8 @@ use std::env::set_var;
 use telegram::receive::webhook_handler;
 use webhooks::receivers::{documenso, facebook_contact_form, wordpress_contact_form};
 
+use crate::webhooks::receivers::new_lead_form;
+
 pub mod amazon;
 pub mod axum_helpers;
 pub mod crud;
@@ -52,6 +54,10 @@ async fn main() -> Result<(), Error> {
         .route(
             "/facebook-contact-form/{company_id}",
             post(facebook_contact_form),
+        )
+        .route(
+            "/v1/webhooks/new-lead-form/{company_id}",
+            post(new_lead_form),
         )
         .route("/telegram/webhook", post(webhook_handler))
         .layer(axum::middleware::from_fn(print_request_body))
