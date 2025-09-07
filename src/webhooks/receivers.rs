@@ -10,8 +10,11 @@ use crate::schemas::add_customer::{FaceBookContactForm, NewLeadForm, WordpressCo
 use crate::telegram::send::send_lead_manager_message;
 use axum::extract::Path;
 use axum::extract::{Json, State};
+use axum::http::StatusCode;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
+use crate::google::maps::driving_distance_miles;
+use crate::crud::company::get_company_address;
 
 pub async fn documenso() -> BasicResponse {
     OK_RESPONSE
@@ -125,11 +128,30 @@ pub async fn facebook_contact_form(
     CREATED_RESPONSE
 }
 
+/*
+async fn get_distance(
+    pool: &MySqlPool,
+    address: Option<String>,
+    company_id: Option<i32>,
+    lead_address: String,
+) -> Option<f64> {
+    if let Some(lead_address) = address {
+        if let Ok(company_address) = get_company_address(&pool, company_id).await {
+            if let Some(company_final) = company_address {
+            let distance = driving_distance_miles(&company_final, lead_address).await;
+                println!("Distance: {:?}", distance);
+            }
+        }
+    }
+}
+    */
+
 pub async fn new_lead_form(
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<NewLeadForm>,
 ) -> BasicResponse {
+
     let result = match create_lead_from_new_lead_form(&pool, &contact_form, company_id).await {
         Ok(id) => id,
         Err(e) => {

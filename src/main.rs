@@ -29,6 +29,7 @@ pub mod posthog;
 pub mod schemas;
 pub mod telegram;
 pub mod webhooks;
+pub mod google;
 
 async fn health_check() -> impl IntoResponse {
     OK_RESPONSE
