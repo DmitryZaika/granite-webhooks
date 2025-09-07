@@ -102,13 +102,23 @@ async fn handle_telegram_code(
             );
     }
     let db_code = match get_user_telegram_token(pool, chat_id.0).await {
-        Ok(db_code) => db_code,
+        Ok(Some(db_code)) => db_code,
+        Ok(None) => {
+            tracing::error!(
+                chat_id = chat_id.0,
+                "User does not have a confirmation token"
+            );
+            return (
+                StatusCode::FORBIDDEN,
+                "User does not have a confirmation token",
+            );
+        }
         Err(e) => {
             tracing::error!(?e, chat_id = chat_id.0, "Failed to get user telegram token");
             return internal_error(ERR_DB);
         }
     };
-    if db_code.unwrap() == code {
+    if db_code == code {
         if let Err(e) = set_telegram_id(pool, chat_id.0).await {
             tracing::error!(?e, chat_id = chat_id.0, "Failed to set telegram id");
             return internal_error(ERR_DB);
@@ -191,7 +201,18 @@ async fn handle_assign_lead(
         return e;
     }
 
-    let result = create_deal(pool, lead_id, 1, 0, user_id).await.unwrap();
+    let result = match create_deal(pool, lead_id, 1, 0, user_id).await {
+        Ok(deal) => deal,
+        Err(e) => {
+            tracing::error!(
+                ?e,
+                user_id = user_id,
+                lead_id = lead_id,
+                "Failed to create deal"
+            );
+            return internal_error(ERR_DB);
+        }
+    };
     let deal_id = result.last_insert_id();
     let lead_link = lead_url(deal_id);
     if let Some(telegram_id) = tg_info.telegram_id {
