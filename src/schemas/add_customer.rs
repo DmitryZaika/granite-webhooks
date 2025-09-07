@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::fmt::Write as _;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WordpressContactForm {
@@ -149,7 +150,6 @@ impl fmt::Display for FaceBookContactForm {
     }
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NewLeadForm {
     pub name: String,
@@ -166,9 +166,9 @@ pub struct NewLeadForm {
 
     #[serde(rename = "remodel_type")]
     pub remodal_type: Option<String>,
-   
+
     pub project_size: Option<String>,
-    
+
     pub contact_time: Option<String>,
 
     #[serde(rename = "start_date")]
@@ -197,79 +197,75 @@ pub struct NewLeadForm {
     #[serde(rename = "campaign_name")]
     pub compaign_name: Option<String>,
 
-    #[serde(rename ="file")]
+    #[serde(rename = "file")]
     pub attached_file: Option<String>,
 
     pub source: Option<String>,
 }
 
-
-
 impl fmt::Display for NewLeadForm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut message = String::from("New lead received.\n\n");
-
-        message += &format!("Name: {}\n", self.name);
+        let mut message = format!("New lead received.\n\nName: {}", self.name);
 
         if let Some(phone) = &self.phone {
-            message += &format!("Phone: {}\n", phone);
+            writeln!(message, "Phone: {phone}").unwrap();
         }
         if let Some(email) = &self.email {
-            message += &format!("Email: {}\n", email);
+            writeln!(message, "Email: {email}").unwrap();
         }
         if let Some(postal_code) = &self.postal_code {
-            message += &format!("Postal Code: {}\n", postal_code);
+            writeln!(message, "Postal Code: {postal_code}").unwrap();
         }
         if let Some(address) = &self.address {
-            message += &format!("Address: {}\n", address);
+            writeln!(message, "Address: {address}").unwrap();
         }
         if let Some(city) = &self.city {
-            message += &format!("City: {}\n", city);
+            writeln!(message, "City: {city}").unwrap();
         }
         if let Some(remodal_type) = &self.remodal_type {
-            message += &format!("Remodel Type: {}\n", remodal_type);
+            writeln!(message, "Remodel Type: {remodal_type}").unwrap();
         }
         if let Some(project_size) = &self.project_size {
-            message += &format!("Project Size: {}\n", project_size);
+            writeln!(message, "Project Size: {project_size}").unwrap();
         }
         if let Some(contact_time) = &self.contact_time {
-            message += &format!("Best Time to Contact: {}\n", contact_time);
+            writeln!(message, "Best Time to Contact: {contact_time}").unwrap();
         }
         if let Some(when_start) = &self.when_start {
-            message += &format!("Start Date: {}\n", when_start);
+            writeln!(message, "Start Date: {when_start}").unwrap();
         }
         if let Some(remove_and_dispose) = &self.remove_and_dispose {
-            message += &format!("Tear Out: {}\n", remove_and_dispose);
+            writeln!(message, "Tear Out: {remove_and_dispose}").unwrap();
         }
         if let Some(improve_offer) = &self.improve_offer {
-            message += &format!("Improve Offer: {}\n", improve_offer);
+            writeln!(message, "Improve Offer: {improve_offer}").unwrap();
         }
         if let Some(sink) = &self.sink {
-            message += &format!("Sink: {}\n", sink);
+            writeln!(message, "Sink: {sink}").unwrap();
         }
         if let Some(kitchen_stove) = &self.kitchen_stove {
-            message += &format!("Stove Type: {}\n", kitchen_stove);
+            writeln!(message, "Stove Type: {kitchen_stove}").unwrap();
         }
         if let Some(backsplash) = &self.backsplash {
-            message += &format!("Backsplash: {}\n", backsplash);
+            writeln!(message, "Backsplash: {backsplash}").unwrap();
         }
         if let Some(your_message) = &self.your_message {
-            message += &format!("Message: {}\n", your_message);
+            writeln!(message, "Message: {your_message}").unwrap();
         }
         if let Some(details) = &self.details {
-            message += &format!("Details: {}\n", details);
+            writeln!(message, "Details: {details}").unwrap();
         }
         if let Some(ad_name) = &self.ad_name {
-            message += &format!("Ad Name: {}\n", ad_name);
+            writeln!(message, "Ad Name: {ad_name}").unwrap();
         }
         if let Some(adset_name) = &self.adset_name {
-            message += &format!("Adset Name: {}\n", adset_name);
+            writeln!(message, "Adset Name: {adset_name}").unwrap();
         }
         if let Some(compaign_name) = &self.compaign_name {
-            message += &format!("Campaign Name: {}\n", compaign_name);
+            writeln!(message, "Campaign Name: {compaign_name}").unwrap();
         }
         if let Some(attached_file) = &self.attached_file {
-            message += &format!("File: {}\n", attached_file);
+            writeln!(message, "File: {attached_file}").unwrap();
         }
 
         write!(f, "{message}")
