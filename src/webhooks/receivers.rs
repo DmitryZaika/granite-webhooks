@@ -7,14 +7,13 @@ use crate::crud::users::get_sales_users;
 use crate::libs::constants::{CREATED_RESPONSE, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use crate::schemas::add_customer::{FaceBookContactForm, NewLeadForm, WordpressContactForm};
-use crate::schemas::documenso::WebhookEvent;
 use crate::telegram::send::send_lead_manager_message;
 use axum::extract::Path;
 use axum::extract::{Json, State};
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
-pub async fn documenso(payload: Json<WebhookEvent>) -> BasicResponse {
+pub async fn documenso() -> BasicResponse {
     OK_RESPONSE
 }
 
