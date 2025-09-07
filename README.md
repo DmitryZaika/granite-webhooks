@@ -19,6 +19,10 @@ Conntect to telegram:
 curl -X POST "https://api.telegram.org/bot<token>/setWebhook" \
       -d "url=https://cawv6iwjgxpk5fj2fchs6vc5vq0bycwp.lambda-url.us-east-2.on.aws/telegram/webhook" \
       -d "secret_token=fake"
+
+||
+
+set-dev-telegram https://d608ecb7196d.ngrok-free.app
 ```
 
 When server dies instantly:
@@ -37,3 +41,5 @@ curl -v -X POST \
   -d '{ "event": "DOCUMENT_CREATED" }'
 
 ```
+
+###
