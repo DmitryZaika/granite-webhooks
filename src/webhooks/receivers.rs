@@ -41,21 +41,18 @@ async fn handle_telegram_send<T: Display>(
             )
         })
         .collect();
-    let sales_manager = all_users
+    if let Some(telegram_id) = all_users
         .iter()
-        .find(|item| item.position_id == Some(2) && item.telegram_id.is_some());
-    if let Some(manager) = sales_manager {
-        let send_message = send_lead_manager_message(
-            &data.to_string(),
-            customer_id,
-            manager.telegram_id.unwrap(),
-            &candidates,
-        )
-        .await;
+        .find(|u| u.position_id == Some(2))
+        .and_then(|u| u.telegram_id)
+    {
+        let send_message =
+            send_lead_manager_message(&data.to_string(), customer_id, telegram_id, &candidates)
+                .await;
         if send_message.is_err() {
             tracing::error!(
                 ?send_message,
-                manager_id = manager.id,
+                telegram_id = telegram_id,
                 "Error sending message to lead manager"
             );
         }

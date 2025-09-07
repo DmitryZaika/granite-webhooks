@@ -74,10 +74,11 @@ async fn log_response_body(
 }
 
 async fn posthog_capture_request(status: StatusCode, uri: &Uri, body: &Bytes) {
-    let api_key = std::env::var("POSTHOG_API_KEY").unwrap();
-    let body_str = String::from_utf8_lossy(body);
-    let event = PostHogEvent::new_http_exception(api_key, body_str, status, uri);
-    let posthog_client = client().await;
-    posthog_client.capture(event).await.unwrap();
-    println!("Error response received: SENT TO POSTHOG");
+    if let Ok(api_key) = std::env::var("POSTHOG_API_KEY") {
+        let body_str = String::from_utf8_lossy(body);
+        let event = PostHogEvent::new_http_exception(api_key, body_str, status, uri);
+        let posthog_client = client().await;
+        posthog_client.capture(event).await.unwrap();
+        println!("Error response received: SENT TO POSTHOG");
+    }
 }
