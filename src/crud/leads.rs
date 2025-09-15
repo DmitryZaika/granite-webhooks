@@ -146,3 +146,27 @@ pub async fn create_lead_from_new_lead_form(
         .execute(pool)
         .await;
 }
+
+pub async fn check_lead_exists(
+    pool: &MySqlPool,
+    email: &str,
+    phone: &str,
+    company_id: i32,
+) -> Result<bool, sqlx::Error> {
+    let row = query!(
+       r#"
+        SELECT COUNT(*) as count 
+        FROM customers 
+        WHERE company_id = ? 
+          AND (email = ? OR phone = ?)
+        "#,
+        email,
+        phone,
+        company_id,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(row.count > 0)
+}
+
