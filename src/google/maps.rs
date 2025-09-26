@@ -38,9 +38,9 @@ struct MatrixElement {
 
     // These can appear; keep them optional.
     #[serde(default)]
-    duration: Option<String>,      // e.g., "160s"
+    duration: Option<String>, // e.g., "160s"
     #[serde(default)]
-    condition: Option<String>,     // e.g., "ROUTE_EXISTS"
+    condition: Option<String>, // e.g., "ROUTE_EXISTS"
 }
 
 // --- Request body types (minimal) ---
@@ -81,8 +81,7 @@ struct ComputeRouteMatrixRequest {
 /// Использует Google Routes API Distance Matrix v2 и адресные строки.
 pub async fn driving_distance_miles(origin: &str, destination: &str) -> Result<f64, DistanceError> {
     let client = Client::new();
-    let api_key =
-        std::env::var("GOOGLE_MAPS_API_KEY").expect("GOOGLE_MAPS_API_KEY must be set");
+    let api_key = std::env::var("GOOGLE_MAPS_API_KEY").expect("GOOGLE_MAPS_API_KEY must be set");
 
     let body = ComputeRouteMatrixRequest {
         origins: vec![RouteMatrixOrigin {
@@ -126,20 +125,18 @@ pub async fn driving_distance_miles(origin: &str, destination: &str) -> Result<f
 
     // Status OK if code == 0 (empty object => defaults to 0/"").
     if el.status.code != 0 {
-        return Err(DistanceError::Api(
-            if el.status.message.is_empty() {
-                "non-OK status".into()
-            } else {
-                el.status.message.clone()
-            },
-        ));
+        return Err(DistanceError::Api(if el.status.message.is_empty() {
+            "non-OK status".into()
+        } else {
+            el.status.message.clone()
+        }));
     }
 
     // Some responses also include a condition; ensure route exists.
-    if let Some(cond) = &el.condition {
-        if cond != "ROUTE_EXISTS" {
-            return Err(DistanceError::ElementStatus(cond.clone()));
-        }
+    if let Some(cond) = &el.condition
+        && cond != "ROUTE_EXISTS"
+    {
+        return Err(DistanceError::ElementStatus(cond.clone()));
     }
 
     let meters = el.distance_meters.ok_or(DistanceError::Shape)? as f64;

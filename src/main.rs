@@ -23,13 +23,13 @@ use crate::webhooks::receivers::new_lead_form;
 pub mod amazon;
 pub mod axum_helpers;
 pub mod crud;
+pub mod google;
 pub mod libs;
 pub mod middleware;
 pub mod posthog;
 pub mod schemas;
 pub mod telegram;
 pub mod webhooks;
-pub mod google;
 
 async fn health_check() -> impl IntoResponse {
     OK_RESPONSE

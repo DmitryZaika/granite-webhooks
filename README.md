@@ -9,7 +9,7 @@ uvx cargo-lambda lambda deploy --iam-role arn:aws:iam::741448943665:role/cargo-l
 
 ## Testing
 
-uvx cargo-lambda lambda watch --env-file .env
+uvx cargo-lambda lambda watch --env-file.env
 
 Connect to internet: ngrok http 9000
 

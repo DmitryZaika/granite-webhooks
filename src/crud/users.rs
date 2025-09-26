@@ -105,7 +105,7 @@ pub async fn set_user_telegram_token(
 
 pub async fn get_user_tg_info(
     pool: &MySqlPool,
-    user_id: i64,
+    user_id: i32,
 ) -> Result<Option<UserTgInfo>, sqlx::Error> {
     sqlx::query_as!(
         UserTgInfo,

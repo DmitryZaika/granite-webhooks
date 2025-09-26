@@ -181,7 +181,7 @@ async fn handle_assign_lead(
         return internal_error(ERR_DB);
     }
 
-    let tg_info = match get_user_tg_info(pool, user_id).await {
+    let tg_info = match get_user_tg_info(pool, user_id.try_into().unwrap()).await {
         Ok(Some(info)) => info,
         Ok(None) => {
             return (StatusCode::NOT_FOUND, "User not found");
@@ -236,7 +236,6 @@ async fn handle_assign_lead(
         tg_info.email
     );
     let message_result = send_message(&[&tg_info.email], "Lead assigned", &message).await;
-
     if message_result.is_err() {
         tracing::error!(
             ?message_result,
@@ -253,7 +252,6 @@ async fn handle_callback(cb: CallbackQuery, pool: &MySqlPool, bot: &TelegramBot)
     let Some(data) = &cb.data else {
         return OK_RESPONSE;
     };
-
     if let Some((lead_id, user_id)) = parse_assign(data) {
         return handle_assign_lead(pool, lead_id, user_id, bot, cb).await;
     }
@@ -270,4 +268,92 @@ pub async fn webhook_handler(
         UpdateKind::CallbackQuery(cb) => handle_callback(cb, &pool, &tg_bot).await,
         _ => OK_RESPONSE,
     }
+}
+
+async fn handle_repeted_lead_assignment(
+    pool: &MySqlPool,
+    lead_id: i32,
+    user_id: i64,
+    bot: &TelegramBot,
+    cb: CallbackQuery,
+) -> BasicResponse {
+    let Some(message) = cb.message else {
+        return (StatusCode::NOT_FOUND, "Invalid message");
+    };
+    let lead_result = assign_lead(pool, lead_id, user_id).await;
+    if let Err(e) = lead_result {
+        tracing::error!(
+            ?e,
+            lead_id = lead_id,
+            user_id = user_id,
+            "Failed to assign lead"
+        );
+        return internal_error(ERR_DB);
+    }
+
+    let tg_info = match get_user_tg_info(pool, user_id.try_into().unwrap()).await {
+        Ok(Some(info)) => info,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, "User not found");
+        }
+        Err(e) => {
+            tracing::error!(?e, user_id = user_id, "Failed to get user info");
+            return internal_error(ERR_DB);
+        }
+    };
+
+    let former_message = extract_message(&message).unwrap_or_default();
+
+    let user_name = tg_info.name.unwrap_or_else(|| "Unknown".to_string());
+    let full_content = format!("{former_message}\n\nLead assigned to {user_name}");
+    let edit_result = bot.edit_message_text(&message, full_content).await;
+    if let Err(e) = edit_result {
+        return e;
+    }
+
+    let result = match create_deal(pool, lead_id, 1, 0, user_id).await {
+        Ok(deal) => deal,
+        Err(e) => {
+            tracing::error!(
+                ?e,
+                user_id = user_id,
+                lead_id = lead_id,
+                "Failed to create deal"
+            );
+            return internal_error(ERR_DB);
+        }
+    };
+    let deal_id = result.last_insert_id();
+    let lead_link = lead_url(deal_id);
+    if let Some(telegram_id) = tg_info.telegram_id {
+        let final_message = format!("You were assigned a REPETED lead. Click here: \n{lead_link}");
+        return bot
+            .send_message(ChatId(telegram_id), final_message)
+            .await
+            .map_or_else(|e| e, |_| (StatusCode::OK, "Invalid code"));
+    }
+    let bot_link = "https://t.me/granitemanager_bot?start";
+    let message = format!(
+        r"
+    You were assigned a REPETED lead. Click here:
+    {lead_link}
+
+    Please link to telegram bot:
+    {bot_link}
+
+    Paste this command into the bot: \start {}
+    ",
+        tg_info.email
+    );
+    let message_result = send_message(&[&tg_info.email], "Lead assigned", &message).await;
+    if message_result.is_err() {
+        tracing::error!(
+            ?message_result,
+            email = tg_info.email,
+            "Error sending email"
+        );
+        return internal_error(ERR_SEND_EMAIL);
+    }
+
+    OK_RESPONSE
 }

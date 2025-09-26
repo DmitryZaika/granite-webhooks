@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::Write as _;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WordpressContactForm {
     pub name: String,
 
@@ -88,7 +88,7 @@ impl fmt::Display for WordpressContactForm {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FaceBookContactForm {
     #[serde(rename = "name")]
     pub name: String,
@@ -150,7 +150,7 @@ impl fmt::Display for FaceBookContactForm {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NewLeadForm {
     pub name: String,
 
