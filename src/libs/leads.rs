@@ -22,7 +22,7 @@ async fn handle_repeat_lead(
 ) -> BasicResponse {
     let name = existing.name.as_deref();
     let message = format!(
-        "You received a repeated lead {}, click here: {}",
+        "You received a REPEATED lead {}, click here: {}",
         name.unwrap_or("Unknown"),
         lead_url(deal.id)
     );
@@ -69,7 +69,7 @@ async fn handle_repeat_lead(
         },
     };
     let repeted_lead_message = format!(
-        "You received a repeated lead {}, click here: {}",
+        "You received a REPEATED lead {}, click here: {}",
         name.unwrap_or("Unknown"),
         lead_url(deal.id)
     );
@@ -107,11 +107,9 @@ async fn create_new_deal_existing_customer(
     }
     form.update_lead(pool, company_id, existing.id).await;
     let clean_id = u64::try_from(existing.id).unwrap();
-    let name = existing.name.as_deref().unwrap_or("Unknown");
     let message = format!(
-        "You received a REPEATED lead for {}, click here: {}",
-        name,
-        lead_url(clean_id)
+        "You received a REPEATED lead with no sales rep \n{form}",
+        // form.to_string()
     );
     match send_telegram_manager_assign(pool, company_id, message, clean_id).await {
         Ok(_) => return Ok(None),

@@ -205,7 +205,7 @@ pub struct NewLeadForm {
 
 impl fmt::Display for NewLeadForm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut message = format!("New lead received.\n\nName: {}", self.name);
+        let mut message = format!("New lead received.\n\nName: {}\n", self.name);
 
         if let Some(phone) = &self.phone {
             writeln!(message, "Phone: {phone}").unwrap();
