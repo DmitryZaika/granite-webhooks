@@ -158,7 +158,7 @@ pub async fn create_deal(
     return query!(
         r#"INSERT INTO deals (customer_id, status, list_id, position, user_id) VALUES (?,?,?,?,?)"#,
         customer_id,
-        "new",
+        "New Customer",
         list_id,
         next_pos,
         sales_rep,
