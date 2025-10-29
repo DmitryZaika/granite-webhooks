@@ -8,7 +8,9 @@ use crate::libs::constants::{
     CREATED_RESPONSE, ERR_DB, ERR_SEND_EMAIL, ERR_SEND_TELEGRAM, internal_error,
 };
 use crate::libs::types::BasicResponse;
-use crate::telegram::send::{send_plain_message_to_chat, send_telegram_manager_assign};
+use crate::telegram::send::{
+    send_plain_message_to_chat, send_telegram_duplicate_notification, send_telegram_manager_assign,
+};
 use crate::telegram::utils::lead_url;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
@@ -141,6 +143,9 @@ pub async fn existing_lead_check(
     };
     match get_existing_deal(pool, existing.id).await {
         Ok(Some(deal)) => {
+            let name = existing.name.as_deref().unwrap_or("Unknown");
+            send_telegram_duplicate_notification(pool, company_id, name, deal.user_id.unwrap())
+                .await;
             return Some(handle_repeat_lead(&existing, deal, pool, company_id, form).await);
         }
         Ok(None) => {
