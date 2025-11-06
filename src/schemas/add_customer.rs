@@ -1,6 +1,31 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::Write as _;
+use serde::de::Deserializer;
+
+fn clean_phone<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    Ok(opt.map(|s| {
+        let digits: String = s.chars()
+            .filter(|c| c.is_ascii_digit())
+            .collect();
+        
+        let digits = if digits.starts_with('1') && digits.len() == 11 {
+            &digits[1..]
+        } else {
+            &digits
+        };
+        
+        if digits.len() == 10 {
+            format!("{}-{}-{}", &digits[0..3], &digits[3..6], &digits[6..10])
+        } else {
+            digits.to_string()
+        }
+    }))
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WordpressContactForm {
@@ -156,6 +181,7 @@ pub struct NewLeadForm {
 
     pub email: Option<String>,
 
+    #[serde(default, deserialize_with = "clean_phone")]
     pub phone: Option<String>,
 
     pub postal_code: Option<String>,
@@ -269,5 +295,53 @@ impl fmt::Display for NewLeadForm {
         }
 
         write!(f, "{message}")
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_clean_phone_basic() {
+        let data = json!({ "name": "Test", "phone": "(317) 555-1234" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(lead.phone.unwrap(), "317-555-1234");
+    }
+
+    #[test]
+    fn test_clean_phone_with_spaces() {
+        let data = json!({ "name": "Test", "phone": "317 555  6789" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(lead.phone.unwrap(), "317-555-6789");
+    }
+
+    #[test]
+    fn test_clean_phone_with_plus_sign_and_country_code() {
+        let data = json!({ "name": "Test", "phone": "+1 (463) 999-0000" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(lead.phone.unwrap(), "463-999-0000");
+    }
+
+    #[test]
+    fn test_clean_phone_with_symbols_and_text() {
+        let data = json!({ "name": "Test", "phone": "Call: 317-555-8888" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(lead.phone.unwrap(), "317-555-8888");
+    }
+
+    #[test]
+    fn test_clean_phone_none() {
+        let data = json!({ "name": "Test" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(lead.phone, None);
+    }
+    #[test]
+    fn test_clean_phone_with_country_code() {
+        let data = json!({ "name": "Test", "phone": "+13175556789" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(lead.phone.unwrap(), "317-555-6789");
     }
 }

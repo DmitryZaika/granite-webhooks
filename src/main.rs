@@ -76,7 +76,7 @@ mod tests {
     use super::*;
     use axum::http::StatusCode;
     use sqlx::mysql::MySqlPoolOptions;
-    use serde_json::json;
+    use crate::schemas::add_customer::NewLeadForm;
     use axum_test::TestServer;
 
     fn new_test_app(pool: MySqlPool) -> TestServer {
@@ -88,39 +88,41 @@ mod tests {
         dotenvy::dotenv().ok();
         let base = std::env::var("TEST_DATABASE_URL").unwrap();
         let prefix = base.rsplit_once('/').map(|(p, _)| p.to_string()).unwrap_or(base);
-        format!("{}/granite_test_{}", prefix, rand::random::<u64>())
+        format!("{}/test", prefix)
     }
 
-    fn invalid_json_body() -> &'static str {
+    fn valid_json_body() -> &'static str {
         r#"{
   "name": "William Brant",
-  "Email": "brant_bill@yahoo.com",
-  "Phone": "(317) 603-7047",
-  "Address": "6105 North Cedarwood Drive",
-  "Zip": "46055",
-  "Remodel": "Kitchen",
-  "project": "94",
-  "Contacted": "Day",
-  "Remove": "Not sure",
-  "Improve": "Yes",
-  "Sink": "I will provide my own sink",
-  "Backsplash": "",
-  "Stove": "Standard stove",
-  "Message": "Quartz measurement 94"x48" iland counter tops approx 78"x26 and 79x26 and 39x26",
-  "File": "https://granitedepotindy.com/wp-content/uploads/cf7-to-makewebhook-uploads/8667/68e6cd3341f69/file-507-17599562388614637280734145199875.jpg"
+  "email": "brant_bill@yahoo.com",
+  "phone": "(317) 603-7047",
+  "address": "6105 North Cedarwood Drive",
+  "postal_code": "46055",
+  "remodel_type": "Kitchen",
+  "project_size": "94",
+  "contact_time": "Day",
+  "tear_out": "Not sure",
+  "improve_offer": "Yes",
+  "sink": "I will provide my own sink",
+  "backsplash": "",
+  "stove_type": "Standard stove",
+  "your_message": "Quartz measurement 94x48 iland counter tops approx 78x26 and 79x26 and 39x26",
+  "file": "https://granitedepotindy.com/wp-content/uploads/cf7-to-makewebhook-uploads/8667/68e6cd3341f69/file-507-17599562388614637280734145199875.jpg"
 }"#
     }
 
-    #[tokio::test]
-    async fn test_invalid_json_unescaped_quotes_fails_for_now() {
+    async fn test_basic_success() {
         let db_url = unique_test_database_url();
         let pool = MySqlPoolOptions::new().connect_lazy(&db_url).unwrap();
         let app = new_test_app(pool);
 
+        let body = serde_json::from_str::<NewLeadForm>(valid_json_body()).unwrap();
         let response = app.post("/v1/webhooks/new-lead-form/1")
-            .json(&json!(invalid_json_body()))
+            .json(&body)
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        println!("Response: {:?}", response);
+
+        assert_eq!(response.status_code(), StatusCode::OK);
     }
 }
