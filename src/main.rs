@@ -36,7 +36,6 @@ async fn health_check() -> impl IntoResponse {
 }
 
 fn new_main_app(pool: MySqlPool) -> Router {
-
     tracing::init_default_subscriber();
 
     Router::new()
@@ -70,11 +69,12 @@ async fn main() -> Result<(), Error> {
     run(app).await
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::http::StatusCode;
+    use axum_test::TestServer;
+    use serde_json::json;
     use sqlx::mysql::MySqlPoolOptions;
     use crate::schemas::add_customer::NewLeadForm;
     use axum_test::TestServer;
@@ -87,7 +87,10 @@ mod tests {
     fn unique_test_database_url() -> String {
         dotenvy::dotenv().ok();
         let base = std::env::var("TEST_DATABASE_URL").unwrap();
-        let prefix = base.rsplit_once('/').map(|(p, _)| p.to_string()).unwrap_or(base);
+        let prefix = base
+            .rsplit_once('/')
+            .map(|(p, _)| p.to_string())
+            .unwrap_or(base);
         format!("{}/test", prefix)
     }
 
@@ -116,9 +119,9 @@ mod tests {
         let pool = MySqlPoolOptions::new().connect_lazy(&db_url).unwrap();
         let app = new_test_app(pool);
 
-        let body = serde_json::from_str::<NewLeadForm>(valid_json_body()).unwrap();
-        let response = app.post("/v1/webhooks/new-lead-form/1")
-            .json(&body)
+        let response = app
+            .post("/v1/webhooks/new-lead-form/1")
+            .json(&json!(invalid_json_body()))
             .await;
 
         println!("Response: {:?}", response);

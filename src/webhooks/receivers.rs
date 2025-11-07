@@ -1,3 +1,4 @@
+use crate::axum_helpers::guards::MarketingUser;
 use crate::crud::leads::LeadForm;
 use crate::crud::leads::{
     create_lead_from_facebook, create_lead_from_new_lead_form, create_lead_from_wordpress,
@@ -17,6 +18,7 @@ pub async fn documenso() -> BasicResponse {
 }
 
 pub async fn wordpress_contact_form(
+    _: MarketingUser,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<WordpressContactForm>,
@@ -58,9 +60,11 @@ pub async fn wordpress_contact_form(
 }
 
 pub async fn facebook_contact_form(
+    _: MarketingUser,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<FaceBookContactForm>,
+    // _: MarketingUser,
 ) -> BasicResponse {
     if let Some(response) = existing_lead_check(
         &pool,
@@ -100,28 +104,12 @@ pub async fn facebook_contact_form(
     CREATED_RESPONSE
 }
 
-/*
-async fn get_distance(
-    pool: &MySqlPool,
-    address: Option<String>,
-    company_id: Option<i32>,
-    lead_address: String,
-) -> Option<f64> {
-    if let Some(lead_address) = address {
-        if let Ok(company_address) = get_company_address(&pool, company_id).await {
-            if let Some(company_final) = company_address {
-            let distance = driving_distance_miles(&company_final, lead_address).await;
-                println!("Distance: {:?}", distance);
-            }
-        }
-    }
-}
-    */
-
 pub async fn new_lead_form(
+    _: MarketingUser,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<NewLeadForm>,
+    // _: MarketingUser,
 ) -> BasicResponse {
     let existing_result = existing_lead_check(
         &pool,
@@ -159,5 +147,3 @@ pub async fn new_lead_form(
     }
     CREATED_RESPONSE
 }
-
-

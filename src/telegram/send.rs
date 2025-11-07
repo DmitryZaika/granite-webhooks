@@ -102,3 +102,40 @@ pub async fn send_telegram_manager_assign<T: Display>(
     }
     Ok(())
 }
+
+pub async fn send_telegram_duplicate_notification(
+    pool: &MySqlPool,
+    company_id: i32,
+    lead_name: &str,
+    assigned_id: i32,
+) -> bool {
+    let all_users = match get_sales_users(pool, company_id).await {
+        Ok(users) => users,
+        Err(e) => {
+            tracing::error!(?e, company_id = company_id, "Error fetching users");
+            return false;
+        }
+    };
+    let assigned_name = all_users
+        .iter()
+        .find(|u| u.id == assigned_id)
+        .map(|u| u.name.clone().unwrap_or_else(|| "Unknown".to_string()))
+        .unwrap_or_else(|| "Unknown".to_string());
+    if let Some(telegram_id) = all_users
+        .iter()
+        .find(|u| u.position_id == Some(2))
+        .and_then(|u| u.telegram_id)
+    {
+        let message = format!("Repeat lead {lead_name} with for sales rep {assigned_name}");
+        let response = send_plain_message_to_chat(telegram_id, &message).await;
+
+        if response.is_err() {
+            tracing::error!(
+                ?message,
+                telegram_id = telegram_id,
+                "Error sending message to lead manager"
+            );
+        }
+    }
+    true
+}

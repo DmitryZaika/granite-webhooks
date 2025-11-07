@@ -22,8 +22,8 @@ pub struct Properties {
     #[serde(rename = "$exception_fingerprint")]
     pub exception_fingerprint: String,
 
-    pub status: u16,
-    pub path: String,
+    pub status: Option<u16>,
+    pub path: Option<String>,
 
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
@@ -86,8 +86,39 @@ impl PostHogEvent {
             properties: Some(Properties {
                 exception_list: Some(vec![item]),
                 exception_fingerprint: fingerprint,
-                status: status.as_u16(),
-                path: uri.to_string(),
+                status: Some(status.as_u16()),
+                path: Some(uri.to_string()),
+                extra: HashMap::new(),
+            }),
+            timestamp: None,
+        }
+    }
+    pub fn new_general_exception(
+        api_key: impl Into<String>,
+        value: impl Into<String> + std::fmt::Display + Clone,
+        title: impl Into<String> + std::fmt::Display + Clone,
+    ) -> Self {
+        let item = ExceptionItem {
+            exception_type: title.clone().into(),
+            value: value.clone().into(),
+            stacktrace: Some(StackTrace {
+                kind: "raw".into(),
+                frames: vec![],
+            }),
+        };
+
+        let mut hasher = Sha256::new();
+        hasher.update(format!("{}|{}|", value, title));
+        let fingerprint = format!("{:x}", hasher.finalize());
+        Self {
+            api_key: api_key.into(),
+            event: "$exception".into(),
+            distinct_id: "server-webhooks".into(),
+            properties: Some(Properties {
+                exception_list: Some(vec![item]),
+                exception_fingerprint: fingerprint,
+                status: None,
+                path: None,
                 extra: HashMap::new(),
             }),
             timestamp: None,
