@@ -305,43 +305,86 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn test_clean_phone_basic() {
-        let data = json!({ "name": "Test", "phone": "(317) 555-1234" });
+    fn test_clean_phone_from_list_parens_812() {
+        let data = json!({ "name": "Test", "phone": "(812) 374-4195" });
         let lead: NewLeadForm = serde_json::from_value(data).unwrap();
-        assert_eq!(lead.phone.unwrap(), "317-555-1234");
+        assert_eq!(lead.phone.unwrap(), "812-374-4195");
     }
 
     #[test]
-    fn test_clean_phone_with_spaces() {
-        let data = json!({ "name": "Test", "phone": "317 555  6789" });
+    fn test_clean_phone_from_list_e164_812() {
+        let data = json!({ "name": "Test", "phone": "+18125819268" });
         let lead: NewLeadForm = serde_json::from_value(data).unwrap();
-        assert_eq!(lead.phone.unwrap(), "317-555-6789");
+        assert_eq!(lead.phone.unwrap(), "812-581-9268");
     }
 
     #[test]
-    fn test_clean_phone_with_plus_sign_and_country_code() {
-        let data = json!({ "name": "Test", "phone": "+1 (463) 999-0000" });
+    fn test_clean_phone_from_list_e164_317_a() {
+        let data = json!({ "name": "Test", "phone": "+13174417059" });
         let lead: NewLeadForm = serde_json::from_value(data).unwrap();
-        assert_eq!(lead.phone.unwrap(), "463-999-0000");
+        assert_eq!(lead.phone.unwrap(), "317-441-7059");
     }
 
     #[test]
-    fn test_clean_phone_with_symbols_and_text() {
-        let data = json!({ "name": "Test", "phone": "Call: 317-555-8888" });
+    fn test_clean_phone_from_list_e164_317_b() {
+        let data = json!({ "name": "Test", "phone": "+13179995973" });
         let lead: NewLeadForm = serde_json::from_value(data).unwrap();
-        assert_eq!(lead.phone.unwrap(), "317-555-8888");
+        assert_eq!(lead.phone.unwrap(), "317-999-5973");
     }
 
     #[test]
-    fn test_clean_phone_none() {
-        let data = json!({ "name": "Test" });
+    fn test_clean_phone_from_list_e164_806() {
+        let data = json!({ "name": "Test", "phone": "+18064016803" });
         let lead: NewLeadForm = serde_json::from_value(data).unwrap();
-        assert_eq!(lead.phone, None);
+        assert_eq!(lead.phone.unwrap(), "806-401-6803");
     }
+
     #[test]
-    fn test_clean_phone_with_country_code() {
-        let data = json!({ "name": "Test", "phone": "+13175556789" });
+    fn test_clean_phone_from_list_e164_317_c() {
+        let data = json!({ "name": "Test", "phone": "+13174072028" });
         let lead: NewLeadForm = serde_json::from_value(data).unwrap();
-        assert_eq!(lead.phone.unwrap(), "317-555-6789");
+        assert_eq!(lead.phone.unwrap(), "317-407-2028");
+    }
+
+    #[test]
+    fn test_clean_phone_from_list_already_normalized() {
+        let data = json!({ "name": "Test", "phone": "614-469-1230" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(lead.phone.unwrap(), "614-469-1230");
+    }
+
+    #[test]
+    fn test_clean_phone_from_list_no_delimiters_other() {
+        let data = json!({ "name": "Test", "phone": "7657643147" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(lead.phone.unwrap(), "765-764-3147");
+    }
+
+    #[test]
+    fn test_clean_phone_from_list_parens_317_a() {
+        let data = json!({ "name": "Test", "phone": "(317) 522-8701" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(lead.phone.unwrap(), "317-522-8701");
+    }
+
+    #[test]
+    fn test_clean_phone_from_list_plain_574() {
+        let data = json!({ "name": "Test", "phone": "574-612-5902" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(lead.phone.unwrap(), "574-612-5902");
+    }
+
+    #[test]
+    fn test_clean_phone_from_list_parens_317_b() {
+        let data = json!({ "name": "Test", "phone": "(317) 402-1551" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(lead.phone.unwrap(), "317-402-1551");
+    }
+
+    #[test]
+    fn test_clean_phone_from_list_dup_example() {
+        let data = json!({ "name": "Test", "phone": "317-750-6474" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(lead.phone.unwrap(), "317-750-6474");
     }
 }
