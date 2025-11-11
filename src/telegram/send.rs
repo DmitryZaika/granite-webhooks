@@ -100,6 +100,7 @@ pub async fn send_telegram_manager_assign<T: Display>(
             );
         }
     }
+ 
     Ok(())
 }
 
@@ -108,6 +109,7 @@ pub async fn send_telegram_duplicate_notification(
     company_id: i32,
     lead_name: &str,
     assigned_id: i32,
+    lead_body: String,
 ) -> bool {
     let all_users = match get_sales_users(pool, company_id).await {
         Ok(users) => users,
@@ -126,9 +128,8 @@ pub async fn send_telegram_duplicate_notification(
         .find(|u| u.position_id == Some(2))
         .and_then(|u| u.telegram_id)
     {
-        let message = format!("Repeat lead {lead_name} with for sales rep {assigned_name}");
+        let message = format!("Repeat lead {lead_name} with for sales rep {assigned_name}\n{lead_body}");
         let response = send_plain_message_to_chat(telegram_id, &message).await;
-
         if response.is_err() {
             tracing::error!(
                 ?message,

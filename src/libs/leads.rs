@@ -144,7 +144,13 @@ pub async fn existing_lead_check(
     match get_existing_deal(pool, existing.id).await {
         Ok(Some(deal)) => {
             let name = existing.name.as_deref().unwrap_or("Unknown");
-            send_telegram_duplicate_notification(pool, company_id, name, deal.user_id.unwrap())
+            send_telegram_duplicate_notification(
+                pool,
+                company_id,
+                name,
+                deal.user_id.unwrap(),
+                form.to_string(),
+            )
                 .await;
             return Some(handle_repeat_lead(&existing, deal, pool, company_id, form).await);
         }
