@@ -77,8 +77,7 @@ pub struct WordpressContactForm {
 impl fmt::Display for WordpressContactForm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let message = format!(
-            "New lead received.\n\n\
-           Name: {}\n\
+            "Name: {}\n\
            Phone: {}\n\
            Email: {}\n\
            Address: {}\n\
@@ -149,8 +148,7 @@ pub struct FaceBookContactForm {
 impl fmt::Display for FaceBookContactForm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let message = format!(
-            "New lead received.\n\n\
-               Name: {}\n\
+            "Name: {}\n\
                Phone: {}\n\
                Remove and Dispose: {}\n\
                Email: {}\n\
@@ -231,7 +229,7 @@ pub struct NewLeadForm {
 
 impl fmt::Display for NewLeadForm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut message = format!("New lead received.\n\nName: {}\n", self.name);
+        let mut message = format!("Name: {}\n", self.name);
 
         if let Some(phone) = &self.phone {
             writeln!(message, "Phone: {phone}").unwrap();
