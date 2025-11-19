@@ -34,8 +34,8 @@ pub struct WordpressContactForm {
     #[serde(rename = "Email")]
     pub email: Option<String>,
 
-    #[serde(rename = "Phone")]
-    pub phone: String,
+    #[serde(deserialize_with = "clean_phone", rename = "Phone")]
+    pub phone: Option<String>,
 
     #[serde(rename = "Zip")]
     pub postal_code: Option<String>,
@@ -93,7 +93,7 @@ impl fmt::Display for WordpressContactForm {
            Your Message: {}\n\
            Attached File: {}",
             self.name,
-            self.phone,
+            self.phone.as_deref().unwrap_or("N/A"),
             self.email.as_deref().unwrap_or("N/A"),
             self.address.as_deref().unwrap_or("N/A"),
             self.postal_code.as_deref().unwrap_or("N/A"),
@@ -114,11 +114,10 @@ impl fmt::Display for WordpressContactForm {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FaceBookContactForm {
-    #[serde(rename = "name")]
     pub name: String,
 
-    #[serde(rename = "phone")]
-    pub phone: String,
+    #[serde(deserialize_with = "clean_phone")]
+    pub phone: Option<String>,
 
     #[serde(rename = "remove")]
     pub remove_and_dispose: Option<String>,
@@ -159,7 +158,7 @@ impl fmt::Display for FaceBookContactForm {
                Adset: {}\n\
                Ad: {}",
             self.name,
-            self.phone,
+            self.phone.as_deref().unwrap_or("N/A"),
             self.remove_and_dispose.as_deref().unwrap_or("N/A"),
             self.email.as_deref().unwrap_or("N/A"),
             self.city.as_deref().unwrap_or("N/A"),
@@ -384,5 +383,102 @@ mod tests {
         let data = json!({ "name": "Test", "phone": "317-750-6474" });
         let lead: NewLeadForm = serde_json::from_value(data).unwrap();
         assert_eq!(lead.phone.unwrap(), "317-750-6474");
+    }
+
+    #[test]
+    fn test_wordpress_contact_form_deserialize() {
+        let data = json!({
+            "name": "John Doe",
+            "Email": "john@example.com",
+            "Phone": "317-750-6474",
+            "Zip": "46201",
+            "Address": "123 Main St",
+            "Remodel": "Kitchen",
+            "project": "Medium",
+            "Contacted": "Evening",
+            "Remove": "Yes",
+            "Improve": "New counters",
+            "Sink": "Undermount",
+            "Backsplash": "Tile",
+            "Stove": "Gas",
+            "Message": "Looking for a quote",
+            "File": "https://www.google.com"
+        });
+
+        let form: WordpressContactForm = serde_json::from_value(data).unwrap();
+
+        assert_eq!(form.name, "John Doe");
+        assert_eq!(form.email.clone().unwrap(), "john@example.com");
+        assert_eq!(form.phone, Some("317-750-6474".to_string()));
+        assert_eq!(form.postal_code.clone().unwrap(), "46201");
+        assert_eq!(form.address.clone().unwrap(), "123 Main St");
+        assert_eq!(form.remodal_type.clone().unwrap(), "Kitchen");
+        assert_eq!(form.project_size.clone().unwrap(), "Medium");
+        assert_eq!(form.contact_time.clone().unwrap(), "Evening");
+        assert_eq!(form.remove_and_dispose.clone().unwrap(), "Yes");
+        assert_eq!(form.improve_offer.clone().unwrap(), "New counters");
+        assert_eq!(form.sink.clone().unwrap(), "Undermount");
+        assert_eq!(form.backsplash.clone().unwrap(), "Tile");
+        assert_eq!(form.kitchen_stove.clone().unwrap(), "Gas");
+        assert_eq!(form.your_message.clone().unwrap(), "Looking for a quote");
+        assert_eq!(form.attached_file.clone().unwrap(), "https://www.google.com");
+
+        let text = form.to_string();
+        assert!(text.contains("Name: John Doe"));
+        assert!(text.contains("Phone: 317-750-6474"));
+        assert!(text.contains("Email: john@example.com"));
+        assert!(text.contains("Address: 123 Main St"));
+        assert!(text.contains("Zip: 46201"));
+        assert!(text.contains("Remodeling Type: Kitchen"));
+        assert!(text.contains("Project Size: Medium"));
+        assert!(text.contains("Contacted: Evening"));
+        assert!(text.contains("Remove and Dispose: Yes"));
+        assert!(text.contains("Improve Offer: New counters"));
+        assert!(text.contains("Sink: Undermount"));
+        assert!(text.contains("Backsplash: Tile"));
+        assert!(text.contains("Stove: Gas"));
+        assert!(text.contains("Your Message: Looking for a quote"));
+        assert!(text.contains("Attached File: https://www.google.com"));
+    }
+
+    #[test]
+    fn test_facebook_contact_form_deserialize() {
+        let data = json!({
+            "name": "Jane Smith",
+            "phone": "812-374-4195",
+            "remove": "No",
+            "email": "jane@example.com",
+            "city": "Columbus",
+            "zip": "47201",
+            "share": "Full kitchen remodel",
+            "campaign": "Fall Promo",
+            "adsetname": "Indiana Leads",
+            "adname": "Kitchen Ad 1"
+        });
+
+        let form: FaceBookContactForm = serde_json::from_value(data).unwrap();
+
+        assert_eq!(form.name, "Jane Smith");
+        assert_eq!(form.phone, Some("812-374-4195".to_string()));
+        assert_eq!(form.remove_and_dispose.clone().unwrap(), "No");
+        assert_eq!(form.email.clone().unwrap(), "jane@example.com");
+        assert_eq!(form.city.clone().unwrap(), "Columbus");
+        assert_eq!(form.postal_code.clone().unwrap(), "47201");
+        assert_eq!(form.details.clone().unwrap(), "Full kitchen remodel");
+        assert_eq!(form.compaign_name.clone().unwrap(), "Fall Promo");
+        assert_eq!(form.adset_name.clone().unwrap(), "Indiana Leads");
+        assert_eq!(form.ad_name.clone().unwrap(), "Kitchen Ad 1");
+
+        let text = form.to_string();
+        assert!(text.contains("Name: Jane Smith"));
+        assert!(text.contains("Phone: 812-374-4195"));
+        assert!(text.contains("Remove and Dispose: No"));
+        assert!(text.contains("Email: jane@example.com"));
+        assert!(text.contains("City: Columbus"));
+        assert!(text.contains("Zip: 47201"));
+        assert!(text.contains("Details: Full kitchen remodel"));
+        assert!(text.contains("Campaign: Fall Promo"));
+        assert!(text.contains("Adset: Indiana Leads"));
+        assert!(text.contains("Ad: Kitchen Ad 1"));
     }
 }
