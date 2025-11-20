@@ -26,7 +26,7 @@ pub async fn wordpress_contact_form(
     if let Some(response) = existing_lead_check(
         &pool,
         &contact_form.email.as_deref(),
-        &Some(&contact_form.phone),
+        &contact_form.phone.as_deref(),
         company_id,
         &LeadForm::WordpressContactForm(contact_form.clone()),
     )
@@ -69,7 +69,7 @@ pub async fn facebook_contact_form(
     if let Some(response) = existing_lead_check(
         &pool,
         &contact_form.email.as_deref(),
-        &Some(&contact_form.phone),
+        &contact_form.phone.as_deref(),
         company_id,
         &LeadForm::FaceBookContactForm(contact_form.clone()),
     )
