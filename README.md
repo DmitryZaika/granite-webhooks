@@ -2,6 +2,10 @@
 
 grante-webhooks is a Rust project that implements an AWS Lambda function in Rust.
 
+## Migrations
+
+mysqldump -u root -p test --no-data > schema_only.sql
+
 ## Deploying
 
 uvx cargo-lambda lambda build --release
