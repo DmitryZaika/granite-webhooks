@@ -1,5 +1,5 @@
 use crate::amazon::email::send_message;
-use crate::axum_helpers::guards::TelegramBot;
+use crate::axum_helpers::guards::{Telegram, TelegramBot};
 use crate::crud::leads::assign_lead;
 use crate::crud::leads::create_deal;
 use crate::crud::users::get_user_tg_info;
@@ -24,9 +24,9 @@ Invalid message. Please send one of the following commands:
 <code>
 ";
 
-async fn handle_start_command(
+async fn handle_start_command<T: Telegram>(
     pool: &MySqlPool,
-    bot: &TelegramBot,
+    bot: &T,
     email: &str,
     chat_id: ChatId,
 ) -> BasicResponse {
@@ -75,9 +75,9 @@ async fn handle_start_command(
         .map_or_else(|e| e, |_| OK_RESPONSE)
 }
 
-async fn handle_telegram_code(
+async fn handle_telegram_code<T: Telegram>(
     pool: &MySqlPool,
-    bot: &TelegramBot,
+    bot: &T,
     chat_id: ChatId,
     code: i32,
 ) -> BasicResponse {
@@ -133,7 +133,7 @@ async fn handle_telegram_code(
         .map_or_else(|e| e, |_| (StatusCode::OK, "Invalid code"))
 }
 
-async fn handle_message(msg: Message, pool: &MySqlPool, bot: &TelegramBot) -> BasicResponse {
+async fn handle_message<T: Telegram>(msg: Message, pool: &MySqlPool, bot: &T) -> BasicResponse {
     let chat_id = msg.chat.id; // ChatId
     let Some(text) = msg.text() else {
         return OK_RESPONSE;
@@ -160,11 +160,11 @@ async fn handle_message(msg: Message, pool: &MySqlPool, bot: &TelegramBot) -> Ba
         .map_or_else(|e| e, |_| (StatusCode::OK, "Invalid code"))
 }
 
-async fn handle_assign_lead(
+async fn handle_assign_lead<T: Telegram>(
     pool: &MySqlPool,
     lead_id: i32,
     user_id: i64,
-    bot: &TelegramBot,
+    bot: &T,
     cb: CallbackQuery,
 ) -> BasicResponse {
     let Some(message) = cb.message else {
@@ -248,7 +248,11 @@ async fn handle_assign_lead(
     OK_RESPONSE
 }
 
-async fn handle_callback(cb: CallbackQuery, pool: &MySqlPool, bot: &TelegramBot) -> BasicResponse {
+async fn handle_callback<T: Telegram>(
+    cb: CallbackQuery,
+    pool: &MySqlPool,
+    bot: &T,
+) -> BasicResponse {
     let Some(data) = &cb.data else {
         return OK_RESPONSE;
     };

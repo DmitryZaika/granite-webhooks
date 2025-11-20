@@ -14,12 +14,27 @@ use crate::libs::constants::{FORBIDDEN_RESPONSE, internal_error};
 
 const CORRECT_ID: Uuid = uuid!("9ca4dfa8-0eec-46cc-967f-3385624be883");
 
+pub trait Telegram: Send + Sync {
+    async fn send_message<C, T>(&self, chat: C, text: T) -> Result<Message, BasicResponse>
+    where
+        C: Into<Recipient> + Send,
+        T: Into<String> + Send;
+
+    async fn edit_message_text<T>(
+        &self,
+        message: &MaybeInaccessibleMessage,
+        text: T,
+    ) -> Result<Message, BasicResponse>
+    where
+        T: Into<String> + Send;
+}
+
 pub struct TelegramBot {
     bot: teloxide::Bot,
 }
 
-impl TelegramBot {
-    pub async fn send_message<C, T>(&self, chat: C, text: T) -> Result<Message, BasicResponse>
+impl Telegram for TelegramBot {
+    async fn send_message<C, T>(&self, chat: C, text: T) -> Result<Message, BasicResponse>
     where
         C: Into<Recipient>,
         T: Into<String>,
@@ -33,7 +48,7 @@ impl TelegramBot {
         }
     }
 
-    pub async fn edit_message_text<T>(
+    async fn edit_message_text<T>(
         &self,
         message: &MaybeInaccessibleMessage,
         text: T,
