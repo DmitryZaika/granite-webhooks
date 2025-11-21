@@ -5,7 +5,7 @@ pub struct SalesUser {
     pub id: i32,
     pub telegram_id: Option<i64>,
     pub name: Option<String>,
-    pub position_id: Option<u64>,
+    pub position_id: Option<i32>,
     pub mtd_lead_count: i64,
 }
 
