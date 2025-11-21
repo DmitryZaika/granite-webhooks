@@ -49,7 +49,8 @@ CREATE TABLE slab_inventory (
     stove VARCHAR(255),
     extras JSON NULL,
     room_uuid binary(16),
-    square_feet DECIMAL(10,2)
+    square_feet DECIMAL(10,2),
+    is_leftover BOOLEAN DEFAULT FALSE
 );
 
 ALTER TABLE stones

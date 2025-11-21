@@ -60,3 +60,6 @@ CREATE TABLE email_reads (
     ip_address VARCHAR(100),
     FOREIGN KEY (message_id) REFERENCES emails(message_id)
 );
+
+CREATE INDEX idx_slab_inventory_leftover
+ON slab_inventory(stone_id, is_leftover, sale_id);
