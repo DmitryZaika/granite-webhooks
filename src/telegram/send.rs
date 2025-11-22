@@ -118,11 +118,10 @@ pub async fn send_telegram_duplicate_notification(
             return false;
         }
     };
-    let assigned_name = all_users
-        .iter()
-        .find(|u| u.id == assigned_id)
-        .map(|u| u.name.clone().unwrap_or_else(|| "Unknown".to_string()))
-        .unwrap_or_else(|| "Unknown".to_string());
+    let assigned_name = all_users.iter().find(|u| u.id == assigned_id).map_or_else(
+        || "Unknown".to_string(),
+        |u| u.name.clone().unwrap_or_else(|| "Unknown".to_string()),
+    );
     if let Some(telegram_id) = all_users
         .iter()
         .find(|u| u.position_id == Some(2))

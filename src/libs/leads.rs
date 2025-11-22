@@ -34,7 +34,7 @@ async fn handle_repeat_lead(
         Ok(Some(info)) => info,
         Ok(None) => {
             match send_telegram_manager_assign(pool, company_id, message, customer_id).await {
-                Ok(_) => return CREATED_RESPONSE,
+                Ok(()) => return CREATED_RESPONSE,
                 Err(e) => {
                     tracing::error!(
                         ?e,
@@ -54,12 +54,12 @@ async fn handle_repeat_lead(
             return internal_error(ERR_DB);
         }
     };
-    let subject = format!("Granite Manager");
-    let message = format!("Please register for Telegram to receive notifications about leads");
+    let subject = "Granite Manager".to_string();
+    let message = "Please register for Telegram to receive notifications about leads".to_string();
     let clean_tg_id = match user_info.telegram_id {
         Some(id) => id,
         None => match send_message(&[&user_info.email], &subject, &message).await {
-            Ok(_) => return CREATED_RESPONSE,
+            Ok(()) => return CREATED_RESPONSE,
             Err(e) => {
                 tracing::error!(
                     ?e,
@@ -114,14 +114,14 @@ async fn create_new_deal_existing_customer(
         // form.to_string()
     );
     match send_telegram_manager_assign(pool, company_id, message, clean_id).await {
-        Ok(_) => return Ok(None),
+        Ok(()) => Ok(None),
         Err(e) => {
             tracing::error!(
                 ?e,
                 company_id = company_id,
                 "Failed to send message to Telegram"
             );
-            return Err(e);
+            Err(e)
         }
     }
 }
@@ -160,10 +160,10 @@ pub async fn existing_lead_check(
                 Ok(Some(deal)) => {
                     return Some(handle_repeat_lead(&existing, deal, pool, company_id, form).await);
                 }
-                Ok(None) => return Some(CREATED_RESPONSE),
+                Ok(None) => Some(CREATED_RESPONSE),
                 Err(e) => {
                     tracing::error!(?e, company_id = company_id, "Failed to create new deal");
-                    return Some(e);
+                    Some(e)
                 }
             }
         }

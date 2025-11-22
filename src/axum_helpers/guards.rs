@@ -104,7 +104,7 @@ pub struct MarketingUser {
 }
 
 impl MarketingUser {
-    pub fn new(id: uuid::Uuid) -> Self {
+    pub const fn new(id: uuid::Uuid) -> Self {
         Self { id }
     }
 }
@@ -116,12 +116,11 @@ fn parse_uuid_from_bearer(header: &str) -> Option<Uuid> {
 }
 
 async fn report_to_posthog(message: &str) {
-    let api_key = match std::env::var("POSTHOG_API_KEY") {
-        Ok(key) => key,
-        Err(_) => {
-            tracing::error!("POSTHOG_API_KEY not set");
-            return;
-        }
+    let api_key = if let Ok(key) = std::env::var("POSTHOG_API_KEY") {
+        key
+    } else {
+        tracing::error!("POSTHOG_API_KEY not set");
+        return;
     };
 
     let event =
@@ -141,36 +140,33 @@ where
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let headers = &parts.headers;
-        let raw_bearer = match headers.get("authorization") {
-            Some(v) => v.to_str(),
-            None => {
-                tracing::error!("Authorization header not found");
-                report_to_posthog("Authorization header not found").await;
-                return Ok(MarketingUser::new(CORRECT_ID));
-            }
+        let raw_bearer = if let Some(v) = headers.get("authorization") {
+            v.to_str()
+        } else {
+            tracing::error!("Authorization header not found");
+            report_to_posthog("Authorization header not found").await;
+            return Ok(Self::new(CORRECT_ID));
         };
-        let clean_bearer = match raw_bearer {
-            Ok(bearer) => bearer,
-            Err(_) => {
-                tracing::error!("Failed to parse authorization header");
-                report_to_posthog("Failed to parse authorization header").await;
-                return Ok(MarketingUser::new(CORRECT_ID));
-            }
+        let clean_bearer = if let Ok(bearer) = raw_bearer {
+            bearer
+        } else {
+            tracing::error!("Failed to parse authorization header");
+            report_to_posthog("Failed to parse authorization header").await;
+            return Ok(Self::new(CORRECT_ID));
         };
 
-        let bearer_uuid = match parse_uuid_from_bearer(clean_bearer) {
-            Some(uuid) => uuid,
-            None => {
-                tracing::error!("Failed to parse bearer UUID: {}", clean_bearer);
-                report_to_posthog("Failed to parse bearer UUID").await;
-                return Ok(MarketingUser::new(CORRECT_ID));
-            }
+        let bearer_uuid = if let Some(uuid) = parse_uuid_from_bearer(clean_bearer) {
+            uuid
+        } else {
+            tracing::error!("Failed to parse bearer UUID: {}", clean_bearer);
+            report_to_posthog("Failed to parse bearer UUID").await;
+            return Ok(Self::new(CORRECT_ID));
         };
 
         if bearer_uuid != CORRECT_ID {
             tracing::error!("Bearer UUID does not match");
             report_to_posthog("Bearer UUID does not match").await;
-            return Ok(MarketingUser::new(CORRECT_ID));
+            return Ok(Self::new(CORRECT_ID));
         }
 
         Ok(Self::new(bearer_uuid))

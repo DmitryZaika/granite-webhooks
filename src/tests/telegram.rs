@@ -50,7 +50,7 @@ pub fn generate_message_common(text: &str) -> MessageCommon {
     }
 }
 
-fn get_chat(chat_id: i64) -> Chat {
+const fn get_chat(chat_id: i64) -> Chat {
     Chat {
         id: ChatId(chat_id),
         kind: ChatKind::Private(ChatPrivate {

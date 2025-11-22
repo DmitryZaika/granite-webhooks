@@ -108,7 +108,7 @@ impl PostHogEvent {
         };
 
         let mut hasher = Sha256::new();
-        hasher.update(format!("{}|{}|", value, title));
+        hasher.update(format!("{value}|{title}|"));
         let fingerprint = format!("{:x}", hasher.finalize());
         Self {
             api_key: api_key.into(),

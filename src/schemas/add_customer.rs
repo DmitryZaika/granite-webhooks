@@ -9,7 +9,7 @@ where
 {
     let opt = Option::<String>::deserialize(deserializer)?;
     Ok(opt.map(|s| {
-        let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+        let digits: String = s.chars().filter(char::is_ascii_digit).collect();
 
         let digits = if digits.starts_with('1') && digits.len() == 11 {
             &digits[1..]
