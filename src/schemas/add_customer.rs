@@ -1,7 +1,7 @@
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::Write as _;
-use serde::de::Deserializer;
 
 fn clean_phone<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
@@ -9,16 +9,14 @@ where
 {
     let opt = Option::<String>::deserialize(deserializer)?;
     Ok(opt.map(|s| {
-        let digits: String = s.chars()
-            .filter(|c| c.is_ascii_digit())
-            .collect();
-        
+        let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+
         let digits = if digits.starts_with('1') && digits.len() == 11 {
             &digits[1..]
         } else {
             &digits
         };
-        
+
         if digits.len() == 10 {
             format!("{}-{}-{}", &digits[0..3], &digits[3..6], &digits[6..10])
         } else {
@@ -295,7 +293,6 @@ impl fmt::Display for NewLeadForm {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,7 +418,10 @@ mod tests {
         assert_eq!(form.backsplash.clone().unwrap(), "Tile");
         assert_eq!(form.kitchen_stove.clone().unwrap(), "Gas");
         assert_eq!(form.your_message.clone().unwrap(), "Looking for a quote");
-        assert_eq!(form.attached_file.clone().unwrap(), "https://www.google.com");
+        assert_eq!(
+            form.attached_file.clone().unwrap(),
+            "https://www.google.com"
+        );
 
         let text = form.to_string();
         assert!(text.contains("Name: John Doe"));

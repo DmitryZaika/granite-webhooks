@@ -151,7 +151,7 @@ pub async fn existing_lead_check(
                 deal.user_id.unwrap(),
                 form.to_string(),
             )
-                .await;
+            .await;
             return Some(handle_repeat_lead(&existing, deal, pool, company_id, form).await);
         }
         Ok(None) => {
