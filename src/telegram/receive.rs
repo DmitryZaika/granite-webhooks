@@ -273,3 +273,265 @@ pub async fn webhook_handler(
         _ => OK_RESPONSE,
     }
 }
+
+#[cfg(test)]
+mod local_tests {
+    use super::*;
+    use crate::tests::telegram::{MockTelegram, generate_message, telegram_user};
+    use axum::http::StatusCode;
+    use sqlx::MySqlPool;
+    use teloxide::types::CallbackQuery;
+
+    fn chat_id(id: i64) -> ChatId {
+        ChatId(id)
+    }
+
+    pub async fn create_default_user(pool: &MySqlPool, email: &str) -> Result<u64, sqlx::Error> {
+        let rec = sqlx::query!(
+            r#"
+            INSERT INTO users (
+                email,
+                password,
+                name,
+                phone_number,
+                is_employee,
+                is_admin,
+                is_superuser,
+                is_deleted,
+                company_id,
+                telegram_id,
+                telegram_conf_code,
+                telegram_conf_expires_at,
+                temp_telegram_id
+            )
+            VALUES (?, NULL, NULL, NULL, false, false, false, false, 1, NULL, NULL, NULL, NULL)
+            "#,
+            email
+        )
+        .execute(pool)
+        .await?;
+
+        Ok(rec.last_insert_id())
+    }
+
+    #[sqlx::test]
+    fn test_message_invalid_option(pool: MySqlPool) {
+        let message = generate_message(1, "Leeeroy Jenkins".to_string());
+        let mock_bot = MockTelegram::new();
+        handle_message(message, &pool, &mock_bot).await;
+
+        let sent = mock_bot.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].1, MESSAGE);
+    }
+
+    // -----------------------------
+    // handle_start_command
+    // -----------------------------
+
+    #[sqlx::test]
+    async fn test_start_already_registered(pool: MySqlPool) {
+        let bot = MockTelegram::new();
+        let user_id = create_default_user(&pool, "test@example.com")
+            .await
+            .unwrap();
+        sqlx::query!("UPDATE users SET telegram_id = 123 WHERE id = ?", user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let res = handle_start_command(&pool, &bot, "test@example.com", chat_id(123)).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+
+        let sent = bot.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].1.contains("already"));
+    }
+
+    #[sqlx::test]
+    async fn test_start_db_error(pool: MySqlPool) {
+        // force DB error: use nonexistent table or corrupted state
+        let bot = MockTelegram::new();
+
+        // переименуем таблицу
+        sqlx::query!("RENAME TABLE users TO users_tmp")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let res = handle_start_command(&pool, &bot, "a@b.com", chat_id(5)).await;
+
+        assert_eq!(res.0, StatusCode::INTERNAL_SERVER_ERROR);
+
+        sqlx::query!("RENAME TABLE users_tmp TO users")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[sqlx::test]
+    async fn test_start_sets_code_and_sends_email(pool: MySqlPool) {
+        let bot = MockTelegram::new();
+
+        create_default_user(&pool, "t@x.com").await.unwrap();
+        let res = handle_start_command(&pool, &bot, "t@x.com", chat_id(7)).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+
+        // сообщение отправлено
+        let sent = bot.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].1.contains("please enter the code"));
+
+        // код записан
+        let tok = sqlx::query!("SELECT telegram_conf_code FROM users WHERE temp_telegram_id = 7")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(tok.telegram_conf_code.is_some());
+    }
+
+    // -----------------------------
+    // handle_telegram_code
+    // -----------------------------
+
+    #[sqlx::test]
+    async fn test_code_user_already_registered(pool: MySqlPool) {
+        let bot = MockTelegram::new();
+
+        let user_id = create_default_user(&pool, "test@example.com")
+            .await
+            .unwrap();
+        sqlx::query!("UPDATE users SET telegram_id = 99 WHERE id = ?", user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let res = handle_telegram_code(&pool, &bot, chat_id(99), 111).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+        let sent = bot.sent.lock().unwrap();
+        assert_eq!(sent[0].1, "You are already registered");
+    }
+
+    #[sqlx::test]
+    async fn test_code_no_token(pool: MySqlPool) {
+        let bot = MockTelegram::new();
+
+        let res = handle_telegram_code(&pool, &bot, chat_id(2), 123).await;
+
+        assert_eq!(res.0, StatusCode::FORBIDDEN);
+    }
+
+    #[sqlx::test]
+    async fn test_code_incorrect(pool: MySqlPool) {
+        let bot = MockTelegram::new();
+
+        let user_id = create_default_user(&pool, "test@example.com")
+            .await
+            .unwrap();
+        sqlx::query!(
+            "UPDATE users SET telegram_conf_code = 555, temp_telegram_id = 3 WHERE id = ?",
+            user_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let res = handle_telegram_code(&pool, &bot, chat_id(3), 111).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+
+        let sent = bot.sent.lock().unwrap();
+        assert!(sent[0].1.contains("Invalid code"));
+    }
+
+    #[sqlx::test]
+    async fn test_code_success(pool: MySqlPool) {
+        let bot = MockTelegram::new();
+
+        let user_id = create_default_user(&pool, "test@example.com")
+            .await
+            .unwrap();
+        sqlx::query!(
+            "UPDATE users SET telegram_conf_code = 999, temp_telegram_id = 4 WHERE id = ?",
+            user_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let res = handle_telegram_code(&pool, &bot, chat_id(4), 999).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+
+        let user = sqlx::query!("SELECT telegram_id FROM users WHERE id = ?", user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(user.telegram_id, Some(4));
+        let sent = bot.sent.lock().unwrap();
+        assert_eq!(sent[0].1, "Accepted, you are now registered");
+    }
+
+    // -----------------------------
+    // handle_message
+    // -----------------------------
+
+    #[sqlx::test]
+    async fn test_message_start(pool: MySqlPool) {
+        let bot = MockTelegram::new();
+
+        let msg = generate_message(1, "/start".into());
+        let res = handle_message(msg, &pool, &bot).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+
+        let sent = bot.sent.lock().unwrap();
+        assert!(sent[0].1.contains("Welcome"));
+    }
+
+    #[sqlx::test]
+    async fn test_message_email(pool: MySqlPool) {
+        let bot = MockTelegram::new();
+        let msg = generate_message(1, "/email x@y.com".into());
+
+        let res = handle_message(msg, &pool, &bot).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+    }
+
+    #[sqlx::test]
+    async fn test_message_invalid(pool: MySqlPool) {
+        let bot = MockTelegram::new();
+        let msg = generate_message(1, "whatever invalid".into());
+
+        let res = handle_message(msg, &pool, &bot).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+
+        let sent = bot.sent.lock().unwrap();
+        assert!(sent[0].1.contains("Invalid message"));
+    }
+
+    // -----------------------------
+    // handle_callback
+    // -----------------------------
+
+    #[sqlx::test]
+    async fn test_callback_no_data(pool: MySqlPool) {
+        let bot = MockTelegram::new();
+        let cb = CallbackQuery {
+            id: "a".into(),
+            from: telegram_user(3),
+            message: None,
+            inline_message_id: None,
+            chat_instance: "".into(),
+            data: None,
+            game_short_name: None,
+        };
+
+        let res = handle_callback(cb, &pool, &bot).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+    }
+}

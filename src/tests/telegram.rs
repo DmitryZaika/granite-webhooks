@@ -12,7 +12,7 @@ use teloxide::types::{
     MessageKind, User, UserId,
 };
 
-fn telegram_user(id: u64) -> User {
+pub fn telegram_user(id: u64) -> User {
     User {
         id: UserId(id),
         is_bot: false,
@@ -61,7 +61,21 @@ fn get_chat(chat_id: i64) -> Chat {
     }
 }
 
-pub fn generate_chat() {}
+pub fn generate_message(chat_id: i64, text: String) -> Message {
+    let from_user = telegram_user(1);
+    Message {
+        id: teloxide::types::MessageId(1),
+        thread_id: None,
+        from: Some(from_user),
+        sender_chat: None,
+        date: Utc::now(),
+        is_topic_message: false,
+        via_bot: None,
+        sender_business_bot: None,
+        kind: MessageKind::Common(generate_message_common(&text)),
+        chat: get_chat(chat_id),
+    }
+}
 
 #[derive(Default)]
 pub struct MockTelegram {
@@ -75,19 +89,7 @@ impl MockTelegram {
     }
 
     fn dummy_message(chat_id: i64, text: String) -> Message {
-        let from_user = telegram_user(1);
-        Message {
-            id: teloxide::types::MessageId(1),
-            thread_id: None,
-            from: Some(from_user),
-            sender_chat: None,
-            date: Utc::now(),
-            is_topic_message: false,
-            via_bot: None,
-            sender_business_bot: None,
-            kind: MessageKind::Common(generate_message_common(&text)),
-            chat: get_chat(chat_id),
-        }
+        generate_message(chat_id, text)
     }
 }
 
