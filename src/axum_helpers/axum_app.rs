@@ -1,4 +1,4 @@
-use crate::amazonses::routes::read_receipt_handler;
+use crate::amazonses::routes::{read_receipt_handler, receive_handler};
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
 use crate::telegram::receive::webhook_handler;
@@ -36,6 +36,7 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         )
         .route("/telegram/webhook", post(webhook_handler))
         .route("/ses/read-receipt", post(read_receipt_handler))
+        .route("/ses/receive-email", post(receive_handler))
         .layer(axum::middleware::from_fn(print_request_body))
         .with_state(pool)
 }

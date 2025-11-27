@@ -2,9 +2,13 @@ use axum::extract::{Json, State};
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
-use crate::amazonses::schemas::SesEvent;
-use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE};
+use crate::amazonses::schemas::{S3Event, SesEvent};
+use crate::crud::email::{create_email, create_email_read, get_prior_email};
+use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
+use aws_sdk_s3::Client;
+
+use crate::amazonses::parse_email::parse_email;
 
 pub async fn read_receipt_handler(
     State(pool): State<MySqlPool>,
@@ -13,21 +17,11 @@ pub async fn read_receipt_handler(
     let message_id = info.detail.mail.message_id;
     let user_agent = info.detail.open.user_agent;
     let ip_address = info.detail.open.ip_address;
-    let result = sqlx::query!(
-        r#"
-        INSERT INTO email_reads (message_id, user_agent, ip_address)
-        VALUES (?, ?, ?)
-        "#,
-        message_id,
-        user_agent,
-        ip_address,
-    )
-    .execute(&pool)
-    .await;
 
+    let result = create_email_read(&pool, &message_id, &user_agent, &ip_address).await;
     if let Err(error) = result {
         tracing::error!(
-            "Error inserting email: {} into the db: {}",
+            "Error inserting email read: {} into the db: {}",
             message_id,
             error
         );
@@ -36,10 +30,101 @@ pub async fn read_receipt_handler(
     OK_RESPONSE
 }
 
+pub async fn receive_handler(
+    State(pool): State<MySqlPool>,
+    Json(event): Json<S3Event>,
+) -> BasicResponse {
+    let config = aws_config::load_from_env().await;
+    let client = Client::new(&config);
+
+    let bucket = &event.detail.bucket.name;
+    let key = &event.detail.object.key;
+
+    let get_object_output = match client.get_object().bucket(bucket).key(key).send().await {
+        Ok(output) => output,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                bucket = bucket,
+                key = key,
+                "Failed to retrieve email from S3"
+            );
+            return internal_error("Unable to retrieve email from S3");
+        }
+    };
+
+    let email_bytes = match get_object_output.body.collect().await {
+        Ok(bytes) => bytes.into_bytes(),
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                bucket = bucket,
+                key = key,
+                "Failed to read email content from S3"
+            );
+            return internal_error("Unable to read email content from S3");
+        }
+    };
+    let parsed = match parse_email(&email_bytes) {
+        Ok(email) => email,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                bucket = bucket,
+                key = key,
+                "Failed to parse email content from S3"
+            );
+            return internal_error("Unable to parse email content from S3");
+        }
+    };
+    let message_id = match parsed.message_id() {
+        Some(id) => id,
+        None => {
+            tracing::error!(
+                bucket = bucket,
+                key = key,
+                "Failed to extract message ID from email"
+            );
+            return internal_error("Unable to extract message ID from email");
+        }
+    };
+    let prior = match get_prior_email(&pool, &message_id).await {
+        Ok(email) => email,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                bucket = bucket,
+                key = key,
+                "Failed to retrieve prior email"
+            );
+            return internal_error("Unable to retrieve prior email");
+        }
+    };
+    let clean_prior = match prior {
+        Some(email) => email,
+        None => {
+            tracing::error!(bucket = bucket, key = key, "No prior email found");
+            return internal_error("No prior email found");
+        }
+    };
+    let result = create_email(&pool, &parsed, &clean_prior).await;
+    if let Err(error) = result {
+        tracing::error!(
+            "Error inserting email: {} into the db: {}",
+            message_id,
+            error
+        );
+        return internal_error("Failed to insert email into the database");
+    }
+
+    OK_RESPONSE
+}
+
 #[cfg(test)]
 mod local_tests {
     use crate::axum_helpers::axum_app::new_main_app;
     use crate::tests::data::ses_open_json::ses_open_event_json;
+    use crate::tests::data::ses_received::ses_received_json;
     use axum::http::StatusCode;
     use axum_test::TestServer;
     use sqlx::MySqlPool;
@@ -58,7 +143,7 @@ mod local_tests {
     async fn insert_email(pool: &MySqlPool, message_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
-            INSERT INTO emails (user_id, subject, body, message_id)
+            INSERT INTO emails (sender_user_id, subject, body, message_id)
             VALUES (?, ?, ?, ?)
             "#,
             1,
@@ -107,5 +192,19 @@ mod local_tests {
         assert_eq!(result.message_id, expected_message_id);
         assert_eq!(result.user_agent.unwrap(), expected_user_agent);
         assert_eq!(result.ip_address.unwrap(), expected_ip);
+    }
+
+    #[sqlx::test]
+    async fn test_ses_received_success(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+
+        let response = app
+            .post("/ses/read-receipt")
+            .json(&ses_received_json())
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let result = check_db_email_reads(&pool).await.unwrap();
     }
 }

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+// Receive read receipts
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SesEvent {
     pub version: String,
@@ -84,4 +86,51 @@ pub struct Open {
     pub user_agent: String,
     #[serde(rename = "ipAddress")]
     pub ip_address: String,
+}
+
+// Receive emails
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct S3Event {
+    version: String,
+    id: String,
+    #[serde(rename = "detail-type")]
+    detail_type: String,
+    source: String,
+    account: String,
+    time: String,
+    region: String,
+    resources: Vec<String>,
+    pub detail: ReceiveDetail,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiveDetail {
+    version: String,
+    pub bucket: Bucket,
+    pub object: Object,
+    #[serde(rename = "request-id")]
+    request_id: String,
+    requester: String,
+    #[serde(rename = "source-ip-address")]
+    source_ip_address: String,
+    reason: String,
+}
+
+/// Holds S3 Bucket information.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Bucket {
+    pub name: String,
+}
+
+/// Holds S3 Object information (the email file).
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Object {
+    pub key: String,
+    size: u64,
+    etag: String,
+    sequencer: String,
 }

@@ -1,0 +1,76 @@
+Return-Path: <colin99delahunty@gmail.com>
+Received: from mail-wm1-f53.google.com (mail-wm1-f53.google.com [209.85.128.53])
+ by inbound-smtp.us-east-2.amazonaws.com with SMTP id 12vre12pmtechjio3jk2m9m0i9ptbquiua714b01
+ for colin.delahunty@granite-manager.com;
+ Sun, 23 Nov 2025 18:20:30 +0000 (UTC)
+X-SES-Spam-Verdict: PASS
+X-SES-Virus-Verdict: PASS
+Received-SPF: pass (spfCheck: domain of _spf.google.com designates 209.85.128.53 as permitted sender) client-ip=209.85.128.53; envelope-from=colin99delahunty@gmail.com; helo=mail-wm1-f53.google.com;
+Authentication-Results: amazonses.com;
+ spf=pass (spfCheck: domain of _spf.google.com designates 209.85.128.53 as permitted sender) client-ip=209.85.128.53; envelope-from=colin99delahunty@gmail.com; helo=mail-wm1-f53.google.com;
+ dkim=pass header.i=@gmail.com;
+ dmarc=pass header.from=gmail.com;
+X-SES-RECEIPT: AEFBQUFBQUFBQUFFSzhUeHM3aGdmaXJYRlBJWDNSK0ZqMUtBVWdWaWlxZkJEQU5JMlFrMXovYjEvUWhBVjBzT3N2eWc2QzF0dzBoNUxzdndzMEtQVEIwbEpYWU9qV1pXRE9INHpKYnhZOFBOTVYwUFgwd0RNSDcwcVFWbzY4YWVzNU5ERUZ3WjQyUEFEQWRKWG5MNFp4S1Y5T2JONzM3Z1BhYnZIN1F0VU9CNW84MHpCOGZLdVZaTmxrdEt6bFV1WTI4Yk1SRlk0ekxCS3FxY1hqdUw3VG1BeUZrcGpwdWlNREpmV1FQY2ZrRjV5MGpYTTVCd01TV0cwVEtzVGsrd28vMVRBdjR2QnlKaWp0K2tsV2pQR1F1NVFGZXF2Z2tZeUVpZzNmY0IvbVE0RlVsRUx2YUJVRFE9PQ==
+X-SES-DKIM-SIGNATURE: a=rsa-sha256; q=dns/txt; b=UJg1oX8ttBLlQUKdIuTCccZ8ioQYf5WSz8DRijzmlF2tt8WX3XU+l6UzsnyZrzCDY08oTSzvNVJlYQDeXe09NX6R903ZUT3B/4HQBIoRpgnspyvwHiXMrHW8dYMVHNDLYVn+PfbAN0VqxD3To3jLiBMNtUd9pEg9TemKlPbfIbQ=; c=relaxed/simple; s=ndjes4mrtuzus6qxu3frw3ubo3gpjndv; d=amazonses.com; t=1763922031; v=1; bh=iPAYORK2MRT+3+WTyxdH3p1/NwHNDKrkijcfF/krErs=; h=From:To:Cc:Bcc:Subject:Date:Message-ID:MIME-Version:Content-Type:X-SES-RECEIPT;
+Received: by mail-wm1-f53.google.com with SMTP id 5b1f17b1804b1-47755de027eso19006975e9.0
+        for <colin.delahunty@granite-manager.com>; Sun, 23 Nov 2025 10:20:30 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20230601; t=1763922029; x=1764526829; darn=granite-manager.com;
+        h=content-transfer-encoding:to:subject:message-id:date:from
+         :in-reply-to:references:mime-version:from:to:cc:subject:date
+         :message-id:reply-to;
+        bh=iPAYORK2MRT+3+WTyxdH3p1/NwHNDKrkijcfF/krErs=;
+        b=VbeF+ztv64deZv+RGfGjMPyHOiwCP4NuWqNipVCEB7uym8ePxzp6XNv9u2AZDXrHwR
+         ihsbhlc9JaHWoKSIe3LOiUDg8aq15oJ1uciqNrsmkAE2oyCSDrgHkURSHBSHOej8Szi+
+         K8V6IFmqS6QzoK3hGbH1OZS3WGrp081jQ0WAxE2tzMZGg3o3sU9xmd8G2WkG/IQKooXt
+         Aar2G48IiC46lQROmPUpPN8gNR/caYBuB8bEaV2P7/28j32XxNK5J2vpbO+iZNIIQJI8
+         ZEsmHtihD4FaWb8IozzO27Q0w9+Kq846RzivMeCLvxVOet+95RXVvHyWMvVADyGYnfny
+         y41Q==
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20230601; t=1763922029; x=1764526829;
+        h=content-transfer-encoding:to:subject:message-id:date:from
+         :in-reply-to:references:mime-version:x-gm-gg:x-gm-message-state:from
+         :to:cc:subject:date:message-id:reply-to;
+        bh=iPAYORK2MRT+3+WTyxdH3p1/NwHNDKrkijcfF/krErs=;
+        b=STgQ22aNDJFFnusifYnk9qNwkROzdAGKvQhTq2LTCYlbLeV9he6MY5y3ATFdMSnKsg
+         QN2y+/EtBFXa62to8NCTCV5mtFkaqrZv0RbDCvT6ffqgoQxQz+qnr6JBVq00MFXHvQWy
+         sbsM3n9ePlYuBghCWszVLlNVvZboY3JHQ6Ro0oiXrNgsClFp9kBwYyNyRBoIkArItSMY
+         P2Vium2CTgxiVi4vqcnUFxNYDNp5KIsnnE4jRX0ri5CQtD3bd93bQirJ7MFN4nz2ICXE
+         qDBay8MogNTtba/XD5K3vcoiYiRDZpuzHSfd9vLOeLOcPfzjKfaMQ85905eIStzigoze
+         y8MA==
+X-Gm-Message-State: AOJu0YxsCi3HWOt6GRX3/pCKtbr6VarArREf1BVjULtqcj1kHnBEKDqn
+	kcEfU7s2dw1GDyweNZUV7Arx+rz33h6fnFhRhHcFIt+pIJDzTmS4rYaqhuRzcsrwvePOFAasaO4
+	qJmhchJWqEOVovGqmZzI57nr+dSrMvxEK7w==
+X-Gm-Gg: ASbGncs8nM8yw9CmVlGzQmqHXKTQLw1hPGNFQSmYkrFdH5jsJudURLSt6/qmkwqw6aA
+	Jq1hm1VO8oe9XoZI0rw0wJmg53pYVu3lPbxMyFBiCkMIKxBsSgZryyKEM2lzbk9Jdft64I9uYQl
+	Qkk3Bo9a9A3RqcBT6AV73fNYMrfaIjzihQK6k8cAcpAG3KCN7srTjD9P+8VDfkbJiplpMa7RNkn
+	DdqFP+CWyGkfeNF33ihjQE4QKXOcv2XBkKmQbOhKt6mt8lyaAP9M6Z2aprSO1Y5D4ltilBQSmSO
+	7uTlV0DKpHnPeliGitDHLBFlkJ8=
+X-Google-Smtp-Source: AGHT+IHyiy5I+8AZ4aeHO30esEAn6NszWGzqqqYl83g4cnrVgTAJKeRamq2c80R9eUTd9uiDDWCLnFTfi1iUCPg+EQA=
+X-Received: by 2002:a17:907:db16:b0:b73:6d56:f3f3 with SMTP id
+ a640c23a62f3a-b7671a11dc2mr929519466b.53.1763918644457; Sun, 23 Nov 2025
+ 09:24:04 -0800 (PST)
+MIME-Version: 1.0
+References: <010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000@us-east-2.amazonses.com>
+In-Reply-To: <010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000@us-east-2.amazonses.com>
+From: Colin Delahunty <colin99delahunty@gmail.com>
+Date: Sun, 23 Nov 2025 12:23:33 -0500
+X-Gm-Features: AWmQ_bn2lebuNjRmxTkmu-6gfvFu7OyoJmGRl0oXS-DKFIjje1HHEwcF8hUjZYA
+Message-ID: <CAG6QthbVR6eOBoEFup=bnuuBw=_JQWfP1rLzAjwDUGCpNV_wyg@mail.gmail.com>
+Subject: Re: COLINS TEST
+To: colin.delahunty@granite-manager.com
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+Please respond.
+
+=D0=B2=D1=81, 23 =D0=BD=D0=BE=D1=8F=D0=B1. 2025=E2=80=AF=D0=B3. =D0=B2 11:3=
+0, <colin.delahunty@granite-manager.com>:
+>
+> Hello my good friend, Are you interested? I would love to sell you a coun=
+tertop. Sincerely, Colin Delahunty
+
+
+
+--=20
+Colin Delahunty
