@@ -2,11 +2,10 @@ use crate::amazon::email::send_message;
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
 use crate::crud::leads::assign_lead;
 use crate::crud::leads::create_deal;
-use crate::crud::users::get_user_tg_info;
-use crate::crud::users::user_has_telegram_id;
+use crate::crud::users::{email_exists, get_user_tg_info, user_has_telegram_id};
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
-use crate::libs::constants::internal_error;
 use crate::libs::constants::{ERR_DB, ERR_SEND_EMAIL, OK_RESPONSE};
+use crate::libs::constants::{FORBIDDEN_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use crate::telegram::utils::extract_message;
 use crate::telegram::utils::parse_code;
@@ -148,7 +147,19 @@ async fn handle_message<T: Telegram>(msg: Message, pool: &MySqlPool, bot: &T) ->
     }
 
     if let Some(email) = parse_slash_email(text) {
-        return handle_start_command(pool, bot, &email, chat_id).await;
+        match email_exists(pool, &email).await {
+            Ok(true) => {
+                return handle_start_command(pool, bot, &email, chat_id).await;
+            }
+            Ok(false) => {
+                tracing::error!(email = email, "Email does not exist");
+                return FORBIDDEN_RESPONSE;
+            }
+            Err(e) => {
+                tracing::error!(?e, email = email, "Failed to check email existence");
+                return internal_error(ERR_DB);
+            }
+        }
     }
 
     if let Some(code) = parse_code(text) {

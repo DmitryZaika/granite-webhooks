@@ -115,3 +115,20 @@ pub async fn get_user_tg_info(
     .fetch_optional(pool)
     .await
 }
+
+pub async fn email_exists(pool: &MySqlPool, email: &str) -> Result<bool, sqlx::Error> {
+    let exists = sqlx::query_scalar!(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM users
+            WHERE email = ?
+        ) AS "email_exists!: bool"
+        "#,
+        email
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(exists)
+}
