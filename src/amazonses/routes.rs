@@ -197,6 +197,9 @@ mod local_tests {
     #[sqlx::test]
     async fn test_ses_received_success(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
+        let message_id = "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000";
+
+        insert_email(&pool, message_id).await.unwrap();
 
         let response = app
             .post("/ses/read-receipt")
