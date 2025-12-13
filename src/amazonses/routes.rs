@@ -125,6 +125,7 @@ mod local_tests {
     use bytes::Bytes;
     use sqlx::MySqlPool;
     use std::path::PathBuf;
+    use uuid::Uuid;
 
     struct ReadDb {
         message_id: String,
@@ -142,6 +143,7 @@ mod local_tests {
         pub subject: Option<String>,
         pub body: Option<String>,
         pub message_id: Option<String>,
+        pub thread_id: Option<String>,
     }
 
     impl MockClient {
@@ -162,15 +164,17 @@ mod local_tests {
     }
 
     async fn insert_email(pool: &MySqlPool, message_id: &str) -> Result<(), sqlx::Error> {
+        let uuid: Uuid = Uuid::new_v4();
         sqlx::query!(
             r#"
-            INSERT INTO emails (sender_user_id, subject, body, message_id)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO emails (sender_user_id, subject, body, message_id, thread_id)
+            VALUES (?, ?, ?, ?, ?)
             "#,
             1,
             "Test Subject",
             "Test Body",
-            message_id
+            message_id,
+            uuid.to_string()
         )
         .execute(pool)
         .await?;
@@ -195,7 +199,7 @@ mod local_tests {
         sqlx::query_as!(
             Email,
             r#"
-            SELECT id, sender_user_id, subject, body, message_id
+            SELECT id, sender_user_id, subject, body, message_id, thread_id
             FROM emails
             ORDER BY id DESC
             LIMIT 10
@@ -246,6 +250,9 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 2);
-        // assert_eq!(result[0].message_id.unwrap(), message_id);
+        assert_eq!(
+            result[0].thread_id.clone().unwrap(),
+            result[1].thread_id.clone().unwrap()
+        );
     }
 }
