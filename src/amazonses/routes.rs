@@ -138,7 +138,6 @@ mod local_tests {
     }
 
     pub struct Email {
-        pub id: i32,
         pub sender_user_id: Option<i32>,
         pub subject: Option<String>,
         pub body: Option<String>,
@@ -199,7 +198,7 @@ mod local_tests {
         sqlx::query_as!(
             Email,
             r#"
-            SELECT id, sender_user_id, subject, body, message_id, thread_id
+            SELECT sender_user_id, subject, body, message_id, thread_id
             FROM emails
             ORDER BY id DESC
             LIMIT 10
@@ -250,6 +249,16 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 2);
+        assert_eq!(result[0].subject, Some("Re: COLINS TEST".to_string()));
+        assert!(
+            result[0]
+                .body
+                .clone()
+                .unwrap()
+                .contains("Hello my good friend, Are you interested?")
+        );
+        assert_eq!(result[0].message_id, None);
+        assert_eq!(result[0].sender_user_id, None);
         assert_eq!(
             result[0].thread_id.clone().unwrap(),
             result[1].thread_id.clone().unwrap()

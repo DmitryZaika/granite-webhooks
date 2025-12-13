@@ -15,16 +15,20 @@ use crate::libs::constants::{FORBIDDEN_RESPONSE, internal_error};
 const CORRECT_ID: Uuid = uuid!("9ca4dfa8-0eec-46cc-967f-3385624be883");
 
 pub trait Telegram: Send + Sync {
-    async fn send_message<C, T>(&self, chat: C, text: T) -> Result<Message, BasicResponse>
+    fn send_message<C, T>(
+        &self,
+        chat: C,
+        text: T,
+    ) -> impl Future<Output = Result<Message, BasicResponse>> + Send
     where
         C: Into<Recipient> + Send,
         T: Into<String> + Send;
 
-    async fn edit_message_text<T>(
+    fn edit_message_text<T>(
         &self,
         message: &MaybeInaccessibleMessage,
         text: T,
-    ) -> Result<Message, BasicResponse>
+    ) -> impl Future<Output = Result<Message, BasicResponse>> + Send
     where
         T: Into<String> + Send;
 }
@@ -34,39 +38,46 @@ pub struct TelegramBot {
 }
 
 impl Telegram for TelegramBot {
-    async fn send_message<C, T>(&self, chat: C, text: T) -> Result<Message, BasicResponse>
+    fn send_message<C, T>(
+        &self,
+        chat: C,
+        text: T,
+    ) -> impl Future<Output = Result<Message, BasicResponse>> + Send
     where
-        C: Into<Recipient>,
-        T: Into<String>,
+        C: Into<Recipient> + Send,
+        T: Into<String> + Send,
     {
-        match self.bot.send_message(chat, text).await {
-            Ok(message) => Ok(message),
-            Err(err) => {
-                tracing::error!(?err, ERR_SEND_TELEGRAM);
-                Err(internal_error(ERR_SEND_TELEGRAM))
+        let bot = self.bot.clone();
+        async move {
+            match bot.send_message(chat, text).await {
+                Ok(message) => Ok(message),
+                Err(err) => {
+                    tracing::error!(?err, ERR_SEND_TELEGRAM);
+                    Err(internal_error(ERR_SEND_TELEGRAM))
+                }
             }
         }
     }
 
-    async fn edit_message_text<T>(
+    fn edit_message_text<T>(
         &self,
         message: &MaybeInaccessibleMessage,
         text: T,
-    ) -> Result<Message, BasicResponse>
+    ) -> impl Future<Output = Result<Message, BasicResponse>> + Send
     where
-        T: Into<String>,
+        T: Into<String> + Send,
     {
+        let bot = self.bot.clone();
         let msg_id = message.id();
-        match self
-            .bot
-            .edit_message_text(message.chat().id, msg_id, text)
-            .await
-        {
-            Ok(message) => Ok(message),
-            Err(err) => {
-                let message_id = format!("Message ID: {msg_id}");
-                tracing::error!(?err, message_id = message_id, ERR_SEND_TELEGRAM);
-                Err(internal_error(ERR_SEND_TELEGRAM))
+        let chat_id = message.chat().id;
+
+        async move {
+            match bot.edit_message_text(chat_id, msg_id, text).await {
+                Ok(message) => Ok(message),
+                Err(err) => {
+                    tracing::error!(?err, message_id = %msg_id, ERR_SEND_TELEGRAM);
+                    Err(internal_error(ERR_SEND_TELEGRAM))
+                }
             }
         }
     }
