@@ -2,13 +2,12 @@ use axum::extract::{Json, State};
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
+use crate::amazon::bucket::{CustomClient, S3Bucket};
+use crate::amazonses::parse_email::parse_email;
 use crate::amazonses::schemas::{S3Event, SesEvent};
 use crate::crud::email::{create_email, create_email_read, get_prior_email};
 use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
-use aws_sdk_s3::Client;
-
-use crate::amazonses::parse_email::parse_email;
 
 pub async fn read_receipt_handler(
     State(pool): State<MySqlPool>,
@@ -30,31 +29,16 @@ pub async fn read_receipt_handler(
     OK_RESPONSE
 }
 
-pub async fn receive_handler(
-    State(pool): State<MySqlPool>,
-    Json(event): Json<S3Event>,
+pub async fn process_ses_received_event<C: S3Bucket>(
+    pool: &MySqlPool,
+    client: &C,
+    event: &S3Event,
 ) -> BasicResponse {
-    let config = aws_config::load_from_env().await;
-    let client = Client::new(&config);
-
     let bucket = &event.detail.bucket.name;
     let key = &event.detail.object.key;
 
-    let get_object_output = match client.get_object().bucket(bucket).key(key).send().await {
-        Ok(output) => output,
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                bucket = bucket,
-                key = key,
-                "Failed to retrieve email from S3"
-            );
-            return internal_error("Unable to retrieve email from S3");
-        }
-    };
-
-    let email_bytes = match get_object_output.body.collect().await {
-        Ok(bytes) => bytes.into_bytes(),
+    let email_bytes = match client.read_bytes(bucket, key).await {
+        Ok(bytes) => bytes,
         Err(error) => {
             tracing::error!(
                 ?error,
@@ -65,6 +49,7 @@ pub async fn receive_handler(
             return internal_error("Unable to read email content from S3");
         }
     };
+
     let parsed = match parse_email(&email_bytes) {
         Ok(email) => email,
         Err(error) => {
@@ -120,19 +105,55 @@ pub async fn receive_handler(
     OK_RESPONSE
 }
 
+pub async fn receive_handler(
+    State(pool): State<MySqlPool>,
+    Json(event): Json<S3Event>,
+) -> BasicResponse {
+    let custom_client = CustomClient {};
+    process_ses_received_event(&pool, &custom_client, &event).await
+}
+
 #[cfg(test)]
 mod local_tests {
+    use super::*;
     use crate::axum_helpers::axum_app::new_main_app;
     use crate::tests::data::ses_open_json::ses_open_event_json;
     use crate::tests::data::ses_received::ses_received_json;
+    use crate::tests::utils::read_file_as_bytes;
     use axum::http::StatusCode;
     use axum_test::TestServer;
+    use bytes::Bytes;
     use sqlx::MySqlPool;
+    use std::path::PathBuf;
 
     struct ReadDb {
         message_id: String,
         user_agent: Option<String>,
         ip_address: Option<String>,
+    }
+
+    pub struct MockClient {
+        pub path: PathBuf,
+    }
+
+    pub struct Email {
+        pub id: i32,
+        pub sender_user_id: Option<i32>,
+        pub subject: Option<String>,
+        pub body: Option<String>,
+        pub message_id: Option<String>,
+    }
+
+    impl MockClient {
+        pub fn new<P: Into<PathBuf>>(path: P) -> Self {
+            Self { path: path.into() }
+        }
+    }
+
+    impl S3Bucket for MockClient {
+        async fn read_bytes(&self, _bucket: &str, _key: &str) -> Result<Bytes, String> {
+            read_file_as_bytes(&self.path).map_err(|e| e.to_string())
+        }
     }
 
     fn new_test_app(pool: MySqlPool) -> TestServer {
@@ -170,6 +191,20 @@ mod local_tests {
         .await
     }
 
+    async fn get_emails(pool: &MySqlPool) -> Result<Vec<Email>, sqlx::Error> {
+        sqlx::query_as!(
+            Email,
+            r#"
+            SELECT id, sender_user_id, subject, body, message_id
+            FROM emails
+            ORDER BY id DESC
+            LIMIT 10
+            "#,
+        )
+        .fetch_all(pool)
+        .await
+    }
+
     #[sqlx::test]
     async fn test_ses_open_event_success(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
@@ -196,18 +231,21 @@ mod local_tests {
 
     #[sqlx::test]
     async fn test_ses_received_success(pool: MySqlPool) {
-        let app = new_test_app(pool.clone());
         let message_id = "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000";
 
         insert_email(&pool, message_id).await.unwrap();
 
-        let response = app
-            .post("/ses/read-receipt")
-            .json(&ses_received_json())
-            .await;
+        let mock_client = MockClient::new("src/tests/data/reply_email1.eml");
 
-        assert_eq!(response.status_code(), StatusCode::OK);
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, &mock_client, &data).await;
 
-        let result = check_db_email_reads(&pool).await.unwrap();
+        assert_eq!(response, OK_RESPONSE);
+
+        // TODO: Check that correct email was added into the db
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 2);
+        // assert_eq!(result[0].message_id.unwrap(), message_id);
     }
 }

@@ -82,13 +82,7 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<ParsedEmail, String> {
 #[cfg(test)]
 mod local_tests {
     use super::*;
-    use std::fs;
-    use std::path::Path;
-
-    pub fn read_file_as_bytes<P: AsRef<Path>>(path: P) -> std::io::Result<Bytes> {
-        let data = fs::read(path)?;
-        Ok(Bytes::from(data))
-    }
+    use crate::tests::utils::read_file_as_bytes;
 
     #[test]
     fn test_parse_email() {
