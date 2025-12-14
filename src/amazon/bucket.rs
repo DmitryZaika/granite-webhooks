@@ -1,3 +1,4 @@
+use aws_config::BehaviorVersion;
 use aws_sdk_s3::Client;
 use bytes::Bytes;
 
@@ -18,7 +19,7 @@ impl S3Bucket for CustomClient {
         key: &'a str,
     ) -> impl Future<Output = Result<Bytes, String>> + Send + 'a {
         async move {
-            let config = aws_config::load_from_env().await;
+            let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
             let client = Client::new(&config);
 
             let get_object_output = client
