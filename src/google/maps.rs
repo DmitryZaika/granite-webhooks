@@ -59,8 +59,8 @@ struct RouteModifiers {
 #[derive(Serialize)]
 struct RouteMatrixOrigin {
     waypoint: Waypoint,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    routeModifiers: Option<RouteModifiers>, // keep your exact field name if you prefer
+    #[serde(rename = "routeModifiers", skip_serializing_if = "Option::is_none")]
+    route_modifiers: Option<RouteModifiers>,
 }
 
 #[derive(Serialize)]
@@ -88,7 +88,7 @@ pub async fn driving_distance_miles(origin: &str, destination: &str) -> Result<f
             waypoint: Waypoint {
                 address: origin.to_string(),
             },
-            routeModifiers: Some(RouteModifiers {
+            route_modifiers: Some(RouteModifiers {
                 avoid_ferries: Some(false),
             }),
         }],
