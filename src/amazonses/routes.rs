@@ -1,4 +1,5 @@
 use axum::extract::{Json, State};
+use axum::http::StatusCode;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
@@ -89,7 +90,7 @@ pub async fn process_ses_received_event<C: S3Bucket>(
         Some(email) => email,
         None => {
             tracing::error!(bucket = bucket, key = key, "No prior email found");
-            return internal_error("No prior email found");
+            return (StatusCode::BAD_REQUEST, "No prior email found");
         }
     };
     let result = create_email(&pool, &parsed, &clean_prior).await;
@@ -266,7 +267,7 @@ mod local_tests {
         let data: S3Event = ses_received_json();
         let response = process_ses_received_event(&pool, &mock_client, &data).await;
 
-        const BAD: BasicResponse = (StatusCode::INTERNAL_SERVER_ERROR, "No prior email found");
+        const BAD: BasicResponse = (StatusCode::BAD_REQUEST, "No prior email found");
         assert_eq!(response, BAD);
     }
 }
