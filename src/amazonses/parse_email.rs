@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use email_reply_parser::EmailReplyParser;
 use mail_parser::{HeaderValue, MessageParser};
 
 pub struct ParsedEmail {
@@ -49,9 +50,10 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<ParsedEmail, String> {
         .ok_or("Failed to parse email")?;
     let subject = message.subject();
     let body = message
-        .body_html(0)
+        .body_text(0)
         .ok_or("Failed to parse email body")?
         .into_owned();
+    let reply_body = EmailReplyParser::parse_reply(&body);
     let sender_emails = message.from().ok_or("Failed to parse sender email")?;
     let sender_email = sender_emails
         .first()
@@ -72,7 +74,7 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<ParsedEmail, String> {
     let in_reply_to = parse_header_value(in_reply_to_raw);
     Ok(ParsedEmail::new(
         subject.map(|s| s.to_string()),
-        body,
+        reply_body,
         sender_email,
         receiver_email,
         in_reply_to,
@@ -89,9 +91,8 @@ mod local_tests {
         let email_bytes = read_file_as_bytes("src/tests/data/reply_email1.eml").unwrap();
         let parsed_email = parse_email(&email_bytes).unwrap();
         assert_eq!(parsed_email.subject, Some("Re: COLINS TEST".to_string()));
-        assert!(parsed_email.body.contains(
-            "Hello my good friend, Are you interested? I would love to sell you a countertop"
-        ));
+        const EMAIL_BODY: &str = "Please respond.";
+        assert_eq!(parsed_email.body, EMAIL_BODY);
         assert_eq!(parsed_email.sender_email, "colin99delahunty@gmail.com");
         assert_eq!(
             parsed_email.receiver_email,

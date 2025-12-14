@@ -250,13 +250,8 @@ mod local_tests {
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].subject, Some("Re: COLINS TEST".to_string()));
-        assert!(
-            result[0]
-                .body
-                .clone()
-                .unwrap()
-                .contains("Hello my good friend, Are you interested?")
-        );
+        const EMAIL_BODY: &str = "Please respond.";
+        assert_eq!(result[0].body.clone().unwrap(), EMAIL_BODY);
         assert_eq!(result[0].message_id, None);
         assert_eq!(result[0].sender_user_id, None);
         assert_eq!(

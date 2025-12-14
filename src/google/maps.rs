@@ -37,8 +37,8 @@ struct MatrixElement {
     distance_meters: Option<i64>,
 
     // These can appear; keep them optional.
-    #[serde(default)]
-    duration: Option<String>, // e.g., "160s"
+    // #[serde(default)]
+    // duration: Option<String>, // e.g., "160s"
     #[serde(default)]
     condition: Option<String>, // e.g., "ROUTE_EXISTS"
 }

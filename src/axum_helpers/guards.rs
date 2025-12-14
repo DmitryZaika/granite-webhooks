@@ -110,13 +110,11 @@ where
     }
 }
 
-pub struct MarketingUser {
-    id: uuid::Uuid,
-}
+pub struct MarketingUser {}
 
 impl MarketingUser {
-    pub const fn new(id: uuid::Uuid) -> Self {
-        Self { id }
+    pub const fn new(_: uuid::Uuid) -> Self {
+        Self {}
     }
 }
 
