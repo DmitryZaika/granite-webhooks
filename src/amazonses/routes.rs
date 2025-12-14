@@ -63,18 +63,15 @@ pub async fn process_ses_received_event<C: S3Bucket>(
             return internal_error("Unable to parse email content from S3");
         }
     };
-    let message_id = match parsed.message_id() {
-        Some(id) => id,
-        None => {
-            tracing::error!(
-                bucket = bucket,
-                key = key,
-                "Failed to extract message ID from email"
-            );
-            return internal_error("Unable to extract message ID from email");
-        }
+    let message_id = if let Some(id) = parsed.message_id() { id } else {
+        tracing::error!(
+            bucket = bucket,
+            key = key,
+            "Failed to extract message ID from email"
+        );
+        return internal_error("Unable to extract message ID from email");
     };
-    let prior = match get_prior_email(&pool, &message_id).await {
+    let prior = match get_prior_email(pool, &message_id).await {
         Ok(email) => email,
         Err(error) => {
             tracing::error!(
@@ -86,14 +83,11 @@ pub async fn process_ses_received_event<C: S3Bucket>(
             return internal_error("Unable to retrieve prior email");
         }
     };
-    let clean_prior = match prior {
-        Some(email) => email,
-        None => {
-            tracing::error!(bucket = bucket, key = key, "No prior email found");
-            return (StatusCode::BAD_REQUEST, "No prior email found");
-        }
+    let clean_prior = if let Some(email) = prior { email } else {
+        tracing::error!(bucket = bucket, key = key, "No prior email found");
+        return (StatusCode::BAD_REQUEST, "No prior email found");
     };
-    let result = create_email(&pool, &parsed, &clean_prior).await;
+    let result = create_email(pool, &parsed, &clean_prior).await;
     if let Err(error) = result {
         tracing::error!(
             "Error inserting email: {} into the db: {}",

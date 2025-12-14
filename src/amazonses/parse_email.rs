@@ -11,14 +11,14 @@ pub struct ParsedEmail {
 }
 
 impl ParsedEmail {
-    pub fn new(
+    pub const fn new(
         subject: Option<String>,
         body: String,
         sender_email: String,
         receiver_email: String,
         in_reply_to: Option<String>,
     ) -> Self {
-        ParsedEmail {
+        Self {
             subject,
             body,
             sender_email,
@@ -73,7 +73,7 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<ParsedEmail, String> {
     let in_reply_to_raw = message.in_reply_to();
     let in_reply_to = parse_header_value(in_reply_to_raw);
     Ok(ParsedEmail::new(
-        subject.map(|s| s.to_string()),
+        subject.map(std::string::ToString::to_string),
         reply_body,
         sender_email,
         receiver_email,
