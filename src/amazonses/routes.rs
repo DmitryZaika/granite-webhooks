@@ -264,4 +264,14 @@ mod local_tests {
             result[1].thread_id.clone().unwrap()
         );
     }
+    #[sqlx::test]
+    async fn test_ses_received_no_sent(pool: MySqlPool) {
+        let mock_client = MockClient::new("src/tests/data/reply_email1.eml");
+
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, &mock_client, &data).await;
+
+        const BAD: BasicResponse = (StatusCode::INTERNAL_SERVER_ERROR, "No prior email found");
+        assert_eq!(response, BAD);
+    }
 }
