@@ -297,7 +297,35 @@ mod local_tests {
         ChatId(id)
     }
 
-    pub async fn create_default_user(pool: &MySqlPool, email: &str) -> Result<u64, sqlx::Error> {
+    async fn create_default_user(pool: &MySqlPool, email: &str) -> Result<u64, sqlx::Error> {
+        let rec = sqlx::query!(
+            r#"
+            INSERT INTO users (
+                email,
+                password,
+                name,
+                phone_number,
+                is_employee,
+                is_admin,
+                is_superuser,
+                is_deleted,
+                company_id,
+                telegram_id,
+                telegram_conf_code,
+                telegram_conf_expires_at,
+                temp_telegram_id
+            )
+            VALUES (?, NULL, NULL, NULL, false, false, false, false, 1, NULL, NULL, NULL, NULL)
+            "#,
+            email
+        )
+        .execute(pool)
+        .await?;
+
+        Ok(rec.last_insert_id())
+    }
+
+    async fn insert_user(pool: &MySqlPool, email: &str) -> Result<u64, sqlx::Error> {
         let rec = sqlx::query!(
             r#"
             INSERT INTO users (
@@ -502,13 +530,24 @@ mod local_tests {
     }
 
     #[sqlx::test]
-    async fn test_message_email(pool: MySqlPool) {
+    async fn test_message_email_valid(pool: MySqlPool) {
         let bot = MockTelegram::new();
+        insert_user(&pool, "x@y.com").await.unwrap();
         let msg = generate_message(1, "/email x@y.com".into());
 
         let res = handle_message(msg, &pool, &bot).await;
 
         assert_eq!(res.0, StatusCode::OK);
+    }
+
+    #[sqlx::test]
+    async fn test_message_email_invalid(pool: MySqlPool) {
+        let bot = MockTelegram::new();
+        let msg = generate_message(1, "/email x@y.com".into());
+
+        let res = handle_message(msg, &pool, &bot).await;
+
+        assert_eq!(res.0, StatusCode::FORBIDDEN);
     }
 
     #[sqlx::test]

@@ -1,5 +1,6 @@
 use bytes::Bytes;
-use mail_parser::{HeaderValue, MessageParser};
+use email_reply_parser::EmailReplyParser;
+use mail_parser::{HeaderValue, MessageParser, MessagePart, PartType};
 
 pub struct ParsedEmail {
     pub subject: Option<String>,
@@ -7,27 +8,33 @@ pub struct ParsedEmail {
     pub sender_email: String,
     pub receiver_email: String,
     in_reply_to: Option<String>,
+    pub message_id: String,
 }
 
 impl ParsedEmail {
-    pub fn new(
+    pub const fn new(
         subject: Option<String>,
         body: String,
         sender_email: String,
         receiver_email: String,
         in_reply_to: Option<String>,
+        message_id: String,
     ) -> Self {
-        ParsedEmail {
+        Self {
             subject,
             body,
             sender_email,
             receiver_email,
             in_reply_to,
+            message_id,
         }
     }
 
-    pub fn message_id(&self) -> Option<String> {
+    pub fn reply_message_id(&self) -> Option<String> {
         let target = self.in_reply_to.clone()?;
+        if target.contains("mail.gmail.com") {
+            return Some(target);
+        }
         let clean = match target.find('@') {
             Some(idx) => &target[..idx],
             None => &target,
@@ -43,15 +50,33 @@ fn parse_header_value(value: &HeaderValue) -> Option<String> {
     }
 }
 
+fn parse_attachment(attachment: &MessagePart) -> Option<String> {
+    if let PartType::Binary(ref body) = attachment.body {
+        Some(format!("Attachment: {}", body.len()))
+    } else {
+        None
+    }
+}
+
 pub fn parse_email(email_bytes: &Bytes) -> Result<ParsedEmail, String> {
     let message = MessageParser::default()
         .parse(&email_bytes)
         .ok_or("Failed to parse email")?;
+    let message_id = message.message_id().ok_or("Failed to parse message ID")?;
     let subject = message.subject();
     let body = message
-        .body_html(0)
+        .body_text(0)
         .ok_or("Failed to parse email body")?
         .into_owned();
+    let mut reply_body = EmailReplyParser::parse_reply(&body);
+    /*
+    let attachments = message.attachments();
+    for attachment in attachments {
+        if let Some(attachment_info) = parse_attachment(attachment) {
+            reply_body.push_str(&attachment_info);
+        }
+    }
+     */
     let sender_emails = message.from().ok_or("Failed to parse sender email")?;
     let sender_email = sender_emails
         .first()
@@ -71,33 +96,27 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<ParsedEmail, String> {
     let in_reply_to_raw = message.in_reply_to();
     let in_reply_to = parse_header_value(in_reply_to_raw);
     Ok(ParsedEmail::new(
-        subject.map(|s| s.to_string()),
-        body,
+        subject.map(std::string::ToString::to_string),
+        reply_body,
         sender_email,
         receiver_email,
         in_reply_to,
+        message_id.to_string(),
     ))
 }
 
 #[cfg(test)]
 mod local_tests {
     use super::*;
-    use std::fs;
-    use std::path::Path;
-
-    pub fn read_file_as_bytes<P: AsRef<Path>>(path: P) -> std::io::Result<Bytes> {
-        let data = fs::read(path)?;
-        Ok(Bytes::from(data))
-    }
+    use crate::tests::utils::read_file_as_bytes;
 
     #[test]
     fn test_parse_email() {
         let email_bytes = read_file_as_bytes("src/tests/data/reply_email1.eml").unwrap();
         let parsed_email = parse_email(&email_bytes).unwrap();
         assert_eq!(parsed_email.subject, Some("Re: COLINS TEST".to_string()));
-        assert!(parsed_email.body.contains(
-            "Hello my good friend, Are you interested? I would love to sell you a countertop"
-        ));
+        const EMAIL_BODY: &str = "Please respond.";
+        assert_eq!(parsed_email.body, EMAIL_BODY);
         assert_eq!(parsed_email.sender_email, "colin99delahunty@gmail.com");
         assert_eq!(
             parsed_email.receiver_email,
@@ -114,7 +133,7 @@ mod local_tests {
     fn test_parse_email_message_id() {
         let email_bytes = read_file_as_bytes("src/tests/data/reply_email1.eml").unwrap();
         let parsed_email = parse_email(&email_bytes).unwrap();
-        let message_id = parsed_email.message_id();
+        let message_id = parsed_email.reply_message_id();
         let correct_message_id =
             Some("010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000".to_string());
         assert_eq!(message_id, correct_message_id);

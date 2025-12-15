@@ -1,6 +1,6 @@
-use serde_json::Value;
+use serde::Deserialize;
 
-pub fn ses_received_json() -> Value {
+pub fn ses_received_json<T: for<'de> Deserialize<'de>>() -> T {
     serde_json::from_str(
         r#"{
         "version":"0",

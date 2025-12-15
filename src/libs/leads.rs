@@ -28,7 +28,14 @@ async fn handle_repeat_lead(
         name.unwrap_or("Unknown"),
         lead_url(deal.id)
     );
-    form.update_lead(pool, company_id, existing.id).await;
+    if let Err(e) = form.update_lead(pool, company_id, existing.id).await {
+        tracing::error!(
+            ?e,
+            company_id = company_id,
+            existing_id = existing.id,
+            "Failed to update lead"
+        );
+    }
     let customer_id = u64::try_from(existing.id).unwrap();
     let user_info = match get_user_tg_info(pool, deal.user_id.unwrap()).await {
         Ok(Some(info)) => info,
@@ -107,7 +114,14 @@ async fn create_new_deal_existing_customer(
             }
         };
     }
-    form.update_lead(pool, company_id, existing.id).await;
+    if let Err(e) = form.update_lead(pool, company_id, existing.id).await {
+        tracing::error!(
+            ?e,
+            company_id = company_id,
+            existing_id = existing.id,
+            "Failed to update lead"
+        );
+    }
     let clean_id = u64::try_from(existing.id).unwrap();
     let message = format!(
         "You received a REPEATED lead with no sales rep \n{form}",
