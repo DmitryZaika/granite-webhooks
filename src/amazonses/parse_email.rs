@@ -8,6 +8,7 @@ pub struct ParsedEmail {
     pub sender_email: String,
     pub receiver_email: String,
     in_reply_to: Option<String>,
+    pub message_id: String,
 }
 
 impl ParsedEmail {
@@ -17,6 +18,7 @@ impl ParsedEmail {
         sender_email: String,
         receiver_email: String,
         in_reply_to: Option<String>,
+        message_id: String,
     ) -> Self {
         Self {
             subject,
@@ -24,11 +26,15 @@ impl ParsedEmail {
             sender_email,
             receiver_email,
             in_reply_to,
+            message_id,
         }
     }
 
-    pub fn message_id(&self) -> Option<String> {
+    pub fn reply_message_id(&self) -> Option<String> {
         let target = self.in_reply_to.clone()?;
+        if target.contains("mail.gmail.com") {
+            return Some(target);
+        }
         let clean = match target.find('@') {
             Some(idx) => &target[..idx],
             None => &target,
@@ -56,6 +62,7 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<ParsedEmail, String> {
     let message = MessageParser::default()
         .parse(&email_bytes)
         .ok_or("Failed to parse email")?;
+    let message_id = message.message_id().ok_or("Failed to parse message ID")?;
     let subject = message.subject();
     let body = message
         .body_text(0)
@@ -94,6 +101,7 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<ParsedEmail, String> {
         sender_email,
         receiver_email,
         in_reply_to,
+        message_id.to_string(),
     ))
 }
 
@@ -125,7 +133,7 @@ mod local_tests {
     fn test_parse_email_message_id() {
         let email_bytes = read_file_as_bytes("src/tests/data/reply_email1.eml").unwrap();
         let parsed_email = parse_email(&email_bytes).unwrap();
-        let message_id = parsed_email.message_id();
+        let message_id = parsed_email.reply_message_id();
         let correct_message_id =
             Some("010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000".to_string());
         assert_eq!(message_id, correct_message_id);

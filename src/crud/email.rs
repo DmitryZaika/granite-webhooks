@@ -47,15 +47,16 @@ pub async fn create_email(
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     sqlx::query!(
         r#"
-        INSERT INTO emails (subject, body,  thread_id, receiver_user_id, sender_email, receiver_email)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO emails (subject, body, thread_id, receiver_user_id, sender_email, receiver_email, message_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         "#,
         email.subject,
         email.body,
         prior.thread_id,
         prior.receiver_user_id,
         email.sender_email,
-        email.receiver_email
+        email.receiver_email,
+        email.message_id
     )
     .execute(pool)
     .await

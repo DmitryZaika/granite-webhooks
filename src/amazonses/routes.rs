@@ -63,7 +63,9 @@ pub async fn process_ses_received_event<C: S3Bucket>(
             return internal_error("Unable to parse email content from S3");
         }
     };
-    let message_id = if let Some(id) = parsed.message_id() { id } else {
+    let message_id = if let Some(id) = parsed.reply_message_id() {
+        id
+    } else {
         tracing::error!(
             bucket = bucket,
             key = key,
@@ -83,7 +85,9 @@ pub async fn process_ses_received_event<C: S3Bucket>(
             return internal_error("Unable to retrieve prior email");
         }
     };
-    let clean_prior = if let Some(email) = prior { email } else {
+    let clean_prior = if let Some(email) = prior {
+        email
+    } else {
         tracing::error!(bucket = bucket, key = key, "No prior email found");
         return (StatusCode::BAD_REQUEST, "No prior email found");
     };
@@ -247,12 +251,14 @@ mod local_tests {
         assert_eq!(result[0].subject, Some("Re: COLINS TEST".to_string()));
         const EMAIL_BODY: &str = "Please respond.";
         assert_eq!(result[0].body.clone().unwrap(), EMAIL_BODY);
-        assert_eq!(result[0].message_id, None);
         assert_eq!(result[0].sender_user_id, None);
         assert_eq!(
             result[0].thread_id.clone().unwrap(),
             result[1].thread_id.clone().unwrap()
         );
+        const MESSAGE_ID: &str =
+            "CAG6QthbVR6eOBoEFup=bnuuBw=_JQWfP1rLzAjwDUGCpNV_wyg@mail.gmail.com";
+        assert_eq!(result[0].message_id, Some(MESSAGE_ID.to_string()));
     }
     #[sqlx::test]
     async fn test_ses_received_no_sent(pool: MySqlPool) {
