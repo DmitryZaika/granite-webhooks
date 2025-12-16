@@ -62,12 +62,11 @@ fn parse_header_value(value: &HeaderValue) -> Option<String> {
     }
 }
 
-fn extract_attribute<'x>(
-    attributes: Option<&[Attribute<'x>]>,
+fn extract_attribute(
+    attributes: Option<&[Attribute<'_>]>,
     name: std::borrow::Cow<'_, str>,
 ) -> Option<String> {
     if let Some(attributes) = attributes {
-        println!("Attributes: {:?}", attributes);
         for attribute in attributes {
             if attribute.name == name {
                 return Some(attribute.value.to_string());
@@ -92,18 +91,17 @@ fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
         match &header.name {
             HeaderName::ContentType => {
                 if let HeaderValue::ContentType(ct) = &header.value {
-                    println!("Content-Type: {:?}", ct);
                     content_type = Some(ct.c_type.to_string());
-                    content_subtype = ct.c_subtype.clone().map(|s| s.into_owned());
+                    content_subtype = ct.c_subtype.clone().map(std::borrow::Cow::into_owned);
                     filename = extract_attribute(ct.attributes(), Borrowed("name"));
                 }
             }
 
             HeaderName::ContentDisposition => {
-                if let HeaderValue::ContentType(cd) = &header.value {
-                    if filename.is_none() {
-                        filename = extract_attribute(cd.attributes(), Borrowed("filename"));
-                    }
+                if let HeaderValue::ContentType(cd) = &header.value
+                    && filename.is_none()
+                {
+                    filename = extract_attribute(cd.attributes(), Borrowed("filename"));
                 }
             }
 
@@ -111,18 +109,15 @@ fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
         }
     }
 
-    let clean_content_type = match content_type {
-        Some(ct) => ct,
-        None => return None,
-    };
+    let clean_content_type = content_type?;
 
     let default_name = format!("attachment-{}.bin", Uuid::new_v4());
 
     Some(Attachment {
         content_type: clean_content_type,
-        content_subtype: content_subtype,
+        content_subtype,
 
-        filename: filename.unwrap_or_else(|| default_name.to_string()),
+        filename: filename.unwrap_or_else(|| default_name.clone()),
         data,
     })
 }
