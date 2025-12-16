@@ -160,7 +160,7 @@ mod local_tests {
             key: &'a str,
             data: Bytes,
         ) -> impl Future<Output = Result<(), String>> + Send + 'a {
-            future::ready(Ok(()))
+            async move { Ok(()) }
         }
     }
 
