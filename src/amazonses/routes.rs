@@ -2,6 +2,7 @@ use axum::extract::{Json, State};
 use axum::http::StatusCode;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
+use std::future;
 
 use crate::amazon::bucket::{CustomClient, S3Bucket};
 use crate::amazonses::parse_email::parse_email;
@@ -154,6 +155,14 @@ mod local_tests {
         async fn read_bytes(&self, _bucket: &str, _key: &str) -> Result<Bytes, String> {
             read_file_as_bytes(&self.path).map_err(|e| e.to_string())
         }
+        fn send_file<'a>(
+            &'a self,
+            bucket: &'a str,
+            key: &'a str,
+            data: Bytes,
+        ) -> impl Future<Output = Result<(), String>> + Send + 'a {
+            future::ready(Ok(()))
+        }
     }
 
     fn new_test_app(pool: MySqlPool) -> TestServer {
@@ -259,6 +268,33 @@ mod local_tests {
         const MESSAGE_ID: &str =
             "CAG6QthbVR6eOBoEFup=bnuuBw=_JQWfP1rLzAjwDUGCpNV_wyg@mail.gmail.com";
         assert_eq!(result[0].message_id, Some(MESSAGE_ID.to_string()));
+    }
+
+    #[sqlx::test]
+    async fn test_ses_response_to_received_success(pool: MySqlPool) {
+        let message_id = "010f019b278e838b-4026f591-7b73-451a-a540-7e70c8bd5c84-000000";
+
+        insert_email(&pool, message_id).await.unwrap();
+
+        let response1 = MockClient::new("src/tests/data/reply_attachment_1.eml");
+        let response2 = MockClient::new("src/tests/data/reply_attachment_2.eml");
+
+        let data: S3Event = ses_received_json();
+        let answer1 = process_ses_received_event(&pool, &response1, &data).await;
+        let answer2 = process_ses_received_event(&pool, &response2, &data).await;
+
+        assert_eq!(answer1, OK_RESPONSE);
+        assert_eq!(answer2, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(
+            result[0].thread_id.clone().unwrap(),
+            result[1].thread_id.clone().unwrap()
+        );
+        assert_eq!(
+            result[1].thread_id.clone().unwrap(),
+            result[2].thread_id.clone().unwrap()
+        );
     }
     #[sqlx::test]
     async fn test_ses_received_no_sent(pool: MySqlPool) {
