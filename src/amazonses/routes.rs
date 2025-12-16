@@ -6,7 +6,8 @@ use sqlx::MySqlPool;
 use crate::amazon::bucket::{CustomClient, S3Bucket};
 use crate::amazonses::parse_email::parse_email;
 use crate::amazonses::schemas::{S3Event, SesEvent};
-use crate::crud::email::{create_email, create_email_read, get_prior_email};
+use crate::amazonses::upload::upload_attachments;
+use crate::crud::email::{create_email_read, create_email_with_attachments, get_prior_email};
 use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 
@@ -30,9 +31,9 @@ pub async fn read_receipt_handler(
     OK_RESPONSE
 }
 
-pub async fn process_ses_received_event<C: S3Bucket>(
+pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
     pool: &MySqlPool,
-    client: &C,
+    client: C,
     event: &S3Event,
 ) -> BasicResponse {
     let bucket = &event.detail.bucket.name;
@@ -51,7 +52,7 @@ pub async fn process_ses_received_event<C: S3Bucket>(
         }
     };
 
-    let parsed = match parse_email(&email_bytes) {
+    let (parsed, attachments) = match parse_email(&email_bytes) {
         Ok(email) => email,
         Err(error) => {
             tracing::error!(
@@ -91,7 +92,10 @@ pub async fn process_ses_received_event<C: S3Bucket>(
         tracing::error!(bucket = bucket, key = key, "No prior email found");
         return (StatusCode::BAD_REQUEST, "No prior email found");
     };
-    let result = create_email(pool, &parsed, &clean_prior).await;
+
+    let uploaded_attachments = upload_attachments(client, attachments).await.unwrap();
+    let result =
+        create_email_with_attachments(pool, &parsed, &clean_prior, &uploaded_attachments).await;
     if let Err(error) = result {
         tracing::error!(
             "Error inserting email: {} into the db: {}",
@@ -109,7 +113,7 @@ pub async fn receive_handler(
     Json(event): Json<S3Event>,
 ) -> BasicResponse {
     let custom_client = CustomClient {};
-    process_ses_received_event(&pool, &custom_client, &event).await
+    process_ses_received_event(&pool, custom_client, &event).await
 }
 
 #[cfg(test)]
@@ -132,6 +136,7 @@ mod local_tests {
         ip_address: Option<String>,
     }
 
+    #[derive(Clone)]
     pub struct MockClient {
         pub path: PathBuf,
     }
@@ -159,8 +164,8 @@ mod local_tests {
             bucket: &'a str,
             key: &'a str,
             data: Bytes,
-        ) -> impl Future<Output = Result<(), String>> + Send + 'a {
-            async move { Ok(()) }
+        ) -> impl Future<Output = Result<String, String>> + Send + 'a {
+            async move { Ok(format!("s3://{bucket}/{key}")) }
         }
     }
 
@@ -248,7 +253,7 @@ mod local_tests {
         let mock_client = MockClient::new("src/tests/data/reply_email1.eml");
 
         let data: S3Event = ses_received_json();
-        let response = process_ses_received_event(&pool, &mock_client, &data).await;
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
 
         assert_eq!(response, OK_RESPONSE);
 
@@ -279,8 +284,8 @@ mod local_tests {
         let response2 = MockClient::new("src/tests/data/reply_attachment_2.eml");
 
         let data: S3Event = ses_received_json();
-        let answer1 = process_ses_received_event(&pool, &response1, &data).await;
-        let answer2 = process_ses_received_event(&pool, &response2, &data).await;
+        let answer1 = process_ses_received_event(&pool, response1, &data).await;
+        let answer2 = process_ses_received_event(&pool, response2, &data).await;
 
         assert_eq!(answer1, OK_RESPONSE);
         assert_eq!(answer2, OK_RESPONSE);
@@ -300,7 +305,7 @@ mod local_tests {
         let mock_client = MockClient::new("src/tests/data/reply_email1.eml");
 
         let data: S3Event = ses_received_json();
-        let response = process_ses_received_event(&pool, &mock_client, &data).await;
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
 
         const BAD: BasicResponse = (StatusCode::BAD_REQUEST, "No prior email found");
         assert_eq!(response, BAD);

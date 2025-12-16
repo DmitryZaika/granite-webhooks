@@ -2,7 +2,7 @@ use aws_config::BehaviorVersion;
 use aws_sdk_s3::Client;
 use bytes::Bytes;
 
-pub trait S3Bucket: Send + Sync {
+pub trait S3Bucket: Send + Sync + Clone {
     fn read_bytes<'a>(
         &'a self,
         bucket: &'a str,
@@ -14,9 +14,10 @@ pub trait S3Bucket: Send + Sync {
         bucket: &'a str,
         key: &'a str,
         data: Bytes,
-    ) -> impl Future<Output = Result<(), String>> + Send + 'a;
+    ) -> impl Future<Output = Result<String, String>> + Send + 'a;
 }
 
+#[derive(Clone)]
 pub struct CustomClient {}
 
 impl S3Bucket for CustomClient {
@@ -53,7 +54,7 @@ impl S3Bucket for CustomClient {
         bucket: &'a str,
         key: &'a str,
         data: Bytes,
-    ) -> impl std::future::Future<Output = Result<(), String>> + Send + 'a {
+    ) -> impl std::future::Future<Output = Result<String, String>> + Send + 'a {
         async move {
             let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
             let client = Client::new(&config);
@@ -67,7 +68,7 @@ impl S3Bucket for CustomClient {
                 .await
                 .map_err(|e| e.to_string())?;
 
-            Ok(())
+            Ok(format!("s3://{}/{}", bucket, key))
         }
     }
 }
