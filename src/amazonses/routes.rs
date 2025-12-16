@@ -2,7 +2,6 @@ use axum::extract::{Json, State};
 use axum::http::StatusCode;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
-use std::future;
 
 use crate::amazon::bucket::{CustomClient, S3Bucket};
 use crate::amazonses::parse_email::parse_email;
