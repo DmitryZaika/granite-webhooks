@@ -100,7 +100,7 @@ fn parse_header_value(value: &HeaderValue) -> Option<String> {
 fn extract_attribute(attributes: Option<&[Attribute<'_>]>, name: &str) -> Option<String> {
     if let Some(attributes) = attributes {
         for attribute in attributes {
-            if &attribute.name == name {
+            if attribute.name == name {
                 return Some(attribute.value.to_string());
             }
         }
