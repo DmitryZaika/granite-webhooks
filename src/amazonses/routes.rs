@@ -127,6 +127,7 @@ mod local_tests {
     use axum_test::TestServer;
     use bytes::Bytes;
     use sqlx::MySqlPool;
+    use sqlx::mysql::MySqlQueryResult;
     use std::path::PathBuf;
     use uuid::Uuid;
 
@@ -147,6 +148,13 @@ mod local_tests {
         pub body: Option<String>,
         pub message_id: Option<String>,
         pub thread_id: Option<String>,
+    }
+
+    pub struct Attachment {
+        content_type: String,
+        content_subtype: Option<String>,
+        filename: String,
+        url: String,
     }
 
     impl MockClient {
@@ -174,7 +182,10 @@ mod local_tests {
         TestServer::builder().build(app).unwrap()
     }
 
-    async fn insert_email(pool: &MySqlPool, message_id: &str) -> Result<(), sqlx::Error> {
+    async fn insert_email(
+        pool: &MySqlPool,
+        message_id: &str,
+    ) -> Result<MySqlQueryResult, sqlx::Error> {
         let uuid: Uuid = Uuid::new_v4();
         sqlx::query!(
             r#"
@@ -188,8 +199,7 @@ mod local_tests {
             uuid.to_string()
         )
         .execute(pool)
-        .await?;
-        Ok(())
+        .await
     }
 
     async fn check_db_email_reads(pool: &MySqlPool) -> Result<ReadDb, sqlx::Error> {
@@ -212,9 +222,26 @@ mod local_tests {
             r#"
             SELECT sender_user_id, subject, body, message_id, thread_id
             FROM emails
-            ORDER BY id DESC
+            ORDER BY id ASC
             LIMIT 10
             "#,
+        )
+        .fetch_all(pool)
+        .await
+    }
+    async fn get_email_attachments(
+        pool: &MySqlPool,
+        email_id: u64,
+    ) -> Result<Vec<Attachment>, sqlx::Error> {
+        sqlx::query_as!(
+            Attachment,
+            r#"
+            SELECT content_type, content_subtype, filename, url
+            FROM email_attachments
+            WHERE email_id = ?
+            ORDER BY id ASC
+            "#,
+            email_id
         )
         .fetch_all(pool)
         .await
@@ -261,17 +288,17 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].subject, Some("Re: COLINS TEST".to_string()));
+        assert_eq!(result[1].subject, Some("Re: COLINS TEST".to_string()));
         const EMAIL_BODY: &str = "Please respond.";
-        assert_eq!(result[0].body.clone().unwrap(), EMAIL_BODY);
-        assert_eq!(result[0].sender_user_id, None);
+        assert_eq!(result[1].body.clone().unwrap(), EMAIL_BODY);
+        assert_eq!(result[1].sender_user_id, None);
         assert_eq!(
-            result[0].thread_id.clone().unwrap(),
-            result[1].thread_id.clone().unwrap()
+            result[1].thread_id.clone().unwrap(),
+            result[0].thread_id.clone().unwrap()
         );
         const MESSAGE_ID: &str =
             "CAG6QthbVR6eOBoEFup=bnuuBw=_JQWfP1rLzAjwDUGCpNV_wyg@mail.gmail.com";
-        assert_eq!(result[0].message_id, Some(MESSAGE_ID.to_string()));
+        assert_eq!(result[1].message_id, Some(MESSAGE_ID.to_string()));
     }
 
     #[sqlx::test]
@@ -309,5 +336,41 @@ mod local_tests {
 
         const BAD: BasicResponse = (StatusCode::BAD_REQUEST, "No prior email found");
         assert_eq!(response, BAD);
+    }
+    #[sqlx::test]
+    async fn test_ses_four_attachments(pool: MySqlPool) {
+        let message_id = "010f019b278e838b-4026f591-7b73-451a-a540-7e70c8bd5c84-000000";
+
+        let email_result = insert_email(&pool, message_id).await.unwrap();
+
+        let response1 = MockClient::new("src/tests/data/reply_attachment_2.eml");
+
+        let data: S3Event = ses_received_json();
+        let answer1 = process_ses_received_event(&pool, response1, &data).await;
+
+        assert_eq!(answer1, OK_RESPONSE);
+
+        let result = get_email_attachments(&pool, email_result.last_insert_id())
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 4);
+
+        let expected = [
+            ("image", "png", "img_0.png"),
+            ("image", "jpeg", "img_1.jpg"),
+            ("image", "png", "img_1.png"),
+            ("image", "jpeg", "img_0.jpg"),
+        ];
+        for (attachment, (content_type, content_subtype, filename)) in result.iter().zip(expected) {
+            assert_eq!(attachment.content_type, content_type);
+            assert_eq!(
+                attachment.content_subtype.as_ref().unwrap(),
+                content_subtype
+            );
+            assert_eq!(attachment.filename, filename);
+            assert!(!attachment.url.starts_with("s3://"));
+            let extension = attachment.url.split('.').last().unwrap();
+            assert_eq!(extension, filename.split('.').last().unwrap());
+        }
     }
 }
