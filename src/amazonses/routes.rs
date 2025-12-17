@@ -93,7 +93,18 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
         return (StatusCode::BAD_REQUEST, "No prior email found");
     };
 
-    let uploaded_attachments = upload_attachments(client, attachments).await.unwrap();
+    let uploaded_attachments = match upload_attachments(client, attachments).await {
+        Ok(attachments) => attachments,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                bucket = bucket,
+                key = key,
+                "Failed to upload attachments"
+            );
+            return internal_error("Failed to upload attachments");
+        }
+    };
     let result =
         create_email_with_attachments(pool, &parsed, &clean_prior, &uploaded_attachments).await;
     if let Err(error) = result {
