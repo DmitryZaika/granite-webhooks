@@ -142,8 +142,8 @@ async fn create_new_deal_existing_customer(
 
 pub async fn existing_lead_check(
     pool: &MySqlPool,
-    email: &Option<&str>,
-    phone: &Option<&str>,
+    email: Option<&str>,
+    phone: Option<&str>,
     company_id: i32,
     form: &LeadForm,
 ) -> Option<BasicResponse> {

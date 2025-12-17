@@ -13,7 +13,7 @@ pub fn filename_to_uuid(original: &str) -> String {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| format!(".{}", e))
+        .map(|e| format!(".{e}"))
         .unwrap_or_default();
 
     format!("{}{}", Uuid::new_v4(), ext)

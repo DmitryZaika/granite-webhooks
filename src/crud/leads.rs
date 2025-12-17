@@ -252,9 +252,9 @@ pub async fn check_lead_exists(
 ) -> Result<bool, sqlx::Error> {
     let row = query!(
         r#"
-        SELECT COUNT(*) as count 
-        FROM customers 
-        WHERE company_id = ? 
+        SELECT COUNT(*) as count
+        FROM customers
+        WHERE company_id = ?
           AND (email = ? OR phone = ?)
         "#,
         company_id,
@@ -280,8 +280,8 @@ pub struct Deal {
 
 pub async fn find_existing_customer(
     pool: &MySqlPool,
-    email: &Option<&str>,
-    phone: &Option<&str>,
+    email: Option<&str>,
+    phone: Option<&str>,
     company_id: i32,
 ) -> Result<Option<ExistingCustomer>, sqlx::Error> {
     if email.is_none() && phone.is_none() {

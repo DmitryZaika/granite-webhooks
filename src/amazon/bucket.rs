@@ -68,7 +68,7 @@ impl S3Bucket for CustomClient {
                 .await
                 .map_err(|e| e.to_string())?;
 
-            Ok(format!("s3://{}/{}", bucket, key))
+            Ok(format!("s3://{bucket}/{key}"))
         }
     }
 }

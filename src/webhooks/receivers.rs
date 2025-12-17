@@ -25,8 +25,8 @@ pub async fn wordpress_contact_form(
 ) -> BasicResponse {
     if let Some(response) = existing_lead_check(
         &pool,
-        &contact_form.email.as_deref(),
-        &contact_form.phone.as_deref(),
+        contact_form.email.as_deref(),
+        contact_form.phone.as_deref(),
         company_id,
         &LeadForm::WordpressContactForm(contact_form.clone()),
     )
@@ -68,8 +68,8 @@ pub async fn facebook_contact_form(
 ) -> BasicResponse {
     if let Some(response) = existing_lead_check(
         &pool,
-        &contact_form.email.as_deref(),
-        &contact_form.phone.as_deref(),
+        contact_form.email.as_deref(),
+        contact_form.phone.as_deref(),
         company_id,
         &LeadForm::FaceBookContactForm(contact_form.clone()),
     )
@@ -113,8 +113,8 @@ pub async fn new_lead_form(
 ) -> BasicResponse {
     let existing_result = existing_lead_check(
         &pool,
-        &contact_form.email.as_deref(),
-        &contact_form.phone.as_deref(),
+        contact_form.email.as_deref(),
+        contact_form.phone.as_deref(),
         company_id,
         &LeadForm::NewLeadForm(contact_form.clone()),
     )

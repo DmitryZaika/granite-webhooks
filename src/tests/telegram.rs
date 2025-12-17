@@ -61,7 +61,7 @@ const fn get_chat(chat_id: i64) -> Chat {
     }
 }
 
-pub fn generate_message(chat_id: i64, text: String) -> Message {
+pub fn generate_message(chat_id: i64, text: &str) -> Message {
     let from_user = telegram_user(1);
     Message {
         id: teloxide::types::MessageId(1),
@@ -88,7 +88,7 @@ impl MockTelegram {
         Self::default()
     }
 
-    fn dummy_message(chat_id: i64, text: String) -> Message {
+    fn dummy_message(chat_id: i64, text: &str) -> Message {
         generate_message(chat_id, text)
     }
 }
@@ -112,7 +112,7 @@ impl Telegram for MockTelegram {
         if self.fail {
             Err(internal_error(ERR_SEND_TELEGRAM))
         } else {
-            Ok(Self::dummy_message(chat_id, text))
+            Ok(Self::dummy_message(chat_id, &text))
         }
     }
 
@@ -126,6 +126,6 @@ impl Telegram for MockTelegram {
     {
         // Если нужно — тоже логируешь
         let text = text.into();
-        Ok(Self::dummy_message(0, text))
+        Ok(Self::dummy_message(0, &text))
     }
 }
