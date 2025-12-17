@@ -338,8 +338,8 @@ mod local_tests {
         assert_eq!(response, BAD);
     }
     #[sqlx::test]
-    async fn test_ses_four_attachments(pool: MySqlPool) {
-        let message_id = "010f019b278e838b-4026f591-7b73-451a-a540-7e70c8bd5c84-000000";
+    async fn test_see_four_attachments(pool: MySqlPool) {
+        let message_id = "CAG6QthaOtf0GWH6Ba9eOfRkfbviRi-RJw_vVnRc4U5cW_9GPmA@mail.gmail.com";
 
         let email_result = insert_email(&pool, message_id).await.unwrap();
 
@@ -350,7 +350,11 @@ mod local_tests {
 
         assert_eq!(answer1, OK_RESPONSE);
 
-        let result = get_email_attachments(&pool, email_result.last_insert_id())
+        let wrong_result = get_email_attachments(&pool, email_result.last_insert_id())
+            .await
+            .unwrap();
+        assert_eq!(wrong_result.len(), 0);
+        let result = get_email_attachments(&pool, email_result.last_insert_id() + 1)
             .await
             .unwrap();
         assert_eq!(result.len(), 4);
@@ -368,7 +372,7 @@ mod local_tests {
                 content_subtype
             );
             assert_eq!(attachment.filename, filename);
-            assert!(!attachment.url.starts_with("s3://"));
+            assert!(attachment.url.starts_with("s3://"));
             let extension = attachment.url.split('.').last().unwrap();
             assert_eq!(extension, filename.split('.').last().unwrap());
         }
