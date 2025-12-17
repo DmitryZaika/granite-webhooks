@@ -2,14 +2,22 @@ use aws_config::BehaviorVersion;
 use aws_sdk_s3::Client;
 use bytes::Bytes;
 
-pub trait S3Bucket: Send + Sync {
+pub trait S3Bucket: Send + Sync + Clone {
     fn read_bytes<'a>(
         &'a self,
         bucket: &'a str,
         key: &'a str,
     ) -> impl Future<Output = Result<Bytes, String>> + Send + 'a;
+
+    fn send_file<'a>(
+        &'a self,
+        bucket: &'a str,
+        key: &'a str,
+        data: Bytes,
+    ) -> impl Future<Output = Result<String, String>> + Send + 'a;
 }
 
+#[derive(Clone)]
 pub struct CustomClient {}
 
 impl S3Bucket for CustomClient {
@@ -17,7 +25,7 @@ impl S3Bucket for CustomClient {
         &'a self,
         bucket: &'a str,
         key: &'a str,
-    ) -> impl Future<Output = Result<Bytes, String>> + Send + 'a {
+    ) -> impl std::future::Future<Output = Result<Bytes, String>> + Send + 'a {
         async move {
             let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
             let client = Client::new(&config);
@@ -30,14 +38,37 @@ impl S3Bucket for CustomClient {
                 .await
                 .map_err(|e| e.to_string())?;
 
-            let email_bytes = get_object_output
+            let bytes = get_object_output
                 .body
                 .collect()
                 .await
                 .map_err(|e| e.to_string())?
                 .into_bytes();
 
-            Ok(email_bytes)
+            Ok(bytes)
+        }
+    }
+
+    fn send_file<'a>(
+        &'a self,
+        bucket: &'a str,
+        key: &'a str,
+        data: Bytes,
+    ) -> impl std::future::Future<Output = Result<String, String>> + Send + 'a {
+        async move {
+            let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+            let client = Client::new(&config);
+
+            client
+                .put_object()
+                .bucket(bucket)
+                .key(key)
+                .body(data.into())
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(format!("s3://{}/{}", bucket, key))
         }
     }
 }

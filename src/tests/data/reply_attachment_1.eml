@@ -1,0 +1,170 @@
+Return-Path: <colin99delahunty@gmail.com>
+Received: from mail-yw1-f181.google.com (mail-yw1-f181.google.com [209.85.128.181])
+ by inbound-smtp.us-east-2.amazonaws.com with SMTP id ghc7l441bt5si02u0kne4c191fl4rpdvi9asjto1
+ for sales@granite-manager.com;
+ Tue, 16 Dec 2025 14:29:48 +0000 (UTC)
+X-SES-Spam-Verdict: PASS
+X-SES-Virus-Verdict: PASS
+Received-SPF: pass (spfCheck: domain of _spf.google.com designates 209.85.128.181 as permitted sender) client-ip=209.85.128.181; envelope-from=colin99delahunty@gmail.com; helo=mail-yw1-f181.google.com;
+Authentication-Results: amazonses.com;
+ spf=pass (spfCheck: domain of _spf.google.com designates 209.85.128.181 as permitted sender) client-ip=209.85.128.181; envelope-from=colin99delahunty@gmail.com; helo=mail-yw1-f181.google.com;
+ dkim=pass header.i=@gmail.com;
+ dmarc=pass header.from=gmail.com;
+X-SES-RECEIPT: AEFBQUFBQUFBQUFIcjlHYkthOWZnK3JMWW0vTnpEMGZDcGtteWlYRzQzUDdZV29hMnJXL21VYXE3V1FkUVhCcG1HR3pmN1dyZCtyazJpaW9TbllSRlV2VmZRbUdvYzNwaGZuV1c1QjZDRDBiMWhWaFFXT001L3l3QWtrRWRJSjRjaVpVK2JCNkhXOS9SbXp3UTFBREdBYWtUTUxqVHN5OXZscXc3TUsxRVIyV2liaVJUcUdZeWF0WFVnOG1kdnBVOGY2cHBIMEY2ZE80V3VyVEErS0VmcVYzRHFVZWk3aGh5cjZ6cnBYMk5mczRhMGE5WUoxMUdWdTI5M1hRVExMVEtaWXI0N2VOeHA4RkF2M29PQnAvTUxoelhFRUNkak90WWs0a0JQSWEyMkxOUVhobERrZlVwTHc9PQ==
+X-SES-DKIM-SIGNATURE: a=rsa-sha256; q=dns/txt; b=S7snCeGbrGXoP2Agf3ZuQJvqZ5rhKsTL3BNt92yJT07RzKDbVAR48sNOnRf6VZGd0/znsyItOkXHlK1bHsIr+XdohTM7fvUaZVvp8fQ4WqoHNHLkZwdnxmKGXlGLCT6/Ho4e3J4vbvKOV5C0AuCaq1LcQQ47hginj8m9u5e8hL4=; c=relaxed/simple; s=ndjes4mrtuzus6qxu3frw3ubo3gpjndv; d=amazonses.com; t=1765895389; v=1; bh=Jtz9dBboM9XX/kTnHZPfsfTkvAvm5r5ucUcwWMz+7fw=; h=From:To:Cc:Bcc:Subject:Date:Message-ID:MIME-Version:Content-Type:X-SES-RECEIPT;
+Received: by mail-yw1-f181.google.com with SMTP id 00721157ae682-78d6a3c3b77so49692527b3.0
+        for <sales@granite-manager.com>; Tue, 16 Dec 2025 06:29:48 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20230601; t=1765895388; x=1766500188; darn=granite-manager.com;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :from:to:cc:subject:date:message-id:reply-to;
+        bh=Jtz9dBboM9XX/kTnHZPfsfTkvAvm5r5ucUcwWMz+7fw=;
+        b=a+6roq2pFTAwPp/fI7AbGKvISQ6zvw+SAet9JvM1UP9hqkA5g8IxbqLIJ37YNaKmca
+         cs51BMQtmX7tImKYJT+Gh+3qqzMmgd2afIAylTeoVsTXViLK4N3qlNn7CmvNt3cIU56h
+         hx5gK4WHvsRQwwRcMHnMKB1TQGFjMRjbnidW3Ip+fpsKO7OTNgKliJ4mkwqJW7SdbCN5
+         Izwf0ZOBGsxD4cS4zLNBySsZPfszTsUWVUDRdgydQli7bQIWRvdk+hmyROv+cGZ19gK4
+         9GpF7ZE3GrSY0q5kfqv2tvcWRIfaMzga/tmrA6sQ77UkzVrXFvl66THRKT2ZMZHynnNQ
+         1UXA==
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20230601; t=1765895388; x=1766500188;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :x-gm-gg:x-gm-message-state:from:to:cc:subject:date:message-id
+         :reply-to;
+        bh=Jtz9dBboM9XX/kTnHZPfsfTkvAvm5r5ucUcwWMz+7fw=;
+        b=wAr5awGDsF6695nkbxPIplHktp85aACuJm8J8XflgVfwb5kZaHMoUMzf8rb13i7TfC
+         1xJ/PiLTHAILk808HPMVYoRtcTS0YS/tGsVEd/fjGojaFgxuSKa1fFGJBJxGcif5uoR0
+         QjzYGrGvawWPGuMVtx73gwDch5MYLyUGHKTXrXm5sI4nAnMaH9QPpj21RNcdNdmul8Ye
+         R+LAeFkaLGH4oQDskYsn1gQyQpnih/8fgA1VMx229WbbHBwtD+08LifM3OQkQLbkQxxX
+         g5W85A2wfR+0QOv/ow3Jwvb95vEfi8D8xUnl10ue51vAXyD9p6iSp0dRkvWWUgLwAMu/
+         nEYg==
+X-Gm-Message-State: AOJu0Yz4ywQFCGt4iPy5MruxCBePOapY6GtkwWuVasTUgVMFZvuFji1K
+	rAOrWIINZ4xRIZ4j+GJ7/mec/GKyDB5qtVzTFPT4zI7XJmubuz1Qqw9ZK2lw9e0nyAlYubb+jxR
+	vEEHXutebjFpIltMVplLByBwvV5IDqfmYpA==
+X-Gm-Gg: AY/fxX7oMvMvRUh8btiCZ/Gw49IWiMhGVQMj2IrMDjn2N1VexfCzm9brykDVocfB2dP
+	D8d1spAEj/z1RJnxI8ft2wqY98dQDebarb5z6iQbybV7hjkUNrEMpi2QX2kGOvW5Z+Z6wmsiAgo
+	yYOQBv5YAPNR6qDbI7pWz411qo4ORTguyNrEQiblzppqLFbNB5EU/5WwXdrQdL674+TgMvo7nie
+	WDCdjUlv1Mo7UEV0hAj1rMH5D5My7lW3X6NupaGaliwlhf7YTZbzlP1g5alFDFMHhl5N2ZMRQYs
+	MKA5arfYjFKaBprViHjZxXVEJItk
+X-Google-Smtp-Source: AGHT+IFKc5YiNmKNspqoOZgrjnip9UkyjZRb2C7FzfY9/0hdVTbuHPymDVdGs+E7Tm3K+xv394HLg41JkV2CrrWy/vo=
+X-Received: by 2002:a05:690e:12ca:b0:645:5849:8b8c with SMTP id
+ 956f58d0204a3-64558498bf3mr10317273d50.47.1765895387533; Tue, 16 Dec 2025
+ 06:29:47 -0800 (PST)
+MIME-Version: 1.0
+References: <010f019b278e838b-4026f591-7b73-451a-a540-7e70c8bd5c84-000000@us-east-2.amazonses.com>
+In-Reply-To: <010f019b278e838b-4026f591-7b73-451a-a540-7e70c8bd5c84-000000@us-east-2.amazonses.com>
+From: Colin Delahunty <colin99delahunty@gmail.com>
+Date: Tue, 16 Dec 2025 09:29:34 -0500
+X-Gm-Features: AQt7F2opM1iPtPeNwwoIOJOPyE-bZ2CpudsArbiBWClnmk8-6iNXT8pifYNQsS8
+Message-ID: <CAG6QthaOtf0GWH6Ba9eOfRkfbviRi-RJw_vVnRc4U5cW_9GPmA@mail.gmail.com>
+Subject: Re: Explore Your Countertop Options with TEST
+To: sales@granite-manager.com
+Content-Type: multipart/mixed; boundary="0000000000004975360646128f4f"
+
+--0000000000004975360646128f4f
+Content-Type: multipart/alternative; boundary="0000000000004975340646128f4d"
+
+--0000000000004975340646128f4d
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+Hello. This is my first reply.
+
+=D0=B2=D1=82, 16 =D0=B4=D0=B5=D0=BA. 2025=E2=80=AF=D0=B3. =D0=B2 09:26, <sa=
+les@granite-manager.com>:
+
+> Hi Colin, I=E2=80=99m Colin from TEST. I saw your interest and would love=
+ to
+> assist you with your countertop project. When would be a good time to
+> discuss your needs? Looking forward to connecting.
+>
+
+
+--=20
+*Colin Delahunty*
+
+--0000000000004975340646128f4d
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<div dir=3D"ltr">Hello. This is my first reply.</div><br><div class=3D"gmai=
+l_quote gmail_quote_container"><div dir=3D"ltr" class=3D"gmail_attr">=D0=B2=
+=D1=82, 16 =D0=B4=D0=B5=D0=BA. 2025=E2=80=AF=D0=B3. =D0=B2 09:26, &lt;<a hr=
+ef=3D"mailto:sales@granite-manager.com">sales@granite-manager.com</a>&gt;:<=
+br></div><blockquote class=3D"gmail_quote" style=3D"margin:0px 0px 0px 0.8e=
+x;border-left:1px solid rgb(204,204,204);padding-left:1ex"><div style=3D"wh=
+ite-space:pre-wrap">Hi Colin,
+
+I=E2=80=99m Colin from TEST. I saw your interest and would love to assist y=
+ou with your countertop project. When would be a good time to discuss your =
+needs?
+
+Looking forward to connecting.</div><img alt=3D"" src=3D"https://j4lhg80e.r=
+.us-east-2.awstrack.me/I0/010f019b278e838b-4026f591-7b73-451a-a540-7e70c8bd=
+5c84-000000/8dHmJj2eGmxs0RCV6EMop7eiwA8=3D241" style=3D"display: none; widt=
+h: 1px; height: 1px;">
+</blockquote></div><div><br clear=3D"all"></div><div><br></div><span class=
+=3D"gmail_signature_prefix">-- </span><br><div dir=3D"ltr" class=3D"gmail_s=
+ignature"><div><strong>Colin Delahunty</strong></div></div>
+
+--0000000000004975340646128f4d--
+--0000000000004975360646128f4f
+Content-Type: image/jpeg; name="img_7.jpg"
+Content-Disposition: attachment; filename="img_7.jpg"
+Content-Transfer-Encoding: base64
+Content-ID: <f_mj8oibq54>
+X-Attachment-Id: f_mj8oibq54
+
+/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDACAWGBwYFCAcGhwkIiAmMFA0MCwsMGJGSjpQdGZ6eHJm
+cG6AkLicgIiuim5woNqirr7EztDOfJri8uDI8LjKzsb/2wBDASIkJDAqMF40NF7GhHCExsbGxsbG
+xsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsb/wAARCAAgACADASIA
+AhEBAxEB/8QAGAABAAMBAAAAAAAAAAAAAAAAAAECAwT/xAAcEAACAwADAQAAAAAAAAAAAAAAAQIR
+MQMEQXL/xAAXAQADAQAAAAAAAAAAAAAAAAAAAQMF/8QAGBEAAwEBAAAAAAAAAAAAAAAAAAIRARL/
+2gAMAwEAAhEDEQA/AOgAAZYAAALrRaeMpKFu0woP1iul8RJei5Dko60iTHsZx/aGTRemh//Z
+--0000000000004975360646128f4f
+Content-Type: image/jpeg; name="img_9.jpg"
+Content-Disposition: attachment; filename="img_9.jpg"
+Content-Transfer-Encoding: base64
+Content-ID: <f_mj8oibpv0>
+X-Attachment-Id: f_mj8oibpv0
+
+/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDACAWGBwYFCAcGhwkIiAmMFA0MCwsMGJGSjpQdGZ6eHJm
+cG6AkLicgIiuim5woNqirr7EztDOfJri8uDI8LjKzsb/2wBDASIkJDAqMF40NF7GhHCExsbGxsbG
+xsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsb/wAARCAAgACADASIA
+AhEBAxEB/8QAFwABAQEBAAAAAAAAAAAAAAAAAAQDBf/EAB0QAAICAgMBAAAAAAAAAAAAAAABAgMR
+USMxYYH/xAAXAQEBAQEAAAAAAAAAAAAAAAAABAED/8QAGBEBAQADAAAAAAAAAAAAAAAAAAIRMkH/
+2gAMAwEAAhEDEQA/AOmACBQAAAAAJoWykrM6bXhvW81xb0iaqL5FjqLX0prWK4p6R0vHG1s//9k=
+--0000000000004975360646128f4f
+Content-Type: image/png; name="img_9.png"
+Content-Disposition: attachment; filename="img_9.png"
+Content-Transfer-Encoding: base64
+Content-ID: <f_mj8oibq21>
+X-Attachment-Id: f_mj8oibq21
+
+iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAVUlEQVR42mP8fTyagZaAiYHGYNSC
+UQtGLRi1YNSC4WzBhxn8yNzqU+zVp9ipZgHEdDQ7hk4QITucGE+MJtNRC0YtGIwWCGR8xMrGBVio
+4sxWs5+45ACHUxFwKQo7bgAAAABJRU5ErkJggg==
+--0000000000004975360646128f4f
+Content-Type: image/jpeg; name="img_8.jpg"
+Content-Disposition: attachment; filename="img_8.jpg"
+Content-Transfer-Encoding: base64
+Content-ID: <f_mj8oibq32>
+X-Attachment-Id: f_mj8oibq32
+
+/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDACAWGBwYFCAcGhwkIiAmMFA0MCwsMGJGSjpQdGZ6eHJm
+cG6AkLicgIiuim5woNqirr7EztDOfJri8uDI8LjKzsb/2wBDASIkJDAqMF40NF7GhHCExsbGxsbG
+xsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsb/wAARCAAgACADASIA
+AhEBAxEB/8QAGAAAAwEBAAAAAAAAAAAAAAAAAAMEAgH/xAAiEAADAAIBAgcAAAAAAAAAAAAAAQID
+ETEEQRIUIVFScZH/xAAWAQEBAQAAAAAAAAAAAAAAAAADAAT/xAAdEQADAAICAwAAAAAAAAAAAAAA
+AQIDBBEhMUFh/9oADAMBAAIRAxEAPwCrFCumnvjsO8vHvQrp2lb20vTuUeOPlP6Z9i8ivifBY5lz
+2JyYZiHSb2hJTmqXiaVJv7JW0uR9e6cN2/YeRJPo6AAaX8DDRm+xvZlrfIDWS5ctcEz/2Q==
+--0000000000004975360646128f4f
+Content-Type: image/png; name="img_8.png"
+Content-Disposition: attachment; filename="img_8.png"
+Content-Transfer-Encoding: base64
+Content-ID: <f_mj8oibq43>
+X-Attachment-Id: f_mj8oibq43
+
+iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAcklEQVR42mPMXXaLgZaAiYHGgOYW
+sKDx+639SDWi8OimYR1EoxaMWjBqAWZRQRVwT8odpwX4C5bRSB61YMjkA071DDSR7zdnUMcCTKOR
+xbFaw0S56fgV0DwOGElq2eH3BNYgIi0OIEbQMJIJGjeak8kAAHfoHObrwUe7AAAAAElFTkSuQmCC
+--0000000000004975360646128f4f--

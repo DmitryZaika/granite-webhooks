@@ -6,7 +6,8 @@ use sqlx::MySqlPool;
 use crate::amazon::bucket::{CustomClient, S3Bucket};
 use crate::amazonses::parse_email::parse_email;
 use crate::amazonses::schemas::{S3Event, SesEvent};
-use crate::crud::email::{create_email, create_email_read, get_prior_email};
+use crate::amazonses::upload::upload_attachments;
+use crate::crud::email::{create_email_read, create_email_with_attachments, get_prior_email};
 use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 
@@ -30,9 +31,9 @@ pub async fn read_receipt_handler(
     OK_RESPONSE
 }
 
-pub async fn process_ses_received_event<C: S3Bucket>(
+pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
     pool: &MySqlPool,
-    client: &C,
+    client: C,
     event: &S3Event,
 ) -> BasicResponse {
     let bucket = &event.detail.bucket.name;
@@ -51,7 +52,7 @@ pub async fn process_ses_received_event<C: S3Bucket>(
         }
     };
 
-    let parsed = match parse_email(&email_bytes) {
+    let (parsed, attachments) = match parse_email(&email_bytes) {
         Ok(email) => email,
         Err(error) => {
             tracing::error!(
@@ -91,7 +92,21 @@ pub async fn process_ses_received_event<C: S3Bucket>(
         tracing::error!(bucket = bucket, key = key, "No prior email found");
         return (StatusCode::BAD_REQUEST, "No prior email found");
     };
-    let result = create_email(pool, &parsed, &clean_prior).await;
+
+    let uploaded_attachments = match upload_attachments(client, attachments).await {
+        Ok(attachments) => attachments,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                bucket = bucket,
+                key = key,
+                "Failed to upload attachments"
+            );
+            return internal_error("Failed to upload attachments");
+        }
+    };
+    let result =
+        create_email_with_attachments(pool, &parsed, &clean_prior, &uploaded_attachments).await;
     if let Err(error) = result {
         tracing::error!(
             "Error inserting email: {} into the db: {}",
@@ -109,7 +124,7 @@ pub async fn receive_handler(
     Json(event): Json<S3Event>,
 ) -> BasicResponse {
     let custom_client = CustomClient {};
-    process_ses_received_event(&pool, &custom_client, &event).await
+    process_ses_received_event(&pool, custom_client, &event).await
 }
 
 #[cfg(test)]
@@ -123,6 +138,7 @@ mod local_tests {
     use axum_test::TestServer;
     use bytes::Bytes;
     use sqlx::MySqlPool;
+    use sqlx::mysql::MySqlQueryResult;
     use std::path::PathBuf;
     use uuid::Uuid;
 
@@ -132,6 +148,7 @@ mod local_tests {
         ip_address: Option<String>,
     }
 
+    #[derive(Clone)]
     pub struct MockClient {
         pub path: PathBuf,
     }
@@ -144,6 +161,13 @@ mod local_tests {
         pub thread_id: Option<String>,
     }
 
+    pub struct Attachment {
+        content_type: String,
+        content_subtype: Option<String>,
+        filename: String,
+        url: String,
+    }
+
     impl MockClient {
         pub fn new<P: Into<PathBuf>>(path: P) -> Self {
             Self { path: path.into() }
@@ -154,6 +178,14 @@ mod local_tests {
         async fn read_bytes(&self, _bucket: &str, _key: &str) -> Result<Bytes, String> {
             read_file_as_bytes(&self.path).map_err(|e| e.to_string())
         }
+        fn send_file<'a>(
+            &'a self,
+            bucket: &'a str,
+            key: &'a str,
+            data: Bytes,
+        ) -> impl Future<Output = Result<String, String>> + Send + 'a {
+            async move { Ok(format!("s3://{bucket}/{key}")) }
+        }
     }
 
     fn new_test_app(pool: MySqlPool) -> TestServer {
@@ -161,7 +193,10 @@ mod local_tests {
         TestServer::builder().build(app).unwrap()
     }
 
-    async fn insert_email(pool: &MySqlPool, message_id: &str) -> Result<(), sqlx::Error> {
+    async fn insert_email(
+        pool: &MySqlPool,
+        message_id: &str,
+    ) -> Result<MySqlQueryResult, sqlx::Error> {
         let uuid: Uuid = Uuid::new_v4();
         sqlx::query!(
             r#"
@@ -175,8 +210,7 @@ mod local_tests {
             uuid.to_string()
         )
         .execute(pool)
-        .await?;
-        Ok(())
+        .await
     }
 
     async fn check_db_email_reads(pool: &MySqlPool) -> Result<ReadDb, sqlx::Error> {
@@ -199,9 +233,26 @@ mod local_tests {
             r#"
             SELECT sender_user_id, subject, body, message_id, thread_id
             FROM emails
-            ORDER BY id DESC
+            ORDER BY id ASC
             LIMIT 10
             "#,
+        )
+        .fetch_all(pool)
+        .await
+    }
+    async fn get_email_attachments(
+        pool: &MySqlPool,
+        email_id: u64,
+    ) -> Result<Vec<Attachment>, sqlx::Error> {
+        sqlx::query_as!(
+            Attachment,
+            r#"
+            SELECT content_type, content_subtype, filename, url
+            FROM email_attachments
+            WHERE email_id = ?
+            ORDER BY id ASC
+            "#,
+            email_id
         )
         .fetch_all(pool)
         .await
@@ -240,7 +291,7 @@ mod local_tests {
         let mock_client = MockClient::new("src/tests/data/reply_email1.eml");
 
         let data: S3Event = ses_received_json();
-        let response = process_ses_received_event(&pool, &mock_client, &data).await;
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
 
         assert_eq!(response, OK_RESPONSE);
 
@@ -248,26 +299,93 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].subject, Some("Re: COLINS TEST".to_string()));
+        assert_eq!(result[1].subject, Some("Re: COLINS TEST".to_string()));
         const EMAIL_BODY: &str = "Please respond.";
-        assert_eq!(result[0].body.clone().unwrap(), EMAIL_BODY);
-        assert_eq!(result[0].sender_user_id, None);
+        assert_eq!(result[1].body.clone().unwrap(), EMAIL_BODY);
+        assert_eq!(result[1].sender_user_id, None);
+        assert_eq!(
+            result[1].thread_id.clone().unwrap(),
+            result[0].thread_id.clone().unwrap()
+        );
+        const MESSAGE_ID: &str =
+            "CAG6QthbVR6eOBoEFup=bnuuBw=_JQWfP1rLzAjwDUGCpNV_wyg@mail.gmail.com";
+        assert_eq!(result[1].message_id, Some(MESSAGE_ID.to_string()));
+    }
+
+    #[sqlx::test]
+    async fn test_ses_response_to_received_success(pool: MySqlPool) {
+        let message_id = "010f019b278e838b-4026f591-7b73-451a-a540-7e70c8bd5c84-000000";
+
+        insert_email(&pool, message_id).await.unwrap();
+
+        let response1 = MockClient::new("src/tests/data/reply_attachment_1.eml");
+        let response2 = MockClient::new("src/tests/data/reply_attachment_2.eml");
+
+        let data: S3Event = ses_received_json();
+        let answer1 = process_ses_received_event(&pool, response1, &data).await;
+        let answer2 = process_ses_received_event(&pool, response2, &data).await;
+
+        assert_eq!(answer1, OK_RESPONSE);
+        assert_eq!(answer2, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
         assert_eq!(
             result[0].thread_id.clone().unwrap(),
             result[1].thread_id.clone().unwrap()
         );
-        const MESSAGE_ID: &str =
-            "CAG6QthbVR6eOBoEFup=bnuuBw=_JQWfP1rLzAjwDUGCpNV_wyg@mail.gmail.com";
-        assert_eq!(result[0].message_id, Some(MESSAGE_ID.to_string()));
+        assert_eq!(
+            result[1].thread_id.clone().unwrap(),
+            result[2].thread_id.clone().unwrap()
+        );
     }
     #[sqlx::test]
     async fn test_ses_received_no_sent(pool: MySqlPool) {
         let mock_client = MockClient::new("src/tests/data/reply_email1.eml");
 
         let data: S3Event = ses_received_json();
-        let response = process_ses_received_event(&pool, &mock_client, &data).await;
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
 
         const BAD: BasicResponse = (StatusCode::BAD_REQUEST, "No prior email found");
         assert_eq!(response, BAD);
+    }
+    #[sqlx::test]
+    async fn test_see_four_attachments(pool: MySqlPool) {
+        let message_id = "CAG6QthaOtf0GWH6Ba9eOfRkfbviRi-RJw_vVnRc4U5cW_9GPmA@mail.gmail.com";
+
+        let email_result = insert_email(&pool, message_id).await.unwrap();
+
+        let response1 = MockClient::new("src/tests/data/reply_attachment_2.eml");
+
+        let data: S3Event = ses_received_json();
+        let answer1 = process_ses_received_event(&pool, response1, &data).await;
+
+        assert_eq!(answer1, OK_RESPONSE);
+
+        let wrong_result = get_email_attachments(&pool, email_result.last_insert_id())
+            .await
+            .unwrap();
+        assert_eq!(wrong_result.len(), 0);
+        let result = get_email_attachments(&pool, email_result.last_insert_id() + 1)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 4);
+
+        let expected = [
+            ("image", "png", "img_0.png"),
+            ("image", "jpeg", "img_1.jpg"),
+            ("image", "png", "img_1.png"),
+            ("image", "jpeg", "img_0.jpg"),
+        ];
+        for (attachment, (content_type, content_subtype, filename)) in result.iter().zip(expected) {
+            assert_eq!(attachment.content_type, content_type);
+            assert_eq!(
+                attachment.content_subtype.as_ref().unwrap(),
+                content_subtype
+            );
+            assert_eq!(attachment.filename, filename);
+            assert!(attachment.url.starts_with("s3://"));
+            let extension = attachment.url.split('.').last().unwrap();
+            assert_eq!(extension, filename.split('.').last().unwrap());
+        }
     }
 }
