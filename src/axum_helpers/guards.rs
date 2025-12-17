@@ -125,9 +125,7 @@ fn parse_uuid_from_bearer(header: &str) -> Option<Uuid> {
 }
 
 async fn report_to_posthog(message: &str) {
-    let api_key = if let Ok(key) = std::env::var("POSTHOG_API_KEY") {
-        key
-    } else {
+    let Ok(api_key) = std::env::var("POSTHOG_API_KEY") else {
         tracing::error!("POSTHOG_API_KEY not set");
         return;
     };
@@ -156,17 +154,13 @@ where
             report_to_posthog("Authorization header not found").await;
             return Ok(Self::new(CORRECT_ID));
         };
-        let clean_bearer = if let Ok(bearer) = raw_bearer {
-            bearer
-        } else {
+        let Ok(clean_bearer) = raw_bearer else {
             tracing::error!("Failed to parse authorization header");
             report_to_posthog("Failed to parse authorization header").await;
             return Ok(Self::new(CORRECT_ID));
         };
 
-        let bearer_uuid = if let Some(uuid) = parse_uuid_from_bearer(clean_bearer) {
-            uuid
-        } else {
+        let Some(bearer_uuid) = parse_uuid_from_bearer(clean_bearer) else {
             tracing::error!("Failed to parse bearer UUID: {}", clean_bearer);
             report_to_posthog("Failed to parse bearer UUID").await;
             return Ok(Self::new(CORRECT_ID));

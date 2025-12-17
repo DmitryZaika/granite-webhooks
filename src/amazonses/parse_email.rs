@@ -97,13 +97,10 @@ fn parse_header_value(value: &HeaderValue) -> Option<String> {
     }
 }
 
-fn extract_attribute(
-    attributes: Option<&[Attribute<'_>]>,
-    name: std::borrow::Cow<'_, str>,
-) -> Option<String> {
+fn extract_attribute(attributes: Option<&[Attribute<'_>]>, name: &str) -> Option<String> {
     if let Some(attributes) = attributes {
         for attribute in attributes {
-            if attribute.name == name {
+            if &attribute.name == name {
                 return Some(attribute.value.to_string());
             }
         }
@@ -128,7 +125,7 @@ fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
                 if let HeaderValue::ContentType(ct) = &header.value {
                     content_type = Some(ct.c_type.to_string());
                     content_subtype = ct.c_subtype.clone().map(std::borrow::Cow::into_owned);
-                    filename = extract_attribute(ct.attributes(), Borrowed("name"));
+                    filename = extract_attribute(ct.attributes(), &Borrowed("name"));
                 }
             }
 
@@ -136,7 +133,7 @@ fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
                 if let HeaderValue::ContentType(cd) = &header.value
                     && filename.is_none()
                 {
-                    filename = extract_attribute(cd.attributes(), Borrowed("filename"));
+                    filename = extract_attribute(cd.attributes(), &Borrowed("filename"));
                 }
             }
 

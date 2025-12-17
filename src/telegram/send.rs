@@ -9,7 +9,7 @@ use crate::libs::types::BasicResponse;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
-pub async fn documenso() -> BasicResponse {
+pub const fn documenso() -> BasicResponse {
     OK_RESPONSE
 }
 

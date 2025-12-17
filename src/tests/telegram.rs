@@ -72,7 +72,7 @@ pub fn generate_message(chat_id: i64, text: &str) -> Message {
         is_topic_message: false,
         via_bot: None,
         sender_business_bot: None,
-        kind: MessageKind::Common(generate_message_common(&text)),
+        kind: MessageKind::Common(generate_message_common(text)),
         chat: get_chat(chat_id),
     }
 }

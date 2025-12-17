@@ -64,9 +64,7 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Unable to parse email content from S3");
         }
     };
-    let message_id = if let Some(id) = parsed.reply_message_id() {
-        id
-    } else {
+    let Some(message_id) = parsed.reply_message_id() else {
         tracing::error!(
             bucket = bucket,
             key = key,
@@ -86,9 +84,7 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Unable to retrieve prior email");
         }
     };
-    let clean_prior = if let Some(email) = prior {
-        email
-    } else {
+    let Some(clean_prior) = prior else {
         tracing::error!(bucket = bucket, key = key, "No prior email found");
         return (StatusCode::BAD_REQUEST, "No prior email found");
     };
