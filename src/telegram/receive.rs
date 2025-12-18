@@ -355,7 +355,7 @@ mod local_tests {
 
     #[sqlx::test]
     fn test_message_invalid_option(pool: MySqlPool) {
-        let message = generate_message(1, "Leeeroy Jenkins".to_string());
+        let message = generate_message(1, "Leeeroy Jenkins");
         let mock_bot = MockTelegram::new();
         handle_message(message, &pool, &mock_bot).await;
 
