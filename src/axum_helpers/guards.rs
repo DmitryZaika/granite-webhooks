@@ -5,6 +5,7 @@ use axum::http::{StatusCode, request::Parts};
 use lambda_http::tracing;
 use std::env::var;
 use teloxide::prelude::*;
+use teloxide::types::InlineKeyboardMarkup;
 use teloxide::types::MaybeInaccessibleMessage;
 use teloxide::types::{Message, Recipient};
 use uuid::{Uuid, uuid};
@@ -20,6 +21,16 @@ pub trait Telegram: Send + Sync {
         chat: C,
         text: T,
     ) -> impl Future<Output = Result<Message, BasicResponse>> + Send
+    where
+        C: Into<Recipient> + Send,
+        T: Into<String> + Send;
+
+    fn send_repliable_message<C, T>(
+        &self,
+        chat: C,
+        text: T,
+        repliable: InlineKeyboardMarkup,
+    ) -> impl Future<Output = Result<Message, teloxide::RequestError>> + Send
     where
         C: Into<Recipient> + Send,
         T: Into<String> + Send;
@@ -57,6 +68,20 @@ impl Telegram for TelegramBot {
                 }
             }
         }
+    }
+
+    fn send_repliable_message<C, T>(
+        &self,
+        chat: C,
+        text: T,
+        repliable: InlineKeyboardMarkup,
+    ) -> impl Future<Output = Result<Message, teloxide::RequestError>> + Send
+    where
+        C: Into<Recipient> + Send,
+        T: Into<String> + Send,
+    {
+        let bot = self.bot.clone();
+        async move { bot.send_message(chat, text).reply_markup(repliable).await }
     }
 
     fn edit_message_text<T>(

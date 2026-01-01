@@ -1,4 +1,5 @@
 use crate::amazon::email::send_message;
+use crate::axum_helpers::guards::Telegram;
 use crate::crud::leads::{
     Deal, ExistingCustomer, LeadForm, create_deal_from_lead, find_existing_customer,
     get_existing_deal,
@@ -15,12 +16,13 @@ use crate::telegram::utils::lead_url;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
-async fn handle_repeat_lead(
+async fn handle_repeat_lead<T: Telegram>(
     existing: &ExistingCustomer,
     deal: Deal,
     pool: &MySqlPool,
     company_id: i32,
     form: &LeadForm,
+    bot: &T,
 ) -> BasicResponse {
     let name = existing.name.as_deref();
     let message = format!(
@@ -40,7 +42,7 @@ async fn handle_repeat_lead(
     let user_info = match get_user_tg_info(pool, deal.user_id.unwrap()).await {
         Ok(Some(info)) => info,
         Ok(None) => {
-            match send_telegram_manager_assign(pool, company_id, message, customer_id).await {
+            match send_telegram_manager_assign(pool, company_id, message, customer_id, bot).await {
                 Ok(()) => return CREATED_RESPONSE,
                 Err(e) => {
                     tracing::error!(
@@ -82,7 +84,7 @@ async fn handle_repeat_lead(
         name.unwrap_or("Unknown"),
         lead_url(deal.id)
     );
-    let tg_result = send_plain_message_to_chat(clean_tg_id, &repeted_lead_message).await;
+    let tg_result = send_plain_message_to_chat(clean_tg_id, &repeted_lead_message, bot).await;
     if let Err(request_error) = tg_result {
         tracing::error!(
             ?request_error,
@@ -94,11 +96,12 @@ async fn handle_repeat_lead(
     CREATED_RESPONSE
 }
 
-async fn create_new_deal_existing_customer(
+async fn create_new_deal_existing_customer<T: Telegram>(
     pool: &MySqlPool,
     existing: &ExistingCustomer,
     company_id: i32,
     form: &LeadForm,
+    bot: &T,
 ) -> Result<Option<Deal>, BasicResponse> {
     if let Some(rep) = existing.sales_rep {
         match create_deal_from_lead(pool, existing.id, rep.into()).await {
@@ -127,7 +130,7 @@ async fn create_new_deal_existing_customer(
         "You received a REPEATED lead with no sales rep \n{form}",
         // form.to_string()
     );
-    match send_telegram_manager_assign(pool, company_id, message, clean_id).await {
+    match send_telegram_manager_assign(pool, company_id, message, clean_id, bot).await {
         Ok(()) => Ok(None),
         Err(e) => {
             tracing::error!(
@@ -140,12 +143,13 @@ async fn create_new_deal_existing_customer(
     }
 }
 
-pub async fn existing_lead_check(
+pub async fn existing_lead_check<T: Telegram>(
     pool: &MySqlPool,
     email: Option<&str>,
     phone: Option<&str>,
     company_id: i32,
     form: &LeadForm,
+    bot: &T,
 ) -> Option<BasicResponse> {
     let existing = match find_existing_customer(pool, email, phone, company_id).await {
         Ok(Some(v)) => v,
@@ -164,15 +168,19 @@ pub async fn existing_lead_check(
                 name,
                 deal.user_id.unwrap(),
                 form.to_string(),
+                bot,
             )
             .await;
-            return Some(handle_repeat_lead(&existing, deal, pool, company_id, form).await);
+            return Some(handle_repeat_lead(&existing, deal, pool, company_id, form, bot).await);
         }
         Ok(None) => {
-            let deal = create_new_deal_existing_customer(pool, &existing, company_id, form).await;
+            let deal =
+                create_new_deal_existing_customer(pool, &existing, company_id, form, bot).await;
             match deal {
                 Ok(Some(deal)) => {
-                    return Some(handle_repeat_lead(&existing, deal, pool, company_id, form).await);
+                    return Some(
+                        handle_repeat_lead(&existing, deal, pool, company_id, form, bot).await,
+                    );
                 }
                 Ok(None) => Some(CREATED_RESPONSE),
                 Err(e) => {

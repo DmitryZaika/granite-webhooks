@@ -1,7 +1,7 @@
 use crate::axum_helpers::guards::Telegram;
 use crate::libs::types::BasicResponse;
 use chrono::Utc;
-use teloxide::types::MaybeInaccessibleMessage;
+use teloxide::types::{InlineKeyboardMarkup, MaybeInaccessibleMessage};
 use teloxide::types::{Message, Recipient};
 
 use crate::libs::constants::ERR_SEND_TELEGRAM;
@@ -79,7 +79,7 @@ pub fn generate_message(chat_id: i64, text: &str) -> Message {
 
 #[derive(Default)]
 pub struct MockTelegram {
-    pub sent: Mutex<Vec<(i64, String)>>,
+    pub sent: Mutex<Vec<(i64, String, Option<InlineKeyboardMarkup>)>>,
     pub fail: bool,
 }
 
@@ -107,10 +107,40 @@ impl Telegram for MockTelegram {
             Recipient::ChannelUsername(_) => 0, // для тестов можно забить
         };
 
-        self.sent.lock().unwrap().push((chat_id, text.clone()));
+        self.sent
+            .lock()
+            .unwrap()
+            .push((chat_id, text.clone(), None));
 
         if self.fail {
             Err(internal_error(ERR_SEND_TELEGRAM))
+        } else {
+            Ok(Self::dummy_message(chat_id, &text))
+        }
+    }
+    async fn send_repliable_message<C, T>(
+        &self,
+        chat: C,
+        text: T,
+        repliable: InlineKeyboardMarkup,
+    ) -> Result<Message, teloxide::RequestError>
+    where
+        C: Into<Recipient> + Send,
+        T: Into<String> + Send,
+    {
+        let recipient = chat.into();
+        let text = text.into();
+
+        let chat_id = match recipient {
+            Recipient::Id(id) => id.0,
+            Recipient::ChannelUsername(_) => 0, // для тестов можно забить
+        };
+        self.sent
+            .lock()
+            .unwrap()
+            .push((chat_id, text.clone(), Some(repliable)));
+        if self.fail {
+            Err(teloxide::RequestError::Api(teloxide::ApiError::BotBlocked))
         } else {
             Ok(Self::dummy_message(chat_id, &text))
         }

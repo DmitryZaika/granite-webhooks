@@ -1,4 +1,5 @@
 use crate::axum_helpers::guards::MarketingUser;
+use crate::axum_helpers::guards::{Telegram, TelegramBot};
 use crate::crud::leads::LeadForm;
 use crate::crud::leads::{
     create_lead_from_facebook, create_lead_from_new_lead_form, create_lead_from_wordpress,
@@ -21,7 +22,17 @@ pub async fn wordpress_contact_form(
     _: MarketingUser,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
+    tg_bot: TelegramBot,
     Json(contact_form): Json<WordpressContactForm>,
+) -> BasicResponse {
+    wordpress_contact_form_inner(company_id, pool, contact_form, &tg_bot).await
+}
+
+pub async fn wordpress_contact_form_inner<T: Telegram>(
+    company_id: i32,
+    pool: MySqlPool,
+    contact_form: WordpressContactForm,
+    bot: &T,
 ) -> BasicResponse {
     if let Some(response) = existing_lead_check(
         &pool,
@@ -29,6 +40,7 @@ pub async fn wordpress_contact_form(
         contact_form.phone.as_deref(),
         company_id,
         &LeadForm::WordpressContactForm(contact_form.clone()),
+        bot,
     )
     .await
     {
@@ -46,6 +58,7 @@ pub async fn wordpress_contact_form(
         company_id,
         &contact_form.to_string(),
         result.last_insert_id(),
+        bot,
     )
     .await;
     if tg_result.is_err() {
@@ -63,8 +76,17 @@ pub async fn facebook_contact_form(
     _: MarketingUser,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
+    tg_bot: TelegramBot,
     Json(contact_form): Json<FaceBookContactForm>,
-    // _: MarketingUser,
+) -> BasicResponse {
+    facebook_contact_form_inner(company_id, pool, contact_form, &tg_bot).await
+}
+
+pub async fn facebook_contact_form_inner<T: Telegram>(
+    company_id: i32,
+    pool: MySqlPool,
+    contact_form: FaceBookContactForm,
+    bot: &T,
 ) -> BasicResponse {
     if let Some(response) = existing_lead_check(
         &pool,
@@ -72,6 +94,7 @@ pub async fn facebook_contact_form(
         contact_form.phone.as_deref(),
         company_id,
         &LeadForm::FaceBookContactForm(contact_form.clone()),
+        bot,
     )
     .await
     {
@@ -91,6 +114,7 @@ pub async fn facebook_contact_form(
         company_id,
         &contact_form.to_string(),
         result.last_insert_id(),
+        bot,
     )
     .await;
     if tg_result.is_err() {
@@ -108,8 +132,17 @@ pub async fn new_lead_form(
     _: MarketingUser,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
+    tg_bot: TelegramBot,
     Json(contact_form): Json<NewLeadForm>,
-    // _: MarketingUser,
+) -> BasicResponse {
+    new_lead_form_inner(company_id, pool, contact_form, &tg_bot).await
+}
+
+pub async fn new_lead_form_inner<T: Telegram>(
+    company_id: i32,
+    pool: MySqlPool,
+    contact_form: NewLeadForm,
+    bot: &T,
 ) -> BasicResponse {
     let existing_result = existing_lead_check(
         &pool,
@@ -117,6 +150,7 @@ pub async fn new_lead_form(
         contact_form.phone.as_deref(),
         company_id,
         &LeadForm::NewLeadForm(contact_form.clone()),
+        bot,
     )
     .await;
     if let Some(response) = existing_result {
@@ -135,6 +169,7 @@ pub async fn new_lead_form(
         company_id,
         &contact_form.to_string(),
         result.last_insert_id(),
+        bot,
     )
     .await;
     if tg_result.is_err() {

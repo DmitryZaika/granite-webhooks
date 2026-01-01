@@ -1,3 +1,4 @@
+use crate::axum_helpers::guards::Telegram;
 use std::fmt::Display;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
@@ -36,34 +37,36 @@ fn kb_for_users(lead_id: u64, candidates: &[Candidate]) -> InlineKeyboardMarkup 
     InlineKeyboardMarkup::new(rows)
 }
 
-pub async fn send_lead_manager_message<T>(
+pub async fn send_lead_manager_message<T, V: Telegram>(
     message: &T,
     lead_id: u64,
     user_id: i64,
     candidates: &[Candidate],
+    bot: &V,
 ) -> Result<teloxide::prelude::Message, teloxide::RequestError>
 where
     T: Display + Sync + ?Sized,
 {
-    let bot = Bot::from_env();
-    bot.send_message(ChatId(user_id), format!("{message}. Choose a salesperson."))
-        .reply_markup(kb_for_users(lead_id, candidates))
+    let full_message = format!("{message}. Choose a salesperson.");
+    let kb = kb_for_users(lead_id, candidates);
+    bot.send_repliable_message(ChatId(user_id), full_message, kb)
         .await
 }
 
-pub async fn send_plain_message_to_chat(
+pub async fn send_plain_message_to_chat<T: Telegram>(
     chat_id: i64,
     message: &str,
-) -> Result<teloxide::prelude::Message, teloxide::RequestError> {
-    let bot = Bot::from_env();
+    bot: &T,
+) -> Result<teloxide::prelude::Message, BasicResponse> {
     bot.send_message(ChatId(chat_id), message.to_string()).await
 }
 
-pub async fn send_telegram_manager_assign<T: Display>(
+pub async fn send_telegram_manager_assign<T: Display, V: Telegram>(
     pool: &MySqlPool,
     company_id: i32,
     data: T,
     customer_id: u64,
+    bot: &V,
 ) -> Result<(), BasicResponse> {
     let all_users = match get_sales_users(pool, company_id).await {
         Ok(users) => users,
@@ -88,9 +91,14 @@ pub async fn send_telegram_manager_assign<T: Display>(
         .find(|u| u.position_id == Some(2))
         .and_then(|u| u.telegram_id)
     {
-        let send_message =
-            send_lead_manager_message(&data.to_string(), customer_id, telegram_id, &candidates)
-                .await;
+        let send_message = send_lead_manager_message(
+            &data.to_string(),
+            customer_id,
+            telegram_id,
+            &candidates,
+            bot,
+        )
+        .await;
 
         if send_message.is_err() {
             tracing::error!(
@@ -104,12 +112,13 @@ pub async fn send_telegram_manager_assign<T: Display>(
     Ok(())
 }
 
-pub async fn send_telegram_duplicate_notification(
+pub async fn send_telegram_duplicate_notification<T: Telegram>(
     pool: &MySqlPool,
     company_id: i32,
     lead_name: &str,
     assigned_id: i32,
     lead_body: String,
+    bot: &T,
 ) -> bool {
     let all_users = match get_sales_users(pool, company_id).await {
         Ok(users) => users,
@@ -129,7 +138,7 @@ pub async fn send_telegram_duplicate_notification(
     {
         let message =
             format!("Repeat lead {lead_name} with for sales rep {assigned_name}\n\n{lead_body}");
-        let response = send_plain_message_to_chat(telegram_id, &message).await;
+        let response = send_plain_message_to_chat(telegram_id, &message, bot).await;
         if response.is_err() {
             tracing::error!(
                 ?message,
