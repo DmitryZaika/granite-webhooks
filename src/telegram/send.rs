@@ -146,6 +146,14 @@ pub async fn send_telegram_duplicate_notification<T: Telegram>(
                 "Error sending message to lead manager"
             );
         }
+    } else {
+        tracing::error!(
+            ?company_id,
+            ?lead_name,
+            ?assigned_id,
+            "No sales manager found"
+        );
+        return false;
     }
     true
 }
