@@ -16,6 +16,9 @@ use crate::telegram::utils::lead_url;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
+const REGISTER_SUBJECT: &str = "Granite Manager";
+const REGISTER_MESSAGE: &str = "Please register for Telegram to receive notifications about leads";
+
 async fn handle_repeat_lead<T: Telegram>(
     existing: &ExistingCustomer,
     deal: Deal,
@@ -63,11 +66,10 @@ async fn handle_repeat_lead<T: Telegram>(
             return internal_error(ERR_DB);
         }
     };
-    let subject = "Granite Manager".to_string();
-    let message = "Please register for Telegram to receive notifications about leads".to_string();
+
     let clean_tg_id = match user_info.telegram_id {
         Some(id) => id,
-        None => match send_message(&[&user_info.email], &subject, &message).await {
+        None => match send_message(&[&user_info.email], REGISTER_SUBJECT, REGISTER_MESSAGE).await {
             Ok(()) => return CREATED_RESPONSE,
             Err(e) => {
                 tracing::error!(
