@@ -1,10 +1,12 @@
 use crate::axum_helpers::guards::Telegram;
 use std::fmt::Display;
+use std::sync::Arc;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+use tokio::task::JoinSet;
 
-use crate::crud::users::get_sales_users;
-use crate::libs::constants::{ERR_DB, OK_RESPONSE, internal_error};
+use crate::crud::users::{SalesUser, get_sales_users};
+use crate::libs::constants::{ERR_DB, OK_RESPONSE, SALES_MANAGER, SALES_WORKER, internal_error};
 use crate::libs::types::BasicResponse;
 
 use lambda_http::tracing;
@@ -37,37 +39,68 @@ fn kb_for_users(lead_id: u64, candidates: &[Candidate]) -> InlineKeyboardMarkup 
     InlineKeyboardMarkup::new(rows)
 }
 
-pub async fn send_lead_manager_message<T, V: Telegram>(
+pub async fn send_lead_manager_message_to_all<T, V>(
     message: &T,
     lead_id: u64,
-    user_id: i64,
+    telegram_ids: Vec<i64>,
     candidates: &[Candidate],
-    bot: &V,
-) -> Result<teloxide::prelude::Message, teloxide::RequestError>
+    raw_bot: Arc<V>,
+) -> Result<Vec<Message>, teloxide::RequestError>
 where
     T: Display + Sync + ?Sized,
+    V: Telegram + Send + Sync + 'static + Clone,
 {
     let full_message = format!("{message}. Choose a salesperson.");
     let kb = kb_for_users(lead_id, candidates);
-    bot.send_repliable_message(ChatId(user_id), full_message, kb)
-        .await
+
+    let mut set = JoinSet::new();
+
+    for user_id in telegram_ids {
+        let bot = Arc::clone(&raw_bot);
+        let msg = full_message.clone();
+        let kb = kb.clone();
+
+        set.spawn(async move { bot.send_repliable_message(ChatId(user_id), msg, kb).await });
+    }
+
+    let mut out = Vec::new();
+    while let Some(res) = set.join_next().await {
+        let msg = res.expect("task panicked or was cancelled")?;
+        out.push(msg);
+    }
+
+    Ok(out)
 }
 
-pub async fn send_plain_message_to_chat<T: Telegram>(
+pub async fn send_plain_message_to_chat<T>(
     chat_id: i64,
     message: &str,
     bot: &T,
-) -> Result<teloxide::prelude::Message, BasicResponse> {
+) -> Result<teloxide::prelude::Message, BasicResponse>
+where
+    T: Telegram + Send + Sync + 'static + Clone,
+{
     bot.send_message(ChatId(chat_id), message.to_string()).await
 }
 
-pub async fn send_telegram_manager_assign<T: Display, V: Telegram>(
+fn get_manager_telegram_ids(users: &[SalesUser]) -> Vec<i64> {
+    users
+        .iter()
+        .filter(|u| u.position_id == SALES_MANAGER)
+        .filter_map(|u| u.telegram_id)
+        .collect()
+}
+
+pub async fn send_telegram_manager_assign<T: Display, V>(
     pool: &MySqlPool,
     company_id: i32,
     data: T,
     customer_id: u64,
     bot: &V,
-) -> Result<(), BasicResponse> {
+) -> Result<(), BasicResponse>
+where
+    V: Telegram + Send + Sync + 'static + Clone,
+{
     let all_users = match get_sales_users(pool, company_id).await {
         Ok(users) => users,
         Err(e) => {
@@ -77,7 +110,7 @@ pub async fn send_telegram_manager_assign<T: Display, V: Telegram>(
     };
     let candidates: Vec<(String, i32, i64)> = all_users
         .iter()
-        .filter(|item| item.position_id == Some(1))
+        .filter(|item| item.position_id == SALES_WORKER)
         .map(|user| {
             (
                 user.name.clone().unwrap_or_else(|| "Unknown".to_string()),
@@ -86,40 +119,102 @@ pub async fn send_telegram_manager_assign<T: Display, V: Telegram>(
             )
         })
         .collect();
-    if let Some(telegram_id) = all_users
-        .iter()
-        .find(|u| u.position_id == Some(2))
-        .and_then(|u| u.telegram_id)
-    {
-        let send_message = send_lead_manager_message(
-            &data.to_string(),
-            customer_id,
-            telegram_id,
-            &candidates,
-            bot,
-        )
-        .await;
+    let telegram_ids = get_manager_telegram_ids(&all_users);
 
-        if send_message.is_err() {
-            tracing::error!(
-                ?send_message,
-                telegram_id = telegram_id,
-                "Error sending message to lead manager"
-            );
-        }
+    if telegram_ids.is_empty() {
+        tracing::error!(
+            ?company_id,
+            position_id = SALES_MANAGER,
+            "No sales manager found"
+        );
+        return Err(internal_error(ERR_DB));
+    }
+    let new_bot = Arc::new(bot.clone());
+    let send_message = send_lead_manager_message_to_all(
+        &data.to_string(),
+        customer_id,
+        telegram_ids.clone(),
+        &candidates,
+        new_bot,
+    )
+    .await;
+
+    if send_message.is_err() {
+        let telegram_ids_str = telegram_ids
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        tracing::error!(
+            ?send_message,
+            telegram_ids = %telegram_ids_str,
+            "Error sending message to lead manager"
+        );
     }
 
     Ok(())
 }
 
-pub async fn send_telegram_duplicate_notification<T: Telegram>(
+pub async fn send_lead_managers_dupliacate<V>(
+    message: String,
+    telegram_ids: Vec<i64>,
+    raw_bot: Arc<V>,
+) -> Result<Vec<Message>, teloxide::RequestError>
+where
+    V: Telegram + Send + Sync + 'static + Clone,
+{
+    let full_message = format!("{message}. Choose a salesperson.");
+
+    let mut set = JoinSet::new();
+
+    for user_id in telegram_ids.clone() {
+        let bot = Arc::clone(&raw_bot);
+        let msg = full_message.clone();
+
+        set.spawn(async move { send_plain_message_to_chat(user_id, &msg, bot.as_ref()).await });
+    }
+
+    let mut out = Vec::new();
+    while let Some(res) = set.join_next().await {
+        let res_inner = match res {
+            Ok(msg) => msg,
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    ?message,
+                    ?telegram_ids,
+                    "Error sending message to lead manager"
+                );
+                continue;
+            }
+        };
+        match res_inner {
+            Ok(msg) => out.push(msg),
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    ?message,
+                    ?telegram_ids,
+                    "Error sending message to lead manager",
+                );
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+pub async fn send_telegram_duplicate_notification<T>(
     pool: &MySqlPool,
     company_id: i32,
     lead_name: &str,
     assigned_id: i32,
     lead_body: String,
     bot: &T,
-) -> bool {
+) -> bool
+where
+    T: Telegram + Send + Sync + 'static + Clone,
+{
     let all_users = match get_sales_users(pool, company_id).await {
         Ok(users) => users,
         Err(e) => {
@@ -131,29 +226,19 @@ pub async fn send_telegram_duplicate_notification<T: Telegram>(
         || "Unknown".to_string(),
         |u| u.name.clone().unwrap_or_else(|| "Unknown".to_string()),
     );
-    if let Some(telegram_id) = all_users
-        .iter()
-        .find(|u| u.position_id == Some(2))
-        .and_then(|u| u.telegram_id)
-    {
-        let message =
-            format!("Repeat lead {lead_name} with for sales rep {assigned_name}\n\n{lead_body}");
-        let response = send_plain_message_to_chat(telegram_id, &message, bot).await;
-        if response.is_err() {
-            tracing::error!(
-                ?message,
-                telegram_id = telegram_id,
-                "Error sending message to lead manager"
-            );
-        }
-    } else {
+    let telegram_ids = get_manager_telegram_ids(&all_users);
+    if telegram_ids.is_empty() {
         tracing::error!(
             ?company_id,
-            ?lead_name,
-            ?assigned_id,
+            position_id = SALES_MANAGER,
             "No sales manager found"
         );
         return false;
     }
-    true
+    let message =
+        format!("Repeat lead {lead_name} with for sales rep {assigned_name}\n\n{lead_body}");
+    let new_bot = Arc::new(bot.clone());
+    send_lead_managers_dupliacate(message, telegram_ids, new_bot)
+        .await
+        .is_err()
 }

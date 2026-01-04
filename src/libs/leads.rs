@@ -19,14 +19,17 @@ use sqlx::MySqlPool;
 const REGISTER_SUBJECT: &str = "Granite Manager";
 const REGISTER_MESSAGE: &str = "Please register for Telegram to receive notifications about leads";
 
-async fn handle_repeat_lead<T: Telegram>(
+async fn handle_repeat_lead<T>(
     existing: &ExistingCustomer,
     deal: Deal,
     pool: &MySqlPool,
     company_id: i32,
     form: &LeadForm,
     bot: &T,
-) -> BasicResponse {
+) -> BasicResponse
+where
+    T: Telegram + Send + Sync + 'static + Clone,
+{
     let name = existing.name.as_deref();
     let message = format!(
         "You received a REPEATED lead {}, click here: {}",
@@ -98,13 +101,16 @@ async fn handle_repeat_lead<T: Telegram>(
     CREATED_RESPONSE
 }
 
-async fn create_new_deal_existing_customer<T: Telegram>(
+async fn create_new_deal_existing_customer<T>(
     pool: &MySqlPool,
     existing: &ExistingCustomer,
     company_id: i32,
     form: &LeadForm,
     bot: &T,
-) -> Result<Option<Deal>, BasicResponse> {
+) -> Result<Option<Deal>, BasicResponse>
+where
+    T: Telegram + Send + Sync + 'static + Clone,
+{
     if let Some(rep) = existing.sales_rep {
         match create_deal_from_lead(pool, existing.id, rep.into()).await {
             Ok(r) => {
@@ -145,14 +151,17 @@ async fn create_new_deal_existing_customer<T: Telegram>(
     }
 }
 
-pub async fn existing_lead_check<T: Telegram>(
+pub async fn existing_lead_check<T>(
     pool: &MySqlPool,
     email: Option<&str>,
     phone: Option<&str>,
     company_id: i32,
     form: &LeadForm,
     bot: &T,
-) -> Option<BasicResponse> {
+) -> Option<BasicResponse>
+where
+    T: Telegram + Send + Sync + 'static + Clone,
+{
     let existing = match find_existing_customer(pool, email, phone, company_id).await {
         Ok(Some(v)) => v,
         Ok(None) => return None,

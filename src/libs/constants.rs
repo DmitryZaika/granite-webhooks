@@ -13,3 +13,6 @@ pub const BAD_REQUEST: (StatusCode, &str) = (StatusCode::BAD_REQUEST, "bad_reque
 pub const fn internal_error(error: &'static str) -> (StatusCode, &'static str) {
     (StatusCode::INTERNAL_SERVER_ERROR, error)
 }
+
+pub const SALES_WORKER: Option<i32> = Some(1);
+pub const SALES_MANAGER: Option<i32> = Some(2);

@@ -6,7 +6,7 @@ use teloxide::types::{Message, Recipient};
 
 use crate::libs::constants::ERR_SEND_TELEGRAM;
 use crate::libs::constants::internal_error;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use teloxide::types::{
     Chat, ChatId, ChatKind, ChatPrivate, EffectId, MediaKind, MediaText, MessageCommon,
     MessageKind, User, UserId,
@@ -77,9 +77,11 @@ pub fn generate_message(chat_id: i64, text: &str) -> Message {
     }
 }
 
-#[derive(Default)]
+type MockTelegramSent = Arc<Mutex<Vec<(i64, String, Option<InlineKeyboardMarkup>)>>>;
+
+#[derive(Default, Clone)]
 pub struct MockTelegram {
-    pub sent: Mutex<Vec<(i64, String, Option<InlineKeyboardMarkup>)>>,
+    pub sent: MockTelegramSent,
     pub fail: bool,
 }
 

@@ -44,6 +44,7 @@ pub trait Telegram: Send + Sync {
         T: Into<String> + Send;
 }
 
+#[derive(Clone)]
 pub struct TelegramBot {
     bot: teloxide::Bot,
 }
