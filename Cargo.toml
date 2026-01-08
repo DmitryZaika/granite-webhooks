@@ -6,26 +6,26 @@ edition = "2024"
 [dependencies]
 axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
-lambda_http = "1.0.1"
+lambda_http = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "mysql"] }
 
-openssl-sys = { version = "0.9", features = ["vendored"] }
 http-body-util = "0.1"
 aws-sdk-sesv2 = "1"
-teloxide = { version = "0.17", features = ["macros"] }
+teloxide = { git = "https://github.com/colin99d/teloxide", features = ["macros"] }
+openssl-sys = { version = "0.9", features = ["vendored"] }
 rand = "0.9"
-aws-config = { version = "1.8.12", features = ["behavior-version-latest"] }
-reqwest = "0.12"
+aws-config = { version = "1.8", features = ["behavior-version-latest"] }
+reqwest = "0.13"
 sha2 = "0.10"
 uuid = "1.19"
-aws-sdk-s3 = "1.118.0"
-mail-parser = "0.11.1"
-bytes = "1.11.0"
-email_reply_parser = "0.1.2"
-thiserror = "2.0.16"
+aws-sdk-s3 = "1.118"
+mail-parser = "0.11"
+bytes = "1.11"
+email_reply_parser = "0.1"
+thiserror = "2.0"
 
 [dev-dependencies]
 axum-test = "18"

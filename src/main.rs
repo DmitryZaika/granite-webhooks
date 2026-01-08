@@ -22,9 +22,11 @@ pub mod schemas;
 pub mod telegram;
 pub mod tests;
 pub mod webhooks;
+use lambda_http::tracing;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    tracing::init_default_subscriber();
     unsafe {
         set_var("AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH", "true");
     }

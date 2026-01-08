@@ -8,7 +8,6 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use lambda_http::tracing;
 use sqlx::MySqlPool;
 
 use crate::webhooks::receivers::new_lead_form;
@@ -17,8 +16,6 @@ async fn health_check() -> impl IntoResponse {
 }
 
 pub fn new_main_app(pool: MySqlPool) -> Router {
-    tracing::init_default_subscriber();
-
     Router::new()
         .route("/", get(health_check))
         .route("/documenso", post(documenso))

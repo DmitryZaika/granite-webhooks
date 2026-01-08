@@ -49,6 +49,14 @@ pub struct TelegramBot {
     bot: teloxide::Bot,
 }
 
+impl TelegramBot {
+    pub fn new() -> Self {
+        Self {
+            bot: teloxide::Bot::from_env(),
+        }
+    }
+}
+
 impl Telegram for TelegramBot {
     fn send_message<C, T>(
         &self,
