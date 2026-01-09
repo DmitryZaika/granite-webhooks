@@ -163,8 +163,6 @@ where
 
 pub async fn existing_lead_check<T>(
     pool: &MySqlPool,
-    email: Option<&str>,
-    phone: Option<&str>,
     company_id: i32,
     form: &LeadForm,
     bot: &T,
@@ -172,7 +170,14 @@ pub async fn existing_lead_check<T>(
 where
     T: Telegram + Send + Sync + 'static + Clone,
 {
-    let existing = match find_existing_customer(pool, email, phone, company_id).await {
+    let existing = match find_existing_customer(
+        pool,
+        form.email().as_deref(),
+        form.phone().as_deref(),
+        company_id,
+    )
+    .await
+    {
         Ok(Some(v)) => v,
         Ok(None) => return None,
         Err(e) => {

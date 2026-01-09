@@ -1,9 +1,6 @@
 use crate::axum_helpers::guards::MarketingUser;
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
 use crate::crud::leads::LeadForm;
-use crate::crud::leads::{
-    create_lead_from_facebook, create_lead_from_new_lead_form, create_lead_from_wordpress,
-};
 use crate::libs::constants::{CREATED_RESPONSE, OK_RESPONSE, internal_error};
 use crate::libs::leads::existing_lead_check;
 use crate::libs::types::BasicResponse;
@@ -25,54 +22,8 @@ pub async fn wordpress_contact_form(
     Json(contact_form): Json<WordpressContactForm>,
 ) -> BasicResponse {
     let tg_bot = TelegramBot::new();
-    wordpress_contact_form_inner(company_id, pool, contact_form, &tg_bot).await
-}
-
-pub async fn wordpress_contact_form_inner<T>(
-    company_id: i32,
-    pool: MySqlPool,
-    contact_form: WordpressContactForm,
-    bot: &T,
-) -> BasicResponse
-where
-    T: Telegram + Send + Sync + 'static + Clone,
-{
-    if let Some(response) = existing_lead_check(
-        &pool,
-        contact_form.email.as_deref(),
-        contact_form.phone.as_deref(),
-        company_id,
-        &LeadForm::WordpressContactForm(contact_form.clone()),
-        bot,
-    )
-    .await
-    {
-        return response;
-    }
-    let result = match create_lead_from_wordpress(&pool, &contact_form, company_id).await {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::error!(?e, "Error creating lead from WordPress");
-            return internal_error("Error creating lead from WordPress");
-        }
-    };
-    let tg_result = send_telegram_manager_assign(
-        &pool,
-        company_id,
-        &contact_form.to_string(),
-        result.last_insert_id(),
-        bot,
-    )
-    .await;
-    if tg_result.is_err() {
-        tracing::error!(
-            ?tg_result,
-            company_id = company_id,
-            "Error sending message to Telegram"
-        );
-        return internal_error("Error sending message to Telegram");
-    }
-    CREATED_RESPONSE
+    let lead_form = LeadForm::WordpressContactForm(contact_form);
+    new_lead_form_inner(company_id, pool, lead_form, &tg_bot).await
 }
 
 pub async fn facebook_contact_form(
@@ -82,56 +33,8 @@ pub async fn facebook_contact_form(
     Json(contact_form): Json<FaceBookContactForm>,
 ) -> BasicResponse {
     let tg_bot = TelegramBot::new();
-    facebook_contact_form_inner(company_id, pool, contact_form, &tg_bot).await
-}
-
-pub async fn facebook_contact_form_inner<T>(
-    company_id: i32,
-    pool: MySqlPool,
-    contact_form: FaceBookContactForm,
-    bot: &T,
-) -> BasicResponse
-where
-    T: Telegram + Send + Sync + 'static + Clone,
-{
-    if let Some(response) = existing_lead_check(
-        &pool,
-        contact_form.email.as_deref(),
-        contact_form.phone.as_deref(),
-        company_id,
-        &LeadForm::FaceBookContactForm(contact_form.clone()),
-        bot,
-    )
-    .await
-    {
-        return response;
-    }
-
-    let result = match create_lead_from_facebook(&pool, &contact_form, company_id).await {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::error!(?e, "Error creating lead from Facebook");
-            return internal_error("Error creating lead from Facebook");
-        }
-    };
-
-    let tg_result = send_telegram_manager_assign(
-        &pool,
-        company_id,
-        &contact_form.to_string(),
-        result.last_insert_id(),
-        bot,
-    )
-    .await;
-    if tg_result.is_err() {
-        tracing::error!(
-            ?tg_result,
-            company_id = company_id,
-            "Error sending message to Telegram"
-        );
-        return internal_error("Error sending message to Telegram");
-    }
-    CREATED_RESPONSE
+    let lead_form = LeadForm::FaceBookContactForm(contact_form);
+    new_lead_form_inner(company_id, pool, lead_form, &tg_bot).await
 }
 
 pub async fn new_lead_form(
@@ -141,32 +44,24 @@ pub async fn new_lead_form(
     Json(contact_form): Json<NewLeadForm>,
 ) -> BasicResponse {
     let tg_bot = TelegramBot::new();
-    new_lead_form_inner(company_id, pool, contact_form, &tg_bot).await
+    let lead_form = LeadForm::NewLeadForm(contact_form);
+    new_lead_form_inner(company_id, pool, lead_form, &tg_bot).await
 }
 
 pub async fn new_lead_form_inner<T>(
     company_id: i32,
     pool: MySqlPool,
-    contact_form: NewLeadForm,
+    lead_form: LeadForm,
     bot: &T,
 ) -> BasicResponse
 where
     T: Telegram + Send + Sync + 'static + Clone,
 {
-    let existing_result = existing_lead_check(
-        &pool,
-        contact_form.email.as_deref(),
-        contact_form.phone.as_deref(),
-        company_id,
-        &LeadForm::NewLeadForm(contact_form.clone()),
-        bot,
-    )
-    .await;
-    if let Some(response) = existing_result {
+    if let Some(response) = existing_lead_check(&pool, company_id, &lead_form, bot).await {
         return response;
     }
 
-    let result = match create_lead_from_new_lead_form(&pool, &contact_form, company_id).await {
+    let result = match lead_form.create_lead(&pool, company_id).await {
         Ok(id) => id,
         Err(e) => {
             tracing::error!(?e, "Error creating lead from New Lead Form");
@@ -176,7 +71,7 @@ where
     let tg_result = send_telegram_manager_assign(
         &pool,
         company_id,
-        &contact_form.to_string(),
+        &lead_form.to_string(),
         result.last_insert_id(),
         bot,
     )
@@ -289,6 +184,16 @@ mod local_tests {
         return sales_id;
     }
 
+    fn new_lead_form(data: Value) -> LeadForm {
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        LeadForm::NewLeadForm(lead)
+    }
+
+    fn facebook_form(data: Value) -> LeadForm {
+        let lead: FaceBookContactForm = serde_json::from_value(data).unwrap();
+        LeadForm::FaceBookContactForm(lead)
+    }
+
     #[sqlx::test]
     async fn test_basic_facebook(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
@@ -342,14 +247,14 @@ mod local_tests {
     async fn send_multiple_managers(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
-        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let lead = new_lead_form(data);
         let bot = MockTelegram::new();
 
         positioned_user(&pool, company_id, 1, 123).await;
         positioned_user(&pool, company_id, 2, 456).await;
         positioned_user(&pool, company_id, 2, 789).await;
 
-        let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
         println!("{:?}", bot.sent.lock().unwrap());
         let mut messages = bot.sent.lock().unwrap();
@@ -366,14 +271,15 @@ mod local_tests {
     async fn duplicate_send_multiple_lead_notifies_manager(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
-        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let lead = new_lead_form(data.clone());
+        let lead2 = new_lead_form(data);
         let bot = MockTelegram::new();
 
         let sales_id = positioned_user(&pool, company_id, 1, 123).await;
         positioned_user(&pool, company_id, 2, 456).await;
         positioned_user(&pool, company_id, 2, 789).await;
 
-        let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        let response = new_lead_form_inner(1, pool.clone(), lead2, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
 
         let customers = get_customers(&pool).await.unwrap();
@@ -402,13 +308,14 @@ mod local_tests {
     async fn duplicate_lead_notifies_manager(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
-        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let lead = new_lead_form(data.clone());
+        let lead2 = new_lead_form(data.clone());
         let bot = MockTelegram::new();
 
         let sales_id = positioned_user(&pool, company_id, 1, 123).await;
         positioned_user(&pool, company_id, 2, 456).await;
 
-        let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
         assert_eq!(bot.sent.lock().unwrap().len(), 1);
 
@@ -419,7 +326,7 @@ mod local_tests {
             .await
             .unwrap();
 
-        let response = new_lead_form_inner(1, pool, lead, &bot).await;
+        let response = new_lead_form_inner(1, pool, lead2, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
         let mut messages = bot.sent.lock().unwrap();
         assert_eq!(messages.len(), 3);
@@ -438,7 +345,8 @@ mod local_tests {
     async fn duplicate_lead_notifies_manager_also_sales(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
-        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let lead = new_lead_form(data.clone());
+        let lead2 = new_lead_form(data.clone());
         let bot = MockTelegram::new();
 
         let sales_id = positioned_user(&pool, company_id, 1, 123).await;
@@ -447,7 +355,7 @@ mod local_tests {
             .await
             .unwrap();
 
-        let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
         assert_eq!(bot.sent.lock().unwrap().len(), 1);
 
@@ -458,7 +366,7 @@ mod local_tests {
             .await
             .unwrap();
 
-        let response = new_lead_form_inner(1, pool, lead, &bot).await;
+        let response = new_lead_form_inner(1, pool, lead2, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
         assert_eq!(bot.sent.lock().unwrap().len(), 3);
 
@@ -473,52 +381,17 @@ mod local_tests {
     }
 
     #[sqlx::test]
-    async fn facebook_duplicate_lead_notifies_manager(pool: MySqlPool) {
-        let company_id = 1;
-        let data = json!({ "name": "Test", "phone": "+13179995973" });
-        let lead: FaceBookContactForm = serde_json::from_value(data).unwrap();
-        let bot = MockTelegram::new();
-
-        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
-        positioned_user(&pool, company_id, 2, 456).await;
-
-        let response = facebook_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
-        assert_eq!(response.0, StatusCode::CREATED);
-        assert_eq!(bot.sent.lock().unwrap().len(), 1);
-
-        let customers = get_customers(&pool).await.unwrap();
-        assert_eq!(customers.len(), 1);
-
-        create_deal(&pool, customers[0].id, 1, 0, sales_id as i64)
-            .await
-            .unwrap();
-
-        let response = facebook_contact_form_inner(1, pool, lead, &bot).await;
-        assert_eq!(response.0, StatusCode::CREATED);
-        let mut messages = bot.sent.lock().unwrap();
-        assert_eq!(messages.len(), 3);
-
-        // Assert manager received message
-        let second_message = messages.pop().unwrap();
-        assert!(second_message.1.starts_with("Repeat lead "));
-        assert_eq!(second_message.0, 456);
-        // Assert sales recevied message
-        let last_message = messages.pop().unwrap();
-        assert!(last_message.1.starts_with("You received a REPEATED lead "));
-        assert_eq!(last_message.0, 123);
-    }
-
-    #[sqlx::test]
-    async fn facebook_duplicate_lead_no_deal_existing_customer(pool: MySqlPool) {
+    async fn duplicate_lead_no_deal_existing_customer(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "13179995973" });
-        let lead: FaceBookContactForm = serde_json::from_value(data).unwrap();
+        let lead = facebook_form(data.clone());
+        let lead2 = facebook_form(data.clone());
         let bot = MockTelegram::new();
 
         let sales_id = positioned_user(&pool, company_id, 1, 123).await;
         positioned_user(&pool, company_id, 2, 456).await;
 
-        let response = facebook_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
         assert_eq!(bot.sent.lock().unwrap().len(), 1);
         sqlx::query!("UPDATE customers SET sales_rep = ?", sales_id)
@@ -526,7 +399,7 @@ mod local_tests {
             .await
             .unwrap();
 
-        let response = facebook_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        let response = new_lead_form_inner(1, pool.clone(), lead2, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
 
         let customers = get_customers(&pool).await.unwrap();
@@ -552,23 +425,24 @@ mod local_tests {
     }
 
     #[sqlx::test]
-    async fn facebook_duplicate_lead_notifies_manager_no_deal_no_existing(pool: MySqlPool) {
+    async fn duplicate_lead_notifies_manager_no_deal_no_existing(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
-        let lead: FaceBookContactForm = serde_json::from_value(data).unwrap();
+        let lead = facebook_form(data.clone());
+        let lead2 = facebook_form(data.clone());
         let bot = MockTelegram::new();
 
         positioned_user(&pool, company_id, 1, 123).await;
         positioned_user(&pool, company_id, 2, 456).await;
 
-        let response = facebook_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
         assert_eq!(bot.sent.lock().unwrap().len(), 1);
 
         let customers = get_customers(&pool).await.unwrap();
         assert_eq!(customers.len(), 1);
 
-        let response = facebook_contact_form_inner(1, pool, lead, &bot).await;
+        let response = new_lead_form_inner(1, pool, lead2, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
         assert_eq!(bot.sent.lock().unwrap().len(), 2);
 
@@ -580,118 +454,5 @@ mod local_tests {
                 .starts_with("You received a REPEATED lead with no sales rep")
         );
         assert_eq!(second_message.0, 456);
-    }
-
-    #[sqlx::test]
-    async fn facebook_duplicate_lead_notifies_manager_also_sales(pool: MySqlPool) {
-        let company_id = 1;
-        let data = json!({ "name": "Test", "phone": "+13179995973" });
-        let lead: FaceBookContactForm = serde_json::from_value(data).unwrap();
-        let bot = MockTelegram::new();
-
-        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
-        let admin_id = positioned_user(&pool, company_id, 2, 456).await;
-        assigned_user_position(&pool, company_id, 1, admin_id)
-            .await
-            .unwrap();
-
-        let response = facebook_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
-        assert_eq!(response.0, StatusCode::CREATED);
-        assert_eq!(bot.sent.lock().unwrap().len(), 1);
-
-        let customers = get_customers(&pool).await.unwrap();
-        assert_eq!(customers.len(), 1);
-
-        create_deal(&pool, customers[0].id, 1, 0, sales_id as i64)
-            .await
-            .unwrap();
-
-        let response = facebook_contact_form_inner(1, pool, lead, &bot).await;
-        assert_eq!(response.0, StatusCode::CREATED);
-        let mut messages = bot.sent.lock().unwrap();
-        assert_eq!(messages.len(), 3);
-
-        // Assert manager received message
-        let second_message = messages.pop().unwrap();
-        assert!(second_message.1.starts_with("Repeat lead "));
-        assert_eq!(second_message.0, 456);
-        // Assert sales recevied message
-        let last_message = messages.pop().unwrap();
-        assert!(last_message.1.starts_with("You received a REPEATED lead "));
-        assert_eq!(last_message.0, 123);
-    }
-
-    #[sqlx::test]
-    async fn wordpress_duplicate_lead_notifies_manager(pool: MySqlPool) {
-        let company_id = 1;
-        let data = json!({ "name": "Test", "Phone": "+13179995973" });
-        let lead: WordpressContactForm = serde_json::from_value(data).unwrap();
-        let bot = MockTelegram::new();
-
-        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
-        positioned_user(&pool, company_id, 2, 456).await;
-
-        let response = wordpress_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
-        assert_eq!(response.0, StatusCode::CREATED);
-        assert_eq!(bot.sent.lock().unwrap().len(), 1);
-
-        let customers = get_customers(&pool).await.unwrap();
-        assert_eq!(customers.len(), 1);
-
-        create_deal(&pool, customers[0].id, 1, 0, sales_id as i64)
-            .await
-            .unwrap();
-
-        let response = wordpress_contact_form_inner(1, pool, lead, &bot).await;
-        assert_eq!(response.0, StatusCode::CREATED);
-        assert_eq!(bot.sent.lock().unwrap().len(), 3);
-
-        // Assert manager received message
-        let second_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(second_message.1.starts_with("Repeat lead "));
-        assert_eq!(second_message.0, 456);
-        // Assert sales recevied message
-        let last_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(last_message.1.starts_with("You received a REPEATED lead "));
-        assert_eq!(last_message.0, 123);
-    }
-
-    #[sqlx::test]
-    async fn wordpress_duplicate_lead_notifies_manager_also_sales(pool: MySqlPool) {
-        let company_id = 1;
-        let data = json!({ "name": "Test", "Phone": "+13179995973" });
-        let lead: WordpressContactForm = serde_json::from_value(data).unwrap();
-        let bot = MockTelegram::new();
-
-        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
-        let admin_id = positioned_user(&pool, company_id, 2, 456).await;
-        assigned_user_position(&pool, company_id, 1, admin_id)
-            .await
-            .unwrap();
-
-        let response = wordpress_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
-        assert_eq!(response.0, StatusCode::CREATED);
-        assert_eq!(bot.sent.lock().unwrap().len(), 1);
-
-        let customers = get_customers(&pool).await.unwrap();
-        assert_eq!(customers.len(), 1);
-
-        create_deal(&pool, customers[0].id, 1, 0, sales_id as i64)
-            .await
-            .unwrap();
-
-        let response = wordpress_contact_form_inner(1, pool, lead, &bot).await;
-        assert_eq!(response.0, StatusCode::CREATED);
-        assert_eq!(bot.sent.lock().unwrap().len(), 3);
-
-        // Assert manager received message
-        let second_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(second_message.1.starts_with("Repeat lead "));
-        assert_eq!(second_message.0, 456);
-        //
-        // Assert sales recevied message
-        let last_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(last_message.1.starts_with("You received a REPEATED lead "));
-        assert_eq!(last_message.0, 123);
     }
 }

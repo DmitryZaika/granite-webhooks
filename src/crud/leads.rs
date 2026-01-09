@@ -361,6 +361,35 @@ impl LeadForm {
             }
         }
     }
+    pub async fn create_lead(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+    ) -> Result<MySqlQueryResult, sqlx::Error> {
+        match self {
+            Self::NewLeadForm(data) => create_lead_from_new_lead_form(pool, data, company_id).await,
+            Self::WordpressContactForm(data) => {
+                create_lead_from_wordpress(pool, data, company_id).await
+            }
+            Self::FaceBookContactForm(data) => {
+                create_lead_from_facebook(pool, data, company_id).await
+            }
+        }
+    }
+    pub fn email(&self) -> Option<String> {
+        match self {
+            Self::NewLeadForm(data) => data.email.clone(),
+            Self::WordpressContactForm(data) => data.email.clone(),
+            Self::FaceBookContactForm(data) => data.email.clone(),
+        }
+    }
+    pub fn phone(&self) -> Option<String> {
+        match self {
+            Self::NewLeadForm(data) => data.phone.clone(),
+            Self::WordpressContactForm(data) => data.phone.clone(),
+            Self::FaceBookContactForm(data) => data.phone.clone(),
+        }
+    }
 }
 
 impl fmt::Display for LeadForm {
