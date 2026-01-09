@@ -126,12 +126,10 @@ pub async fn receive_handler(
 #[cfg(test)]
 mod local_tests {
     use super::*;
-    use crate::axum_helpers::axum_app::new_main_app;
     use crate::tests::data::ses_open_json::ses_open_event_json;
     use crate::tests::data::ses_received::ses_received_json;
-    use crate::tests::utils::read_file_as_bytes;
+    use crate::tests::utils::{new_test_app, read_file_as_bytes};
     use axum::http::StatusCode;
-    use axum_test::TestServer;
     use bytes::Bytes;
     use sqlx::MySqlPool;
     use sqlx::mysql::MySqlQueryResult;
@@ -182,11 +180,6 @@ mod local_tests {
         ) -> impl Future<Output = Result<String, String>> + Send + 'a {
             async move { Ok(format!("s3://{bucket}/{key}")) }
         }
-    }
-
-    fn new_test_app(pool: MySqlPool) -> TestServer {
-        let app = new_main_app(pool);
-        TestServer::builder().build(app).unwrap()
     }
 
     async fn insert_email(

@@ -195,14 +195,14 @@ where
 #[cfg(test)]
 mod local_tests {
     use super::*;
-    use crate::axum_helpers::axum_app::new_main_app;
     use crate::crud::leads::create_deal;
     use crate::tests::telegram::MockTelegram;
-    use crate::tests::utils::insert_user;
+    use crate::tests::utils::{insert_user, new_test_app};
     use axum::http::StatusCode;
-    use axum_test::TestServer;
+    use serde_json::Value;
     use serde_json::json;
     use sqlx::MySqlPool;
+    use uuid::Uuid;
 
     #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
     struct Customer {
@@ -257,13 +257,6 @@ mod local_tests {
         Ok(())
     }
 
-    fn new_test_app(pool: MySqlPool) -> TestServer {
-        let app = new_main_app(pool);
-        TestServer::builder().build(app).unwrap()
-    }
-
-    use serde_json::Value;
-
     pub fn lead_payload_json() -> Value {
         serde_json::from_str(
             r#"{
@@ -280,6 +273,20 @@ mod local_tests {
         }"#,
         )
         .unwrap()
+    }
+
+    pub async fn positioned_user(
+        pool: &MySqlPool,
+        company_id: i32,
+        position_id: i32,
+        telegram_id: i64,
+    ) -> u64 {
+        let email = format!("user_{}_email@example.com", Uuid::new_v4());
+        let sales_id = insert_user(pool, &email, Some(telegram_id)).await.unwrap();
+        assigned_user_position(pool, company_id, position_id, sales_id)
+            .await
+            .unwrap();
+        return sales_id;
     }
 
     #[sqlx::test]
@@ -338,25 +345,9 @@ mod local_tests {
         let lead: NewLeadForm = serde_json::from_value(data).unwrap();
         let bot = MockTelegram::new();
 
-        let sales_id = insert_user(&pool, "colin99delahunty@gmail.com", Some(123))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 1, sales_id)
-            .await
-            .unwrap();
-
-        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 2, admin_id)
-            .await
-            .unwrap();
-        let admin_id2 = insert_user(&pool, "admin2@example.com", Some(789))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 2, admin_id2)
-            .await
-            .unwrap();
+        positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
+        positioned_user(&pool, company_id, 2, 789).await;
 
         let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
@@ -378,25 +369,9 @@ mod local_tests {
         let lead: NewLeadForm = serde_json::from_value(data).unwrap();
         let bot = MockTelegram::new();
 
-        let sales_id = insert_user(&pool, "colin99delahunty@gmail.com", Some(123))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 1, sales_id)
-            .await
-            .unwrap();
-
-        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 2, admin_id)
-            .await
-            .unwrap();
-        let admin_id2 = insert_user(&pool, "admin2@example.com", Some(789))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 2, admin_id2)
-            .await
-            .unwrap();
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
+        positioned_user(&pool, company_id, 2, 789).await;
 
         let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
@@ -430,19 +405,8 @@ mod local_tests {
         let lead: NewLeadForm = serde_json::from_value(data).unwrap();
         let bot = MockTelegram::new();
 
-        let sales_id = insert_user(&pool, "colin99delahunty@gmail.com", Some(123))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 1, sales_id)
-            .await
-            .unwrap();
-
-        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 2, admin_id)
-            .await
-            .unwrap();
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
 
         let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
@@ -477,20 +441,9 @@ mod local_tests {
         let lead: NewLeadForm = serde_json::from_value(data).unwrap();
         let bot = MockTelegram::new();
 
-        let sales_id = insert_user(&pool, "colin99delahunty@gmail.com", Some(123))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 1, sales_id)
-            .await
-            .unwrap();
-
-        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
-            .await
-            .unwrap();
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        let admin_id = positioned_user(&pool, company_id, 2, 456).await;
         assigned_user_position(&pool, company_id, 1, admin_id)
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 2, admin_id)
             .await
             .unwrap();
 
@@ -526,19 +479,8 @@ mod local_tests {
         let lead: FaceBookContactForm = serde_json::from_value(data).unwrap();
         let bot = MockTelegram::new();
 
-        let sales_id = insert_user(&pool, "colin99delahunty@gmail.com", Some(123))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 1, sales_id)
-            .await
-            .unwrap();
-
-        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 2, admin_id)
-            .await
-            .unwrap();
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
 
         let response = facebook_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
@@ -573,19 +515,8 @@ mod local_tests {
         let lead: FaceBookContactForm = serde_json::from_value(data).unwrap();
         let bot = MockTelegram::new();
 
-        let sales_id = insert_user(&pool, "colin99delahunty@gmail.com", Some(123))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 1, sales_id)
-            .await
-            .unwrap();
-
-        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 2, admin_id)
-            .await
-            .unwrap();
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
 
         let response = facebook_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
@@ -627,19 +558,8 @@ mod local_tests {
         let lead: FaceBookContactForm = serde_json::from_value(data).unwrap();
         let bot = MockTelegram::new();
 
-        let sales_id = insert_user(&pool, "colin99delahunty@gmail.com", Some(123))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 1, sales_id)
-            .await
-            .unwrap();
-
-        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 2, admin_id)
-            .await
-            .unwrap();
+        positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
 
         let response = facebook_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
@@ -669,20 +589,9 @@ mod local_tests {
         let lead: FaceBookContactForm = serde_json::from_value(data).unwrap();
         let bot = MockTelegram::new();
 
-        let sales_id = insert_user(&pool, "colin99delahunty@gmail.com", Some(123))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 1, sales_id)
-            .await
-            .unwrap();
-
-        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
-            .await
-            .unwrap();
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        let admin_id = positioned_user(&pool, company_id, 2, 456).await;
         assigned_user_position(&pool, company_id, 1, admin_id)
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 2, admin_id)
             .await
             .unwrap();
 
@@ -719,19 +628,8 @@ mod local_tests {
         let lead: WordpressContactForm = serde_json::from_value(data).unwrap();
         let bot = MockTelegram::new();
 
-        let sales_id = insert_user(&pool, "colin99delahunty@gmail.com", Some(123))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 1, sales_id)
-            .await
-            .unwrap();
-
-        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 2, admin_id)
-            .await
-            .unwrap();
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
 
         let response = wordpress_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
@@ -765,20 +663,9 @@ mod local_tests {
         let lead: WordpressContactForm = serde_json::from_value(data).unwrap();
         let bot = MockTelegram::new();
 
-        let sales_id = insert_user(&pool, "colin99delahunty@gmail.com", Some(123))
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 1, sales_id)
-            .await
-            .unwrap();
-
-        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
-            .await
-            .unwrap();
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        let admin_id = positioned_user(&pool, company_id, 2, 456).await;
         assigned_user_position(&pool, company_id, 1, admin_id)
-            .await
-            .unwrap();
-        assigned_user_position(&pool, company_id, 2, admin_id)
             .await
             .unwrap();
 

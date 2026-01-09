@@ -1,3 +1,7 @@
+#[cfg(test)]
+use crate::axum_helpers::axum_app::new_main_app;
+#[cfg(test)]
+use axum_test::TestServer;
 use bytes::Bytes;
 use sqlx::MySqlPool;
 use std::fs;
@@ -39,4 +43,10 @@ pub async fn insert_user(
     .await?;
 
     Ok(rec.last_insert_id())
+}
+
+#[cfg(test)]
+pub fn new_test_app(pool: MySqlPool) -> TestServer {
+    let app = new_main_app(pool);
+    TestServer::builder().build(app).unwrap()
 }
