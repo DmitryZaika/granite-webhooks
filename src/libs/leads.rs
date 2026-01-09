@@ -70,7 +70,6 @@ where
         }
     };
 
-    println!("CHECK 1");
     let clean_tg_id = match user_info.telegram_id {
         Some(id) => id,
         None => match send_message(&[&user_info.email], REGISTER_SUBJECT, REGISTER_MESSAGE).await {
@@ -90,7 +89,6 @@ where
         name.unwrap_or("Unknown"),
         lead_url(deal.id)
     );
-    println!("CHECK 2");
     let tg_result = send_plain_message_to_chat(clean_tg_id, &repeted_lead_message, bot).await;
     if let Err(request_error) = tg_result {
         tracing::error!(
@@ -100,7 +98,6 @@ where
         );
         return internal_error(ERR_SEND_TELEGRAM);
     }
-    println!("CHECK 3");
     let name = existing.name.as_deref().unwrap_or("Unknown");
     send_telegram_duplicate_notification(
         pool,
@@ -111,7 +108,6 @@ where
         bot,
     )
     .await;
-    println!("CHECK 4");
     CREATED_RESPONSE
 }
 
