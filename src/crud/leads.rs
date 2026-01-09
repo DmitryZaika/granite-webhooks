@@ -317,10 +317,9 @@ pub async fn create_deal_from_lead(
     user_id: i64,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     return query!(
-        r#"INSERT INTO deals (customer_id, status, list_id, user_id) VALUES (?,?,?,?)"#,
+        r#"INSERT INTO deals (customer_id, status, list_id, user_id, position) VALUES (?,?,1,?, 1)"#,
         lead_id,
         "New Customer",
-        1,
         user_id,
     )
     .execute(pool)

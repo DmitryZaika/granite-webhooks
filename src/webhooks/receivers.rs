@@ -408,13 +408,13 @@ mod local_tests {
             .await
             .unwrap();
 
-        let response = new_lead_form_inner(1, pool, lead, &bot).await;
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
+        let customers = get_customers(&pool).await.unwrap();
+        assert_eq!(customers.len(), 1);
         let mut messages = bot.sent.lock().unwrap();
         assert_eq!(messages.len(), 5);
 
-        messages.pop();
-        // Assert manager received message
         let second_message = messages.pop().unwrap();
         assert!(second_message.1.starts_with("Repeat lead "));
         assert_eq!(second_message.0, 789);
@@ -457,17 +457,17 @@ mod local_tests {
 
         let response = new_lead_form_inner(1, pool, lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
-        assert_eq!(bot.sent.lock().unwrap().len(), 3);
-
-        // Assert sales recevied message
-        let last_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(last_message.1.starts_with("You received a REPEATED lead "));
-        assert_eq!(last_message.0, 123);
+        let mut messages = bot.sent.lock().unwrap();
+        assert_eq!(messages.len(), 3);
 
         // Assert manager received message
-        let second_message = bot.sent.lock().unwrap().pop().unwrap();
+        let second_message = messages.pop().unwrap();
         assert!(second_message.1.starts_with("Repeat lead "));
         assert_eq!(second_message.0, 456);
+        // Assert sales recevied message
+        let last_message = messages.pop().unwrap();
+        assert!(last_message.1.starts_with("You received a REPEATED lead "));
+        assert_eq!(last_message.0, 123);
     }
 
     #[sqlx::test]
@@ -509,15 +509,14 @@ mod local_tests {
         assert_eq!(response.0, StatusCode::CREATED);
         assert_eq!(bot.sent.lock().unwrap().len(), 3);
 
-        // Assert sales recevied message
-        let last_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(last_message.1.starts_with("You received a REPEATED lead "));
-        assert_eq!(last_message.0, 123);
-
         // Assert manager received message
         let second_message = bot.sent.lock().unwrap().pop().unwrap();
         assert!(second_message.1.starts_with("Repeat lead "));
         assert_eq!(second_message.0, 456);
+        // Assert sales recevied message
+        let last_message = bot.sent.lock().unwrap().pop().unwrap();
+        assert!(last_message.1.starts_with("You received a REPEATED lead "));
+        assert_eq!(last_message.0, 123);
     }
 
     #[sqlx::test]
@@ -554,17 +553,17 @@ mod local_tests {
 
         let response = facebook_contact_form_inner(1, pool, lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
-        assert_eq!(bot.sent.lock().unwrap().len(), 3);
-
-        // Assert sales recevied message
-        let last_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(last_message.1.starts_with("You received a REPEATED lead "));
-        assert_eq!(last_message.0, 123);
+        let mut messages = bot.sent.lock().unwrap();
+        assert_eq!(messages.len(), 3);
 
         // Assert manager received message
-        let second_message = bot.sent.lock().unwrap().pop().unwrap();
+        let second_message = messages.pop().unwrap();
         assert!(second_message.1.starts_with("Repeat lead "));
         assert_eq!(second_message.0, 456);
+        // Assert sales recevied message
+        let last_message = messages.pop().unwrap();
+        assert!(last_message.1.starts_with("You received a REPEATED lead "));
+        assert_eq!(last_message.0, 123);
     }
 
     #[sqlx::test]
@@ -591,25 +590,34 @@ mod local_tests {
         let response = facebook_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
         assert_eq!(bot.sent.lock().unwrap().len(), 1);
-        let customer = sqlx::query!("UPDATE customers SET sales_rep = ?", sales_id)
+        sqlx::query!("UPDATE customers SET sales_rep = ?", sales_id)
             .execute(&pool)
             .await
             .unwrap();
 
         let response = facebook_contact_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
 
         let customers = get_customers(&pool).await.unwrap();
         assert_eq!(customers.len(), 1);
 
         println!("{:?}", bot.sent.lock().unwrap());
         let last_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(last_message.1.starts_with("You received a REPEATED lead "));
-        assert_eq!(last_message.0, 123);
+        assert!(
+            last_message
+                .1
+                .starts_with("Repeat lead Test with for sales rep Unknown")
+        );
+        assert_eq!(last_message.0, 456);
 
         // Assert manager received message
         let second_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(second_message.1.starts_with("Repeat lead "));
-        assert_eq!(second_message.0, 456);
+        assert!(
+            second_message
+                .1
+                .starts_with("You received a REPEATED lead Test, click here:")
+        );
+        assert_eq!(second_message.0, 123);
     }
 
     #[sqlx::test]
@@ -642,7 +650,6 @@ mod local_tests {
 
         let response = facebook_contact_form_inner(1, pool, lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
-        println!("Response: {:?}", bot.sent.lock().unwrap());
         assert_eq!(bot.sent.lock().unwrap().len(), 2);
 
         // Assert manager received message
@@ -692,17 +699,17 @@ mod local_tests {
 
         let response = facebook_contact_form_inner(1, pool, lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
-        assert_eq!(bot.sent.lock().unwrap().len(), 3);
-
-        // Assert sales recevied message
-        let last_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(last_message.1.starts_with("You received a REPEATED lead "));
-        assert_eq!(last_message.0, 123);
+        let mut messages = bot.sent.lock().unwrap();
+        assert_eq!(messages.len(), 3);
 
         // Assert manager received message
-        let second_message = bot.sent.lock().unwrap().pop().unwrap();
+        let second_message = messages.pop().unwrap();
         assert!(second_message.1.starts_with("Repeat lead "));
         assert_eq!(second_message.0, 456);
+        // Assert sales recevied message
+        let last_message = messages.pop().unwrap();
+        assert!(last_message.1.starts_with("You received a REPEATED lead "));
+        assert_eq!(last_message.0, 123);
     }
 
     #[sqlx::test]
@@ -741,15 +748,14 @@ mod local_tests {
         assert_eq!(response.0, StatusCode::CREATED);
         assert_eq!(bot.sent.lock().unwrap().len(), 3);
 
-        // Assert sales recevied message
-        let last_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(last_message.1.starts_with("You received a REPEATED lead "));
-        assert_eq!(last_message.0, 123);
-
         // Assert manager received message
         let second_message = bot.sent.lock().unwrap().pop().unwrap();
         assert!(second_message.1.starts_with("Repeat lead "));
         assert_eq!(second_message.0, 456);
+        // Assert sales recevied message
+        let last_message = bot.sent.lock().unwrap().pop().unwrap();
+        assert!(last_message.1.starts_with("You received a REPEATED lead "));
+        assert_eq!(last_message.0, 123);
     }
 
     #[sqlx::test]
@@ -791,14 +797,14 @@ mod local_tests {
         assert_eq!(response.0, StatusCode::CREATED);
         assert_eq!(bot.sent.lock().unwrap().len(), 3);
 
-        // Assert sales recevied message
-        let last_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(last_message.1.starts_with("You received a REPEATED lead "));
-        assert_eq!(last_message.0, 123);
-
         // Assert manager received message
         let second_message = bot.sent.lock().unwrap().pop().unwrap();
         assert!(second_message.1.starts_with("Repeat lead "));
         assert_eq!(second_message.0, 456);
+        //
+        // Assert sales recevied message
+        let last_message = bot.sent.lock().unwrap().pop().unwrap();
+        assert!(last_message.1.starts_with("You received a REPEATED lead "));
+        assert_eq!(last_message.0, 123);
     }
 }
