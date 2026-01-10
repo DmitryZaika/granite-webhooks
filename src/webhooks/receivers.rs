@@ -1,15 +1,12 @@
 use crate::axum_helpers::guards::MarketingUser;
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
-use crate::libs::constants::{CREATED_RESPONSE, internal_error};
-use crate::libs::leads::existing_lead_check;
+use crate::libs::leads::process_lead;
 use crate::libs::types::BasicResponse;
 use crate::schemas::add_customer::{
     FaceBookContactForm, LeadPayload, NewLeadForm, WordpressContactForm,
 };
-use crate::telegram::send::send_telegram_manager_assign;
 use axum::extract::Path;
 use axum::extract::{Json, State};
-use lambda_http::tracing;
 use sqlx::MySqlPool;
 
 pub async fn wordpress_contact_form(
@@ -51,34 +48,7 @@ pub async fn new_lead_form_inner<T, V: LeadPayload>(
 where
     T: Telegram + Send + Sync + 'static + Clone,
 {
-    if let Some(response) = existing_lead_check(&pool, company_id, &lead_form, bot).await {
-        return response;
-    }
-
-    let result = match lead_form.insert(&pool, company_id).await {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::error!(?e, "Error creating lead from New Lead Form");
-            return internal_error("Error creating lead from New Lead Form");
-        }
-    };
-    let tg_result = send_telegram_manager_assign(
-        &pool,
-        company_id,
-        &lead_form.to_string(),
-        result.last_insert_id(),
-        bot,
-    )
-    .await;
-    if tg_result.is_err() {
-        tracing::error!(
-            ?tg_result,
-            company_id = company_id,
-            "Error sending message to Telegram"
-        );
-        return internal_error("Error sending message to Telegram");
-    }
-    CREATED_RESPONSE
+    process_lead(&pool, company_id, &lead_form, bot).await
 }
 
 #[cfg(test)]

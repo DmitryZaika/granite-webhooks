@@ -161,47 +161,80 @@ where
     }
 }
 
-pub async fn existing_lead_check<T, V: LeadPayload>(
+async fn new_lead<T, V: LeadPayload>(
     pool: &MySqlPool,
     company_id: i32,
     form: &V,
     bot: &T,
-) -> Option<BasicResponse>
+) -> BasicResponse
+where
+    T: Telegram + Send + Sync + 'static + Clone,
+{
+    let result = match form.insert(&pool, company_id).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(?e, "Error creating lead from New Lead Form");
+            return internal_error("Error creating lead from New Lead Form");
+        }
+    };
+    let tg_result = send_telegram_manager_assign(
+        &pool,
+        company_id,
+        &form.to_string(),
+        result.last_insert_id(),
+        bot,
+    )
+    .await;
+    if tg_result.is_err() {
+        tracing::error!(
+            ?tg_result,
+            company_id = company_id,
+            "Error sending message to Telegram"
+        );
+        return internal_error("Error sending message to Telegram");
+    }
+    CREATED_RESPONSE
+}
+
+pub async fn process_lead<T, V: LeadPayload>(
+    pool: &MySqlPool,
+    company_id: i32,
+    form: &V,
+    bot: &T,
+) -> BasicResponse
 where
     T: Telegram + Send + Sync + 'static + Clone,
 {
     let existing = match find_existing_customer(pool, form.email(), form.phone(), company_id).await
     {
         Ok(Some(v)) => v,
-        Ok(None) => return None,
+        Ok(None) => return new_lead(pool, company_id, form, bot).await,
         Err(e) => {
             tracing::error!(?e, company_id = company_id, "Failed to check existing lead");
-            return Some(internal_error(ERR_DB));
+            return internal_error(ERR_DB);
         }
     };
     match get_existing_deal(pool, existing.id).await {
         Ok(Some(deal)) => {
-            return Some(handle_repeat_lead(&existing, deal, pool, company_id, form, bot).await);
+            return handle_repeat_lead(&existing, deal, pool, company_id, form, bot).await;
         }
         Ok(None) => {
             let deal =
                 create_new_deal_existing_customer(pool, &existing, company_id, form, bot).await;
             match deal {
                 Ok(Some(deal)) => {
-                    return Some(
-                        handle_repeat_lead(&existing, deal, pool, company_id, form, bot).await,
-                    );
+                    return handle_repeat_lead(&existing, deal, pool, company_id, form, bot).await;
                 }
-                Ok(None) => Some(CREATED_RESPONSE),
+                Ok(None) => CREATED_RESPONSE,
                 Err(e) => {
                     tracing::error!(?e, company_id = company_id, "Failed to create new deal");
-                    Some(e)
+                    e
                 }
             }
         }
         Err(e) => {
             tracing::error!(?e, lead_id = existing.id, "Failed to check existing deal");
-            Some(internal_error(ERR_DB))
+            internal_error(ERR_DB)
         }
     }
 }
