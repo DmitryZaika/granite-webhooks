@@ -2,7 +2,7 @@ use crate::amazonses::routes::{read_receipt_handler, receive_handler};
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
 use crate::telegram::receive::webhook_handler;
-use crate::webhooks::receivers::{documenso, facebook_contact_form, wordpress_contact_form};
+use crate::webhooks::receivers::{facebook_contact_form, wordpress_contact_form};
 use axum::{
     Router,
     response::IntoResponse,
@@ -18,7 +18,6 @@ async fn health_check() -> impl IntoResponse {
 pub fn new_main_app(pool: MySqlPool) -> Router {
     Router::new()
         .route("/", get(health_check))
-        .route("/documenso", post(documenso))
         .route(
             "/wordpress-contact-form/{company_id}",
             post(wordpress_contact_form),

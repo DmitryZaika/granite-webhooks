@@ -1,7 +1,7 @@
 use crate::axum_helpers::guards::MarketingUser;
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
 use crate::crud::leads::LeadForm;
-use crate::libs::constants::{CREATED_RESPONSE, OK_RESPONSE, internal_error};
+use crate::libs::constants::{CREATED_RESPONSE, internal_error};
 use crate::libs::leads::existing_lead_check;
 use crate::libs::types::BasicResponse;
 use crate::schemas::add_customer::{FaceBookContactForm, NewLeadForm, WordpressContactForm};
@@ -10,10 +10,6 @@ use axum::extract::Path;
 use axum::extract::{Json, State};
 use lambda_http::tracing;
 use sqlx::MySqlPool;
-
-pub async fn documenso() -> BasicResponse {
-    OK_RESPONSE
-}
 
 pub async fn wordpress_contact_form(
     _: MarketingUser,
