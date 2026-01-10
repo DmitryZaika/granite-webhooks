@@ -1,6 +1,13 @@
+use crate::crud::leads::{
+    create_lead_from_facebook, create_lead_from_new_lead_form, create_lead_from_wordpress,
+    update_lead_from_facebook, update_lead_from_new_lead_form, update_lead_from_wordpress,
+};
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
+use sqlx::MySqlPool;
+use sqlx::mysql::MySqlQueryResult;
 use std::fmt;
+use std::fmt::Display;
 use std::fmt::Write as _;
 
 fn clean_phone<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -23,6 +30,25 @@ where
             digits.to_string()
         }
     }))
+}
+
+pub trait LeadPayload: Display + Send + Sync {
+    fn email(&self) -> Option<&str>;
+    fn phone(&self) -> Option<&str>;
+    // fn referral_source(&self) -> &'static str;
+
+    fn insert(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+    ) -> impl Future<Output = Result<MySqlQueryResult, sqlx::Error>> + Send;
+
+    fn update(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+        id: i32,
+    ) -> impl Future<Output = Result<MySqlQueryResult, sqlx::Error>> + Send;
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -70,6 +96,33 @@ pub struct WordpressContactForm {
 
     #[serde(rename = "File")]
     pub attached_file: Option<String>,
+}
+
+impl LeadPayload for WordpressContactForm {
+    fn email(&self) -> Option<&str> {
+        self.email.as_deref()
+    }
+
+    fn phone(&self) -> Option<&str> {
+        self.phone.as_deref()
+    }
+
+    fn insert(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+    ) -> impl Future<Output = Result<MySqlQueryResult, sqlx::Error>> + Send {
+        create_lead_from_wordpress(pool, self, company_id)
+    }
+
+    fn update(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+        id: i32,
+    ) -> impl Future<Output = Result<MySqlQueryResult, sqlx::Error>> {
+        update_lead_from_wordpress(pool, self, company_id, id)
+    }
 }
 
 impl fmt::Display for WordpressContactForm {
@@ -140,6 +193,33 @@ pub struct FaceBookContactForm {
 
     #[serde(rename = "adname")]
     pub ad_name: Option<String>,
+}
+
+impl LeadPayload for FaceBookContactForm {
+    fn email(&self) -> Option<&str> {
+        self.email.as_deref()
+    }
+
+    fn phone(&self) -> Option<&str> {
+        self.phone.as_deref()
+    }
+
+    fn insert(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+    ) -> impl Future<Output = Result<MySqlQueryResult, sqlx::Error>> + Send {
+        create_lead_from_facebook(pool, self, company_id)
+    }
+
+    fn update(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+        id: i32,
+    ) -> impl Future<Output = Result<MySqlQueryResult, sqlx::Error>> {
+        update_lead_from_facebook(pool, self, company_id, id)
+    }
 }
 
 impl fmt::Display for FaceBookContactForm {
@@ -224,6 +304,32 @@ pub struct NewLeadForm {
     pub referral_source: Option<String>,
 }
 
+impl LeadPayload for NewLeadForm {
+    fn email(&self) -> Option<&str> {
+        self.email.as_deref()
+    }
+
+    fn phone(&self) -> Option<&str> {
+        self.phone.as_deref()
+    }
+
+    fn insert(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+    ) -> impl Future<Output = Result<MySqlQueryResult, sqlx::Error>> + Send {
+        create_lead_from_new_lead_form(pool, self, company_id)
+    }
+
+    fn update(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+        id: i32,
+    ) -> impl Future<Output = Result<MySqlQueryResult, sqlx::Error>> {
+        update_lead_from_new_lead_form(pool, self, company_id, id)
+    }
+}
 impl fmt::Display for NewLeadForm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut message = format!("Name: {}\n", self.name);

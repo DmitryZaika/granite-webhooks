@@ -1,7 +1,6 @@
 use crate::schemas::add_customer::{FaceBookContactForm, NewLeadForm, WordpressContactForm};
 use sqlx::mysql::MySqlQueryResult;
 use sqlx::{MySqlPool, query};
-use std::fmt;
 
 pub async fn create_lead_from_wordpress(
     pool: &MySqlPool,
@@ -334,70 +333,4 @@ pub async fn deal_check(pool: &MySqlPool, customer_id: i32) -> Result<bool, sqlx
     .fetch_optional(pool)
     .await?;
     Ok(row.is_some_and(|r| r.id > 0))
-}
-
-pub enum LeadForm {
-    NewLeadForm(NewLeadForm),
-    WordpressContactForm(WordpressContactForm),
-    FaceBookContactForm(FaceBookContactForm),
-}
-
-impl LeadForm {
-    pub async fn update_lead(
-        &self,
-        pool: &MySqlPool,
-        company_id: i32,
-        id: i32,
-    ) -> Result<MySqlQueryResult, sqlx::Error> {
-        match self {
-            Self::NewLeadForm(data) => {
-                update_lead_from_new_lead_form(pool, data, company_id, id).await
-            }
-            Self::WordpressContactForm(data) => {
-                update_lead_from_wordpress(pool, data, company_id, id).await
-            }
-            Self::FaceBookContactForm(data) => {
-                update_lead_from_facebook(pool, data, company_id, id).await
-            }
-        }
-    }
-    pub async fn create_lead(
-        &self,
-        pool: &MySqlPool,
-        company_id: i32,
-    ) -> Result<MySqlQueryResult, sqlx::Error> {
-        match self {
-            Self::NewLeadForm(data) => create_lead_from_new_lead_form(pool, data, company_id).await,
-            Self::WordpressContactForm(data) => {
-                create_lead_from_wordpress(pool, data, company_id).await
-            }
-            Self::FaceBookContactForm(data) => {
-                create_lead_from_facebook(pool, data, company_id).await
-            }
-        }
-    }
-    pub fn email(&self) -> Option<String> {
-        match self {
-            Self::NewLeadForm(data) => data.email.clone(),
-            Self::WordpressContactForm(data) => data.email.clone(),
-            Self::FaceBookContactForm(data) => data.email.clone(),
-        }
-    }
-    pub fn phone(&self) -> Option<String> {
-        match self {
-            Self::NewLeadForm(data) => data.phone.clone(),
-            Self::WordpressContactForm(data) => data.phone.clone(),
-            Self::FaceBookContactForm(data) => data.phone.clone(),
-        }
-    }
-}
-
-impl fmt::Display for LeadForm {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::NewLeadForm(data) => writeln!(f, "{data}"),
-            Self::WordpressContactForm(data) => writeln!(f, "{data}"),
-            Self::FaceBookContactForm(data) => writeln!(f, "{data}"),
-        }
-    }
 }
