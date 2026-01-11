@@ -295,7 +295,6 @@ pub struct NewLeadForm {
 
     pub adset_name: Option<String>,
 
-    #[serde(rename = "campaign_name")]
     pub compaign_name: Option<String>,
 
     #[serde(rename = "file")]
