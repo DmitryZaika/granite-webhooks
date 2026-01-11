@@ -227,29 +227,6 @@ pub async fn update_lead_from_new_lead_form(
         .await;
 }
 
-pub async fn check_lead_exists(
-    pool: &MySqlPool,
-    email: &str,
-    phone: &str,
-    company_id: i32,
-) -> Result<bool, sqlx::Error> {
-    let row = query!(
-        r#"
-        SELECT COUNT(*) as count
-        FROM customers
-        WHERE company_id = ?
-          AND (email = ? OR phone = ?)
-        "#,
-        company_id,
-        email,
-        phone,
-    )
-    .fetch_one(pool)
-    .await?;
-
-    Ok(row.count > 0)
-}
-
 pub struct ExistingCustomer {
     pub id: i32,
     pub name: Option<String>,
@@ -307,14 +284,4 @@ pub async fn create_deal_from_lead(
     )
     .execute(pool)
     .await;
-}
-
-pub async fn deal_check(pool: &MySqlPool, customer_id: i32) -> Result<bool, sqlx::Error> {
-    let row = query!(
-        r#"SELECT id FROM deals WHERE customer_id = ? AND list_id != 4 AND deleted_at IS NULL"#,
-        customer_id,
-    )
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.is_some_and(|r| r.id > 0))
 }
