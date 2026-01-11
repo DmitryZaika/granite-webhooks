@@ -231,6 +231,15 @@ mod local_tests {
     }
 
     #[test]
+    fn test_parse_email_message_id_external() {
+        let email_bytes = read_file_as_bytes("src/tests/data/external1.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        let message_id = parsed_email.reply_message_id();
+        let correct_message_id = None;
+        assert_eq!(message_id, correct_message_id);
+    }
+
+    #[test]
     fn test_parse_email_attachments() {
         let email_bytes = read_file_as_bytes("src/tests/data/reply_attachment_2.eml").unwrap();
         let (_, attachments) = parse_email(&email_bytes).unwrap();

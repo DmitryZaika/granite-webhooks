@@ -8,7 +8,7 @@ use crate::amazonses::parse_email::parse_email;
 use crate::amazonses::schemas::{S3Event, SesEvent};
 use crate::amazonses::upload::upload_attachments;
 use crate::crud::email::{create_email_read, create_email_with_attachments, get_prior_email};
-use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
+use crate::libs::constants::{ACCEPTED_RESPONSE, BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 
 pub async fn read_receipt_handler(
@@ -70,7 +70,7 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
             key = key,
             "Failed to extract message ID from email"
         );
-        return internal_error("Unable to extract message ID from email");
+        return ACCEPTED_RESPONSE;
     };
     let prior = match get_prior_email(pool, &message_id).await {
         Ok(email) => email,
@@ -126,6 +126,7 @@ pub async fn receive_handler(
 #[cfg(test)]
 mod local_tests {
     use super::*;
+    use crate::libs::constants::ACCEPTED_RESPONSE;
     use crate::tests::data::ses_open_json::ses_open_event_json;
     use crate::tests::data::ses_received::ses_received_json;
     use crate::tests::utils::{new_test_app, read_file_as_bytes};
@@ -299,6 +300,23 @@ mod local_tests {
         const MESSAGE_ID: &str =
             "CAG6QthbVR6eOBoEFup=bnuuBw=_JQWfP1rLzAjwDUGCpNV_wyg@mail.gmail.com";
         assert_eq!(result[1].message_id, Some(MESSAGE_ID.to_string()));
+    }
+
+    #[sqlx::test]
+    async fn test_ses_received_accepted(pool: MySqlPool) {
+        let message_id = "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000";
+
+        insert_email(&pool, message_id).await.unwrap();
+
+        let mock_client = MockClient::new("src/tests/data/external1.eml");
+
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+
+        assert_eq!(response, ACCEPTED_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
     }
 
     #[sqlx::test]
