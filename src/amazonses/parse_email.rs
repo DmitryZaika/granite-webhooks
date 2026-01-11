@@ -199,7 +199,7 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
 #[cfg(test)]
 mod local_tests {
     use super::*;
-    use crate::tests::utils::read_file_as_bytes;
+    use crate::tests::utils::{read_file_as_bytes, replace_bytes};
 
     #[test]
     fn test_parse_email() {
@@ -231,6 +231,17 @@ mod local_tests {
     }
 
     #[test]
+    fn test_parse_email_message_id_no_amp() {
+        let email_bytes = read_file_as_bytes("src/tests/data/reply_email1.eml").unwrap();
+        let clean_bytes = replace_bytes(&email_bytes, "@us-east-2.amazonses.com", "").unwrap();
+        let (parsed_email, _) = parse_email(&clean_bytes).unwrap();
+        let message_id = parsed_email.reply_message_id();
+        let correct_message_id =
+            Some("010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000".to_string());
+        assert_eq!(message_id, correct_message_id);
+    }
+
+    #[test]
     fn test_parse_email_message_id_external() {
         let email_bytes = read_file_as_bytes("src/tests/data/external1.eml").unwrap();
         let (parsed_email, _) = parse_email(&email_bytes).unwrap();
@@ -243,6 +254,33 @@ mod local_tests {
     fn test_parse_email_attachments() {
         let email_bytes = read_file_as_bytes("src/tests/data/reply_attachment_2.eml").unwrap();
         let (_, attachments) = parse_email(&email_bytes).unwrap();
+        let attachments = attachments;
+        assert_eq!(attachments.len(), 4);
+        let expected = [
+            ("image", "png", "img_0.png", 134),
+            ("image", "jpeg", "img_1.jpg", 376),
+            ("image", "png", "img_1.png", 170),
+            ("image", "jpeg", "img_0.jpg", 362),
+        ];
+
+        for (attachment, (content_type, content_subtype, filename, size)) in
+            attachments.iter().zip(expected)
+        {
+            assert_eq!(attachment.content_type, content_type);
+            assert_eq!(
+                attachment.content_subtype.as_ref().unwrap(),
+                content_subtype
+            );
+            assert_eq!(attachment.filename, filename);
+            assert_eq!(attachment.data.len(), size);
+            assert!(!attachment.data.is_empty());
+        }
+    }
+    #[test]
+    fn test_parse_email_attachments_filename_only() {
+        let email_bytes = read_file_as_bytes("src/tests/data/reply_attachment_2.eml").unwrap();
+        let clean_bytes = replace_bytes(&email_bytes, " name=", " badkey=").unwrap();
+        let (_, attachments) = parse_email(&clean_bytes).unwrap();
         let attachments = attachments;
         assert_eq!(attachments.len(), 4);
         let expected = [

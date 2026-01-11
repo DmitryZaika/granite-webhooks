@@ -404,4 +404,34 @@ mod local_tests {
         );
         assert_eq!(second_message.0, 456);
     }
+    #[sqlx::test]
+    async fn wordpress_duplicate_lead_notifies_manager_no_deal_no_existing(pool: MySqlPool) {
+        let company_id = 1;
+        let data = json!({ "name": "Test", "Phone": "+13179995973" });
+        let lead: WordpressContactForm = serde_json::from_value(data).unwrap();
+        let bot = MockTelegram::new();
+
+        positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
+
+        let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+        assert_eq!(bot.sent.lock().unwrap().len(), 1);
+
+        let customers = get_customers(&pool).await.unwrap();
+        assert_eq!(customers.len(), 1);
+
+        let response = new_lead_form_inner(1, pool, lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+        assert_eq!(bot.sent.lock().unwrap().len(), 2);
+
+        // Assert manager received message
+        let second_message = bot.sent.lock().unwrap().pop().unwrap();
+        assert!(
+            second_message
+                .1
+                .starts_with("You received a REPEATED lead with no sales rep")
+        );
+        assert_eq!(second_message.0, 456);
+    }
 }

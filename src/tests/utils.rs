@@ -5,6 +5,7 @@ use axum_test::TestServer;
 use bytes::Bytes;
 use sqlx::MySqlPool;
 use std::fs;
+use std::io;
 use std::path::Path;
 
 pub fn read_file_as_bytes<P: AsRef<Path>>(path: P) -> std::io::Result<Bytes> {
@@ -43,6 +44,15 @@ pub async fn insert_user(
     .await?;
 
     Ok(rec.last_insert_id())
+}
+
+pub fn replace_bytes(input: &[u8], search: &str, replace_with: &str) -> io::Result<Bytes> {
+    let s =
+        std::str::from_utf8(input).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let replaced = s.replace(search, replace_with);
+
+    Ok(Bytes::from(replaced.into_bytes()))
 }
 
 #[cfg(test)]
