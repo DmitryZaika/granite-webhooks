@@ -1,1 +1,1 @@
-ALTER TABLE checklists ADD COLUMN email VARCHAR(255) AFTER installation_address NULL;
+ALTER TABLE checklists ADD COLUMN email VARCHAR(255) NULL AFTER installation_address;
