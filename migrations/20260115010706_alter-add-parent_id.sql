@@ -1,0 +1,1 @@
+ALTER TABLE customers ADD COLUMN parent_id INT NULL;
