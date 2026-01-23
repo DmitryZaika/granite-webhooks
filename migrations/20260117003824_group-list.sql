@@ -1,7 +1,7 @@
 CREATE TABLE groups_list (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    company_id INT NOT NULL,
+    company_id INT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP DEFAULT NULL,
     is_displayed BOOLEAN DEFAULT TRUE,
@@ -9,6 +9,6 @@ CREATE TABLE groups_list (
 );
 
 
-ALTER TABLE deals_list 
+ALTER TABLE deals_list
     ADD COLUMN group_id INT NULL,
     ADD CONSTRAINT fk_deals_list_group_id FOREIGN KEY (group_id) REFERENCES groups_list(id);
