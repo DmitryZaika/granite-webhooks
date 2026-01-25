@@ -79,7 +79,6 @@ CREATE TABLE users_positions (
 );
 
 ALTER TABLE users DROP FOREIGN KEY users_ibfk_1;
-ALTER TABLE users DROP COLUMN position_id;
 
 CREATE TABLE deals_images (
     id INT AUTO_INCREMENT PRIMARY KEY,
