@@ -78,8 +78,6 @@ CREATE TABLE users_positions (
     FOREIGN KEY (position_id) REFERENCES positions(id)
 );
 
-ALTER TABLE users DROP FOREIGN KEY users_ibfk_1;
-
 CREATE TABLE deals_images (
     id INT AUTO_INCREMENT PRIMARY KEY,
     deal_id BIGINT UNSIGNED NOT NULL,
