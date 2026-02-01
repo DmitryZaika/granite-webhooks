@@ -13,6 +13,7 @@ use std::env::set_var;
 pub mod amazon;
 pub mod amazonses;
 pub mod axum_helpers;
+pub mod cloudtalk;
 pub mod crud;
 pub mod google;
 pub mod libs;

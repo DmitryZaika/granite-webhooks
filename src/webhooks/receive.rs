@@ -15,7 +15,7 @@ pub async fn wordpress_contact_form(
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<WordpressContactForm>,
 ) -> BasicResponse {
-    let tg_bot = TelegramBot::new();
+    let tg_bot = TelegramBot::default();
     new_lead_form_inner(company_id, pool, contact_form, &tg_bot).await
 }
 
@@ -25,7 +25,7 @@ pub async fn facebook_contact_form(
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<FaceBookContactForm>,
 ) -> BasicResponse {
-    let tg_bot = TelegramBot::new();
+    let tg_bot = TelegramBot::default();
     new_lead_form_inner(company_id, pool, contact_form, &tg_bot).await
 }
 
@@ -35,7 +35,7 @@ pub async fn new_lead_form(
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<NewLeadForm>,
 ) -> BasicResponse {
-    let tg_bot = TelegramBot::new();
+    let tg_bot = TelegramBot::default();
     new_lead_form_inner(company_id, pool, contact_form, &tg_bot).await
 }
 

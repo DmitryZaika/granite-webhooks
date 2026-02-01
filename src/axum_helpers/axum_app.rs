@@ -1,8 +1,9 @@
 use crate::amazonses::routes::{read_receipt_handler, receive_handler};
+use crate::cloudtalk::receive::sms_received;
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
 use crate::telegram::receive::webhook_handler;
-use crate::webhooks::receivers::{facebook_contact_form, wordpress_contact_form};
+use crate::webhooks::receive::{facebook_contact_form, wordpress_contact_form};
 use axum::{
     Router,
     response::IntoResponse,
@@ -10,7 +11,7 @@ use axum::{
 };
 use sqlx::MySqlPool;
 
-use crate::webhooks::receivers::new_lead_form;
+use crate::webhooks::receive::new_lead_form;
 async fn health_check() -> impl IntoResponse {
     OK_RESPONSE
 }
@@ -33,6 +34,7 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         .route("/telegram/webhook", post(webhook_handler))
         .route("/ses/read-receipt", post(read_receipt_handler))
         .route("/ses/receive-email", post(receive_handler))
+        .route("/cloudtalk/sms", post(sms_received))
         .layer(axum::middleware::from_fn(print_request_body))
         .with_state(pool)
 }

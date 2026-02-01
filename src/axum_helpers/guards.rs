@@ -49,8 +49,8 @@ pub struct TelegramBot {
     bot: teloxide::Bot,
 }
 
-impl TelegramBot {
-    pub fn new() -> Self {
+impl Default for TelegramBot {
+    fn default() -> Self {
         Self {
             bot: teloxide::Bot::from_env(),
         }
