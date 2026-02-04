@@ -2,6 +2,7 @@ use crate::amazon::email::send_message;
 use crate::axum_helpers::guards::Telegram;
 use crate::crud::leads::{
     Deal, ExistingCustomer, create_deal_from_lead, find_existing_customer, get_existing_deal,
+    get_default_list_id_from_company_id,
 };
 use crate::crud::users::get_user_tg_info;
 use crate::libs::constants::{
@@ -70,8 +71,9 @@ where
         }
     };
 
-    let Some(clean_tg_id) = user_info.telegram_id else {
-        match send_message(&[&user_info.email], REGISTER_SUBJECT, REGISTER_MESSAGE).await {
+    let clean_tg_id = match user_info.telegram_id {
+        Some(id) => id,
+        None => match send_message(&[&user_info.email], REGISTER_SUBJECT, REGISTER_MESSAGE).await {
             Ok(()) => return CREATED_RESPONSE,
             Err(e) => {
                 tracing::error!(
@@ -81,7 +83,7 @@ where
                 );
                 return internal_error(ERR_SEND_EMAIL);
             }
-        }
+        },
     };
     let repeted_lead_message = format!(
         "You received a REPEATED lead {}, click here: {}",
@@ -121,7 +123,14 @@ where
     T: Telegram + Send + Sync + 'static + Clone,
 {
     if let Some(rep) = existing.sales_rep {
-        match create_deal_from_lead(pool, existing.id, rep.into()).await {
+        let default_list_id = match get_default_list_id_from_company_id(pool, company_id).await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::error!(?e, company_id = company_id, "Failed to get default list");
+                return Err(internal_error(ERR_DB));
+            }
+        };
+        match create_deal_from_lead(pool, existing.id, rep.into(), default_list_id, 0).await {
             Ok(r) => {
                 return Ok(Some(Deal {
                     id: r.last_insert_id(),
@@ -169,7 +178,7 @@ async fn new_lead<T, V: LeadPayload>(
 where
     T: Telegram + Send + Sync + 'static + Clone,
 {
-    let result = match form.insert(pool, company_id).await {
+    let result = match form.insert(&pool, company_id).await {
         Ok(id) => id,
         Err(e) => {
             tracing::error!(?e, "Error creating lead from New Lead Form");
@@ -177,7 +186,7 @@ where
         }
     };
     let tg_result = send_telegram_manager_assign(
-        pool,
+        &pool,
         company_id,
         &form.to_string(),
         result.last_insert_id(),

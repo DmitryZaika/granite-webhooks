@@ -271,17 +271,182 @@ pub async fn get_existing_deal(
     .await
 }
 
+pub async fn get_default_list_id_from_company_id(
+    pool: &MySqlPool,
+    company_id: i32,
+) -> Result<i32, sqlx::Error> {
+    let id = sqlx::query_scalar!(
+        r#"
+        SELECT dl.id 
+        FROM deals_list dl
+        INNER JOIN groups_list gl ON dl.group_id = gl.id
+        WHERE gl.company_id = ?
+          AND gl.is_default = 1
+          AND dl.deleted_at IS NULL
+          AND gl.deleted_at IS NULL
+        ORDER BY dl.position ASC, dl.id ASC 
+        LIMIT 1
+        "#,
+        company_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(id.unwrap_or(1))
+}
+
 pub async fn create_deal_from_lead(
     pool: &MySqlPool,
     lead_id: i32,
     user_id: i64,
+    default_list_id: i32,
+    position: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     return query!(
-        r#"INSERT INTO deals (customer_id, status, list_id, user_id, position) VALUES (?,?,1,?, 1)"#,
+        r#"INSERT INTO deals (customer_id, status, list_id, user_id, position) VALUES (?,?,?,?,?)"#,
         lead_id,
         "New Customer",
+        default_list_id,
         user_id,
+        position,
     )
     .execute(pool)
     .await;
+}
+
+
+mod tests {
+    use super::*;
+
+    async fn insert_company(pool: &MySqlPool, company_id: i32) -> Result<i32, sqlx::Error> {
+        let rec = sqlx::query!(
+            r#"INSERT INTO company (name) VALUES ('Test Company')"#,
+        )
+        .execute(pool)
+        .await?;
+        Ok(rec.last_insert_id() as i32)
+    }
+
+    async fn insert_group_list(pool: &MySqlPool, company_id: i32) -> Result<u64, sqlx::Error> {
+
+        let rec = sqlx::query!(
+            r#"INSERT INTO groups_list (name, company_id, is_default) VALUES ('Test Group', ?, 1)"#,
+            company_id
+        )
+        .execute(pool)
+        .await?;
+        Ok(rec.last_insert_id())
+    }
+
+    async fn insert_deals_list(pool: &MySqlPool, group_id: u64) -> Result<u64, sqlx::Error> {
+
+        let rec = sqlx::query!(
+            r#"INSERT INTO deals_list (name, group_id) VALUES ('Test Deals List', ?)"#,
+            group_id,
+        )
+        .execute(pool)
+        .await?;
+        Ok(rec.last_insert_id())
+    }
+
+    #[sqlx::test]
+    async fn test_get_default_list_id_from_company_id(pool: MySqlPool) {
+        let id = get_default_list_id_from_company_id(&pool, 1).await.unwrap();
+        assert_eq!(id, 1);
+    }
+
+    #[sqlx::test]
+    async fn get_assigned_list_id_from_company_id(pool: MySqlPool) {
+        let company_id = insert_company(&pool, 1).await.unwrap();
+        let group_id = insert_group_list(&pool, company_id).await.unwrap();
+        let list_id = insert_deals_list(&pool, group_id).await.unwrap();
+        let id = get_default_list_id_from_company_id(&pool, company_id).await.unwrap();
+        assert_eq!(id as u64, list_id);
+    }
+
+    #[sqlx::test]
+    async fn test_multiple_default_groups(pool: MySqlPool) {
+        let company_id = insert_company(&pool, 1).await.unwrap();
+        
+        let group_id1 = insert_group_list(&pool, company_id).await.unwrap();
+        let list_id1 = insert_deals_list(&pool, group_id1).await.unwrap();
+        
+        let group_id2 = insert_group_list(&pool, company_id).await.unwrap();
+        let _list_id2 = insert_deals_list(&pool, group_id2).await.unwrap();
+        
+        let id = get_default_list_id_from_company_id(&pool, company_id).await.unwrap();
+        
+        // Should pick the first one based on ordering (dl.id ASC)
+        assert_eq!(id as u64, list_id1);
+    }
+
+    #[sqlx::test]
+    async fn test_no_default_groups(pool: MySqlPool) {
+        let company_id = insert_company(&pool, 1).await.unwrap();
+        
+        // Group that is NOT default
+        sqlx::query!(
+            r#"INSERT INTO groups_list (name, company_id, is_default) VALUES ('Non-default Group', ?, 0)"#,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let id = get_default_list_id_from_company_id(&pool, company_id).await.unwrap();
+        
+        // Should return fallback value 1
+        assert_eq!(id, 1);
+    }
+
+    #[sqlx::test]
+    async fn test_deleted_records_ignored(pool: MySqlPool) {
+        let company_id = insert_company(&pool, 1).await.unwrap();
+        let group_id = insert_group_list(&pool, company_id).await.unwrap();
+        
+        // Insert a deleted deals_list entry
+        sqlx::query!(
+            r#"INSERT INTO deals_list (name, group_id, deleted_at) VALUES ('Deleted List', ?, NOW())"#,
+            group_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Insert a non-deleted one
+        let valid_list_id = insert_deals_list(&pool, group_id).await.unwrap();
+
+        let id = get_default_list_id_from_company_id(&pool, company_id).await.unwrap();
+        assert_eq!(id as u64, valid_list_id);
+    }
+
+    #[sqlx::test]
+    async fn test_deals_list_ordering(pool: MySqlPool) {
+        let company_id = insert_company(&pool, 1).await.unwrap();
+        let group_id = insert_group_list(&pool, company_id).await.unwrap();
+        
+        // List with position 2
+        sqlx::query!(
+            r#"INSERT INTO deals_list (name, group_id, position) VALUES ('Pos 2', ?, 2)"#,
+            group_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // List with position 1
+        let pos1_id = sqlx::query!(
+            r#"INSERT INTO deals_list (name, group_id, position) VALUES ('Pos 1', ?, 1)"#,
+            group_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+
+        let id = get_default_list_id_from_company_id(&pool, company_id).await.unwrap();
+        
+        // Should pick the one with position 1
+        assert_eq!(id as u64, pos1_id);
+    }
+
 }
