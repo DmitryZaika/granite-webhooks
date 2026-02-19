@@ -1,0 +1,1 @@
+ALTER TABLE deal_activities ADD COLUMN created_by VARCHAR(100) NULL;
