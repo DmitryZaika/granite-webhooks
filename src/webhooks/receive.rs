@@ -56,12 +56,11 @@ mod local_tests {
     use super::*;
     use crate::crud::leads::create_deal;
     use crate::tests::telegram::MockTelegram;
-    use crate::tests::utils::{assigned_user_position, insert_user, new_test_app};
+    use crate::tests::utils::{assigned_user_position, insert_user, new_test_app, positioned_user};
     use axum::http::StatusCode;
     use serde_json::Value;
     use serde_json::json;
     use sqlx::MySqlPool;
-    use uuid::Uuid;
 
     #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
     struct Customer {
@@ -97,20 +96,6 @@ mod local_tests {
         }"#,
         )
         .unwrap()
-    }
-
-    pub async fn positioned_user(
-        pool: &MySqlPool,
-        company_id: i32,
-        position_id: i32,
-        telegram_id: i64,
-    ) -> i32 {
-        let email = format!("user_{}_email@example.com", Uuid::new_v4());
-        let sales_id = insert_user(pool, &email, Some(telegram_id)).await.unwrap();
-        assigned_user_position(pool, company_id, position_id, sales_id)
-            .await
-            .unwrap();
-        return sales_id;
     }
 
     #[sqlx::test]

@@ -7,6 +7,7 @@ use sqlx::MySqlPool;
 use std::fs;
 use std::io;
 use std::path::Path;
+use uuid::Uuid;
 
 pub fn read_file_as_bytes<P: AsRef<Path>>(path: P) -> std::io::Result<Bytes> {
     let data = fs::read(path)?;
@@ -94,4 +95,18 @@ pub async fn assigned_user_position(
     .await?;
 
     Ok(())
+}
+
+pub async fn positioned_user(
+    pool: &MySqlPool,
+    company_id: i32,
+    position_id: i32,
+    telegram_id: i64,
+) -> i32 {
+    let email = format!("user_{}_email@example.com", Uuid::new_v4());
+    let sales_id = insert_user(pool, &email, Some(telegram_id)).await.unwrap();
+    assigned_user_position(pool, company_id, position_id, sales_id)
+        .await
+        .unwrap();
+    return sales_id;
 }

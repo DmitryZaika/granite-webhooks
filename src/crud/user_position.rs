@@ -1,5 +1,6 @@
 use sqlx::MySqlPool;
 
+#[derive(Debug)]
 pub struct UserPosition {
     pub user_id: i32,
     pub company_id: i32,
