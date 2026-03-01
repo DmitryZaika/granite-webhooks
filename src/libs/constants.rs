@@ -15,5 +15,5 @@ pub const fn internal_error(error: &'static str) -> (StatusCode, &'static str) {
     (StatusCode::INTERNAL_SERVER_ERROR, error)
 }
 
-pub const SALES_WORKER: Option<i32> = Some(1);
-pub const SALES_MANAGER: Option<i32> = Some(2);
+pub const SALES_WORKER: i32 = 1;
+pub const SALES_MANAGER: i32 = 2;

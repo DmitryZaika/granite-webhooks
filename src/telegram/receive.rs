@@ -1,7 +1,8 @@
 use crate::amazon::email::send_message;
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
-use crate::crud::leads::assign_lead;
 use crate::crud::leads::create_deal;
+use crate::crud::leads::{assign_lead, get_default_list_id_from_company_id};
+use crate::crud::user_position::get_user_position;
 use crate::crud::users::{email_exists, get_user_tg_info, user_has_telegram_id};
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
 use crate::libs::constants::{ERR_DB, ERR_SEND_EMAIL, OK_RESPONSE};
@@ -174,31 +175,46 @@ async fn handle_message<T: Telegram>(msg: Message, pool: &MySqlPool, bot: &T) ->
 async fn handle_assign_lead<T: Telegram>(
     pool: &MySqlPool,
     lead_id: i32,
-    user_id: i64,
+    user_position_id: i32,
     bot: &T,
     cb: CallbackQuery,
 ) -> BasicResponse {
     let Some(message) = cb.message else {
         return (StatusCode::NOT_FOUND, "Invalid message");
     };
-    let lead_result = assign_lead(pool, lead_id, user_id).await;
+    let position = match get_user_position(pool, user_position_id).await {
+        Ok(position) => position,
+        Err(e) => {
+            tracing::error!(
+                ?e,
+                user_position_id = user_position_id,
+                "Failed to get user position"
+            );
+            return internal_error(ERR_DB);
+        }
+    };
+    let lead_result = assign_lead(pool, lead_id, position.user_id).await;
     if let Err(e) = lead_result {
         tracing::error!(
             ?e,
             lead_id = lead_id,
-            user_id = user_id,
+            user_position_id = user_position_id,
             "Failed to assign lead"
         );
         return internal_error(ERR_DB);
     }
 
-    let tg_info = match get_user_tg_info(pool, user_id.try_into().unwrap()).await {
+    let tg_info = match get_user_tg_info(pool, position.user_id).await {
         Ok(Some(info)) => info,
         Ok(None) => {
             return (StatusCode::NOT_FOUND, "User not found");
         }
         Err(e) => {
-            tracing::error!(?e, user_id = user_id, "Failed to get user info");
+            tracing::error!(
+                ?e,
+                user_position_id = user_position_id,
+                "Failed to get user info"
+            );
             return internal_error(ERR_DB);
         }
     };
@@ -212,12 +228,15 @@ async fn handle_assign_lead<T: Telegram>(
         return e;
     }
 
-    let result = match create_deal(pool, lead_id, 1, 0, user_id).await {
+    let list_id = get_default_list_id_from_company_id(pool, position.company_id)
+        .await
+        .unwrap();
+    let result = match create_deal(pool, lead_id, list_id, 0, position.user_id).await {
         Ok(deal) => deal,
         Err(e) => {
             tracing::error!(
                 ?e,
-                user_id = user_id,
+                user_position_id = user_position_id,
                 lead_id = lead_id,
                 "Failed to create deal"
             );
@@ -267,8 +286,8 @@ async fn handle_callback<T: Telegram>(
     let Some(data) = &cb.data else {
         return OK_RESPONSE;
     };
-    if let Some((lead_id, user_id)) = parse_assign(data) {
-        return handle_assign_lead(pool, lead_id, user_id, bot, cb).await;
+    if let Some((lead_id, user_position_id)) = parse_assign(data) {
+        return handle_assign_lead(pool, lead_id, user_position_id, bot, cb).await;
     }
     OK_RESPONSE
 }
@@ -288,9 +307,12 @@ pub async fn webhook_handler(
 #[cfg(test)]
 mod local_tests {
     use super::*;
+    use crate::schemas::add_customer::NewLeadForm;
     use crate::tests::telegram::{MockTelegram, generate_message, telegram_user};
-    use crate::tests::utils::insert_user;
+    use crate::tests::utils::{assigned_user_position, insert_user, new_test_app};
+    use crate::webhooks::receive::new_lead_form_inner;
     use axum::http::StatusCode;
+    use serde_json::json;
     use sqlx::MySqlPool;
     use teloxide::types::CallbackQuery;
 
@@ -324,6 +346,21 @@ mod local_tests {
         .await?;
 
         Ok(rec.last_insert_id())
+    }
+
+    async fn send_lead(pool: &MySqlPool) -> (BasicResponse, MockTelegram) {
+        let bot = MockTelegram::new();
+        let data = json!({ "name": "Test", "phone": "+13179995973" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+
+        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
+            .await
+            .unwrap();
+        assigned_user_position(&pool, 1, 2, admin_id).await.unwrap();
+
+        let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+        return (response, bot);
     }
 
     #[sqlx::test]
@@ -550,6 +587,25 @@ mod local_tests {
             inline_message_id: None,
             chat_instance: "".into(),
             data: None,
+            game_short_name: None,
+        };
+
+        let res = handle_callback(cb, &pool, &bot).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+    }
+
+    #[sqlx::test]
+    async fn test_callback_one_user(pool: MySqlPool) {
+        let (response, bot1) = send_lead(&pool).await;
+        let bot = MockTelegram::new();
+        let cb = CallbackQuery {
+            id: "a".into(),
+            from: telegram_user(3),
+            message: None,
+            inline_message_id: None,
+            chat_instance: "".into(),
+            data: Some(),
             game_short_name: None,
         };
 
