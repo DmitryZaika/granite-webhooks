@@ -55,6 +55,27 @@ pub async fn process_reply_email(pool: &MySqlPool, client: C, message_id: &str) 
 }
 
 pub async fn process_first_email(pool: &MySqlPool, client: C) -> BasicResponse {
-    println!("Hello");
+    let uploaded_attachments = match upload_attachments(client, attachments).await {
+        Ok(attachments) => attachments,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                bucket = bucket,
+                key = key,
+                "Failed to upload attachments"
+            );
+            return internal_error("Failed to upload attachments");
+        }
+    };
+    let result =
+        create_email_with_attachments(pool, &parsed, &clean_prior, &uploaded_attachments).await;
+    if let Err(error) = result {
+        tracing::error!(
+            "Error inserting email: {} into the db: {}",
+            message_id,
+            error
+        );
+        return internal_error("Failed to insert email into the database");
+    }
     OK_RESPONSE
 }
