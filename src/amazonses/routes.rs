@@ -10,6 +10,7 @@ use crate::amazonses::upload::upload_attachments;
 use crate::crud::email::{create_email_read, create_email_with_attachments, get_prior_email};
 use crate::libs::constants::{ACCEPTED_RESPONSE, BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
+use crate::amazonses::process::{process_reply_email, process_first_email};
 
 pub async fn read_receipt_handler(
     State(pool): State<MySqlPool>,
@@ -64,55 +65,10 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Unable to parse email content from S3");
         }
     };
-    let Some(message_id) = parsed.reply_message_id() else {
-        tracing::error!(
-            bucket = bucket,
-            key = key,
-            "Failed to extract message ID from email"
-        );
-        return ACCEPTED_RESPONSE;
-    };
-    let prior = match get_prior_email(pool, &message_id).await {
-        Ok(email) => email,
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                bucket = bucket,
-                key = key,
-                "Failed to retrieve prior email"
-            );
-            return internal_error("Unable to retrieve prior email");
-        }
-    };
-    let Some(clean_prior) = prior else {
-        tracing::error!(bucket = bucket, key = key, "No prior email found");
-        return (StatusCode::BAD_REQUEST, "No prior email found");
-    };
-
-    let uploaded_attachments = match upload_attachments(client, attachments).await {
-        Ok(attachments) => attachments,
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                bucket = bucket,
-                key = key,
-                "Failed to upload attachments"
-            );
-            return internal_error("Failed to upload attachments");
-        }
-    };
-    let result =
-        create_email_with_attachments(pool, &parsed, &clean_prior, &uploaded_attachments).await;
-    if let Err(error) = result {
-        tracing::error!(
-            "Error inserting email: {} into the db: {}",
-            message_id,
-            error
-        );
-        return internal_error("Failed to insert email into the database");
+    match parsed.reply_message_id() {
+        Some(message_id) => process_reply_email(pool, client, &message_id).await,
+        None => process_first_email(pool, client).await,
     }
-
-    OK_RESPONSE
 }
 
 pub async fn receive_handler(
@@ -300,6 +256,18 @@ mod local_tests {
         const MESSAGE_ID: &str =
             "CAG6QthbVR6eOBoEFup=bnuuBw=_JQWfP1rLzAjwDUGCpNV_wyg@mail.gmail.com";
         assert_eq!(result[1].message_id, Some(MESSAGE_ID.to_string()));
+    }
+
+    #[sqlx::test]
+    async fn test_ses_received_accepted_no_start_email(pool: MySqlPool) {
+        let mock_client = MockClient::new("src/tests/data/external1.eml");
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+
+        assert_eq!(response, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
     }
 
     #[sqlx::test]
