@@ -1,16 +1,14 @@
 use axum::extract::{Json, State};
-use axum::http::StatusCode;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
 use crate::amazon::bucket::{CustomClient, S3Bucket};
 use crate::amazonses::parse_email::parse_email;
+use crate::amazonses::process::{EmailInfo, process_first_email, process_reply_email};
 use crate::amazonses::schemas::{S3Event, SesEvent};
-use crate::amazonses::upload::upload_attachments;
-use crate::crud::email::{create_email_read, create_email_with_attachments, get_prior_email};
-use crate::libs::constants::{ACCEPTED_RESPONSE, BAD_REQUEST, OK_RESPONSE, internal_error};
+use crate::crud::email::create_email_read;
+use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
-use crate::amazonses::process::{process_reply_email, process_first_email};
 
 pub async fn read_receipt_handler(
     State(pool): State<MySqlPool>,
@@ -65,9 +63,15 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Unable to parse email content from S3");
         }
     };
+    let email_info = EmailInfo {
+        parsed: &parsed,
+        attachments,
+        bucket,
+        key,
+    };
     match parsed.reply_message_id() {
-        Some(message_id) => process_reply_email(pool, client, &message_id).await,
-        None => process_first_email(pool, client).await,
+        Some(message_id) => process_reply_email(pool, client, &message_id, email_info).await,
+        None => process_first_email(pool, client, email_info).await,
     }
 }
 
