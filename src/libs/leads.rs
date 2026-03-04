@@ -1,8 +1,8 @@
 use crate::amazon::email::send_message;
 use crate::axum_helpers::guards::Telegram;
 use crate::crud::leads::{
-    Deal, ExistingCustomer, create_deal_from_lead, find_existing_customer, get_existing_deal,
-    get_default_list_id_from_company_id,
+    Deal, ExistingCustomer, create_deal_from_lead, find_existing_customer,
+    get_default_list_id_from_company_id, get_existing_deal,
 };
 use crate::crud::users::get_user_tg_info;
 use crate::libs::constants::{

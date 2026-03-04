@@ -56,12 +56,11 @@ mod local_tests {
     use super::*;
     use crate::crud::leads::create_deal;
     use crate::tests::telegram::MockTelegram;
-    use crate::tests::utils::{insert_user, new_test_app};
+    use crate::tests::utils::{assigned_user_position, insert_user, new_test_app, positioned_user};
     use axum::http::StatusCode;
     use serde_json::Value;
     use serde_json::json;
     use sqlx::MySqlPool;
-    use uuid::Uuid;
 
     #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
     struct Customer {
@@ -81,41 +80,6 @@ mod local_tests {
         .await
     }
 
-    pub async fn assigned_user_position(
-        pool: &MySqlPool,
-        company_id: i32,
-        position_id: i32,
-        user_id: u64,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
-            r#"
-            INSERT INTO positions (id, name)
-            VALUES (?, 'Sales')
-            ON DUPLICATE KEY UPDATE
-                name = VALUES(name)
-            "#,
-            position_id
-        )
-        .execute(pool)
-        .await?;
-
-        sqlx::query!(
-            r#"
-            INSERT INTO users_positions (user_id, position_id, company_id)
-            VALUES (?, ?, ?)
-            ON DUPLICATE KEY UPDATE
-                position_id = VALUES(position_id)
-            "#,
-            user_id,
-            position_id,
-            company_id
-        )
-        .execute(pool)
-        .await?;
-
-        Ok(())
-    }
-
     pub fn lead_payload_json() -> Value {
         serde_json::from_str(
             r#"{
@@ -132,20 +96,6 @@ mod local_tests {
         }"#,
         )
         .unwrap()
-    }
-
-    pub async fn positioned_user(
-        pool: &MySqlPool,
-        company_id: i32,
-        position_id: i32,
-        telegram_id: i64,
-    ) -> u64 {
-        let email = format!("user_{}_email@example.com", Uuid::new_v4());
-        let sales_id = insert_user(pool, &email, Some(telegram_id)).await.unwrap();
-        assigned_user_position(pool, company_id, position_id, sales_id)
-            .await
-            .unwrap();
-        return sales_id;
     }
 
     #[sqlx::test]
@@ -238,7 +188,7 @@ mod local_tests {
         let customers = get_customers(&pool).await.unwrap();
         assert_eq!(customers.len(), 1);
 
-        create_deal(&pool, customers[0].id, 1, 0, sales_id as i64)
+        create_deal(&pool, customers[0].id, 1, 0, sales_id)
             .await
             .unwrap();
 
@@ -274,7 +224,7 @@ mod local_tests {
         let customers = get_customers(&pool).await.unwrap();
         assert_eq!(customers.len(), 1);
 
-        create_deal(&pool, customers[0].id, 1, 0, sales_id as i64)
+        create_deal(&pool, customers[0].id, 1, 0, sales_id)
             .await
             .unwrap();
 
@@ -313,7 +263,7 @@ mod local_tests {
         let customers = get_customers(&pool).await.unwrap();
         assert_eq!(customers.len(), 1);
 
-        create_deal(&pool, customers[0].id, 1, 0, sales_id as i64)
+        create_deal(&pool, customers[0].id, 1, 0, sales_id)
             .await
             .unwrap();
 
