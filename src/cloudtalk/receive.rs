@@ -32,7 +32,7 @@ mod tests {
     async fn test_basic_sms(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
-        let response = app.post("/cloudtalk/sms").json(&sms_json()).await;
+        let response = app.post("/cloudtalk/sms/1").json(&sms_json()).await;
         assert_eq!(response.status_code(), StatusCode::NOT_IMPLEMENTED);
     }
 }

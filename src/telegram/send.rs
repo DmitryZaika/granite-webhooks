@@ -114,7 +114,7 @@ where
         .map(|user| {
             (
                 user.name.clone().unwrap_or_else(|| "Unknown".to_string()),
-                user.id,
+                user.user_position_id,
                 user.mtd_lead_count,
             )
         })

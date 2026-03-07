@@ -34,7 +34,7 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         .route("/telegram/webhook", post(webhook_handler))
         .route("/ses/read-receipt", post(read_receipt_handler))
         .route("/ses/receive-email", post(receive_handler))
-        .route("/cloudtalk/sms", post(sms_received))
+        .route("/cloudtalk/sms/{company_id}", post(sms_received))
         .layer(axum::middleware::from_fn(print_request_body))
         .with_state(pool)
 }
