@@ -21,8 +21,8 @@ pub async fn create_email_read(
 }
 
 pub struct PriorEmail {
-    thread_id: Option<String>,
-    receiver_user_id: Option<i32>,
+    pub thread_id: Option<String>,
+    pub receiver_user_id: Option<i32>,
 }
 
 pub async fn get_prior_email(

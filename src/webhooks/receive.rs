@@ -305,12 +305,11 @@ mod local_tests {
         let customers = get_customers(&pool).await.unwrap();
         assert_eq!(customers.len(), 1);
 
-        println!("{:?}", bot.sent.lock().unwrap());
         let last_message = bot.sent.lock().unwrap().pop().unwrap();
         assert!(
             last_message
                 .1
-                .starts_with("Repeat lead Test with for sales rep Unknown")
+                .starts_with("Repeat lead Test for sales rep Unknown")
         );
         assert_eq!(last_message.0, 456);
 
