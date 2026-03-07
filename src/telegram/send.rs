@@ -235,8 +235,7 @@ where
         );
         return false;
     }
-    let message =
-        format!("Repeat lead {lead_name} for sales rep {assigned_name}\n\n{lead_body}");
+    let message = format!("Repeat lead {lead_name} for sales rep {assigned_name}\n\n{lead_body}");
     let new_bot = Arc::new(bot.clone());
     send_lead_managers_dupliacate(message, telegram_ids, new_bot)
         .await
