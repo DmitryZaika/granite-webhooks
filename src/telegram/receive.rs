@@ -386,7 +386,6 @@ mod local_tests {
     }
 
     struct Deal {
-        customer_id: i32,
         status: Option<String>,
         list_id: i32,
         position: i32,
@@ -397,7 +396,7 @@ mod local_tests {
         sqlx::query_as!(
             Deal,
             r#"
-            SELECT customer_id, status, list_id, position, user_id
+            SELECT status, list_id, position, user_id
             FROM deals
             "#,
         )

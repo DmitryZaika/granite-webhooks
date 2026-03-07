@@ -86,7 +86,6 @@ pub async fn receive_handler(
 #[cfg(test)]
 mod local_tests {
     use super::*;
-    use crate::libs::constants::ACCEPTED_RESPONSE;
     use crate::tests::data::ses_open_json::ses_open_event_json;
     use crate::tests::data::ses_received::ses_received_json;
     use crate::tests::utils::{new_test_app, read_file_as_bytes};
