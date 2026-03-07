@@ -178,7 +178,7 @@ async fn new_lead<T, V: LeadPayload>(
 where
     T: Telegram + Send + Sync + 'static + Clone,
 {
-    let result = match form.insert(&pool, company_id).await {
+    let result = match form.insert(pool, company_id).await {
         Ok(id) => id,
         Err(e) => {
             tracing::error!(?e, "Error creating lead from New Lead Form");
@@ -186,7 +186,7 @@ where
         }
     };
     let tg_result = send_telegram_manager_assign(
-        &pool,
+        pool,
         company_id,
         &form.to_string(),
         result.last_insert_id(),

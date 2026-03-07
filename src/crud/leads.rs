@@ -313,6 +313,7 @@ pub async fn create_deal_from_lead(
     .await;
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -335,7 +336,7 @@ mod tests {
 
     async fn insert_deals_list(pool: &MySqlPool, group_id: u64) -> Result<u64, sqlx::Error> {
         let rec = sqlx::query!(
-            r#"INSERT INTO deals_list (name, group_id) VALUES ('Test Deals List', ?)"#,
+            r#"INSERT INTO deals_list (name, group_id, position) VALUES ('Test Deals List', ?, 0)"#,
             group_id,
         )
         .execute(pool)
@@ -406,7 +407,7 @@ mod tests {
 
         // Insert a deleted deals_list entry
         sqlx::query!(
-            r#"INSERT INTO deals_list (name, group_id, deleted_at) VALUES ('Deleted List', ?, NOW())"#,
+            r#"INSERT INTO deals_list (name, group_id, deleted_at, position) VALUES ('Deleted List', ?, NOW(), 0)"#,
             group_id
         )
         .execute(&pool)
