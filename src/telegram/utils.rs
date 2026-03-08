@@ -1,4 +1,3 @@
-use rand::Rng;
 use teloxide::types::MaybeInaccessibleMessage;
 
 pub fn parse_assign(data: &str) -> Option<(i32, i32)> {
