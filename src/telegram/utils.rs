@@ -12,8 +12,8 @@ pub fn parse_assign(data: &str) -> Option<(i32, i64)> {
     }
 }
 
-pub fn lead_url(deal_id: u64) -> String {
-    format!("https://granite-manager.com/employee/deals/edit/{deal_id}/project")
+pub fn lead_url(deal_id: u64, group_id: i32) -> String {
+    format!("https://granite-manager.com/employee/deals/edit/{deal_id}/project?view={group_id}")
 }
 
 pub fn is_email(text: &str) -> bool {

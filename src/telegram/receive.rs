@@ -225,7 +225,7 @@ async fn handle_assign_lead<T: Telegram>(
         }
     };
     let deal_id = result.last_insert_id();
-    let lead_link = lead_url(deal_id);
+    let lead_link = lead_url(deal_id, list_id);
     if let Some(telegram_id) = tg_info.telegram_id {
         let final_message = format!("You were assigned a lead. Click here: \n{lead_link}");
         return bot

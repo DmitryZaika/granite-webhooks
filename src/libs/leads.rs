@@ -39,6 +39,13 @@ where
             "Failed to update lead"
         );
     }
+    let group_id = match get_group_list_id_from_default_group(pool, company_id).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(?e, company_id = company_id, "Failed to get default list");
+            return Err(internal_error(ERR_DB));
+        }
+    };
     let customer_id = u64::try_from(existing.id).unwrap();
     let user_info = match get_user_tg_info(pool, deal.user_id.unwrap()).await {
         Ok(Some(info)) => info,
@@ -47,7 +54,7 @@ where
             let message = format!(
                 "You received a REPEATED lead {}, click here: {}",
                 name.unwrap_or("Unknown"),
-                lead_url(deal.id)
+                lead_url(deal.id, group_id)
             );
             match send_telegram_manager_assign(pool, company_id, message, customer_id, bot).await {
                 Ok(()) => return CREATED_RESPONSE,

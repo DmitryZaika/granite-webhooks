@@ -294,6 +294,43 @@ pub async fn get_default_list_id_from_company_id(
     Ok(id.unwrap_or(1))
 }
 
+pub async fn get_group_list_id_from_default_group(
+    pool: &MySqlPool,
+    company_id: i32,
+) -> Result<i32, sqlx::Error> {
+    let id = sqlx::query_scalar!(
+        r#"SELECT id FROM groups_list WHERE is_default = 1 AND company_id = ? LIMIT 1"#,
+        company_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(id.unwrap())
+}
+
+pub async fn get_group_list_id_from_existing_lead(
+    pool: &MySqlPool,
+    customer_id: i32,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query!(
+        r#"
+        SELECT gl.id
+        FROM deals d
+        INNER JOIN deals_list dl ON d.list_id = dl.id
+        INNER JOIN groups_list gl ON dl.group_id = gl.id
+        WHERE d.customer_id = ?
+          AND d.deleted_at IS NULL
+          AND dl.deleted_at IS NULL
+          AND gl.deleted_at IS NULL
+        ORDER BY d.id DESC
+        LIMIT 1
+        "#,
+        customer_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(id.unwrap())
+}
+
 pub async fn create_deal_from_lead(
     pool: &MySqlPool,
     lead_id: i32,
