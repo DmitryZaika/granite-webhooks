@@ -88,7 +88,7 @@ mod local_tests {
     use super::*;
     use crate::tests::data::ses_open_json::ses_open_event_json;
     use crate::tests::data::ses_received::ses_received_json;
-    use crate::tests::utils::{new_test_app, read_file_as_bytes};
+    use crate::tests::utils::{insert_user, new_test_app, read_file_as_bytes};
     use axum::http::StatusCode;
     use bytes::Bytes;
     use sqlx::MySqlPool;
@@ -108,6 +108,7 @@ mod local_tests {
     }
 
     pub struct Email {
+        pub receiver_user_id: Option<i32>,
         pub sender_user_id: Option<i32>,
         pub subject: Option<String>,
         pub body: Option<String>,
@@ -180,7 +181,7 @@ mod local_tests {
         sqlx::query_as!(
             Email,
             r#"
-            SELECT sender_user_id, subject, body, message_id, thread_id
+            SELECT receiver_user_id, sender_user_id, subject, body, message_id, thread_id
             FROM emails
             ORDER BY id ASC
             LIMIT 10
@@ -267,16 +268,20 @@ mod local_tests {
         let data: S3Event = ses_received_json();
         let response = process_ses_received_event(&pool, mock_client, &data).await;
 
-        assert_eq!(response, OK_RESPONSE);
+        let correct_response = (StatusCode::NOT_FOUND, "receiver email not found");
+        assert_eq!(response, correct_response);
 
         let result = get_emails(&pool).await.unwrap();
-        assert_eq!(result.len(), 1);
+        assert_eq!(result.len(), 0);
     }
 
     #[sqlx::test]
-    async fn test_ses_received_not_a_reply(pool: MySqlPool) {
+    async fn test_ses_received_not_a_reply_user(pool: MySqlPool) {
         let message_id = "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000";
 
+        let admin_id = insert_user(&pool, "info@granitedepotindy.com", Some(456))
+            .await
+            .unwrap();
         insert_email(&pool, message_id).await.unwrap();
 
         let mock_client = MockClient::new("src/tests/data/external1.eml");
@@ -288,6 +293,25 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 2);
+        assert_eq!(&result[1].receiver_user_id.unwrap(), &admin_id);
+    }
+
+    #[sqlx::test]
+    async fn test_ses_received_not_a_reply_no_user(pool: MySqlPool) {
+        let message_id = "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000";
+
+        insert_email(&pool, message_id).await.unwrap();
+
+        let mock_client = MockClient::new("src/tests/data/external1.eml");
+
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+
+        let correct_response = (StatusCode::NOT_FOUND, "receiver email not found");
+        assert_eq!(response, correct_response);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
     }
 
     #[sqlx::test]

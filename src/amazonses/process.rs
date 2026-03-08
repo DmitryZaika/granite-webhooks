@@ -6,6 +6,7 @@ use crate::amazon::bucket::S3Bucket;
 use crate::amazonses::parse_email::{Attachment, ParsedEmail};
 use crate::amazonses::upload::upload_attachments;
 use crate::crud::email::{PriorEmail, create_email_with_attachments, get_prior_email};
+use crate::crud::users::get_id_by_email;
 use crate::libs::constants::{OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 
@@ -86,9 +87,20 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Failed to upload attachments");
         }
     };
+    let Some(receiver_user_id) = get_id_by_email(pool, &email_info.parsed.receiver_email)
+        .await
+        .unwrap()
+    else {
+        tracing::error!(
+            bucket = email_info.bucket,
+            to_email = email_info.parsed.receiver_email,
+            "Reciever email not found"
+        );
+        return (StatusCode::NOT_FOUND, "receiver email not found");
+    };
     let prior_email = PriorEmail {
         thread_id: None,
-        receiver_user_id: None,
+        receiver_user_id: Some(receiver_user_id),
     };
     let result =
         create_email_with_attachments(pool, email_info.parsed, &prior_email, &uploaded_attachments)
