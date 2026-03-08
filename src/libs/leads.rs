@@ -71,9 +71,8 @@ where
         }
     };
 
-    let clean_tg_id = match user_info.telegram_id {
-        Some(id) => id,
-        None => match send_message(&[&user_info.email], REGISTER_SUBJECT, REGISTER_MESSAGE).await {
+    let Some(clean_tg_id) = user_info.telegram_id else {
+        match send_message(&[&user_info.email], REGISTER_SUBJECT, REGISTER_MESSAGE).await {
             Ok(()) => return CREATED_RESPONSE,
             Err(e) => {
                 tracing::error!(
@@ -83,7 +82,7 @@ where
                 );
                 return internal_error(ERR_SEND_EMAIL);
             }
-        },
+        }
     };
     let repeted_lead_message = format!(
         "You received a REPEATED lead {}, click here: {}",

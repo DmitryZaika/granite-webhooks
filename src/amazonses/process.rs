@@ -16,13 +16,13 @@ pub struct EmailInfo<'a> {
     pub attachments: Vec<Attachment>,
 }
 
-pub async fn process_reply_email<'a, C: S3Bucket + Send + Sync + 'static>(
+pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
     pool: &MySqlPool,
     client: C,
     message_id: &str,
-    email_info: EmailInfo<'a>,
+    email_info: EmailInfo<'_>,
 ) -> BasicResponse {
-    let prior = match get_prior_email(pool, &message_id).await {
+    let prior = match get_prior_email(pool, message_id).await {
         Ok(email) => email,
         Err(error) => {
             tracing::error!(
@@ -55,13 +55,9 @@ pub async fn process_reply_email<'a, C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Failed to upload attachments");
         }
     };
-    let result = create_email_with_attachments(
-        pool,
-        &email_info.parsed,
-        &clean_prior,
-        &uploaded_attachments,
-    )
-    .await;
+    let result =
+        create_email_with_attachments(pool, email_info.parsed, &clean_prior, &uploaded_attachments)
+            .await;
     if let Err(error) = result {
         tracing::error!(
             "Error inserting email: {} into the db: {}",
@@ -73,10 +69,10 @@ pub async fn process_reply_email<'a, C: S3Bucket + Send + Sync + 'static>(
     OK_RESPONSE
 }
 
-pub async fn process_first_email<'a, C: S3Bucket + Send + Sync + 'static>(
+pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
     pool: &MySqlPool,
     client: C,
-    email_info: EmailInfo<'a>,
+    email_info: EmailInfo<'_>,
 ) -> BasicResponse {
     let uploaded_attachments = match upload_attachments(client, email_info.attachments).await {
         Ok(attachments) => attachments,
@@ -94,13 +90,9 @@ pub async fn process_first_email<'a, C: S3Bucket + Send + Sync + 'static>(
         thread_id: None,
         receiver_user_id: None,
     };
-    let result = create_email_with_attachments(
-        pool,
-        &email_info.parsed,
-        &prior_email,
-        &uploaded_attachments,
-    )
-    .await;
+    let result =
+        create_email_with_attachments(pool, email_info.parsed, &prior_email, &uploaded_attachments)
+            .await;
     if let Err(error) = result {
         tracing::error!(
             "Error inserting email: {} into the db: {}",
