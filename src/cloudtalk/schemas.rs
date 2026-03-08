@@ -2,18 +2,18 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CloudtalkSMS {
-    id: Option<i32>,
+    pub id: Option<i32>,
     sender: CleanedPhone,
     recipient: CleanedPhone,
-    text: CleanText,
-    agent: Option<String>,
+    pub text: CleanText,
+    pub agent: Option<String>,
 }
 
 impl CloudtalkSMS {
     pub const fn sender(&self) -> u64 {
         self.sender.0
     }
-    pub const fn receipent(&self) -> u64 {
+    pub const fn recipient(&self) -> u64 {
         self.recipient.0
     }
 }
@@ -86,7 +86,7 @@ mod tests {
         let sms: CloudtalkSMS = serde_json::from_slice(MESSAGE_1).expect("Failed to parse JSON");
 
         assert_eq!(sms.sender(), 6468956758);
-        assert_eq!(sms.receipent(), 3173161456);
+        assert_eq!(sms.recipient(), 3173161456);
 
         assert_eq!(sms.text.0, "Не пиши сюда");
         assert!(!sms.text.0.contains("[text]"));
@@ -100,7 +100,7 @@ mod tests {
         let sms: CloudtalkSMS = serde_json::from_slice(MESSAGE_2).expect("Failed to parse JSON");
 
         assert_eq!(sms.sender(), 6468956758);
-        assert_eq!(sms.receipent(), 3173161456);
+        assert_eq!(sms.recipient(), 3173161456);
 
         assert_eq!(sms.text.0, "Не пиши сюда");
         assert!(!sms.text.0.contains("[text]"));
