@@ -114,7 +114,7 @@ where
         .map(|user| {
             (
                 user.name.clone().unwrap_or_else(|| "Unknown".to_string()),
-                user.id,
+                user.user_position_id,
                 user.mtd_lead_count,
             )
         })
@@ -148,7 +148,7 @@ where
         tracing::error!(
             ?send_message,
             telegram_ids = %telegram_ids_str,
-            "Error sending message to lead manager"
+            "Error sending message to lead manager 1"
         );
     }
 
@@ -183,7 +183,7 @@ where
                     ?error,
                     ?message,
                     ?telegram_ids,
-                    "Error sending message to lead manager"
+                    "Error sending message to lead manager 3"
                 );
                 continue;
             }
@@ -195,7 +195,7 @@ where
                     ?error,
                     ?message,
                     ?telegram_ids,
-                    "Error sending message to lead manager",
+                    "Error sending message to lead manager 2",
                 );
             }
         }
@@ -235,8 +235,7 @@ where
         );
         return false;
     }
-    let message =
-        format!("Repeat lead {lead_name} with for sales rep {assigned_name}\n\n{lead_body}");
+    let message = format!("Repeat lead {lead_name} for sales rep {assigned_name}\n\n{lead_body}");
     let new_bot = Arc::new(bot.clone());
     send_lead_managers_dupliacate(message, telegram_ids, new_bot)
         .await

@@ -1,12 +1,11 @@
-use rand::Rng;
 use teloxide::types::MaybeInaccessibleMessage;
 
-pub fn parse_assign(data: &str) -> Option<(i32, i64)> {
+pub fn parse_assign(data: &str) -> Option<(i32, i32)> {
     let parts: Vec<&str> = data.split(':').collect();
     if parts.len() == 3 && parts[0] == "assign" {
         let lead_id = parts[1].parse().ok()?;
-        let user_id = parts[2].parse().ok()?;
-        Some((lead_id, user_id))
+        let user_position_id = parts[2].parse().ok()?;
+        Some((lead_id, user_position_id))
     } else {
         None
     }
@@ -47,7 +46,7 @@ pub fn parse_code(text: &str) -> Option<i32> {
 }
 
 pub fn gen_code() -> i32 {
-    rand::rng().random_range(100_000..=999_999)
+    rand::random_range(100_000..=999_999)
 }
 
 pub fn extract_message(message: &MaybeInaccessibleMessage) -> Option<String> {

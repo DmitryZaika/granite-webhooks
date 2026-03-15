@@ -7,6 +7,7 @@ use sqlx::MySqlPool;
 use std::fs;
 use std::io;
 use std::path::Path;
+use uuid::Uuid;
 
 pub fn read_file_as_bytes<P: AsRef<Path>>(path: P) -> std::io::Result<Bytes> {
     let data = fs::read(path)?;
@@ -17,7 +18,7 @@ pub async fn insert_user(
     pool: &MySqlPool,
     email: &str,
     telegram_id: Option<i64>,
-) -> Result<u64, sqlx::Error> {
+) -> Result<i32, sqlx::Error> {
     let rec = sqlx::query!(
         r#"
         INSERT INTO users (
@@ -43,7 +44,7 @@ pub async fn insert_user(
     .execute(pool)
     .await?;
 
-    Ok(rec.last_insert_id())
+    Ok(rec.last_insert_id().try_into().unwrap())
 }
 
 pub fn replace_bytes(input: &[u8], search: &str, replace_with: &str) -> io::Result<Bytes> {
@@ -59,4 +60,53 @@ pub fn replace_bytes(input: &[u8], search: &str, replace_with: &str) -> io::Resu
 pub fn new_test_app(pool: MySqlPool) -> TestServer {
     let app = new_main_app(pool);
     TestServer::builder().build(app).unwrap()
+}
+
+pub async fn assigned_user_position(
+    pool: &MySqlPool,
+    company_id: i32,
+    position_id: i32,
+    user_id: i32,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+        INSERT INTO positions (id, name)
+        VALUES (?, 'Sales')
+        ON DUPLICATE KEY UPDATE
+            name = VALUES(name)
+        "#,
+        position_id
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query!(
+        r#"
+        INSERT INTO users_positions (user_id, position_id, company_id)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+            position_id = VALUES(position_id)
+        "#,
+        user_id,
+        position_id,
+        company_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn positioned_user(
+    pool: &MySqlPool,
+    company_id: i32,
+    position_id: i32,
+    telegram_id: i64,
+) -> i32 {
+    let email = format!("user_{}_email@example.com", Uuid::new_v4());
+    let sales_id = insert_user(pool, &email, Some(telegram_id)).await.unwrap();
+    assigned_user_position(pool, company_id, position_id, sales_id)
+        .await
+        .unwrap();
+    sales_id
 }

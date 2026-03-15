@@ -16,12 +16,12 @@ http-body-util = "0.1"
 aws-sdk-sesv2 = "1"
 teloxide = { git = "https://github.com/colin99d/teloxide", features = ["macros"] }
 openssl-sys = { version = "0.9", features = ["vendored"] }
-rand = "0.9"
+rand = "0.10"
 aws-config = { version = "1.8", features = ["behavior-version-latest"] }
 reqwest = "0.13"
 sha2 = "0.10"
-uuid = "1.19"
-aws-sdk-s3 = "1.118"
+uuid = "1.22"
+aws-sdk-s3 = "1.125"
 mail-parser = "0.11"
 bytes = "1.11"
 email_reply_parser = "0.1"

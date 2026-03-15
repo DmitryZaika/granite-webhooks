@@ -5,8 +5,9 @@ pub struct SalesUser {
     pub id: i32,
     pub telegram_id: Option<i64>,
     pub name: Option<String>,
-    pub position_id: Option<i32>,
+    pub position_id: i32,
     pub mtd_lead_count: i64,
+    pub user_position_id: i32,
 }
 
 pub struct UserTgInfo {
@@ -27,6 +28,7 @@ pub async fn get_sales_users(
             u.telegram_id,
             u.name,
             up.position_id,
+            up.id as user_position_id,
             COUNT(c.id) as mtd_lead_count
         FROM users u
         INNER JOIN users_positions up ON u.id = up.user_id
@@ -37,7 +39,7 @@ pub async fn get_sales_users(
             AND c.deleted_at IS NULL
         WHERE u.company_id = ?
         AND (up.position_id = 1 OR up.position_id = 2)
-        GROUP BY u.id, u.telegram_id, u.name, up.position_id
+        GROUP BY u.id, u.telegram_id, u.name, up.position_id, user_position_id
         "#,
         company_id
     )
@@ -132,4 +134,12 @@ pub async fn email_exists(pool: &MySqlPool, email: &str) -> Result<bool, sqlx::E
     .await?;
 
     Ok(exists)
+}
+
+pub async fn get_id_by_email(pool: &MySqlPool, email: &str) -> Result<Option<i32>, sqlx::Error> {
+    let user_id = sqlx::query_scalar!(r#"SELECT id FROM users WHERE email = ?"#, email)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(user_id)
 }

@@ -22,7 +22,7 @@ Conntect to telegram:
 
 ```
 curl -X POST "https://api.telegram.org/bot<token>/setWebhook" \
-      -d "url=https://cawv6iwjgxpk5fj2fchs6vc5vq0bycwp.lambda-url.us-east-2.on.aws/telegram/webhook" \
+      -d "url=<ngrok>/telegram/webhook" \
       -d "secret_token=fake"
 
 ||
