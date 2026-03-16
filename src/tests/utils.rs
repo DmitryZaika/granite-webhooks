@@ -108,5 +108,5 @@ pub async fn positioned_user(
     assigned_user_position(pool, company_id, position_id, sales_id)
         .await
         .unwrap();
-    return sales_id;
+    sales_id
 }

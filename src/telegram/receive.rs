@@ -193,7 +193,6 @@ async fn handle_assign_lead<T: Telegram>(
             return internal_error(ERR_DB);
         }
     };
-    println!("{:?}", position);
     let lead_result = assign_lead(pool, lead_id, position.user_id).await;
     if let Err(e) = lead_result {
         tracing::error!(
@@ -321,6 +320,43 @@ mod local_tests {
         ChatId(id)
     }
 
+    async fn create_company(pool: &MySqlPool) -> Result<u64, sqlx::Error> {
+        let rec = sqlx::query!("INSERT INTO company (name) VALUES ('New Company')")
+            .execute(pool)
+            .await?;
+
+        Ok(rec.last_insert_id())
+    }
+
+    async fn create_default_group(pool: &MySqlPool, company_id: u64) -> Result<u64, sqlx::Error> {
+        let rec = sqlx::query!(
+            "INSERT INTO groups_list (name, company_id, is_default) VALUES ('New Group', ?, true)",
+            company_id
+        )
+        .execute(pool)
+        .await?;
+
+        Ok(rec.last_insert_id())
+    }
+
+    async fn create_deal_list(
+        pool: &MySqlPool,
+        name: &str,
+        group_id: u64,
+        position: i32,
+    ) -> Result<u64, sqlx::Error> {
+        let rec = sqlx::query!(
+            "INSERT INTO deals_list (name, group_id, position) VALUES (?, ?, ?)",
+            name,
+            group_id,
+            position,
+        )
+        .execute(pool)
+        .await?;
+
+        Ok(rec.last_insert_id())
+    }
+
     async fn create_default_user(pool: &MySqlPool, email: &str) -> Result<u64, sqlx::Error> {
         let rec = sqlx::query!(
             r#"
@@ -350,7 +386,6 @@ mod local_tests {
     }
 
     struct Deal {
-        customer_id: i32,
         status: Option<String>,
         list_id: i32,
         position: i32,
@@ -361,7 +396,7 @@ mod local_tests {
         sqlx::query_as!(
             Deal,
             r#"
-            SELECT customer_id, status, list_id, position, user_id
+            SELECT status, list_id, position, user_id
             FROM deals
             "#,
         )
@@ -653,6 +688,54 @@ mod local_tests {
         assert_eq!(deals.len(), 1);
         assert_eq!(deals[0].user_id, Some(sales_id));
         assert_eq!(deals[0].list_id, 1);
+        assert_eq!(deals[0].status, Some("New Customer".to_string()));
+        assert_eq!(deals[0].position, 0);
+    }
+
+    #[sqlx::test]
+    async fn test_callback_one_user_non_default_list(pool: MySqlPool) {
+        // Send a real lead
+        let company_id = create_company(&pool).await.unwrap();
+        let group_id = create_default_group(&pool, company_id).await.unwrap();
+        create_deal_list(&pool, "Second List", group_id, 1)
+            .await
+            .unwrap();
+        let first = create_deal_list(&pool, "First List", group_id, 0)
+            .await
+            .unwrap();
+        let sales_id = positioned_user(&pool, company_id as i32, 1, 123).await;
+        let manager_id = positioned_user(&pool, company_id as i32, 2, 456).await;
+        let (_, bot) = send_lead(&pool).await;
+
+        // Mock the sale manager's response
+        let sent_options = bot.clone().sent.lock().unwrap().clone()[0]
+            .clone()
+            .2
+            .unwrap();
+        let option = match sent_options.inline_keyboard[0][0].clone().kind {
+            InlineKeyboardButtonKind::CallbackData(data) => data,
+            _ => unreachable!(),
+        };
+        let inner_m = generate_message(1, "hello");
+        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let cb = CallbackQuery {
+            id: "a".into(),
+            from: telegram_user(manager_id as u64),
+            message: Some(full),
+            inline_message_id: None,
+            chat_instance: "".into(),
+            data: Some(option),
+            game_short_name: None,
+        };
+        let res = handle_callback(cb, &pool, &bot).await;
+
+        // Really process their result
+
+        assert_eq!(res.0, StatusCode::OK);
+        let deals = get_all_deals(&pool).await;
+        assert_eq!(deals.len(), 1);
+        assert_eq!(deals[0].user_id, Some(sales_id));
+        assert_eq!(deals[0].list_id, first as i32);
         assert_eq!(deals[0].status, Some("New Customer".to_string()));
         assert_eq!(deals[0].position, 0);
     }

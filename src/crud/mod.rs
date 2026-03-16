@@ -1,3 +1,4 @@
+pub mod cloudtalk;
 pub mod company;
 pub mod email;
 pub mod leads;

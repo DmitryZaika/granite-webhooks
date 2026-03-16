@@ -313,10 +313,11 @@ pub async fn create_deal_from_lead(
     .await;
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    async fn insert_company(pool: &MySqlPool, company_id: i32) -> Result<i32, sqlx::Error> {
+    async fn insert_company(pool: &MySqlPool) -> Result<i32, sqlx::Error> {
         let rec = sqlx::query!(r#"INSERT INTO company (name) VALUES ('Test Company')"#,)
             .execute(pool)
             .await?;
@@ -335,7 +336,7 @@ mod tests {
 
     async fn insert_deals_list(pool: &MySqlPool, group_id: u64) -> Result<u64, sqlx::Error> {
         let rec = sqlx::query!(
-            r#"INSERT INTO deals_list (name, group_id) VALUES ('Test Deals List', ?)"#,
+            r#"INSERT INTO deals_list (name, group_id, position) VALUES ('Test Deals List', ?, 0)"#,
             group_id,
         )
         .execute(pool)
@@ -351,7 +352,7 @@ mod tests {
 
     #[sqlx::test]
     async fn get_assigned_list_id_from_company_id(pool: MySqlPool) {
-        let company_id = insert_company(&pool, 1).await.unwrap();
+        let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
         let list_id = insert_deals_list(&pool, group_id).await.unwrap();
         let id = get_default_list_id_from_company_id(&pool, company_id)
@@ -362,7 +363,7 @@ mod tests {
 
     #[sqlx::test]
     async fn test_multiple_default_groups(pool: MySqlPool) {
-        let company_id = insert_company(&pool, 1).await.unwrap();
+        let company_id = insert_company(&pool).await.unwrap();
 
         let group_id1 = insert_group_list(&pool, company_id).await.unwrap();
         let list_id1 = insert_deals_list(&pool, group_id1).await.unwrap();
@@ -380,7 +381,7 @@ mod tests {
 
     #[sqlx::test]
     async fn test_no_default_groups(pool: MySqlPool) {
-        let company_id = insert_company(&pool, 1).await.unwrap();
+        let company_id = insert_company(&pool).await.unwrap();
 
         // Group that is NOT default
         sqlx::query!(
@@ -401,12 +402,12 @@ mod tests {
 
     #[sqlx::test]
     async fn test_deleted_records_ignored(pool: MySqlPool) {
-        let company_id = insert_company(&pool, 1).await.unwrap();
+        let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
 
         // Insert a deleted deals_list entry
         sqlx::query!(
-            r#"INSERT INTO deals_list (name, group_id, deleted_at) VALUES ('Deleted List', ?, NOW())"#,
+            r#"INSERT INTO deals_list (name, group_id, deleted_at, position) VALUES ('Deleted List', ?, NOW(), 0)"#,
             group_id
         )
         .execute(&pool)
@@ -424,7 +425,7 @@ mod tests {
 
     #[sqlx::test]
     async fn test_deals_list_ordering(pool: MySqlPool) {
-        let company_id = insert_company(&pool, 1).await.unwrap();
+        let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
 
         // List with position 2

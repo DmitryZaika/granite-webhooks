@@ -135,3 +135,11 @@ pub async fn email_exists(pool: &MySqlPool, email: &str) -> Result<bool, sqlx::E
 
     Ok(exists)
 }
+
+pub async fn get_id_by_email(pool: &MySqlPool, email: &str) -> Result<Option<i32>, sqlx::Error> {
+    let user_id = sqlx::query_scalar!(r#"SELECT id FROM users WHERE email = ?"#, email)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(user_id)
+}
