@@ -3,6 +3,5 @@ SELECT u.id, u.company_id
 FROM users u
 WHERE u.is_superuser = 1
   AND u.is_deleted = 0
-  AND NOT EXISTS (
-    SELECT 1 FROM superadmin_companies sc WHERE sc.user_id = u.id
-  );
+  AND u.company_id >= 0
+  AND u.id NOT IN (SELECT sc.user_id FROM superadmin_companies sc);
