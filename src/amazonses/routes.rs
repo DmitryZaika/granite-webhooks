@@ -69,7 +69,7 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
         bucket,
         key,
     };
-    match parsed.reply_message_id() {
+    match parsed.in_reply_to.clone() {
         Some(message_id) => process_reply_email(pool, client, &message_id, email_info).await,
         None => process_first_email(pool, client, email_info).await,
     }
@@ -234,6 +234,37 @@ mod local_tests {
 
     #[sqlx::test]
     async fn test_ses_received_success(pool: MySqlPool) {
+        let message_id =
+            "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000@us-east-2.amazonses.com";
+
+        insert_email(&pool, message_id).await.unwrap();
+
+        let mock_client = MockClient::new("src/tests/data/reply_email1.eml");
+
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+
+        assert_eq!(response, OK_RESPONSE);
+
+        // TODO: Check that correct email was added into the db
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[1].subject, Some("Re: COLINS TEST".to_string()));
+        const EMAIL_BODY: &str = "Please respond.";
+        assert_eq!(result[1].body.clone().unwrap(), EMAIL_BODY);
+        assert_eq!(result[1].sender_user_id, None);
+        assert_eq!(
+            result[1].thread_id.clone().unwrap(),
+            result[0].thread_id.clone().unwrap()
+        );
+        const MESSAGE_ID: &str =
+            "CAG6QthbVR6eOBoEFup=bnuuBw=_JQWfP1rLzAjwDUGCpNV_wyg@mail.gmail.com";
+        assert_eq!(result[1].message_id, Some(MESSAGE_ID.to_string()));
+    }
+
+    #[sqlx::test]
+    async fn test_ses_received_success_backwards_compatible(pool: MySqlPool) {
         let message_id = "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000";
 
         insert_email(&pool, message_id).await.unwrap();
@@ -317,7 +348,8 @@ mod local_tests {
 
     #[sqlx::test]
     async fn test_ses_response_to_received_success(pool: MySqlPool) {
-        let message_id = "010f019b278e838b-4026f591-7b73-451a-a540-7e70c8bd5c84-000000";
+        let message_id =
+            "010f019b278e838b-4026f591-7b73-451a-a540-7e70c8bd5c84-000000@us-east-2.amazonses.com";
 
         insert_email(&pool, message_id).await.unwrap();
 

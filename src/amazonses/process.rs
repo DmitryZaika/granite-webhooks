@@ -18,13 +18,27 @@ pub struct EmailInfo<'a> {
     pub attachments: Vec<Attachment>,
 }
 
+pub async fn get_prior_email_backwards_compatible(
+    pool: &MySqlPool,
+    message_id: &str,
+) -> Result<Option<PriorEmail>, sqlx::Error> {
+    if let Some(prior) = get_prior_email(pool, message_id).await? {
+        return Ok(Some(prior));
+    };
+    let clean = match message_id.find('@') {
+        Some(idx) => &message_id[..idx],
+        None => &message_id,
+    };
+    get_prior_email(pool, clean).await
+}
+
 pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
     pool: &MySqlPool,
     client: C,
     message_id: &str,
     email_info: EmailInfo<'_>,
 ) -> BasicResponse {
-    let prior = match get_prior_email(pool, message_id).await {
+    let prior = match get_prior_email_backwards_compatible(pool, message_id).await {
         Ok(email) => email,
         Err(error) => {
             tracing::error!(

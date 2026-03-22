@@ -54,7 +54,7 @@ pub struct ParsedEmail {
     pub body: String,
     pub sender_email: String,
     pub receiver_email: String,
-    in_reply_to: Option<String>,
+    pub in_reply_to: Option<String>,
     pub message_id: String,
 }
 
@@ -75,18 +75,6 @@ impl ParsedEmail {
             in_reply_to,
             message_id,
         }
-    }
-
-    pub fn reply_message_id(&self) -> Option<String> {
-        let target = self.in_reply_to.clone()?;
-        if target.contains("mail.gmail.com") {
-            return Some(target);
-        }
-        let clean = match target.find('@') {
-            Some(idx) => &target[..idx],
-            None => &target,
-        };
-        Some(clean.to_string())
     }
 }
 
@@ -224,20 +212,23 @@ mod local_tests {
     fn test_parse_email_message_id() {
         let email_bytes = read_file_as_bytes("src/tests/data/reply_email1.eml").unwrap();
         let (parsed_email, _) = parse_email(&email_bytes).unwrap();
-        let message_id = parsed_email.reply_message_id();
-        let correct_message_id =
-            Some("010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000".to_string());
+        let message_id = parsed_email.in_reply_to;
+        let correct_message_id = Some(
+            "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000@us-east-2.amazonses.com"
+                .to_string(),
+        );
         assert_eq!(message_id, correct_message_id);
     }
 
     #[test]
     fn test_parse_email_message_id_no_amp() {
         let email_bytes = read_file_as_bytes("src/tests/data/reply_email1.eml").unwrap();
-        let clean_bytes = replace_bytes(&email_bytes, "@us-east-2.amazonses.com", "").unwrap();
-        let (parsed_email, _) = parse_email(&clean_bytes).unwrap();
-        let message_id = parsed_email.reply_message_id();
-        let correct_message_id =
-            Some("010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000".to_string());
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        let message_id = parsed_email.in_reply_to;
+        let correct_message_id = Some(
+            "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000@us-east-2.amazonses.com"
+                .to_string(),
+        );
         assert_eq!(message_id, correct_message_id);
     }
 
@@ -245,7 +236,7 @@ mod local_tests {
     fn test_parse_email_message_id_external() {
         let email_bytes = read_file_as_bytes("src/tests/data/external1.eml").unwrap();
         let (parsed_email, _) = parse_email(&email_bytes).unwrap();
-        let message_id = parsed_email.reply_message_id();
+        let message_id = parsed_email.in_reply_to;
         let correct_message_id = None;
         assert_eq!(message_id, correct_message_id);
     }
