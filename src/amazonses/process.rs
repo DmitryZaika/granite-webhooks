@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
+use uuid::Uuid;
 
 use crate::amazon::bucket::S3Bucket;
 use crate::amazonses::parse_email::{Attachment, ParsedEmail};
@@ -99,7 +100,7 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
         return (StatusCode::NOT_FOUND, "receiver email not found");
     };
     let prior_email = PriorEmail {
-        thread_id: None,
+        thread_id: Some(Uuid::new_v4().to_string()),
         receiver_user_id: Some(receiver_user_id),
     };
     let result =
