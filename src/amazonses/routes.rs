@@ -294,6 +294,7 @@ mod local_tests {
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(&result[1].receiver_user_id.unwrap(), &admin_id);
+        assert_eq!(result[1].thread_id.clone().unwrap().len(), 36);
     }
 
     #[sqlx::test]
