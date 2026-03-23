@@ -1,0 +1,1 @@
+INSERT INTO positions (id, name, created_date) VALUES (9, 'super_admin', NOW());
