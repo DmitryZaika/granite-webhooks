@@ -59,7 +59,7 @@ pub fn replace_bytes(input: &[u8], search: &str, replace_with: &str) -> io::Resu
 #[cfg(test)]
 pub fn new_test_app(pool: MySqlPool) -> TestServer {
     let app = new_main_app(pool);
-    TestServer::builder().build(app).unwrap()
+    TestServer::builder().build(app)
 }
 
 pub async fn assigned_user_position(

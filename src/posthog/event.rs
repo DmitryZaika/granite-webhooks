@@ -78,7 +78,8 @@ impl PostHogEvent {
 
         let mut hasher = Sha256::new();
         hasher.update(format!("HTTPError|{}|{}", status.as_u16(), uri));
-        let fingerprint = format!("{:x}", hasher.finalize());
+        let result = hasher.finalize();
+        let fingerprint: String = result.iter().map(|b| format!("{:02x}", b)).collect();
         Self {
             api_key: api_key.into(),
             event: "$exception".into(),
@@ -109,7 +110,8 @@ impl PostHogEvent {
 
         let mut hasher = Sha256::new();
         hasher.update(format!("{value}|{title}|"));
-        let fingerprint = format!("{:x}", hasher.finalize());
+        let result = hasher.finalize();
+        let fingerprint: String = result.iter().map(|b| format!("{:02x}", b)).collect();
         Self {
             api_key: api_key.into(),
             event: "$exception".into(),

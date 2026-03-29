@@ -47,6 +47,7 @@ pub fn generate_message_common(text: &str) -> MessageCommon {
         has_protected_content: false,
         is_from_offline: false,
         business_connection_id: None,
+        reply_to_checklist_task_id: None,
     }
 }
 
@@ -74,6 +75,9 @@ pub fn generate_message(chat_id: i64, text: &str) -> Message {
         sender_business_bot: None,
         kind: MessageKind::Common(generate_message_common(text)),
         chat: get_chat(chat_id),
+        is_paid_post: false,
+        suggested_post_info: None,
+        direct_messages_topic: None,
     }
 }
 
