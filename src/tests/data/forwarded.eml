@@ -1,0 +1,232 @@
+Return-Path: <dema.gdindy+caf_=dema=granitedepotindy.com@gmail.com>
+Received: from mail-dy1-f199.google.com (mail-dy1-f199.google.com [74.125.82.199])
+ by inbound-smtp.us-east-2.amazonaws.com with SMTP id l5em0jucnnrpq8oglgp2o0fb67873813eaqii5o1
+ for dema@granitedepotindy.com;
+ Sun, 05 Apr 2026 15:34:46 +0000 (UTC)
+Received-SPF: pass (spfCheck: domain of _spf.google.com designates 74.125.82.199 as permitted sender) client-ip=74.125.82.199; envelope-from=dema.gdindy+caf_=dema=granitedepotindy.com@gmail.com; helo=mail-dy1-f199.google.com;
+Authentication-Results: amazonses.com;
+ spf=pass (spfCheck: domain of _spf.google.com designates 74.125.82.199 as permitted sender) client-ip=74.125.82.199; envelope-from=dema.gdindy+caf_=dema=granitedepotindy.com@gmail.com; helo=mail-dy1-f199.google.com;
+ dkim=pass header.i=@gmail.com;
+ dmarc=pass header.from=gmail.com;
+X-SES-RECEIPT: AEFBQUFBQUFBQUFGSEpOeVVXbnNoN05LUElJZGJCYTY5aU9ITTNTZ3YyeFpUdDBTdjd4OXFoMCtmTHMwTVB0Zk42ZFhSMEZXT3E5TmVQZW5CaVRrZ1ljQjE2dEVrMWwrcER2TitMR2IwN2l3dXlhQVpLL1FzMjA4cHJGNGkrQ2JpRDhzMEYzTnNTNWsxR2JXNTFHeHpqRitWcnhDSTQ4eEk3N21HMmtzb3ZWRkMrMmVOMThzQTNxTHJTeGtuRzdYOVc5Z1RvSXUvdk9HMlBtZGxKVUlqRGYvdmdHT0J6em1jZXgvR3QzSzNhUjM5NXY4Vk9FTm5kZVFEbEJxVzBoWDdZV2ZzbTZMTk9ubEpmNzBCUEl3R2NDUmMyaDNXVHdNUTJLRkREWVJ5cHhFQmd4ZjY0eFNYQXZtcWNCNDdJZEhNUnhVdm9WMThSTWp4VTBPdkJ5SzRNelJySDcrdy83ck8=
+X-SES-DKIM-SIGNATURE: a=rsa-sha256; q=dns/txt; b=ORofTC49uBH2VbqwSCx2muqwHYAz51ZYbQSL/4gOV55fpuGZcyQvPmAvhpq3AMa83E6DMtG31DYMb3YiP9Xalwcct/kBI04vo3ykVoun6ZYp4fHnfyESaCg94aqhgFVewxxyk9WzenVf4wJPD+RQt/FWwgKiIAgJthICrcKq2Sk=; c=relaxed/simple; s=ndjes4mrtuzus6qxu3frw3ubo3gpjndv; d=amazonses.com; t=1775403287; v=1; bh=1LgozeZMQC5hTCR68pE4I2ixC9RpNKZFnPMCQtCuZOU=; h=From:To:Cc:Bcc:Subject:Date:Message-ID:MIME-Version:Content-Type:X-SES-RECEIPT;
+Received: by mail-dy1-f199.google.com with SMTP id 5a478bee46e88-2bdf6fe90a9so4418756eec.1
+        for <dema@granitedepotindy.com>; Sun, 05 Apr 2026 08:34:46 -0700 (PDT)
+ARC-Seal: i=5; a=rsa-sha256; t=1775403286; cv=pass;
+        d=google.com; s=arc-20240605;
+        b=aifP0X6hlWREb4iH/Mk5Ehu0Pr/CdfNY5TrXZsJoZYyYytCkmS4UnPj/HpAHZ+W828
+         iGARqEbgwbzv77OlfFZMu/wBazmHHEAJ1F1bnNljCl1b2N4WLFTumDdRPite7WUCGhm4
+         k3rimEuEzSTtSaZXUlPhdY7OQ6xe0nO2MpOMw+Q8fW9rXbGouKBJXvdcDXwy4ZnBrX1u
+         VEroz1Lhaik3WygTnocwbszBoRXCF/AbSZtolxGQ1zGe6w2IV1CZBOceQr3x6wixKenE
+         0/qFj8IrXBF0ybyFcbzkyUAP33iENon7vYrW5Dax1CrJSemr19p7gf0jrPwNDTZU1X2N
+         J/xw==
+ARC-Message-Signature: i=5; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20240605;
+        h=to:subject:message-id:date:from:mime-version:dkim-signature
+         :delivered-to;
+        bh=pDGpwU/cSdQyNxABerRByAvLmEg8EWlbj6O8YA39Eo0=;
+        fh=f8YS+t8OGr/A0ykJuE8FwYpVHZc16eurKbRIAnY8bgM=;
+        b=fgJocaluFB+FxYB3/cS1Z7cD17tyEnvnLa0cUCF9LRfHVKb8XvDOhC1ZkK7jvc7lHl
+         Fm7AZAbe0Q6jg8zgN4AQ+hyZPyxCBCv2PbvDENEXpmaFjPWBp4TMRf9TRa43HwkeGNXL
+         5w/HpMNFUni58IBmUrHGWCv5TkFo1hKayAOb9CSMx6VetLxGrf5vCtF2MHR6EdCbPjrf
+         ieyhjNzXta8+eh5/yDRoW7t9GFMCnx/rrQCgG9OURhPKkmK4Pi0Q+mMRx0Q1zU4b5rBc
+         ptEk6K+tJDrxupPARyG6JwmRIH+OI89npMD7u218OsFaYtNASrnT+DEa9U+lRr73zXJ5
+         5lWA==;
+        dara=google.com
+ARC-Authentication-Results: i=5; mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=Dj27jU0D;
+       arc=pass (i=3 spf=pass spfdomain=gmail.com dkim=pass dkdomain=gmail.com dmarc=pass fromdomain=gmail.com);
+       spf=pass (google.com: domain of dema.gdindy+caf_=dema=granitedepotindy.com@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom="dema.gdindy+caf_=dema=granitedepotindy.com@gmail.com";
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20251104; t=1775403286; x=1776008086;
+        h=to:subject:message-id:date:from:mime-version:dkim-signature
+         :delivered-to:x-forwarded-for:x-forwarded-to:x-gm-gg
+         :x-gm-message-state:from:to:cc:subject:date:message-id:reply-to;
+        bh=pDGpwU/cSdQyNxABerRByAvLmEg8EWlbj6O8YA39Eo0=;
+        b=HQepkg6Qw47GZV3Rk1yiflqHgCgg52yzwcM6tqJWdMzkoKK49ECenor3zsZkc4VU1J
+         v4NVVEIVFroW7G6BPDIxTp9ZOBniV/PPiKrrhI2p3uiCAb+TrmP0hq5Afa1HwLpzVtYt
+         oOP1m2i3StRfFN13Jnq17ZhF5pQJ0w2JGzPCiSnbWHJRFy3efzBAtIipgKj4CmjFU2ey
+         qRAC/vKBuQk7uM3FO4DTNqc5bmibi0VnJreocQYx1WC89z5ivvNugXLvpRZXJKg4Jgt5
+         WWcgxpF+QzxZHes3NHl4cl7vzQ+rh9hdVtoCe7zVLT4a3vxZbaH7oF4Qa9g/zLhPhdsn
+         rWzw==
+X-Forwarded-Encrypted: i=5; AJvYcCVegplkU0rQ7FZ2OZPBYpLHGROaLzW6Ke87lfQSFpAyEF3//mmMlkif3X0pzzG8ZS0xuYCa@granitedepotindy.com
+X-Gm-Message-State: AOJu0Yyh+gcOMd4dCi0FYIRK/hAa+qBZAok1X/KjNSQpM5wG0zjBUL8s
+	BKH0MZlBGwtCyTWdTrZ1SIuWsaKJe4Y7FgPSBF5VicYvs+C7o9I2ptKf3P0ER0dwiYzJg1c0OwP
+	JtJRTBl3u1AtL0irk1Q+U2dNFQPFdASyQUcdk3FB2eqmacIlull0yaa6ANpH/nMsJeqElRCtamp
+	R3M+nTZJd3ZcjF5bQQtb7JLOq/5Fu+tcd9oKb8NorJ3Yetxj2cnBYX/ojnRJu9/QrGg5FUF/xYr
+	ZwtVtvvlg==
+X-Gm-Gg: AeBDietHcuhOz+T0/hg/4kI3NNrfahLkKVxXX2h4YnyWQFMBEE3aV6G2CgtZR2kJArZ
+	yP+B67/9djXB4nYTWb0ueYmn8h60725luiLjMTsDtssnaiHZSc8ulAtpCzqU7JVVBJWceh6U1hK
+	l5HyKnpHAwoAo6U/ZARhP26qSCFhhR8aV38nyjNnIve7daLbAbCAoFzlEint+MC2TkoGWgqU6Wv
+	wmsSN5pyaIMYqMyBTfLp2VQ6qurjvVZeXKEkG1g23MT5KOwu3OJB9owb+s/6h+mtzPPqSgxq7wm
+	0T9Vghox39w545LqrDXDQ9V5hTreg2NPsEqqwenMKERMJ7NLRkmgM3J1k+zZxQWLuAVrizoKzy3
+	q0Q==
+X-Received: by 2002:a05:7022:ea2f:b0:128:ca83:5aa3 with SMTP id a92af1059eb24-12bfb6ee08dmr5022876c88.1.1775403285977;
+        Sun, 05 Apr 2026 08:34:45 -0700 (PDT)
+X-Received: by 2002:a05:7022:ea2f:b0:128:ca83:5aa3 with SMTP id a92af1059eb24-12bfb6ee08dmr5022853c88.1.1775403284797;
+        Sun, 05 Apr 2026 08:34:44 -0700 (PDT)
+ARC-Seal: i=4; a=rsa-sha256; t=1775403284; cv=pass;
+        d=google.com; s=arc-20240605;
+        b=JtvzzCK5tguk8I/J2RE8GtpSOrSCRBe7ULeTKr1NCa3HHj9bCIyv4Wo/CoaxHw49mV
+         a5ZsqAqf/Wj+cSHMOpi6JJ0Fp2u4SHzqTFgDKoWb9BBFg9I/VraRxYSBVHGVHJORdOic
+         Lp2Cy5hDp4ZJFoIuCqEDjtzlL1rkVJwdkSWQFHCSyGfXWLBEgV4e5BNrzFmK7kDYE56+
+         bH3fLgqKynTck8tUVUEX762h3QAdCVJKR0ZkK0KnSguiL/1TW8miTafE9WHUzv55c+YA
+         O4NSa7SEsDSAgK0stQJj8xz9+sJ/Y2kGY5uWwWYycOOUAgvc3zvMZKYGMbvRCY29YZdL
+         BSFA==
+ARC-Message-Signature: i=4; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20240605;
+        h=to:subject:message-id:date:from:mime-version:dkim-signature
+         :delivered-to;
+        bh=pDGpwU/cSdQyNxABerRByAvLmEg8EWlbj6O8YA39Eo0=;
+        fh=wUlKK1HZWH/hNKbuhEevqikv82yq85EGm2/I/2M1u8s=;
+        b=NX0wUC9ceD21BElQuXNRz/HIyWg3onzQsDYFyT0aIe3Ij0cTcEeczkzWhEtusynSdP
+         TbC9dbEqGkEbhmS9VoJ/uJqE2Zy+PVViUvpwC3g6fTeIQ3iz9jNYCSNqQ7KGxov3DIoL
+         cZCcmP0Mj4EL0pkPSo9m+RYLnfpYDiQyrIY1Ch/h+tku7SS1FRWHNzYR3dB2xqp4PQTS
+         FVtv2rMM6g68S9R7G4wZ9rZYKJNrbq7o/1d/cNtT5m7fspwCpgfLkuYZby6eUL2SHH0C
+         rTVcLvPdkZ2Y6UBr5Y3bP4WqRaPGyGplB+qrUquZZ0o/sZDoVo5denFTTy6qnCfaWXPG
+         rxdA==;
+        dara=google.com
+ARC-Authentication-Results: i=4; mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=Dj27jU0D;
+       arc=pass (i=3 spf=pass spfdomain=gmail.com dkim=pass dkdomain=gmail.com dmarc=pass fromdomain=gmail.com);
+       spf=pass (google.com: domain of dema.gdindy+caf_=dema=granitedepotindy.com@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom="dema.gdindy+caf_=dema=granitedepotindy.com@gmail.com";
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+Return-Path: <dema.gdindy+caf_=dema=granitedepotindy.com@gmail.com>
+Received: from mail-sor-f41.google.com (mail-sor-f41.google.com. [209.85.220.41])
+        by mx.google.com with SMTPS id a92af1059eb24-12bedea8b3asor860735c88.17.2026.04.05.08.34.44
+        for <dema@granitedepotindy.com>
+        (Google Transport Security);
+        Sun, 05 Apr 2026 08:34:44 -0700 (PDT)
+Received-SPF: pass (google.com: domain of dema.gdindy+caf_=dema=granitedepotindy.com@gmail.com designates 209.85.220.41 as permitted sender) client-ip=209.85.220.41;
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=Dj27jU0D;
+       arc=pass (i=3 spf=pass spfdomain=gmail.com dkim=pass dkdomain=gmail.com dmarc=pass fromdomain=gmail.com);
+       spf=pass (google.com: domain of dema.gdindy+caf_=dema=granitedepotindy.com@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom="dema.gdindy+caf_=dema=granitedepotindy.com@gmail.com";
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+ARC-Seal: i=3; a=rsa-sha256; t=1775403284; cv=pass;
+        d=google.com; s=arc-20240605;
+        b=FsAM7nRx4wBIafRdXP8BqenObznLSe1ykTSg1Zv5j0lMPDgUVX0Ssx24fllywazq0h
+         K5QEXIhZaVUMODgcB76y6+9Hx+I+wL5gh+4e/pbTu70zQjwRvuNoOuNM8r1rVRHftQ2N
+         rR7KZ9Dy91b53DL+Aoby9u9BrMiTgkujW1U3lEqnjNuPLrE7eZmFgW1BCq7BqOaKDUz5
+         eXtu2DSi8PbBgY3SPURRleIFCCvpQw6wNhunzWz2zUHsaxD4Z5RZf5SAhiDBhPV+NMPB
+         BQfDLhm/TtLRyMQ8wn3snXpyUa6nV8wVSd1U9TnDwRWbHSdk34XL1VwT9zyJpG+CLC3D
+         LNMg==
+ARC-Message-Signature: i=3; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20240605;
+        h=to:subject:message-id:date:from:mime-version:dkim-signature
+         :delivered-to;
+        bh=pDGpwU/cSdQyNxABerRByAvLmEg8EWlbj6O8YA39Eo0=;
+        fh=wUlKK1HZWH/hNKbuhEevqikv82yq85EGm2/I/2M1u8s=;
+        b=VQ2ku/HcSneKJKCwhovUKsHh1bh9h4rxmAdNcehV9zH8v/p0idRxXCcgR3247PqOwV
+         SW4yABkljOqLzNnA9eDx9EkzhR6q35nQLR/KIKoyf4YObNZSwhfPYQcsoUp4EOpW9Pxz
+         FABZw+tMWT1UvV+84CjGxrj82sXmC23+SYkmdewpiVjdrZQ2NQTzBmA+Ok0/SCv8JpYh
+         Gn4fz6zOerCySxrnOb519cqLahnkWw8a7PPRhGvGlINI7QVtZQ0J8rKOzfUg6XS8CMCZ
+         jW3GE69FUC1TWTNV68Txa3jYOC6VvsWgmUZEC9wL6nkwm1saI2VvSNu5Ag0SwTznp0xb
+         IBTA==;
+        darn=granitedepotindy.com
+ARC-Authentication-Results: i=3; mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=Dj27jU0D;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of colin99delahunty@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=colin99delahunty@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=pass header.i=@gmail.com
+X-Forwarded-Encrypted: i=3; AJvYcCVE9EuKE++zeouno1ng/1acYI69YHuG4zH71+HMgnTOvglnSaCOAYbuq8xP82fJy6hQAv0A@granitedepotindy.com
+X-Received: by 2002:a05:7022:6997:b0:122:3a5:fc42 with SMTP id a92af1059eb24-12bfb745a46mr4241765c88.20.1775403284206;
+        Sun, 05 Apr 2026 08:34:44 -0700 (PDT)
+X-Forwarded-To: dema@granitedepotindy.com
+X-Forwarded-For: dema.gdindy@gmail.com dema@granitedepotindy.com
+Delivered-To: dema.gdindy@gmail.com
+Received: by 2002:a05:7022:b95:b0:12a:9b7a:3b67 with SMTP id cy21csp850132dlb;
+        Sun, 5 Apr 2026 08:34:42 -0700 (PDT)
+X-Received: by 2002:a05:690c:14:b0:79e:9cc1:ede3 with SMTP id 00721157ae682-7a4d31e64c8mr104760967b3.2.1775403282723;
+        Sun, 05 Apr 2026 08:34:42 -0700 (PDT)
+ARC-Seal: i=2; a=rsa-sha256; t=1775403282; cv=pass;
+        d=google.com; s=arc-20240605;
+        b=aUrB5zjFUyF7PaTIOZFRy/vbNv0eEjLodJIc455JX/SW4PECyUd1i3r3ST+0z/9iUu
+         5dt1XfdZ0PUfP3N2iXg7XMEq1BXfwSEkbb9zCCTTcc1DRI2Gr8KO4YuV4/02SgvOI4eo
+         Nn3Z++em5ZxFV0t5+2OLApYcupstWw0CfENdo4rXugomaM1otMez8NqHKlTgSZvnLg7x
+         08Jyl0ibIHo62fH87DsDbulrXfba+gdCBpKVTXCvjbfesGh9KhNn61M/B6d5HO4tWyW7
+         vs6bdMyQ2d9ozUGToVNgAPBQV5lM3r0KbtncNFaBrtm7AORToXQoNH7Ey7ID3CjkUics
+         b0qA==
+ARC-Message-Signature: i=2; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20240605;
+        h=to:subject:message-id:date:from:mime-version:dkim-signature;
+        bh=pDGpwU/cSdQyNxABerRByAvLmEg8EWlbj6O8YA39Eo0=;
+        fh=2QTyq2/vPOY0A/R1h5WXdATCoj2kX1X1SsNXzOunlw4=;
+        b=SKmRcXNuWUrIkqnU404PIx2Md80VAQwfEPYTA9GeoK9Q1mtXMvafV2geKsu+ro17yF
+         615TKwT+Saw1ciDw5v2V4eByFOIRLm3fWmwvGnAGTBMUz0AMLWpjhG6uKH/ql46XZwEt
+         j31Y0VZx79VNB0i3zKCz2p0KaKLNH152PhhQAH7RlSaE4AvpmfHYkFmo3xBh1g68qs8r
+         CskFY26fuq0yXAWJ6t9aD9ZSUJlcV4hkv0VUt4hzYLH51YVNoDzV8sHzXztrcixM3tc6
+         twDJK04xrbE5jYIWuQOdD+qtqxr1XENnEQXNuvZqVqJNP7iWdp4NcBg9L1wBaotqiIXF
+         1/0A==;
+        dara=google.com
+ARC-Authentication-Results: i=2; mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=Dj27jU0D;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of colin99delahunty@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=colin99delahunty@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=pass header.i=@gmail.com
+Return-Path: <colin99delahunty@gmail.com>
+Received: from mail-sor-f41.google.com (mail-sor-f41.google.com. [209.85.220.41])
+        by mx.google.com with SMTPS id 00721157ae682-7a36e832e6fsor54819507b3.2.2026.04.05.08.34.42
+        for <dema.gdindy@gmail.com>
+        (Google Transport Security);
+        Sun, 05 Apr 2026 08:34:42 -0700 (PDT)
+Received-SPF: pass (google.com: domain of colin99delahunty@gmail.com designates 209.85.220.41 as permitted sender) client-ip=209.85.220.41;
+ARC-Seal: i=1; a=rsa-sha256; t=1775403282; cv=none;
+        d=google.com; s=arc-20240605;
+        b=XNNwVYTBQ22/3fok2mXd0eSisLH5T2yQoUAwVM5eieC8EO32w4m1F8hfq9vLgLiiRP
+         Va+qz32amqrBkwrhZ/Bum2m8+Ay74jozDJiGSyvQHQ2faLBSxrpu5KzWGSCVz3pk+OnY
+         1d8QbvWlw9J+wrwR56h0mcce02M8wcQPvMnB9omMNQfsDULaV3artfpqpU/50IsscLq5
+         8fljn9viU0yD9+Sm3PbgqC4qTb+Zt/coHZPN4Z0Jzd33KIBlQAWpP82XbcQQtdKpmJ2P
+         02uXRukgW8VoPzAZ2ZRFjk2Bdw++eh9hKzHInHRjs54jeIbmeGStv8Mmf802QrTjl3JD
+         3uZg==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20240605;
+        h=to:subject:message-id:date:from:mime-version:dkim-signature;
+        bh=pDGpwU/cSdQyNxABerRByAvLmEg8EWlbj6O8YA39Eo0=;
+        fh=2QTyq2/vPOY0A/R1h5WXdATCoj2kX1X1SsNXzOunlw4=;
+        b=bKC4neBD8OYZ76Cpq1+FiG2iHshmxXtBCfSfTtrofwXZnYSA3j3MXqTFFgIzNKcmzA
+         lHZmbGimlzYgI3v/KwxdlQf+4ndcDFfb4frhf7OU/tdUNTzjF/Fajbe9EcjWlC0XHY73
+         IvWqCeHQTCLpVEXVnosGIKU4T9nhRZKArbsZVX7SnfVvx845wrs6YN3w08XwNiCulWdY
+         IG863Dd0vyil9O9jaMpZznOCLLTiNptY+BKgD8D1b8HXypOXffjZ6pC33hVVdiIyvJ5n
+         mAsviUSW5R8VdSdIj57YDq/tedZvMt4nv02esQpelIwbuuzaSK7efcqzOceSj9PwdzNX
+         GLLw==;
+        dara=google.com
+ARC-Authentication-Results: i=1; mx.google.com; arc=none
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20251104; t=1775403282; x=1776008082; dara=google.com;
+        h=to:subject:message-id:date:from:mime-version:from:to:cc:subject
+         :date:message-id:reply-to;
+        bh=pDGpwU/cSdQyNxABerRByAvLmEg8EWlbj6O8YA39Eo0=;
+        b=Dj27jU0DQMUp815l4/qpgaagRLoeu0Me90aoM8ZvxX1xCnAqrRCgTnvVtdfIWPNh5Q
+         mLGXUoghQGx1nPMIseb0qeTQs6ajL13A/8yITGaSY8LZ9BEXFre3TJWG2g5AuFmY/k0D
+         tZPBmGRs5/gAyC0cXW0MXELkBU5mT4S6VAyYZ7BgX4/bd+hssByi6TqpTk+M3MfX3Bl1
+         PrEci/S8Q7TfIprsi/CxAaCc4oIMt16wUwSoQmk5dgBX7d1GGOE/DIDn0M8LrZS7i8hz
+         IT3kq8Z9oPp+6tsN2undv0HjDvl9Cg0jE3SyCpUbM+7wA5jWP902XT+MmECVwERqtcqA
+         qbbw==
+X-Received: by 2002:a05:690c:488a:b0:798:ff2f:267a with SMTP id
+ 00721157ae682-7a4d6546abcmr101173397b3.52.1775403282032; Sun, 05 Apr 2026
+ 08:34:42 -0700 (PDT)
+MIME-Version: 1.0
+From: Colin Delahunty <colin99delahunty@gmail.com>
+Date: Sun, 5 Apr 2026 11:34:31 -0400
+X-Gm-Features: AQROBzBtg2kMHkTaWiipxPytlVFOKStidN3F_J2yROXifBj0A3um8aF9Thhx_gE
+Message-ID: <CAG6QthYH2y4XX0AkpzEM-edMcdq-4j98htyg95rfJcDxJWhvNw@mail.gmail.com>
+Subject: OLD
+To: "dema.gdindy@gmail.com" <dema.gdindy@gmail.com>
+Content-Type: multipart/alternative; boundary="000000000000f56c9c064eb8496a"
+
+--000000000000f56c9c064eb8496a
+Content-Type: text/plain; charset="UTF-8"
+
+PLEASE SEE THIS OLD EMAIL
+
+-- 
+*Colin Delahunty*
+
+--000000000000f56c9c064eb8496a
+Content-Type: text/html; charset="UTF-8"
+
+<div dir="ltr"><div>PLEASE SEE THIS OLD EMAIL</div><div><br></div><span class="gmail_signature_prefix">-- </span><br><div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature"><div><strong>Colin Delahunty</strong></div></div></div>
+
+--000000000000f56c9c064eb8496a--

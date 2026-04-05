@@ -20,7 +20,7 @@ pub async fn get_sales_users(
     pool: &MySqlPool,
     company_id: i32,
 ) -> Result<Vec<SalesUser>, sqlx::Error> {
-    let users = sqlx::query_as!(
+    sqlx::query_as!(
         SalesUser,
         r#"
         SELECT
@@ -44,8 +44,7 @@ pub async fn get_sales_users(
         company_id
     )
     .fetch_all(pool)
-    .await?;
-    Ok(users)
+    .await
 }
 
 pub async fn set_telegram_id(pool: &MySqlPool, telegram_id: i64) -> Result<(), sqlx::Error> {
@@ -120,7 +119,7 @@ pub async fn get_user_tg_info(
 }
 
 pub async fn email_exists(pool: &MySqlPool, email: &str) -> Result<bool, sqlx::Error> {
-    let exists = sqlx::query_scalar!(
+    sqlx::query_scalar!(
         r#"
         SELECT EXISTS(
             SELECT 1
@@ -131,15 +130,25 @@ pub async fn email_exists(pool: &MySqlPool, email: &str) -> Result<bool, sqlx::E
         email
     )
     .fetch_one(pool)
-    .await?;
-
-    Ok(exists)
+    .await
 }
 
 pub async fn get_id_by_email(pool: &MySqlPool, email: &str) -> Result<Option<i32>, sqlx::Error> {
-    let user_id = sqlx::query_scalar!(r#"SELECT id FROM users WHERE email = ?"#, email)
+    sqlx::query_scalar!(r#"SELECT id FROM users WHERE email = ?"#, email)
         .fetch_optional(pool)
-        .await?;
+        .await
+}
 
-    Ok(user_id)
+pub async fn get_id_by_email_with_forward(
+    pool: &MySqlPool,
+    email: &str,
+    forward: Option<&str>,
+) -> Result<Option<i32>, sqlx::Error> {
+    if let Some(user_id) = get_id_by_email(pool, email).await? {
+        return Ok(Some(user_id));
+    }
+    if let Some(inner_forward) = forward {
+        return get_id_by_email(pool, inner_forward).await;
+    }
+    return Ok(None);
 }

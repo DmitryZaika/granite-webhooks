@@ -54,6 +54,7 @@ pub struct ParsedEmail {
     pub body: String,
     pub sender_email: String,
     pub receiver_email: String,
+    pub forward_to_email: Option<String>,
     pub in_reply_to: Option<String>,
     pub message_id: String,
 }
@@ -64,6 +65,7 @@ impl ParsedEmail {
         body: String,
         sender_email: String,
         receiver_email: String,
+        forward_to_email: Option<String>,
         in_reply_to: Option<String>,
         message_id: String,
     ) -> Self {
@@ -72,6 +74,7 @@ impl ParsedEmail {
             body,
             sender_email,
             receiver_email,
+            forward_to_email,
             in_reply_to,
             message_id,
         }
@@ -173,11 +176,17 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         .to_string();
     let in_reply_to_raw = message.in_reply_to();
     let in_reply_to = parse_header_value(in_reply_to_raw);
+    let mut forward_to_email: Option<String> = None;
+    if let Some(forwarded_to_email_raw) = message.header("X-Forwarded-To") {
+        forward_to_email = parse_header_value(forwarded_to_email_raw);
+    }
+
     let parsed = ParsedEmail::new(
         subject.map(std::string::ToString::to_string),
         reply_body,
         sender_email,
         receiver_email,
+        forward_to_email,
         in_reply_to,
         message_id.to_string(),
     );
@@ -218,6 +227,22 @@ mod local_tests {
                 .to_string(),
         );
         assert_eq!(message_id, correct_message_id);
+    }
+
+    #[test]
+    fn test_parse_email_forward_to() {
+        let email_bytes = read_file_as_bytes("src/tests/data/forwarded.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        let message_id = parsed_email.forward_to_email;
+        assert_eq!(message_id.unwrap(), "dema@granitedepotindy.com".to_string());
+    }
+
+    #[test]
+    fn test_parse_email_forward_to_none() {
+        let email_bytes = read_file_as_bytes("src/tests/data/reply_email1.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        let message_id = parsed_email.forward_to_email;
+        assert_eq!(message_id, None);
     }
 
     #[test]
