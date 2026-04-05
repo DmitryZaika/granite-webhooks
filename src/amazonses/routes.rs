@@ -121,6 +121,7 @@ mod local_tests {
 
     pub struct Email {
         pub receiver_user_id: Option<i32>,
+        pub receiver_email: Option<String>,
         pub sender_user_id: Option<i32>,
         pub subject: Option<String>,
         pub body: Option<String>,
@@ -193,7 +194,7 @@ mod local_tests {
         sqlx::query_as!(
             Email,
             r#"
-            SELECT receiver_user_id, sender_user_id, subject, body, message_id, thread_id
+            SELECT receiver_user_id, receiver_email, sender_user_id, subject, body, message_id, thread_id
             FROM emails
             ORDER BY id ASC
             LIMIT 10
@@ -321,9 +322,8 @@ mod local_tests {
 
     #[sqlx::test]
     async fn received_first(pool: MySqlPool) {
-        let user_id = insert_user(&pool, "info@granitedepotindy.com", Some(456))
-            .await
-            .unwrap();
+        const CLIENT_EMAIL: &str = "info@granitedepotindy.com";
+        let user_id = insert_user(&pool, CLIENT_EMAIL, Some(456)).await.unwrap();
         let mock_client = MockClient::new("src/tests/data/external1.eml");
         let data: S3Event = ses_received_json();
 
@@ -332,7 +332,8 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].receiver_user_id.unwrap(), user_id)
+        assert_eq!(result[0].receiver_user_id.unwrap(), user_id);
+        assert_eq!(result[0].receiver_email, Some(CLIENT_EMAIL.to_string()));
     }
 
     #[sqlx::test]
@@ -347,7 +348,8 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].receiver_user_id.unwrap(), user_id)
+        assert_eq!(result[0].receiver_user_id.unwrap(), user_id);
+        assert_eq!(result[0].receiver_email, Some(CLIENT_EMAIL.to_string()));
     }
 
     #[sqlx::test]
@@ -362,7 +364,8 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].receiver_user_id.unwrap(), user_id)
+        assert_eq!(result[0].receiver_user_id.unwrap(), user_id);
+        assert_eq!(result[0].receiver_email, Some(CLIENT_EMAIL.to_string()));
     }
     #[sqlx::test]
     async fn received_first_forward_both_users(pool: MySqlPool) {
@@ -378,7 +381,8 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].receiver_user_id.unwrap(), user_id)
+        assert_eq!(result[0].receiver_user_id.unwrap(), user_id);
+        assert_eq!(result[0].receiver_email, Some(CLIENT_EMAIL.to_string()));
     }
 
     #[sqlx::test]

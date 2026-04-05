@@ -1,5 +1,9 @@
-use crate::amazonses::parse_email::{ParsedEmail, UploadedAttachment};
+use crate::{
+    amazonses::parse_email::{ParsedEmail, UploadedAttachment},
+    crud::users::ReceivingEmail,
+};
 use sqlx::{MySqlPool, mysql::MySqlQueryResult};
+use uuid::Uuid;
 
 pub async fn get_full_message_id(
     pool: &sqlx::MySqlPool,
@@ -87,10 +91,44 @@ pub async fn insert_email_attachment(
     .await
 }
 
+pub struct SendEmail {
+    subject: Option<String>,
+    body: String,
+    thread_id: String,
+    receiver_user_id: Option<i32>,
+    sender_email: String,
+    receiver_email: Option<String>,
+    message_id: String,
+}
+
+impl SendEmail {
+    pub fn new(
+        email: &ParsedEmail,
+        thread_id: Option<String>,
+        receiver_id: Option<ReceivingEmail>,
+    ) -> Self {
+        let final_thread_id = thread_id.unwrap_or(Uuid::new_v4().to_string());
+        let receiver_email = match receiver_id {
+            Some(ReceivingEmail::To(_)) => Some(email.receiver_email.clone()),
+            Some(ReceivingEmail::Forward(_)) => email.forward_to_email.clone(),
+            None => None,
+        };
+        let receiver_user_id = receiver_id.map(|id| id.inner());
+        Self {
+            subject: email.subject.clone(),
+            body: email.body.clone(),
+            thread_id: final_thread_id,
+            receiver_user_id,
+            sender_email: email.sender_email.clone(),
+            receiver_email,
+            message_id: email.message_id.clone(),
+        }
+    }
+}
+
 pub async fn create_email_with_attachments(
     pool: &MySqlPool,
-    email: &ParsedEmail,
-    prior: &PriorEmail,
+    send: &SendEmail,
     attachments: &[UploadedAttachment],
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     let result = sqlx::query!(
@@ -98,13 +136,13 @@ pub async fn create_email_with_attachments(
         INSERT INTO emails (subject, body, thread_id, receiver_user_id, sender_email, receiver_email, message_id)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         "#,
-        email.subject,
-        email.body,
-        prior.thread_id,
-        prior.receiver_user_id,
-        email.sender_email,
-        email.receiver_email,
-        email.message_id
+        send.subject,
+        send.body,
+        send.thread_id,
+        send.receiver_user_id,
+        send.sender_email,
+        send.receiver_email,
+        send.message_id
     )
     .execute(pool)
     .await?;

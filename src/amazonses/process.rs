@@ -1,13 +1,12 @@
 use axum::http::StatusCode;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
-use uuid::Uuid;
 
 use crate::amazon::bucket::S3Bucket;
 use crate::amazonses::parse_email::{Attachment, ParsedEmail};
 use crate::amazonses::upload::upload_attachments;
-use crate::crud::email::{PriorEmail, create_email_with_attachments, get_prior_email};
-use crate::crud::users::get_id_by_email_with_forward;
+use crate::crud::email::{PriorEmail, SendEmail, create_email_with_attachments, get_prior_email};
+use crate::crud::users::{ReceivingEmail, get_id_by_email_with_forward};
 use crate::libs::constants::{OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 
@@ -38,7 +37,7 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
     message_id: &str,
     email_info: EmailInfo<'_>,
 ) -> BasicResponse {
-    let prior = match get_prior_email_backwards_compatible(pool, message_id).await {
+    let prior_raw = match get_prior_email_backwards_compatible(pool, message_id).await {
         Ok(email) => email,
         Err(error) => {
             tracing::error!(
@@ -50,7 +49,7 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Unable to retrieve prior email");
         }
     };
-    let Some(clean_prior) = prior else {
+    let Some(prior) = prior_raw else {
         tracing::error!(
             bucket = email_info.bucket,
             key = email_info.key,
@@ -71,9 +70,9 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Failed to upload attachments");
         }
     };
-    let result =
-        create_email_with_attachments(pool, email_info.parsed, &clean_prior, &uploaded_attachments)
-            .await;
+    let received = prior.receiver_user_id.map(ReceivingEmail::To);
+    let send_email = SendEmail::new(&email_info.parsed, prior.thread_id, received);
+    let result = create_email_with_attachments(pool, &send_email, &uploaded_attachments).await;
     if let Err(error) = result {
         tracing::error!(
             "Error inserting email: {} into the db: {}",
@@ -102,7 +101,7 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Failed to upload attachments");
         }
     };
-    let Some(receiver_user_id) = get_id_by_email_with_forward(
+    let Some(receiver) = get_id_by_email_with_forward(
         pool,
         &email_info.parsed.receiver_email,
         email_info.parsed.forward_to_email.as_deref(),
@@ -116,13 +115,8 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
         );
         return (StatusCode::NOT_FOUND, "receiver email not found");
     };
-    let prior_email = PriorEmail {
-        thread_id: Some(Uuid::new_v4().to_string()),
-        receiver_user_id: Some(receiver_user_id),
-    };
-    let result =
-        create_email_with_attachments(pool, email_info.parsed, &prior_email, &uploaded_attachments)
-            .await;
+    let send_email = SendEmail::new(&email_info.parsed, None, Some(receiver));
+    let result = create_email_with_attachments(pool, &send_email, &uploaded_attachments).await;
     if let Err(error) = result {
         tracing::error!(
             "Error inserting email: {} into the db: {}",

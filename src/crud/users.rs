@@ -139,16 +139,33 @@ pub async fn get_id_by_email(pool: &MySqlPool, email: &str) -> Result<Option<i32
         .await
 }
 
+pub enum ReceivingEmail {
+    To(i32),
+    Forward(i32),
+}
+
+impl ReceivingEmail {
+    pub fn inner(self) -> i32 {
+        match self {
+            Self::To(value) => value,
+            Self::Forward(value) => value,
+        }
+    }
+}
+
 pub async fn get_id_by_email_with_forward(
     pool: &MySqlPool,
     email: &str,
     forward: Option<&str>,
-) -> Result<Option<i32>, sqlx::Error> {
+) -> Result<Option<ReceivingEmail>, sqlx::Error> {
     if let Some(user_id) = get_id_by_email(pool, email).await? {
-        return Ok(Some(user_id));
+        return Ok(Some(ReceivingEmail::To(user_id)));
     }
-    if let Some(inner_forward) = forward {
-        return get_id_by_email(pool, inner_forward).await;
+    let Some(inner_forward) = forward else {
+        return Ok(None);
+    };
+    if let Some(user_id) = get_id_by_email(pool, inner_forward).await? {
+        return Ok(Some(ReceivingEmail::Forward(user_id)));
     }
     Ok(None)
 }
