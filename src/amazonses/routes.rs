@@ -34,7 +34,7 @@ pub async fn read_receipt_handler(
     if let Err(error) = result {
         tracing::error!(
             "Error inserting email read: {} into the db: {}",
-            message_id,
+            final_message_id,
             error
         );
         return BAD_REQUEST;
