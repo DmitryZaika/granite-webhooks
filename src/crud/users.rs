@@ -150,5 +150,5 @@ pub async fn get_id_by_email_with_forward(
     if let Some(inner_forward) = forward {
         return get_id_by_email(pool, inner_forward).await;
     }
-    return Ok(None);
+    Ok(None)
 }

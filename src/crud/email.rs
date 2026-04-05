@@ -6,7 +6,7 @@ pub async fn get_full_message_id(
     message_id: &str,
 ) -> Result<Option<String>, sqlx::Error> {
     // Create the search pattern (e.g., "abc" becomes "abc%")
-    let pattern = format!("{}%", message_id);
+    let pattern = format!("{message_id}%");
 
     sqlx::query_scalar!(
         r#"
@@ -19,7 +19,7 @@ pub async fn get_full_message_id(
     )
     .fetch_optional(pool)
     .await
-    .map(|res| res.flatten())
+    .map(std::option::Option::flatten)
 }
 
 pub async fn create_email_read(

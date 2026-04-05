@@ -1,6 +1,7 @@
 use axum::http::{StatusCode, Uri};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fmt::Write;
 
 use serde::Serialize;
 
@@ -60,6 +61,16 @@ pub struct Frame {
     pub in_app: Option<bool>,
 }
 
+fn create_fingerprint(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value);
+    let result = hasher.finalize();
+    result.iter().fold(String::new(), |mut output, b| {
+        let _ = write!(output, "{b:02X}");
+        output
+    })
+}
+
 impl PostHogEvent {
     pub fn new_http_exception(
         api_key: impl Into<String>,
@@ -76,10 +87,8 @@ impl PostHogEvent {
             }),
         };
 
-        let mut hasher = Sha256::new();
-        hasher.update(format!("HTTPError|{}|{}", status.as_u16(), uri));
-        let result = hasher.finalize();
-        let fingerprint: String = result.iter().map(|b| format!("{:02x}", b)).collect();
+        let value = format!("HTTPError|{}|{}", status.as_u16(), uri);
+        let fingerprint = create_fingerprint(&value);
         Self {
             api_key: api_key.into(),
             event: "$exception".into(),
@@ -108,10 +117,7 @@ impl PostHogEvent {
             }),
         };
 
-        let mut hasher = Sha256::new();
-        hasher.update(format!("{value}|{title}|"));
-        let result = hasher.finalize();
-        let fingerprint: String = result.iter().map(|b| format!("{:02x}", b)).collect();
+        let fingerprint = create_fingerprint(&format!("{value}|{title}|"));
         Self {
             api_key: api_key.into(),
             event: "$exception".into(),

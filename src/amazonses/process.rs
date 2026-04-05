@@ -24,10 +24,10 @@ pub async fn get_prior_email_backwards_compatible(
 ) -> Result<Option<PriorEmail>, sqlx::Error> {
     if let Some(prior) = get_prior_email(pool, message_id).await? {
         return Ok(Some(prior));
-    };
+    }
     let clean = match message_id.find('@') {
         Some(idx) => &message_id[..idx],
-        None => &message_id,
+        None => message_id,
     };
     get_prior_email(pool, clean).await
 }
