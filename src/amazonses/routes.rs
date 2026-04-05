@@ -6,8 +6,8 @@ use crate::amazon::bucket::{CustomClient, S3Bucket};
 use crate::amazonses::parse_email::parse_email;
 use crate::amazonses::process::{EmailInfo, process_first_email, process_reply_email};
 use crate::amazonses::schemas::{S3Event, SesEvent};
-use crate::crud::email::create_email_read;
-use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
+use crate::crud::email::{create_email_read, get_full_message_id};
+use crate::libs::constants::{BAD_REQUEST, NOT_FOUND_RESPONSE, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 
 pub async fn read_receipt_handler(
@@ -18,7 +18,19 @@ pub async fn read_receipt_handler(
     let user_agent = info.detail.open.user_agent;
     let ip_address = info.detail.open.ip_address;
 
-    let result = create_email_read(&pool, &message_id, &user_agent, &ip_address).await;
+    let final_message_id = match get_full_message_id(&pool, &message_id).await {
+        Ok(Some(message_id)) => message_id,
+        Ok(None) => return NOT_FOUND_RESPONSE,
+        Err(error) => {
+            tracing::error!(
+                "Error fetching email read: {} from the db: {}",
+                message_id,
+                error
+            );
+            return BAD_REQUEST;
+        }
+    };
+    let result = create_email_read(&pool, &final_message_id, &user_agent, &ip_address).await;
     if let Err(error) = result {
         tracing::error!(
             "Error inserting email read: {} into the db: {}",
@@ -212,11 +224,12 @@ mod local_tests {
     async fn test_ses_open_event_success(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
-        let expected_message_id = "010f019a9974b389-60efe038-3845-92e7-45c43cdc6ca2-000000";
+        let message_id =
+            "010f019a9974b389-60efe038-3845-92e7-45c43cdc6ca2-000000@us-east-2.amazonses.com";
         let expected_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36 Edge/12.246 Mozilla/5.0";
         let expected_ip = "108.177.2.32";
 
-        insert_email(&pool, expected_message_id).await.unwrap();
+        insert_email(&pool, message_id).await.unwrap();
 
         let response = app
             .post("/ses/read-receipt")
@@ -227,7 +240,7 @@ mod local_tests {
 
         let result = check_db_email_reads(&pool).await.unwrap();
 
-        assert_eq!(result.message_id, expected_message_id);
+        assert_eq!(result.message_id, message_id);
         assert_eq!(result.user_agent.unwrap(), expected_user_agent);
         assert_eq!(result.ip_address.unwrap(), expected_ip);
     }

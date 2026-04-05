@@ -1,6 +1,27 @@
 use crate::amazonses::parse_email::{ParsedEmail, UploadedAttachment};
 use sqlx::{MySqlPool, mysql::MySqlQueryResult};
 
+pub async fn get_full_message_id(
+    pool: &sqlx::MySqlPool,
+    message_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    // Create the search pattern (e.g., "abc" becomes "abc%")
+    let pattern = format!("{}%", message_id);
+
+    sqlx::query_scalar!(
+        r#"
+        SELECT message_id
+        FROM emails
+        WHERE message_id LIKE ?
+        LIMIT 1
+        "#,
+        pattern
+    )
+    .fetch_optional(pool)
+    .await
+    .map(|res| res.flatten())
+}
+
 pub async fn create_email_read(
     pool: &MySqlPool,
     message_id: &str,

@@ -1,0 +1,1 @@
+ALTER TABLE email_reads MODIFY COLUMN message_id VARCHAR(500) NOT NULL;
