@@ -1,4 +1,3 @@
-use crate::amazon::email::send_message;
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
 use crate::crud::leads::create_deal;
 use crate::crud::leads::{assign_lead, get_default_list_id_from_company_id};
@@ -13,6 +12,7 @@ use crate::telegram::utils::parse_code;
 use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
 use axum::extract::State;
 use axum::http::StatusCode;
+use common::amazon::email::send_message;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
