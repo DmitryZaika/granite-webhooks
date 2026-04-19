@@ -1,9 +1,19 @@
 use lambda_runtime::{tracing, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-#[derive(Deserialize)]
-pub(crate) struct IncomingMessage {
-    command: String,
+#[derive(Deserialize, Debug)]
+pub(crate) struct EventBridgeEvent {
+    pub account: String,
+    pub detail: Value,
+    #[serde(rename = "detail-type")]
+    pub detail_type: String,
+    pub id: String,
+    pub region: String,
+    pub resources: Vec<String>,
+    pub source: String,
+    pub time: String,
+    pub version: String,
 }
 
 #[derive(Serialize)]
@@ -17,17 +27,17 @@ pub(crate) struct OutgoingMessage {
 /// There are some code example in the following URLs:
 /// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
 /// - https://github.com/aws-samples/serverless-rust-demo/
-pub(crate) async fn function_handler(event: LambdaEvent<String>) -> Result<OutgoingMessage, Error> {
-    tracing::info!("{:?}", event);
-    // Extract some useful info from the request
+pub(crate) async fn function_handler(
+    event: LambdaEvent<EventBridgeEvent>,
+) -> Result<OutgoingMessage, Error> {
+    // This will now print the full JSON structure to your CloudWatch logs
+    tracing::info!("Received event: {:?}", event.payload);
 
-    // Prepare the outgoing message
     let resp = OutgoingMessage {
         req_id: event.context.request_id,
-        msg: format!("Command ."),
+        msg: "Check CloudWatch logs for the payload structure.".to_string(),
     };
 
-    // Return `OutgoingMessage` (it will be serialized to JSON automatically by the runtime)
     Ok(resp)
 }
 
@@ -38,8 +48,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_generic_handler() {
-        let event = LambdaEvent::new("hello".to_string(), Context::default());
+        // Mocking the data we saw in the logs
+        let incoming = EventBridgeEvent {
+            account: "123456789012".to_string(),
+            detail: serde_json::json!({}),
+            detail_type: "Scheduled Event".to_string(),
+            id: "uuid-1234".to_string(),
+            region: "us-east-2".to_string(),
+            resources: vec!["arn:aws:scheduler...".to_string()],
+            source: "aws.scheduler".to_string(),
+            time: "2026-04-19T16:04:00Z".to_string(),
+            version: "0".to_string(),
+        };
+
+        let event = LambdaEvent::new(incoming, Context::default());
         let response = function_handler(event).await.unwrap();
-        assert_eq!(response.msg, "Command test.");
+
+        // Adjusting expectation to match the actual fields
+        assert!(response.msg.contains("Check"));
     }
 }
