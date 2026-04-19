@@ -384,6 +384,20 @@ mod local_tests {
         assert_eq!(result[0].receiver_user_id.unwrap(), user_id);
         assert_eq!(result[0].receiver_email, Some(CLIENT_EMAIL.to_string()));
     }
+    
+    #[sqlx::test(migrations = "../migrations")]
+    async fn received_first_forward_from_user(pool: MySqlPool) {
+        const CLIENT_EMAIL: &str = "dema@granitedepotindy.com";
+        let user_id = insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
+        let mock_client = MockClient::new("src/tests/data/forwarded_from_user.eml");
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response.0, StatusCode::OK);
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].receiver_user_id.unwrap(), user_id);
+        assert_eq!(result[0].receiver_email, Some(CLIENT_EMAIL.to_string()));
+    }
 
     #[sqlx::test(migrations = "../migrations")]
     async fn received_not_a_reply_user(pool: MySqlPool) {
