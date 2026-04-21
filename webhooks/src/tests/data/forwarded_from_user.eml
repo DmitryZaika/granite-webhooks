@@ -1,0 +1,187 @@
+Return-Path: <majukita777@gmail.com>
+Received: from mail-vk1-f198.google.com (mail-vk1-f198.google.com [209.85.221.198])
+ by inbound-smtp.us-east-2.amazonaws.com with SMTP id mcff7lvm9sr66srpngd1jo8bso3qd3v5pe1hu881
+ for dema@granitedepotindy.com;
+ Sun, 19 Apr 2026 16:44:38 +0000 (UTC)
+Received-SPF: pass (spfCheck: domain of _spf.google.com designates 209.85.221.198 as permitted sender) client-ip=209.85.221.198; envelope-from=majukita777@gmail.com; helo=mail-vk1-f198.google.com;
+Authentication-Results: amazonses.com;
+ spf=pass (spfCheck: domain of _spf.google.com designates 209.85.221.198 as permitted sender) client-ip=209.85.221.198; envelope-from=majukita777@gmail.com; helo=mail-vk1-f198.google.com;
+ dkim=pass header.i=@gmail.com;
+ dmarc=pass header.from=gmail.com;
+X-SES-RECEIPT: AEFBQUFBQUFBQUFGVzhIV3YvbW5sVzJteXpCTGJ3WVB4c0xzR2JCQWNJU0JHaUFJQ1BwVGpJNEp1SUhOWVB0SnpsdDYwYlVvV0JoVzNnVkU2YlliQkltZ2RZeDhUaldyWWlGWkJheFNNdlZVTXQvNzJmNEw1TzhidWxDTHlKSDJKUS94Vmx6RmxwYzBHWlF6ZERMOExQMk5YNmNoUzRuREhDVTlwQ3pseUcxV0Q0NG14T0Y4NzUwa1hmbVc2alk3dzNNWnZmNEVHYkd1YmFrbjhFR1hkOHJ4enNKZXF0dzlyMXNnUlJhQm1mTUsvVkRZNDR1UXpaOXNEa0V2RGFBTnRKaW1BZXNSM1Fja2taU3ltVmhHK3pJa0t2SWRwL3J3RklvS01rVVgxN21KaitsY2x4NHMydVE9PQ==
+X-SES-DKIM-SIGNATURE: a=rsa-sha256; q=dns/txt; b=u0B0BCqx2vj4gZIDGmwhQCCz6NJ+Ink/5T5kZt02c7RYONVD2xLQck1kzegN+JRy9awzkobcURFyknfVL8BiYOz2l6IHsT7zjBUUeIlGtY6ZCvlQXEo+Uc92phIzR64dn6MQBFrC14c80yKU9e+X+FW5qJthJ9KF3/IMpzXSE3g=; c=relaxed/simple; s=ndjes4mrtuzus6qxu3frw3ubo3gpjndv; d=amazonses.com; t=1776617078; v=1; bh=VLwGK8Tcp5sXsmhKzqA5cpp4V4we+BCpC+axDW6cB9Q=; h=From:To:Cc:Bcc:Subject:Date:Message-ID:MIME-Version:Content-Type:X-SES-RECEIPT;
+Received: by mail-vk1-f198.google.com with SMTP id 71dfb90a1353d-56f66493ef1so828495e0c.0
+        for <dema@granitedepotindy.com>; Sun, 19 Apr 2026 09:44:38 -0700 (PDT)
+ARC-Seal: i=3; a=rsa-sha256; t=1776617077; cv=pass;
+        d=google.com; s=arc-20240605;
+        b=d2Pk0kQjQnOZlEo3r1Bk1CdT8egGSZNvriiMTpQhDaseSeaGdLgjGpj/sJjmM26AxX
+         lIVQMzASYqlhd5z2WWAs0hsGENT3lFPBc7K2Vky7Hdd8XkVvWC5MFn31Fvsf1KUKMDr9
+         MGPSEj0etpcnJTZoJP74brGg9Qk3+HCOBG69z80XMal3dNPlDfRrNGBgvROhlUPFrt/E
+         WVbzMWpuavUikMV8kaPKdk8Zpy8ySc159L3BeQxsVdJ4jgkFMM7udk70fFJ7cKDLil3B
+         2giKwwXIH+h+xvWqMcNstTvnh7TjLqHLB/jtI7C+cDwGlR/N+F2CQhgaZ+FQjji474QT
+         25WQ==
+ARC-Message-Signature: i=3; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20240605;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=VLwGK8Tcp5sXsmhKzqA5cpp4V4we+BCpC+axDW6cB9Q=;
+        fh=KAQxCXGQP0A9xeUTzPsC3gR/dqREw8ZgUt48SBUrdjk=;
+        b=Nr5b6ve5S6L9fj71FUXHIv+Y3xhQ7MiGqeobOK7CEzSkthiyHASx7WlaFu5/ZliGav
+         2eBd0AXsgMW18KiypVB8dUjB0n0C6tTZ2Ro3PVarb0UpQif2zYN2Lf4Jty9ndQ6IhIDa
+         CqfOAy5ILX0brpxOFYdOjW1pbYFQmFKu49+hlajGbxC+xprr8DkCq4tGDqT/rubKueBR
+         W320w+PO4eIlfvo2sFvQ274C8tH906mZX7Q51J+XJ8Z/fEhmbx2rCN5XsKSfQJBaFJ14
+         0CTvVCEsAC0NkXHWJM5VeTb7Ua6DAxxUifDyFjAL+YHPSKXXfwPMM2K/KiNhfh0uOTs6
+         5kAg==;
+        dara=google.com
+ARC-Authentication-Results: i=3; mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=lGrkgSND;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of majukita777@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=majukita777@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20251104; t=1776617077; x=1777221877;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature:x-gm-gg:x-gm-message-state:from:to:cc:subject:date
+         :message-id:reply-to;
+        bh=VLwGK8Tcp5sXsmhKzqA5cpp4V4we+BCpC+axDW6cB9Q=;
+        b=QPyoKda5y/wOSrGhdtnoNCxDVAmBbCWs2OcuVU5V99YyUQCFEEiuw/0rEXxbh5zFqN
+         ZkNkPxiQJlOaYfwRm8Mdv7k/kTkkCyLgbr4L4TxOi83sQrToeLZlKtXBylltnOowOQaH
+         xVwa/c2i9+TWSmMvj3MoRs0lk0B+xBwcPWxV5tNrqBuOjoV01KBl4CXyDwYiScUBC2Yu
+         cH8AraFr17bMNx2BZhItBKdgcDWLNoovnfA7hbLNkeF3Uw956e+tCQlrB3Qdzvx3aM7V
+         vplGUs6qCrWWpyBBONR1hBj4cay/zxxJoqcax9ATWWQO3i7wtL1ZGck2zhbPc6p7ogKn
+         AlFQ==
+X-Gm-Message-State: AOJu0YxWJz+32UzTRqDiVNp4qi6jUvTCaS+Nu/DHMxGVO3DfKKOsXhPy
+	3z2o6Nq8UQK5j/ddDH4gUmu1MRGTWuXewMCbP54FgmfxE6n6J75ZZQulB63AbfPLeCqF0VM5B3h
+	dtrf6HIW9VZCMFKN3FCCWtctHpXgexO4BUJ2fJtPWZaW7VmPbiRdDykn2bTDb2BNo3AAhcExFxr
+	ct8lIVzSKGtPE5DDOGwqX4hK0kM6rlRBLhMuutrQAAkT/AYTVMjzE7kNdARiuaYhKM6PXuA6478
+	lA+Tyve9Q==
+X-Gm-Gg: AeBDiev8cC7OgUmKEogY/N4bU70RQ+3cYvpdq2ukrGzdU/lwcCyaF6J5nxygvx21G8J
+	BvBtxul8ZF4h0MmGtCp1ZLmw+HzxoXcBbrAQtK5W2bLCPxANJhiS2iI9/8tVpHwa1UTDakkDIvx
+	ezoGHmRljEf5VmqMZgNj8vx53sO5vwYnjt2BtBza/JI3YfitO30mLKjV7G8nbl3xDUeQzVK0wVs
+	2gYbPpaC/xZJsghh0dk19z7P6d+2+lNNDGp0FBoqKcwJ0riVSs6rj4YLnkBearOzY9NpfQND6ua
+	ifFFHFmZT21viqwoeovsbhYxXhuJGCAcsFJNqpNH/yOownf9iX/reRVS/L4h80sF4jG+Hnl/owT
+	B1hzXGGVgo9ry
+X-Received: by 2002:a05:6102:149d:b0:613:6b44:3fa5 with SMTP id ada2fe7eead31-616f806ce87mr4387296137.16.1776617077573;
+        Sun, 19 Apr 2026 09:44:37 -0700 (PDT)
+X-Received: by 2002:a05:6102:149d:b0:613:6b44:3fa5 with SMTP id ada2fe7eead31-616f806ce87mr4387285137.16.1776617076720;
+        Sun, 19 Apr 2026 09:44:36 -0700 (PDT)
+ARC-Seal: i=2; a=rsa-sha256; t=1776617076; cv=pass;
+        d=google.com; s=arc-20240605;
+        b=BDWTgWkKvkEjHHfCw+c3gdRYrJTLA5E5kZfio/o3TAECnGYmPaHyyUqQpIoPNzLHkX
+         p6aWR6z8y6hBQxQY+ATg2ud3+BW+YBg/h/oPQuM0OZx3uEJ/G81lgQjesmLRwwSyKuLd
+         wvGm6YKpiEDb2phGeoSDkrUSejlM5SXanvAwpmNCSW8SnB9WcPMGo7ZB79YFHvUy725m
+         ZwRZEGPfLbclpLevnFWfN01AVVy2gPDAMn9PX7xoopiWc41Y5DtfByXLkx+NBj3lKz4T
+         kQIv3iRCW56hJShzrKA719z1x0pcCAsGYiNvZh9DFK29vkEKjOHcadSeL8wDth1RdBc+
+         BGOg==
+ARC-Message-Signature: i=2; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20240605;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=VLwGK8Tcp5sXsmhKzqA5cpp4V4we+BCpC+axDW6cB9Q=;
+        fh=KAQxCXGQP0A9xeUTzPsC3gR/dqREw8ZgUt48SBUrdjk=;
+        b=i1qs7NJrL4WumaLRUZpVZbxgwvfrS+g/Fnty1Msl1Or8HwgeDmk0JU93oW6LWLybs6
+         4gjEWBn8RYDhKklt/tJ+fzOMj6XLpvgKRSzoDq+Hi4jU9MCJulcE/3ANn6U1fuQeb+rx
+         ko5En5/YbGj4PPgwUGRhrOFYA8ykLtFQ1wTG+PDIHR7tgxa5nbroU1f3/lPYfb6bk0RH
+         fod/I2DrnOriImPj5w6JcIHHB977yA54PKjuSpjag8PEQ6XttRnU2L2hewBx1lQxDRf1
+         g/dM5bNWNHN1rHomQUHEsQYUif8CZDHc1D25ccF6+mOZpzeEBLhcUS5u7oKf4I1y6T1z
+         K/cQ==;
+        dara=google.com
+ARC-Authentication-Results: i=2; mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=lGrkgSND;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of majukita777@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=majukita777@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+Return-Path: <majukita777@gmail.com>
+Received: from mail-sor-f41.google.com (mail-sor-f41.google.com. [209.85.220.41])
+        by mx.google.com with SMTPS id ada2fe7eead31-617485b3e67sor865573137.9.2026.04.19.09.44.36
+        for <dema@granitedepotindy.com>
+        (Google Transport Security);
+        Sun, 19 Apr 2026 09:44:36 -0700 (PDT)
+Received-SPF: pass (google.com: domain of majukita777@gmail.com designates 209.85.220.41 as permitted sender) client-ip=209.85.220.41;
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=lGrkgSND;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of majukita777@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=majukita777@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+ARC-Seal: i=1; a=rsa-sha256; t=1776617076; cv=none;
+        d=google.com; s=arc-20240605;
+        b=hIrxOhpbch+Do/y3Oqcr7RtrEzN+xCZDq6D6aieKDywtNzDQ/ETKiLOIHNfOA/I8vu
+         CoR5946W9DjX/eq3ziNV21bNSqvEis/nZq5TAMgZSA1qV/QXxi43JPr9ryAppjLESwuk
+         zj3jaHOwXcLrB0NYPPrIKQnYNDjuGkI0kBapBbilGoUvpRKv4QRRmoX7VRQxGHErMQ9x
+         8ZlA+3R5pw+9ULDXw5XYoPxp5554WkEMb3S+GOfP8+UuykSzZc52Ycu/1zgLwdFHWC4W
+         Dn1DWJvEBtNH1g/y71EQzh+G/7vrZNvZ6jYy0pWkXqsQdTvQnRgTf3RvrhaIXNdvTpku
+         2sTw==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20240605;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=VLwGK8Tcp5sXsmhKzqA5cpp4V4we+BCpC+axDW6cB9Q=;
+        fh=KAQxCXGQP0A9xeUTzPsC3gR/dqREw8ZgUt48SBUrdjk=;
+        b=Vxvp2RjUzMG9p6KsJvaW1q5e8jkgNwT9kCB06cnSElCF0hiC6vy4B51TZWXwyQk/YC
+         rkMLljIg+8vxmFLoNDGqsL7d2a8RK0aTHwWC06CEFt/+U5+dX65hR+arRYTxqwPgBnWg
+         ZTl+tZIOG5z2O/Z1bgufnd5Dsiqeq45aSleohy9azIVvJmgUDNBdVkM2THUJLBoM0J5d
+         VMqKzpbd64gODWBX5tdVQjlEi3HoGjxylC8Gv1gWL5U54IWm9r92uIpl7XGCov9IgngR
+         eJ76GRONZ/P7y51qh1aZEh7aA6jb9+yDILUZfYuxjrEZLyNPkAhLEaUgP9bNBFNrskfa
+         0TCQ==;
+        darn=granitedepotindy.com
+ARC-Authentication-Results: i=1; mx.google.com; arc=none
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20251104; t=1776617076; x=1777221876; darn=granitedepotindy.com;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :from:to:cc:subject:date:message-id:reply-to;
+        bh=VLwGK8Tcp5sXsmhKzqA5cpp4V4we+BCpC+axDW6cB9Q=;
+        b=lGrkgSNDWFRaeiCXoh3F49P5NYFSX/el5nNTVKGcxNQq0BQIk1gEEfu/Syyg8COPWU
+         1O33zOs2eMChvhX6mYmSjtPuoU6btSyzr2tRu52YoU9W8rtpikCf/71qu+Eum3dzIL0s
+         +jjBf3ejCRhZ2dlKmMpix8Shlo43lrzSCSqnNYGVci1HhbZlr55wx9m94XwVo5UZuAYH
+         Af0CqfMZENn6W3CtLOH0wl1AVww2rIspKWrQJ1aIa75aRkgFGIQuM8uj6aJ/pBsdZGAo
+         6XNJSEPXhVzKuY3Cs78hpXhYrHo6cUa5sUrlxRsrrj24Qd01pEv/RdHQXysY3HuBBaGL
+         vucQ==
+X-Received: by 2002:a05:6102:2927:b0:608:9a34:c8ea with SMTP id
+ ada2fe7eead31-616f68d7618mr4318005137.10.1776617076056; Sun, 19 Apr 2026
+ 09:44:36 -0700 (PDT)
+MIME-Version: 1.0
+References: <CAG6Qthb3SMLmdPYcwqrctXcvG4tm+o64nvv_Oswiuvxa+ok9Gg@mail.gmail.com>
+In-Reply-To: <CAG6Qthb3SMLmdPYcwqrctXcvG4tm+o64nvv_Oswiuvxa+ok9Gg@mail.gmail.com>
+From: Dima Zaika <majukita777@gmail.com>
+Date: Sun, 19 Apr 2026 12:44:28 -0400
+X-Gm-Features: AQROBzDhlIktYnaBFDUu77Wm3KXG4kz6OvyJacIbloSDCe8bQEz4ClKMoaR7JNI
+Message-ID: <CAKMM_GO9CuxocG=Jn-ARu0=rbzKSEemcQ0E=LKdUO2u0Mh_Dpg@mail.gmail.com>
+Subject: Fwd:
+To: Dema Granite Depot <dema@granitedepotindy.com>
+Content-Type: multipart/alternative; boundary="000000000000b866d5064fd2e53f"
+
+--000000000000b866d5064fd2e53f
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+---------- Forwarded message ---------
+From: Colin Delahunty <colin99delahunty@gmail.com>
+Date: Sun, Apr 19, 2026 at 12:43=E2=80=AFPM
+Subject:
+To: =D0=94=D0=BC=D0=B8=D1=82=D1=80=D0=B8=D0=B9 =D0=97=D0=B0=D0=B8=D0=BA=D0=
+=B0 <majukita777@gmail.com>
+
+
+Hello
+
+--=20
+*Colin Delahunty*
+
+--000000000000b866d5064fd2e53f
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<div dir=3D"ltr"><br><br><div class=3D"gmail_quote gmail_quote_container"><=
+div dir=3D"ltr" class=3D"gmail_attr">---------- Forwarded message ---------=
+<br>From: <strong class=3D"gmail_sendername" dir=3D"auto">Colin Delahunty</=
+strong> <span dir=3D"auto">&lt;<a href=3D"mailto:colin99delahunty@gmail.com=
+">colin99delahunty@gmail.com</a>&gt;</span><br>Date: Sun, Apr 19, 2026 at 1=
+2:43=E2=80=AFPM<br>Subject: <br>To: =D0=94=D0=BC=D0=B8=D1=82=D1=80=D0=B8=D0=
+=B9 =D0=97=D0=B0=D0=B8=D0=BA=D0=B0 &lt;<a href=3D"mailto:majukita777@gmail.=
+com">majukita777@gmail.com</a>&gt;<br></div><br><br><div dir=3D"ltr"><div>H=
+ello</div><div><br></div><span class=3D"gmail_signature_prefix">-- </span><=
+br><div dir=3D"ltr" class=3D"gmail_signature" data-smartmail=3D"gmail_signa=
+ture"><div><strong>Colin Delahunty</strong></div></div></div>
+</div></div>
+
+--000000000000b866d5064fd2e53f--

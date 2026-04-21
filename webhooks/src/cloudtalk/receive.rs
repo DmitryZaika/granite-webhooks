@@ -48,7 +48,7 @@ mod tests {
         .unwrap()
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn test_basic_sms(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 

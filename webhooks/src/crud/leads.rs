@@ -344,13 +344,13 @@ mod tests {
         Ok(rec.last_insert_id())
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn test_get_default_list_id_from_company_id(pool: MySqlPool) {
         let id = get_default_list_id_from_company_id(&pool, 1).await.unwrap();
         assert_eq!(id, 1);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn get_assigned_list_id_from_company_id(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
@@ -361,7 +361,7 @@ mod tests {
         assert_eq!(id as u64, list_id);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn test_multiple_default_groups(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
 
@@ -379,7 +379,7 @@ mod tests {
         assert_eq!(id as u64, list_id1);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn test_no_default_groups(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
 
@@ -400,7 +400,7 @@ mod tests {
         assert_eq!(id, 1);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn test_deleted_records_ignored(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(id as u64, valid_list_id);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn test_deals_list_ordering(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();

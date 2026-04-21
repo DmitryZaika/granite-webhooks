@@ -98,7 +98,7 @@ mod local_tests {
         .unwrap()
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn test_basic_facebook(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
@@ -115,7 +115,7 @@ mod local_tests {
         assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn test_basic_wordpress(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
@@ -131,7 +131,7 @@ mod local_tests {
         assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn test_basic_new_lead_form(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -147,7 +147,7 @@ mod local_tests {
         assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn send_multiple_managers(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -171,7 +171,7 @@ mod local_tests {
         assert_eq!(first_message.0, 456);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn duplicate_send_multiple_lead_notifies_manager(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -207,7 +207,7 @@ mod local_tests {
         assert_eq!(first_message.0, 456);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn duplicate_lead_notifies_manager(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -243,7 +243,7 @@ mod local_tests {
         assert_eq!(last_message.0, 123);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn duplicate_lead_notifies_manager_also_sales(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -281,7 +281,7 @@ mod local_tests {
         assert_eq!(last_message.0, 123);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn duplicate_lead_no_deal_existing_customer(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "13179995973" });
@@ -323,7 +323,7 @@ mod local_tests {
         assert_eq!(second_message.0, 123);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn duplicate_lead_notifies_manager_no_deal_no_existing(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -353,7 +353,7 @@ mod local_tests {
         );
         assert_eq!(second_message.0, 456);
     }
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn wordpress_duplicate_lead_notifies_manager_no_deal_no_existing(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "Phone": "+13179995973" });

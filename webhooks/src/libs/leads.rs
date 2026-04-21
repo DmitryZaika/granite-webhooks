@@ -1,4 +1,3 @@
-use crate::amazon::email::send_message;
 use crate::axum_helpers::guards::Telegram;
 use crate::crud::leads::{
     Deal, ExistingCustomer, create_deal_from_lead, find_existing_customer,
@@ -14,6 +13,7 @@ use crate::telegram::send::{
     send_plain_message_to_chat, send_telegram_duplicate_notification, send_telegram_manager_assign,
 };
 use crate::telegram::utils::lead_url;
+use common::amazon::email::send_message;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
