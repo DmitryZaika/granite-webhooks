@@ -1,4 +1,5 @@
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
+use crate::crud::email_template::get_templates_from_list_id;
 use crate::crud::leads::create_deal;
 use crate::crud::leads::{assign_lead, get_default_list_id_from_company_id};
 use crate::crud::user_position::get_user_position;
@@ -243,6 +244,8 @@ async fn handle_assign_lead<T: Telegram>(
             return internal_error(ERR_DB);
         }
     };
+    // If the group requires a scheduled email, add it
+    let email_templates = get_templates_from_list_id(pool, list_id).await.unwrap();
     let deal_id = result.last_insert_id();
     let lead_link = lead_url(deal_id);
     if let Some(telegram_id) = tg_info.telegram_id {
