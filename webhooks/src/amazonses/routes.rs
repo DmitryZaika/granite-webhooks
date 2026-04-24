@@ -448,6 +448,28 @@ mod local_tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
     }
+    #[sqlx::test(migrations = "../migrations")]
+    async fn dima_no_receiver_found(pool: MySqlPool) {
+        let mock_client = MockClient::new("src/tests/data/failed_1.eml");
+        const CLIENT_EMAIL: &str = "dema@granitedepotindy.com";
+        let user_id = insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
+
+        let message_id =
+            "010f019dad3defa2-120b60d6-0844-43a4-900d-56cc99b643cf-000000@us-east-2.amazonses.com";
+        insert_email(&pool, message_id).await.unwrap();
+
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+
+        println!("{:?}", response.1);
+        assert_eq!(response.0, StatusCode::OK);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].receiver_email.as_deref().unwrap(), CLIENT_EMAIL);
+        assert_eq!(result[0].receiver_user_id, Some(user_id));
+        assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
+    }
 
     #[sqlx::test(migrations = "../migrations")]
     async fn response_to_received_success(pool: MySqlPool) {
