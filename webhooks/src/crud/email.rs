@@ -129,12 +129,13 @@ impl SendEmail {
 pub async fn create_email_with_attachments(
     pool: &MySqlPool,
     send: &SendEmail,
+    location: &str,
     attachments: &[UploadedAttachment],
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     let result = sqlx::query!(
         r#"
-        INSERT INTO emails (subject, body, thread_id, receiver_user_id, sender_email, receiver_email, message_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO emails (subject, body, thread_id, receiver_user_id, sender_email, receiver_email, message_id, bucket)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         "#,
         send.subject,
         send.body,
@@ -142,7 +143,8 @@ pub async fn create_email_with_attachments(
         send.receiver_user_id,
         send.sender_email,
         send.receiver_email,
-        send.message_id
+        send.message_id,
+        location
     )
     .execute(pool)
     .await?;

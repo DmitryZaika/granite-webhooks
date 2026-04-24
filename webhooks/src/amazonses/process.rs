@@ -17,6 +17,12 @@ pub struct EmailInfo<'a> {
     pub attachments: Vec<Attachment>,
 }
 
+impl EmailInfo<'_> {
+    pub fn s3_url(&self) -> String {
+        format!("s3://{}/{}", self.bucket, self.key)
+    }
+}
+
 pub async fn get_prior_email_backwards_compatible(
     pool: &MySqlPool,
     message_id: &str,
@@ -37,6 +43,7 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
     message_id: &str,
     email_info: EmailInfo<'_>,
 ) -> BasicResponse {
+    let s3_url = email_info.s3_url();
     let prior_raw = match get_prior_email_backwards_compatible(pool, message_id).await {
         Ok(email) => email,
         Err(error) => {
@@ -72,7 +79,8 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
     };
     let received = prior.receiver_user_id.map(ReceivingEmail::To);
     let send_email = SendEmail::new(&email_info.parsed, prior.thread_id, received);
-    let result = create_email_with_attachments(pool, &send_email, &uploaded_attachments).await;
+    let result =
+        create_email_with_attachments(pool, &send_email, &s3_url, &uploaded_attachments).await;
     if let Err(error) = result {
         tracing::error!(
             "Error inserting email: {} into the db: {}",
@@ -89,6 +97,7 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
     client: C,
     email_info: EmailInfo<'_>,
 ) -> BasicResponse {
+    let s3_url = email_info.s3_url();
     let uploaded_attachments = match upload_attachments(client, email_info.attachments).await {
         Ok(attachments) => attachments,
         Err(error) => {
@@ -116,7 +125,8 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
         return (StatusCode::NOT_FOUND, "receiver email not found");
     };
     let send_email = SendEmail::new(&email_info.parsed, None, Some(receiver));
-    let result = create_email_with_attachments(pool, &send_email, &uploaded_attachments).await;
+    let result =
+        create_email_with_attachments(pool, &send_email, &s3_url, &uploaded_attachments).await;
     if let Err(error) = result {
         tracing::error!(
             "Error inserting email: {} into the db: {}",
