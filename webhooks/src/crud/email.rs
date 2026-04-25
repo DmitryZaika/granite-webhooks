@@ -97,7 +97,7 @@ pub struct SendEmail {
     thread_id: String,
     receiver_user_id: Option<i32>,
     sender_email: String,
-    receiver_email: Option<String>,
+    pub receiver_email: Option<String>,
     message_id: String,
 }
 

@@ -158,7 +158,7 @@ mod local_tests {
     }
 
     const BUCKET_NAME: Option<&str> =
-        Some("granite-ses-inbound-emails/p51f95lgdaa8rpcjp0q7loemss3a17avpnc48ug1");
+        Some("s3://granite-ses-inbound-emails/p51f95lgdaa8rpcjp0q7loemss3a17avpnc48ug1");
 
     async fn insert_email(
         pool: &MySqlPool,
@@ -466,9 +466,9 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].receiver_email.as_deref().unwrap(), CLIENT_EMAIL);
-        assert_eq!(result[0].receiver_user_id, Some(user_id));
-        assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
+        assert_eq!(result[1].receiver_email.as_deref().unwrap(), CLIENT_EMAIL);
+        assert_eq!(result[1].receiver_user_id, Some(user_id));
+        assert_eq!(result[1].bucket.as_deref(), BUCKET_NAME);
     }
 
     #[sqlx::test(migrations = "../migrations")]
