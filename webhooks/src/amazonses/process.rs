@@ -84,7 +84,7 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
             .unwrap()
             .map(ReceivingEmail::To),
     };
-    let send_email = SendEmail::new(&email_info.parsed, prior.thread_id, received_id);
+    let send_email = SendEmail::new(email_info.parsed, prior.thread_id, received_id);
     let result =
         create_email_with_attachments(pool, &send_email, &s3_url, &uploaded_attachments).await;
     if let Err(error) = result {
@@ -130,7 +130,7 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
         );
         return (StatusCode::NOT_FOUND, "receiver email not found");
     };
-    let send_email = SendEmail::new(&email_info.parsed, None, Some(receiver));
+    let send_email = SendEmail::new(email_info.parsed, None, Some(receiver));
     let result =
         create_email_with_attachments(pool, &send_email, &s3_url, &uploaded_attachments).await;
     if let Err(error) = result {

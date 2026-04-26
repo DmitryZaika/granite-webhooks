@@ -245,7 +245,7 @@ async fn handle_assign_lead<T: Telegram>(
         }
     };
     // If the group requires a scheduled email, add it
-    let email_templates = get_templates_from_list_id(pool, list_id).await.unwrap();
+    let _email_templates = get_templates_from_list_id(pool, list_id).await.unwrap();
     let deal_id = result.last_insert_id();
     let lead_link = lead_url(deal_id);
     if let Some(telegram_id) = tg_info.telegram_id {

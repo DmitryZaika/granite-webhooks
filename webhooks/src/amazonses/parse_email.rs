@@ -176,10 +176,11 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         .to_string();
     let in_reply_to_raw = message.in_reply_to();
     let in_reply_to = parse_header_value(in_reply_to_raw);
-    let mut forward_to_email: Option<String> = None;
-    if let Some(forwarded_to_email_raw) = message.header("X-Forwarded-To") {
-        forward_to_email = parse_header_value(forwarded_to_email_raw);
-    }
+    let forward_to_email = if let Some(forwarded_to_email_raw) = message.header("X-Forwarded-To") {
+        parse_header_value(forwarded_to_email_raw)
+    } else {
+        None
+    };
 
     let parsed = ParsedEmail::new(
         subject.map(std::string::ToString::to_string),

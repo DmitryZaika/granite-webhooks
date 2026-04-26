@@ -145,10 +145,9 @@ pub enum ReceivingEmail {
 }
 
 impl ReceivingEmail {
-    pub fn inner(self) -> i32 {
+    pub const fn inner(self) -> i32 {
         match self {
-            Self::To(value) => value,
-            Self::Forward(value) => value,
+            Self::To(value) | Self::Forward(value) => value,
         }
     }
 }

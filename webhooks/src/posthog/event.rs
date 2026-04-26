@@ -105,19 +105,19 @@ impl PostHogEvent {
     }
     pub fn new_general_exception(
         api_key: impl Into<String>,
-        value: impl Into<String> + std::fmt::Display + Clone,
-        title: impl Into<String> + std::fmt::Display + Clone,
+        value: impl Into<String> + std::fmt::Display,
+        title: impl Into<String> + std::fmt::Display,
     ) -> Self {
+        let fingerprint = create_fingerprint(&format!("{value}|{title}|"));
         let item = ExceptionItem {
-            exception_type: title.clone().into(),
-            value: value.clone().into(),
+            exception_type: title.into(),
+            value: value.into(),
             stacktrace: Some(StackTrace {
                 kind: "raw".into(),
                 frames: vec![],
             }),
         };
 
-        let fingerprint = create_fingerprint(&format!("{value}|{title}|"));
         Self {
             api_key: api_key.into(),
             event: "$exception".into(),

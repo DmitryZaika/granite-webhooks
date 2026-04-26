@@ -107,13 +107,13 @@ impl SendEmail {
         thread_id: Option<String>,
         receiver_id: Option<ReceivingEmail>,
     ) -> Self {
-        let final_thread_id = thread_id.unwrap_or(Uuid::new_v4().to_string());
+        let final_thread_id = thread_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let receiver_email = match receiver_id {
             Some(ReceivingEmail::To(_)) => Some(email.receiver_email.clone()),
             Some(ReceivingEmail::Forward(_)) => email.forward_to_email.clone(),
             None => None,
         };
-        let receiver_user_id = receiver_id.map(|id| id.inner());
+        let receiver_user_id = receiver_id.map(super::users::ReceivingEmail::inner);
         Self {
             subject: email.subject.clone(),
             body: email.body.clone(),
