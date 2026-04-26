@@ -160,7 +160,6 @@ mod local_tests {
 
         let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
-        println!("{:?}", bot.sent.lock().unwrap());
         let mut messages = bot.sent.lock().unwrap();
         assert_eq!(messages.len(), 2);
         let second_message = messages.pop().unwrap();

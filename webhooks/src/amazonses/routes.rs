@@ -127,6 +127,7 @@ mod local_tests {
         pub body: Option<String>,
         pub message_id: Option<String>,
         pub thread_id: Option<String>,
+        pub bucket: Option<String>,
     }
 
     pub struct Attachment {
@@ -155,6 +156,9 @@ mod local_tests {
             async move { Ok(format!("s3://{bucket}/{key}")) }
         }
     }
+
+    const BUCKET_NAME: Option<&str> =
+        Some("s3://granite-ses-inbound-emails/p51f95lgdaa8rpcjp0q7loemss3a17avpnc48ug1");
 
     async fn insert_email(
         pool: &MySqlPool,
@@ -194,7 +198,7 @@ mod local_tests {
         sqlx::query_as!(
             Email,
             r#"
-            SELECT receiver_user_id, receiver_email, sender_user_id, subject, body, message_id, thread_id
+            SELECT receiver_user_id, receiver_email, sender_user_id, subject, body, message_id, thread_id, bucket
             FROM emails
             ORDER BY id ASC
             LIMIT 10
@@ -350,6 +354,7 @@ mod local_tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].receiver_user_id.unwrap(), user_id);
         assert_eq!(result[0].receiver_email, Some(CLIENT_EMAIL.to_string()));
+        assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -366,6 +371,7 @@ mod local_tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].receiver_user_id.unwrap(), user_id);
         assert_eq!(result[0].receiver_email, Some(CLIENT_EMAIL.to_string()));
+        assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
     }
     #[sqlx::test(migrations = "../migrations")]
     async fn received_first_forward_both_users(pool: MySqlPool) {
@@ -383,8 +389,9 @@ mod local_tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].receiver_user_id.unwrap(), user_id);
         assert_eq!(result[0].receiver_email, Some(CLIENT_EMAIL.to_string()));
+        assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
     }
-    
+
     #[sqlx::test(migrations = "../migrations")]
     async fn received_first_forward_from_user(pool: MySqlPool) {
         const CLIENT_EMAIL: &str = "dema@granitedepotindy.com";
@@ -397,6 +404,7 @@ mod local_tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].receiver_user_id.unwrap(), user_id);
         assert_eq!(result[0].receiver_email, Some(CLIENT_EMAIL.to_string()));
+        assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -419,6 +427,7 @@ mod local_tests {
         assert_eq!(result.len(), 2);
         assert_eq!(&result[1].receiver_user_id.unwrap(), &admin_id);
         assert_eq!(result[1].thread_id.clone().unwrap().len(), 36);
+        assert_eq!(result[1].bucket.as_deref(), BUCKET_NAME);
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -437,6 +446,27 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
+    }
+    #[sqlx::test(migrations = "../migrations")]
+    async fn dima_no_receiver_found(pool: MySqlPool) {
+        let mock_client = MockClient::new("src/tests/data/failed_1.eml");
+        const CLIENT_EMAIL: &str = "dema@granitedepotindy.com";
+        let user_id = insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
+
+        let message_id =
+            "010f019dad3defa2-120b60d6-0844-43a4-900d-56cc99b643cf-000000@us-east-2.amazonses.com";
+        insert_email(&pool, message_id).await.unwrap();
+
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+
+        assert_eq!(response.0, StatusCode::OK);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[1].receiver_email.as_deref().unwrap(), CLIENT_EMAIL);
+        assert_eq!(result[1].receiver_user_id, Some(user_id));
+        assert_eq!(result[1].bucket.as_deref(), BUCKET_NAME);
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -465,6 +495,8 @@ mod local_tests {
             result[1].thread_id.clone().unwrap(),
             result[2].thread_id.clone().unwrap()
         );
+        assert_eq!(result[1].bucket.as_deref(), BUCKET_NAME);
+        assert_eq!(result[2].bucket.as_deref(), BUCKET_NAME);
     }
     #[sqlx::test(migrations = "../migrations")]
     async fn received_no_sent(pool: MySqlPool) {
