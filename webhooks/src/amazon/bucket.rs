@@ -21,32 +21,26 @@ pub trait S3Bucket: Send + Sync + Clone {
 pub struct CustomClient {}
 
 impl S3Bucket for CustomClient {
-    fn read_bytes<'a>(
-        &'a self,
-        bucket: &'a str,
-        key: &'a str,
-    ) -> impl std::future::Future<Output = Result<Bytes, String>> + Send + 'a {
-        async move {
-            let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
-            let client = Client::new(&config);
+    async fn read_bytes(&self, bucket: &str, key: &str) -> Result<Bytes, String> {
+        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+        let client = Client::new(&config);
 
-            let get_object_output = client
-                .get_object()
-                .bucket(bucket)
-                .key(key)
-                .send()
-                .await
-                .map_err(|e| e.to_string())?;
+        let get_object_output = client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
 
-            let bytes = get_object_output
-                .body
-                .collect()
-                .await
-                .map_err(|e| e.to_string())?
-                .into_bytes();
+        let bytes = get_object_output
+            .body
+            .collect()
+            .await
+            .map_err(|e| e.to_string())?
+            .into_bytes();
 
-            Ok(bytes)
-        }
+        Ok(bytes)
     }
 
     fn send_file<'a>(
