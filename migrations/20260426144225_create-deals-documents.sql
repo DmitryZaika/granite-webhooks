@@ -1,0 +1,8 @@
+-- Add migration script here
+CREATE TABLE deals_documents (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    deal_id BIGINT UNSIGNED NOT NULL,
+    image_url VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (deal_id) REFERENCES deals(id) ON DELETE CASCADE
+);
