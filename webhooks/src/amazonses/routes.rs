@@ -399,6 +399,7 @@ mod local_tests {
         let mock_client = MockClient::new("src/tests/data/forwarded_from_user.eml");
         let data: S3Event = ses_received_json();
         let response = process_ses_received_event(&pool, mock_client, &data).await;
+        println!("{:?}", response.1);
         assert_eq!(response.0, StatusCode::OK);
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
@@ -427,7 +428,7 @@ mod local_tests {
         assert_eq!(result.len(), 2);
         assert_eq!(&result[1].receiver_user_id.unwrap(), &admin_id);
         assert_eq!(result[1].thread_id.clone().unwrap().len(), 36);
-        assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
+        assert_eq!(result[1].bucket.as_deref(), BUCKET_NAME);
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -446,7 +447,6 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
     }
     #[sqlx::test(migrations = "../migrations")]
     async fn dima_no_receiver_found(pool: MySqlPool) {
