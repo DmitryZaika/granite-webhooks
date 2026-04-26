@@ -3,16 +3,17 @@ use crate::cloudtalk::schemas::CloudtalkSMS;
 use crate::crud::cloudtalk::insert_cloudtalk_sms;
 use crate::libs::constants::{ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
-use axum::extract::{Json, State};
+use axum::extract::{Json, Path, State};
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
 pub async fn sms_received(
     _: MarketingUser,
     State(pool): State<MySqlPool>,
+    Path(company_id): Path<i32>,
     Json(form): Json<CloudtalkSMS>,
 ) -> BasicResponse {
-    match insert_cloudtalk_sms(&pool, &form).await {
+    match insert_cloudtalk_sms(&pool, &form, company_id).await {
         Ok(_) => OK_RESPONSE,
         Err(error) => {
             tracing::error!("Error inserting sms received into the database: {}", error);
@@ -36,12 +37,13 @@ mod tests {
         pub recipient: i64,
         pub text: String,
         pub agent: Option<String>,
+        pub company_id: Option<i32>,
     }
 
     async fn get_sms_received(pool: &MySqlPool) -> Vec<CloudtalkReceivedSMS> {
         sqlx::query_as!(
             CloudtalkReceivedSMS,
-            "SELECT sender, recipient, text, agent FROM cloudtalk_sms"
+            "SELECT sender, recipient, text, agent, company_id FROM cloudtalk_sms"
         )
         .fetch_all(pool)
         .await
@@ -52,7 +54,7 @@ mod tests {
     async fn test_basic_sms(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
-        let response = app.post("/cloudtalk/sms/1").json(&sms_json()).await;
+        let response = app.post("/cloudtalk/sms/42").json(&sms_json()).await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let smss = get_sms_received(&pool).await;
@@ -61,5 +63,6 @@ mod tests {
         assert_eq!(smss[0].recipient, 3173161456);
         assert_eq!(smss[0].text, "Не пиши сюда".to_string());
         assert_eq!(smss[0].agent, Some("540273".to_string()));
+        assert_eq!(smss[0].company_id, Some(42));
     }
 }

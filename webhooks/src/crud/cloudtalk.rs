@@ -5,17 +5,19 @@ use sqlx::mysql::MySqlQueryResult;
 pub async fn insert_cloudtalk_sms(
     pool: &MySqlPool,
     sms: &CloudtalkSMS,
+    company_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     sqlx::query!(
         r#"
-        INSERT INTO cloudtalk_sms (id, sender, recipient, text, agent)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO cloudtalk_sms (id, sender, recipient, text, agent, company_id)
+        VALUES (?, ?, ?, ?, ?, ?)
         "#,
         sms.id,
         sms.sender(),
         sms.recipient(),
         sms.text.0,
         sms.agent,
+        company_id,
     )
     .execute(pool)
     .await
