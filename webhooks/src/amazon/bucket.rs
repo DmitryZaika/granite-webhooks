@@ -43,26 +43,19 @@ impl S3Bucket for CustomClient {
         Ok(bytes)
     }
 
-    fn send_file<'a>(
-        &'a self,
-        bucket: &'a str,
-        key: &'a str,
-        data: Bytes,
-    ) -> impl std::future::Future<Output = Result<String, String>> + Send + 'a {
-        async move {
-            let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
-            let client = Client::new(&config);
+    async fn send_file(&self, bucket: &str, key: &str, data: Bytes) -> Result<String, String> {
+        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+        let client = Client::new(&config);
 
-            client
-                .put_object()
-                .bucket(bucket)
-                .key(key)
-                .body(data.into())
-                .send()
-                .await
-                .map_err(|e| e.to_string())?;
+        client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .body(data.into())
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
 
-            Ok(format!("s3://{bucket}/{key}"))
-        }
+        Ok(format!("s3://{bucket}/{key}"))
     }
 }
