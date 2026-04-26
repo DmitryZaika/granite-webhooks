@@ -399,7 +399,6 @@ mod local_tests {
         let mock_client = MockClient::new("src/tests/data/forwarded_from_user.eml");
         let data: S3Event = ses_received_json();
         let response = process_ses_received_event(&pool, mock_client, &data).await;
-        println!("{:?}", response.1);
         assert_eq!(response.0, StatusCode::OK);
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
@@ -461,7 +460,6 @@ mod local_tests {
         let data: S3Event = ses_received_json();
         let response = process_ses_received_event(&pool, mock_client, &data).await;
 
-        println!("{:?}", response.1);
         assert_eq!(response.0, StatusCode::OK);
 
         let result = get_emails(&pool).await.unwrap();
