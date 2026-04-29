@@ -1,7 +1,8 @@
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
-use crate::crud::email_template::get_templates_from_list_id;
+use crate::crud::email_template::get_template_from_list_id;
 use crate::crud::leads::create_deal;
 use crate::crud::leads::{assign_lead, get_default_list_id_from_company_id};
+use crate::crud::scheduled_emails::insert_scheduled_email;
 use crate::crud::user_position::get_user_position;
 use crate::crud::users::{email_exists, get_user_tg_info, user_has_telegram_id};
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
@@ -245,7 +246,20 @@ async fn handle_assign_lead<T: Telegram>(
         }
     };
     // If the group requires a scheduled email, add it
-    let _email_templates = get_templates_from_list_id(pool, list_id).await.unwrap();
+    let email_template = get_template_from_list_id(pool, list_id).await.unwrap();
+    if let Some(template) = email_template {
+        insert_scheduled_email(
+            pool,
+            template,
+            result.last_insert_id(),
+            lead_id,
+            position.user_id,
+            position.company_id,
+        )
+        .await
+        .unwrap();
+    }
+
     let deal_id = result.last_insert_id();
     let lead_link = lead_url(deal_id);
     if let Some(telegram_id) = tg_info.telegram_id {
@@ -310,11 +324,14 @@ pub async fn webhook_handler(
 #[cfg(test)]
 mod local_tests {
     use super::*;
+    use crate::crud::email_template::CreateEmailTemplate;
+    use crate::crud::email_template::insert_email_template;
     use crate::schemas::add_customer::NewLeadForm;
     use crate::tests::telegram::{MockTelegram, generate_message, telegram_user};
     use crate::tests::utils::{assigned_user_position, insert_user, positioned_user};
     use crate::webhooks::receive::new_lead_form_inner;
     use axum::http::StatusCode;
+    use chrono::{DateTime, Duration, NaiveDateTime, Utc};
     use serde_json::json;
     use sqlx::MySqlPool;
     use teloxide::types::{CallbackQuery, InlineKeyboardButtonKind, MaybeInaccessibleMessage};
@@ -432,6 +449,38 @@ mod local_tests {
         let sent = mock_bot.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].1, MESSAGE);
+    }
+
+    pub struct ScheduledEmail {
+        pub id: i32,
+        pub template_id: i32,
+        pub deal_id: i32,
+        pub customer_id: i32,
+        pub user_id: i32,
+        pub company_id: i32,
+        pub send_at: NaiveDateTime,
+        pub status: String, // Maps to the Enum column
+        pub sent_at: Option<NaiveDateTime>,
+        pub error_message: Option<String>,
+        pub message_id: Option<String>,
+        pub created_at: Option<DateTime<Utc>>,
+    }
+
+    pub async fn get_all_scheduled_emails(
+        pool: &MySqlPool,
+    ) -> Result<Vec<ScheduledEmail>, sqlx::Error> {
+        sqlx::query_as!(
+            ScheduledEmail,
+            r#"
+            SELECT
+                id, template_id, deal_id, customer_id, user_id,
+                company_id, send_at, status, sent_at,
+                error_message, message_id, created_at
+            FROM scheduled_emails
+            "#
+        )
+        .fetch_all(pool)
+        .await
     }
 
     // -----------------------------
@@ -741,5 +790,76 @@ mod local_tests {
         assert_eq!(deals[0].list_id, first as i32);
         assert_eq!(deals[0].status, Some("New Customer".to_string()));
         assert_eq!(deals[0].position, 0);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_callback_one_user_non_default_list_scheduled(pool: MySqlPool) {
+        // Send a real lead
+        let company_id = create_company(&pool).await.unwrap();
+        let group_id = create_default_group(&pool, company_id).await.unwrap();
+        create_deal_list(&pool, "Second List", group_id, 1)
+            .await
+            .unwrap();
+        let first = create_deal_list(&pool, "First List", group_id, 0)
+            .await
+            .unwrap();
+        let template = CreateEmailTemplate {
+            template_name: "Test Template".to_string(),
+            template_subject: "Test Subject".to_string(),
+            template_body: "Test Body".to_string(),
+            company_id: company_id as i32,
+            lead_group_id: Some(group_id as i32),
+            hour_delay: Some(2),
+            show_template: false,
+        };
+        let created_template = insert_email_template(&pool, template).await.unwrap();
+        let sales_id = positioned_user(&pool, company_id as i32, 1, 123).await;
+        let manager_id = positioned_user(&pool, company_id as i32, 2, 456).await;
+        let (_, bot) = send_lead(&pool).await;
+
+        // Mock the sale manager's response
+        let sent_options = bot.clone().sent.lock().unwrap().clone()[0]
+            .clone()
+            .2
+            .unwrap();
+        let option = match sent_options.inline_keyboard[0][0].clone().kind {
+            InlineKeyboardButtonKind::CallbackData(data) => data,
+            _ => unreachable!(),
+        };
+        let inner_m = generate_message(1, "hello");
+        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let cb = CallbackQuery {
+            id: "a".into(),
+            from: telegram_user(manager_id as u64),
+            message: Some(full),
+            inline_message_id: None,
+            chat_instance: "".into(),
+            data: Some(option),
+            game_short_name: None,
+        };
+        let res = handle_callback(cb, &pool, &bot).await;
+        assert_eq!(res.0, StatusCode::OK);
+
+        // Really process their result
+        let scheduled_emails = get_all_scheduled_emails(&pool).await.unwrap();
+        assert_eq!(scheduled_emails.len(), 1);
+        let scheduled_email = &scheduled_emails[0];
+        assert_eq!(scheduled_email.status, "pending");
+        assert_eq!(
+            scheduled_email.template_id,
+            created_template.last_insert_id() as i32,
+        );
+        assert_eq!(scheduled_email.user_id, sales_id as i32);
+        assert_eq!(scheduled_email.company_id, company_id as i32);
+
+        let expected_send_at = Utc::now().naive_utc() + Duration::hours(2);
+        let duration_diff = scheduled_email.send_at - expected_send_at;
+        let seconds_diff = duration_diff.num_seconds().abs();
+        assert!(
+            seconds_diff < 5,
+            "send_at ({}) was not within 5 seconds of expected ({})",
+            scheduled_email.send_at,
+            expected_send_at
+        );
     }
 }
