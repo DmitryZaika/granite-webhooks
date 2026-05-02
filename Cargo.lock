@@ -874,6 +874,8 @@ version = "0.1.0"
 dependencies = [
  "aws-config",
  "aws-sdk-sesv2",
+ "chrono",
+ "sqlx",
 ]
 
 [[package]]

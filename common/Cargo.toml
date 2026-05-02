@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 aws-sdk-sesv2 = "1"
 aws-config = { version = "1.8", features = ["behavior-version-latest"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "chrono"] }
+chrono = { version = "0.4", features = ["serde"] }
