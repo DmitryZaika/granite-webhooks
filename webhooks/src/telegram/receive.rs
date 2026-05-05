@@ -1,8 +1,6 @@
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
-use crate::crud::email_template::get_template_from_list_id;
 use crate::crud::leads::create_deal;
 use crate::crud::leads::{assign_lead, get_default_list_id_from_company_id};
-use crate::crud::scheduled_emails::insert_scheduled_email;
 use crate::crud::user_position::get_user_position;
 use crate::crud::users::{email_exists, get_user_tg_info, user_has_telegram_id};
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
@@ -15,6 +13,8 @@ use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email
 use axum::extract::State;
 use axum::http::StatusCode;
 use common::amazon::email::send_message;
+use common::crud::email_template::get_template_from_list_id;
+use common::crud::scheduled_emails::insert_scheduled_email;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
@@ -324,14 +324,14 @@ pub async fn webhook_handler(
 #[cfg(test)]
 mod local_tests {
     use super::*;
-    use crate::crud::email_template::CreateEmailTemplate;
-    use crate::crud::email_template::insert_email_template;
     use crate::schemas::add_customer::NewLeadForm;
     use crate::tests::telegram::{MockTelegram, generate_message, telegram_user};
     use crate::tests::utils::{assigned_user_position, insert_user, positioned_user};
     use crate::webhooks::receive::new_lead_form_inner;
     use axum::http::StatusCode;
     use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+    use common::crud::email_template::CreateEmailTemplate;
+    use common::crud::email_template::insert_email_template;
     use serde_json::json;
     use sqlx::MySqlPool;
     use teloxide::types::{CallbackQuery, InlineKeyboardButtonKind, MaybeInaccessibleMessage};
