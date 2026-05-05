@@ -1,0 +1,1 @@
+ALTER TABLE deals_documents ADD COLUMN name VARCHAR(255) NULL AFTER deal_id;
