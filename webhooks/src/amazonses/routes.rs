@@ -468,6 +468,21 @@ mod local_tests {
         assert_eq!(result[1].receiver_user_id, Some(user_id));
         assert_eq!(result[1].bucket.as_deref(), BUCKET_NAME);
     }
+    #[sqlx::test(migrations = "../migrations")]
+    async fn dima_attachment_no_body(pool: MySqlPool) {
+        let mock_client = MockClient::new("src/tests/data/failed_1.eml");
+        const CLIENT_EMAIL: &str = "dema@granitedepotindy.com";
+        insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
+
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+
+        assert_eq!(response.0, StatusCode::OK);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].body.as_deref(), None);
+    }
 
     #[sqlx::test(migrations = "../migrations")]
     async fn response_to_received_success(pool: MySqlPool) {
