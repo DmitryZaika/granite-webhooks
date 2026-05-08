@@ -6,8 +6,8 @@
     clippy::missing_panics_doc
 )]
 use axum_helpers::axum_app::new_main_app;
+use common::crud::setup::create_db_pool;
 use lambda_http::{Error, run};
-use sqlx::MySqlPool;
 use std::env::set_var;
 
 pub mod amazon;
@@ -31,8 +31,7 @@ async fn main() -> Result<(), Error> {
     unsafe {
         set_var("AWS_LAMBDA_HTTP_IGNORE_STAGE_IN_PATH", "true");
     }
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let pool = MySqlPool::connect(&database_url).await?;
+    let pool = create_db_pool().await?;
     let app = new_main_app(pool);
     run(app).await
 }

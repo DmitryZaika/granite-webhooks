@@ -4209,6 +4209,7 @@ dependencies = [
 name = "time-triggered"
 version = "0.1.0"
 dependencies = [
+ "common",
  "lambda_runtime",
  "serde",
  "serde_json",

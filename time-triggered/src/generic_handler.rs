@@ -1,3 +1,4 @@
+use common::crud::{scheduled_emails::get_ready_scheduled_emails, setup::create_db_pool};
 use lambda_runtime::{tracing, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,6 +34,11 @@ pub(crate) async fn function_handler(
     // This will now print the full JSON structure to your CloudWatch logs
     tracing::info!("Received event: {:?}", event.payload);
 
+    let pool = create_db_pool().await?;
+    let ready_emails = get_ready_scheduled_emails(&pool).await?;
+    for email in ready_emails {
+        // println!("{:?}", email);
+    }
     let resp = OutgoingMessage {
         req_id: event.context.request_id,
         msg: "Check CloudWatch logs for the payload structure.".to_string(),
