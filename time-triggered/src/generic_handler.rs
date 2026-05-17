@@ -30,7 +30,7 @@ pub(crate) struct OutgoingMessage {
 /// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
 /// - https://github.com/aws-samples/serverless-rust-demo/
 pub(crate) async fn function_handler(
-    pool: &MySqlPool,
+    _pool: &MySqlPool,
     event: LambdaEvent<EventBridgeEvent>,
 ) -> Result<OutgoingMessage, Error> {
     // This will now print the full JSON structure to your CloudWatch logs
@@ -38,7 +38,7 @@ pub(crate) async fn function_handler(
 
     let pool = create_db_pool().await?;
     let ready_emails = get_ready_scheduled_emails(&pool).await?;
-    for email in ready_emails {
+    for _email in ready_emails {
         // println!("{:?}", email);
     }
     let resp = OutgoingMessage {

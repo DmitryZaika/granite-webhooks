@@ -102,10 +102,8 @@ pub fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
     // 1. Support Text, HTML, and Binary parts. mail-parser decodes
     // text-based attachments (like .csv or .txt) as Text, not Binary!
     let data = match &part.body {
-        PartType::Binary(b) => Bytes::copy_from_slice(b),
-        PartType::InlineBinary(b) => Bytes::copy_from_slice(b),
-        PartType::Text(t) => Bytes::copy_from_slice(t.as_bytes()),
-        PartType::Html(h) => Bytes::copy_from_slice(h.as_bytes()),
+        PartType::Binary(b) | PartType::InlineBinary(b) => Bytes::copy_from_slice(b),
+        PartType::Text(t) | PartType::Html(t) => Bytes::copy_from_slice(t.as_bytes()),
         _ => return None,
     };
 
@@ -114,17 +112,17 @@ pub fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
     let (clean_content_type, content_subtype) = match part.content_type() {
         Some(ct) => (
             ct.c_type.to_string(),
-            ct.c_subtype.as_ref().map(|s| s.to_string()),
+            ct.c_subtype.as_ref().map(std::string::ToString::to_string),
         ),
         None => ("application/octet-stream".to_string(), None),
     };
 
     // 3. Fetch filename using the native helper method.
     // This internally checks both Content-Disposition and Content-Type attributes for you.
-    let filename = part
-        .attachment_name()
-        .map(|name| name.to_string())
-        .unwrap_or_else(|| format!("attachment-{}.bin", Uuid::new_v4()));
+    let filename = part.attachment_name().map_or_else(
+        || format!("attachment-{}.bin", Uuid::new_v4()),
+        std::string::ToString::to_string,
+    );
 
     Some(Attachment {
         content_type: clean_content_type,
@@ -142,7 +140,7 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
     let subject = message.subject();
     let body = message
         .body_text(0)
-        .map(|b| b.into_owned())
+        .map(std::borrow::Cow::into_owned)
         .unwrap_or_default();
     let reply_body = EmailReplyParser::parse_reply(&body);
     let attachments = message.attachments();
