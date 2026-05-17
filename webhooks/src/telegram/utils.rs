@@ -23,7 +23,13 @@ pub fn is_email(text: &str) -> bool {
     email.contains('@')
 }
 
-/// Из /start <email> вытаскиваем email (поддерживает /start@YourBot)
+pub fn parse_email(text: &str) -> Option<String> {
+    if !is_email(text) {
+        return None;
+    }
+    Some(text.trim().to_string())
+}
+
 pub fn parse_slash_email(text: &str) -> Option<String> {
     let mut it = text.split_whitespace();
     let cmd = it.next()?;

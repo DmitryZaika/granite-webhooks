@@ -9,7 +9,7 @@ use crate::libs::constants::{FORBIDDEN_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use crate::telegram::utils::extract_message;
 use crate::telegram::utils::parse_code;
-use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
+use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_email, parse_slash_email};
 use axum::extract::State;
 use axum::http::StatusCode;
 use common::amazon::email::send_message;
@@ -20,10 +20,13 @@ use sqlx::MySqlPool;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, Update, UpdateKind};
 
+const ENTER_EMAIL_MESSAGE: &str = "Please enter your email, e.g. example@gmail.com";
+
+const EMAIL_NOT_FOUND_MESSAGE: &str =
+    "The email doesn't exist in the system, please try again";
+
 const MESSAGE: &str = r"
-Invalid message. Please send one of the following commands:
-/email <email>
-<code>
+Invalid message. Please enter your email or enter the verification code sent to your email.
 ";
 
 async fn handle_start_command<T: Telegram>(
@@ -142,21 +145,23 @@ async fn handle_message<T: Telegram>(msg: Message, pool: &MySqlPool, bot: &T) ->
     };
 
     if text.starts_with("/start") {
-        let full_message = "Welcome to our bot! Please send: /email <email>";
         return bot
-            .send_message(chat_id, full_message)
+            .send_message(chat_id, ENTER_EMAIL_MESSAGE)
             .await
             .map_or_else(|e| e, |_| (StatusCode::OK, "Invalid code"));
     }
 
-    if let Some(email) = parse_slash_email(text) {
+    let email = parse_slash_email(text).or_else(|| parse_email(text));
+    if let Some(email) = email {
         match email_exists(pool, &email).await {
             Ok(true) => {
                 return handle_start_command(pool, bot, &email, chat_id).await;
             }
             Ok(false) => {
-                tracing::error!(email = email, "Email does not exist");
-                return FORBIDDEN_RESPONSE;
+                return bot
+                    .send_message(chat_id, EMAIL_NOT_FOUND_MESSAGE)
+                    .await
+                    .map_or_else(|e| e, |_| (StatusCode::OK, "Email does not exist"));
             }
             Err(e) => {
                 tracing::error!(?e, email = email, "Failed to check email existence");
@@ -645,14 +650,14 @@ mod local_tests {
         assert_eq!(res.0, StatusCode::OK);
 
         let sent = bot.sent.lock().unwrap();
-        assert!(sent[0].1.contains("Welcome"));
+        assert!(sent[0].1.contains(ENTER_EMAIL_MESSAGE));
     }
 
     #[sqlx::test(migrations = "../migrations")]
     async fn test_message_email_valid(pool: MySqlPool) {
         let bot = MockTelegram::new();
         insert_user(&pool, "x@y.com", None).await.unwrap();
-        let msg = generate_message(1, "/email x@y.com".into());
+        let msg = generate_message(1, "x@y.com".into());
 
         let res = handle_message(msg, &pool, &bot).await;
 
@@ -662,11 +667,14 @@ mod local_tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_message_email_invalid(pool: MySqlPool) {
         let bot = MockTelegram::new();
-        let msg = generate_message(1, "/email x@y.com".into());
+        let msg = generate_message(1, "x@y.com".into());
 
         let res = handle_message(msg, &pool, &bot).await;
 
-        assert_eq!(res.0, StatusCode::FORBIDDEN);
+        assert_eq!(res.0, StatusCode::OK);
+
+        let sent = bot.sent.lock().unwrap();
+        assert!(sent[0].1.contains(EMAIL_NOT_FOUND_MESSAGE));
     }
 
     #[sqlx::test(migrations = "../migrations")]
