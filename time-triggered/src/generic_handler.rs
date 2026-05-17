@@ -2,6 +2,7 @@ use common::crud::{scheduled_emails::get_ready_scheduled_emails, setup::create_d
 use lambda_runtime::{tracing, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::MySqlPool;
 
 #[derive(Deserialize, Debug)]
 pub(crate) struct EventBridgeEvent {
@@ -29,6 +30,7 @@ pub(crate) struct OutgoingMessage {
 /// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
 /// - https://github.com/aws-samples/serverless-rust-demo/
 pub(crate) async fn function_handler(
+    pool: &MySqlPool,
     event: LambdaEvent<EventBridgeEvent>,
 ) -> Result<OutgoingMessage, Error> {
     // This will now print the full JSON structure to your CloudWatch logs
@@ -52,8 +54,8 @@ mod tests {
     use super::*;
     use lambda_runtime::{Context, LambdaEvent};
 
-    #[tokio::test]
-    async fn test_generic_handler() {
+    #[sqlx::test]
+    async fn test_generic_handler(pool: MySqlPool) {
         // Mocking the data we saw in the logs
         let incoming = EventBridgeEvent {
             account: "123456789012".to_string(),
@@ -68,7 +70,7 @@ mod tests {
         };
 
         let event = LambdaEvent::new(incoming, Context::default());
-        let response = function_handler(event).await.unwrap();
+        let response = function_handler(&pool, event).await.unwrap();
 
         // Adjusting expectation to match the actual fields
         assert!(response.msg.contains("Check"));

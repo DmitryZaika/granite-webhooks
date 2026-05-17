@@ -1,7 +1,6 @@
 use bytes::Bytes;
 use email_reply_parser::EmailReplyParser;
-use mail_parser::{Attribute, HeaderName, HeaderValue, MessageParser, MessagePart, PartType};
-use std::borrow::Cow::Borrowed;
+use mail_parser::{Attribute, HeaderValue, MessageParser, MessagePart, MimeHeaders, PartType};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -99,48 +98,38 @@ fn extract_attribute(attributes: Option<&[Attribute<'_>]>, name: &str) -> Option
     None
 }
 
-fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
+pub fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
+    // 1. Support Text, HTML, and Binary parts. mail-parser decodes
+    // text-based attachments (like .csv or .txt) as Text, not Binary!
     let data = match &part.body {
         PartType::Binary(b) => Bytes::copy_from_slice(b),
+        PartType::InlineBinary(b) => Bytes::copy_from_slice(b),
+        PartType::Text(t) => Bytes::copy_from_slice(t.as_bytes()),
+        PartType::Html(h) => Bytes::copy_from_slice(h.as_bytes()),
         _ => return None,
     };
 
-    let mut content_type: Option<String> = None;
-    let mut content_subtype: Option<String> = None;
+    // 2. Fetch Content-Type using the native helper method.
+    // Fallback to "application/octet-stream" if the Content-Type is missing.
+    let (clean_content_type, content_subtype) = match part.content_type() {
+        Some(ct) => (
+            ct.c_type.to_string(),
+            ct.c_subtype.as_ref().map(|s| s.to_string()),
+        ),
+        None => ("application/octet-stream".to_string(), None),
+    };
 
-    let mut filename: Option<String> = None;
-
-    for header in &part.headers {
-        match &header.name {
-            HeaderName::ContentType => {
-                if let HeaderValue::ContentType(ct) = &header.value {
-                    content_type = Some(ct.c_type.to_string());
-                    content_subtype = ct.c_subtype.clone().map(std::borrow::Cow::into_owned);
-                    filename = extract_attribute(ct.attributes(), &Borrowed("name"));
-                }
-            }
-
-            HeaderName::ContentDisposition => {
-                if let HeaderValue::ContentType(cd) = &header.value
-                    && filename.is_none()
-                {
-                    filename = extract_attribute(cd.attributes(), &Borrowed("filename"));
-                }
-            }
-
-            _ => {}
-        }
-    }
-
-    let clean_content_type = content_type?;
-
-    let default_name = format!("attachment-{}.bin", Uuid::new_v4());
+    // 3. Fetch filename using the native helper method.
+    // This internally checks both Content-Disposition and Content-Type attributes for you.
+    let filename = part
+        .attachment_name()
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| format!("attachment-{}.bin", Uuid::new_v4()));
 
     Some(Attachment {
         content_type: clean_content_type,
         content_subtype,
-
-        filename: filename.unwrap_or_else(|| default_name.clone()),
+        filename,
         data,
     })
 }
@@ -153,11 +142,12 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
     let subject = message.subject();
     let body = message
         .body_text(0)
-        .ok_or("Failed to parse email body")?
-        .into_owned();
+        .map(|b| b.into_owned())
+        .unwrap_or_default();
     let reply_body = EmailReplyParser::parse_reply(&body);
     let attachments = message.attachments();
-    let final_attachments = attachments.filter_map(parse_attachment).collect();
+    let final_attachments: Vec<Attachment> = attachments.filter_map(parse_attachment).collect();
+    println!("ATTACHMENTS LENGTH RAW: {}", final_attachments.len());
     let sender_emails = message.from().ok_or("Failed to parse sender email")?;
     let sender_email = sender_emails
         .first()
@@ -292,6 +282,13 @@ mod local_tests {
             assert_eq!(attachment.data.len(), size);
             assert!(!attachment.data.is_empty());
         }
+    }
+    #[test]
+    fn test_parse_email_attachment_no_body() {
+        let email_bytes = read_file_as_bytes("src/tests/data/image_only.eml").unwrap();
+        let (email, attachments) = parse_email(&email_bytes).unwrap();
+        assert_eq!(email.body, "".to_string());
+        assert_eq!(attachments.len(), 1);
     }
     #[test]
     fn test_parse_email_attachments_filename_only() {

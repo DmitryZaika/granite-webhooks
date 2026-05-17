@@ -75,6 +75,7 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Unable to parse email content from S3");
         }
     };
+    println!("ATTACHMENTS LENGTH: {}", attachments.len());
     let email_info = EmailInfo {
         parsed: &parsed,
         attachments,
@@ -120,6 +121,7 @@ mod local_tests {
     }
 
     pub struct Email {
+        pub id: i32,
         pub receiver_user_id: Option<i32>,
         pub receiver_email: Option<String>,
         pub sender_user_id: Option<i32>,
@@ -198,7 +200,7 @@ mod local_tests {
         sqlx::query_as!(
             Email,
             r#"
-            SELECT receiver_user_id, receiver_email, sender_user_id, subject, body, message_id, thread_id, bucket
+            SELECT id, receiver_user_id, receiver_email, sender_user_id, subject, body, message_id, thread_id, bucket
             FROM emails
             ORDER BY id ASC
             LIMIT 10
@@ -470,7 +472,7 @@ mod local_tests {
     }
     #[sqlx::test(migrations = "../migrations")]
     async fn dima_attachment_no_body(pool: MySqlPool) {
-        let mock_client = MockClient::new("src/tests/data/failed_1.eml");
+        let mock_client = MockClient::new("src/tests/data/image_only.eml");
         const CLIENT_EMAIL: &str = "dema@granitedepotindy.com";
         insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
 
@@ -481,7 +483,11 @@ mod local_tests {
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].body.as_deref(), None);
+        assert_eq!(result[0].body, Some("".to_string()));
+        let attachments = get_email_attachments(&pool, result[0].id as u64)
+            .await
+            .unwrap();
+        assert_eq!(attachments.len(), 1);
     }
 
     #[sqlx::test(migrations = "../migrations")]
