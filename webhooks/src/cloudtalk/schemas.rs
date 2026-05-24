@@ -111,8 +111,7 @@ pub enum CountryItem {
 impl CountryItem {
     pub fn into_country(self) -> CloudTalkCountry {
         match self {
-            Self::Wrapped { country } => country,
-            Self::Direct(country) => country,
+            Self::Wrapped { country } | Self::Direct(country) => country,
         }
     }
 }
@@ -204,19 +203,19 @@ pub struct ContactSearchHit {
 }
 
 /// Handles the flexible `number | string` type from the TypeScript interface.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum Id {
     Integer(i64),
     String(String),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PublicNumber {
     pub public_number: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ContactDetails {
     pub id: Option<Id>,
     pub contact_numbers: Option<Vec<String>>,

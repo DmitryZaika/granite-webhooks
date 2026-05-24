@@ -72,9 +72,10 @@ pub async fn get_cloudtalk_us_country_id(
 
         if is_united_states(&country)
             && let Some(id_val) = &country.id
-                && let Some(id) = coerce_id(id_val) {
-                    return Some(id); // Found it, break and return early
-                }
+            && let Some(id) = coerce_id(id_val)
+        {
+            return Some(id); // Found it, break and return early
+        }
     }
 
     None
@@ -102,9 +103,8 @@ pub async fn sync_customer_to_cloud_talk(
     client: &Client,
     customer_id: i32,
 ) -> BasicResponse {
-    let customer = match load_customer_with_mapping(pool, customer_id).await.unwrap() {
-        Some(customer) => customer,
-        None => return NOT_FOUND_RESPONSE,
+    let Some(customer) = load_customer_with_mapping(pool, customer_id).await.unwrap() else {
+        return NOT_FOUND_RESPONSE;
     };
     let Some(company_id) = customer.company_id else {
         return internal_error("The given user does not have a company");
@@ -196,9 +196,10 @@ pub async fn find_contact_by_one_phone(
     for hit in hits {
         // Check if the extracted numbers contain the target e164_phone
         if extract_phones(&hit).iter().any(|phone| phone == e164_phone)
-            && let Some(id) = extract_id(&hit) {
-                return Ok(Some(id)); // Return early with the found ID
-            }
+            && let Some(id) = extract_id(&hit)
+        {
+            return Ok(Some(id)); // Return early with the found ID
+        }
     }
 
     Ok(None) // Return None if no matching contact was found
