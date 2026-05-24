@@ -220,3 +220,230 @@ pub async fn find_cloudtalk_contact_by_phone(
     }
     Ok(None)
 }
+
+#[cfg(test)]
+mod local_tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use sqlx::MySqlPool;
+
+    // Adjust this instantiation based on your actual `Client` type
+    // (e.g., reqwest::Client or a custom application HTTP client wrapper)
+    fn setup_mock_client() -> Client {
+        Client::default()
+    }
+
+    async fn create_company(
+        pool: &MySqlPool,
+        name: &str,
+        has_credentials: bool,
+    ) -> Result<u64, sqlx::Error> {
+        let key = if has_credentials {
+            Some("mock_access_key")
+        } else {
+            None
+        };
+        let secret = if has_credentials {
+            Some("mock_access_secret")
+        } else {
+            None
+        };
+
+        let rec = sqlx::query!(
+            r#"
+            INSERT INTO company (name, cloudtalk_access_key, cloudtalk_access_secret)
+            VALUES (?, ?, ?)
+            "#,
+            name,
+            key,
+            secret
+        )
+        .execute(pool)
+        .await?;
+
+        Ok(rec.last_insert_id())
+    }
+
+    async fn create_customer(
+        pool: &MySqlPool,
+        company_id: Option<i32>,
+        phone: Option<&str>,
+        phone_2: Option<&str>,
+        address: Option<&str>,
+    ) -> Result<u64, sqlx::Error> {
+        let rec = sqlx::query!(
+            r#"
+            INSERT INTO customers (company_id, name, phone, phone_2, email, address)
+            VALUES (?, 'Acme Co', ?, ?, 'a@b.com', ?)
+            "#,
+            company_id,
+            phone,
+            phone_2,
+            address
+        )
+        .execute(pool)
+        .await?;
+
+        Ok(rec.last_insert_id())
+    }
+
+    async fn insert_cloudtalk_contact_mapping(
+        pool: &MySqlPool,
+        customer_id: i32,
+        company_id: i32,
+        cloudtalk_id: i32,
+    ) -> Result<u64, sqlx::Error> {
+        let rec = sqlx::query!(
+            r#"
+            INSERT INTO cloudtalk_contacts (customer_id, company_id, cloudtalk_id)
+            VALUES (?, ?, ?)
+            "#,
+            customer_id,
+            company_id,
+            cloudtalk_id
+        )
+        .execute(pool)
+        .await?;
+
+        Ok(rec.last_insert_id())
+    }
+
+    // -----------------------------------------------------------------
+    // sync_customer_to_cloud_talk Tests
+    // -----------------------------------------------------------------
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_sync_customer_not_found(pool: MySqlPool) {
+        let client = setup_mock_client();
+
+        // Target a completely non-existent customer ID
+        let res = sync_customer_to_cloud_talk(&pool, &client, 9999).await;
+
+        // Should return your designated NOT_FOUND_RESPONSE status code
+        assert_eq!(res.0, StatusCode::NOT_FOUND);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_sync_customer_missing_company(pool: MySqlPool) {
+        let client = setup_mock_client();
+
+        // Create a customer without a company_id association
+        let customer_id = create_customer(&pool, None, Some("317-316-1456"), None, None)
+            .await
+            .unwrap();
+
+        let res = sync_customer_to_cloud_talk(&pool, &client, customer_id as i32).await;
+
+        assert_eq!(res.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(res.1.contains("The given user does not have a company"));
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_sync_company_missing_cloud_talk_credentials(pool: MySqlPool) {
+        let client = setup_mock_client();
+
+        // Seed a company explicitly setting credentials to NULL
+        let company_id = create_company(&pool, "No CloudTalk Co", false)
+            .await
+            .unwrap();
+        let customer_id = create_customer(
+            &pool,
+            Some(company_id as i32),
+            Some("317-316-1456"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let res = sync_customer_to_cloud_talk(&pool, &client, customer_id as i32).await;
+
+        assert_eq!(res.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(res.1.contains("Cloudtalk not configured for this company"));
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_sync_customer_no_usable_phone_fails_payload_build(pool: MySqlPool) {
+        let client = setup_mock_client();
+
+        let company_id = create_company(&pool, "Valid Credentials Co", true)
+            .await
+            .unwrap();
+        // Passing None/Invalid properties to hit the `payload == None` guard
+        let customer_id = create_customer(
+            &pool,
+            Some(company_id as i32),
+            None,
+            Some("invalid_phone"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let res = sync_customer_to_cloud_talk(&pool, &client, customer_id as i32).await;
+
+        assert_eq!(res.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(res.1.contains("Failed to build payload"));
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_sync_customer_success_path(pool: MySqlPool) {
+        let client = setup_mock_client();
+
+        let company_id = create_company(&pool, "Fully Configured Co", true)
+            .await
+            .unwrap();
+        let customer_id = create_customer(
+            &pool,
+            Some(company_id as i32),
+            Some("317-316-1456"),
+            None,
+            Some("3333 N Tacoma Ave, Indianapolis, IN 46218, USA"),
+        )
+        .await
+        .unwrap();
+
+        // Execution path will call get_cloudtalk_us_country_id, build_payload, and upsert_contact
+        let res = sync_customer_to_cloud_talk(&pool, &client, customer_id as i32).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_sync_customer_with_existing_mapping_reuses_id(pool: MySqlPool) {
+        let client = setup_mock_client();
+
+        let company_id = create_company(&pool, "Fully Configured Co", true)
+            .await
+            .unwrap();
+        let customer_id = create_customer(
+            &pool,
+            Some(company_id as i32),
+            Some("317-316-1456"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Setup an existing mapping reference in the DB table beforehand
+        insert_cloudtalk_contact_mapping(&pool, customer_id as i32, company_id as i32, 4242)
+            .await
+            .unwrap();
+
+        let res = sync_customer_to_cloud_talk(&pool, &client, customer_id as i32).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+
+        // Confirm mapping configuration remains accurately updated/untouched
+        let mapping_exists = sqlx::query!(
+            "SELECT cloudtalk_id FROM cloudtalk_contacts WHERE customer_id = ?",
+            customer_id as i32
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(mapping_exists.cloudtalk_id, 4242);
+    }
+}
