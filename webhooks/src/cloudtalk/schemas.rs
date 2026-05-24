@@ -111,8 +111,8 @@ pub enum CountryItem {
 impl CountryItem {
     pub fn into_country(self) -> CloudTalkCountry {
         match self {
-            CountryItem::Wrapped { country } => country,
-            CountryItem::Direct(country) => country,
+            Self::Wrapped { country } => country,
+            Self::Direct(country) => country,
         }
     }
 }
@@ -167,12 +167,12 @@ impl ContactId {
     /// Coerces the contact ID into a valid, non-zero u64.
     pub fn coerce(&self) -> Option<u64> {
         match self {
-            ContactId::Number(n) => {
+            Self::Number(n) => {
                 // safely attempt to convert i64 -> u64 (fails if negative)
                 let val: u64 = (*n).try_into().ok()?;
                 if val > 0 { Some(val) } else { None }
             }
-            ContactId::String(s) => {
+            Self::String(s) => {
                 let val = s.parse::<u64>().ok()?;
                 if val > 0 { Some(val) } else { None }
             }
@@ -204,14 +204,14 @@ pub struct ContactSearchHit {
 }
 
 /// Handles the flexible `number | string` type from the TypeScript interface.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum Id {
     Integer(i64),
     String(String),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PublicNumber {
     pub public_number: Option<String>,
 }

@@ -4765,7 +4765,6 @@ dependencies = [
  "http-body-util",
  "lambda_http",
  "mail-parser",
- "once_cell",
  "openssl-sys",
  "rand 0.10.1",
  "regex",

@@ -21,11 +21,11 @@ pub async fn cloudtalk_request<T: Serialize, R: DeserializeOwned>(
     body: Option<&T>,
 ) -> Result<R, Box<dyn std::error::Error + Send + Sync>> {
     let auth = get_auth_string(pool, company_id).await?;
-    let url = format!("{}/{}", BASE_URL, path);
+    let url = format!("{BASE_URL}/{path}");
 
     let mut req = client
         .request(method.clone(), &url)
-        .header("Authorization", format!("Basic {}", auth))
+        .header("Authorization", format!("Basic {auth}"))
         .header("Accept", "application/json");
 
     if let Some(b) = body {
@@ -70,13 +70,11 @@ pub async fn get_cloudtalk_us_country_id(
     for item in items {
         let country = item.into_country();
 
-        if is_united_states(&country) {
-            if let Some(id_val) = &country.id {
-                if let Some(id) = coerce_id(id_val) {
+        if is_united_states(&country)
+            && let Some(id_val) = &country.id
+                && let Some(id) = coerce_id(id_val) {
                     return Some(id); // Found it, break and return early
                 }
-            }
-        }
     }
 
     None
@@ -89,7 +87,7 @@ pub async fn update_cloudtalk_contact(
     cloudtalk_id: i64,
     payload: &ContactPayload,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let path = format!("contacts/edit/{}.json", cloudtalk_id);
+    let path = format!("contacts/edit/{cloudtalk_id}.json");
 
     // We pass `serde_json::Value` as the response type (R) to consume
     // whatever JSON CloudTalk returns without needing to map it.
@@ -176,7 +174,7 @@ pub async fn find_contact_by_one_phone(
 ) -> Result<Option<u64>, Box<dyn std::error::Error + Send + Sync>> {
     // URL-encode the phone number parameter safely
     let encoded_phone = urlencoding::encode(e164_phone);
-    let path = format!("contacts/index.json?keyword={}&limit=10", encoded_phone);
+    let path = format!("contacts/index.json?keyword={encoded_phone}&limit=10");
 
     // Make the request using our generic helper
     let json: ContactSearchEnvelope = cloudtalk_request(
@@ -197,11 +195,10 @@ pub async fn find_contact_by_one_phone(
 
     for hit in hits {
         // Check if the extracted numbers contain the target e164_phone
-        if extract_phones(&hit).iter().any(|phone| phone == e164_phone) {
-            if let Some(id) = extract_id(&hit) {
+        if extract_phones(&hit).iter().any(|phone| phone == e164_phone)
+            && let Some(id) = extract_id(&hit) {
                 return Ok(Some(id)); // Return early with the found ID
             }
-        }
     }
 
     Ok(None) // Return None if no matching contact was found
