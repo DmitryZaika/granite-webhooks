@@ -1,10 +1,12 @@
-use crate::axum_helpers::guards::MarketingUser;
+use crate::axum_helpers::guards::{MarketingUser, RemixBackend};
+use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::cloudtalk::schemas::CloudtalkSMS;
 use crate::crud::cloudtalk::insert_cloudtalk_sms;
 use crate::libs::constants::{ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use axum::extract::{Json, Path, State};
 use lambda_http::tracing;
+use reqwest::Client;
 use sqlx::MySqlPool;
 
 pub async fn sms_received(
@@ -21,6 +23,16 @@ pub async fn sms_received(
         }
     }
 }
+
+pub async fn sync_cloudtalk(
+    _: RemixBackend,
+    State(pool): State<MySqlPool>,
+    Path(customer_id): Path<i32>,
+) -> BasicResponse {
+    let client = Client::new();
+    sync_customer_to_cloud_talk(&pool, &client, customer_id).await
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::utils::new_test_app;

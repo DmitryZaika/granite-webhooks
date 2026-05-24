@@ -10,6 +10,7 @@ use teloxide::types::MaybeInaccessibleMessage;
 use teloxide::types::{Message, Recipient};
 use uuid::{Uuid, uuid};
 
+use crate::axum_helpers::utils::get_remix_key;
 use crate::libs::constants::ERR_SEND_TELEGRAM;
 use crate::libs::constants::{FORBIDDEN_RESPONSE, internal_error};
 
@@ -207,5 +208,44 @@ where
         }
 
         Ok(Self::new(bearer_uuid))
+    }
+}
+
+pub struct RemixBackend {}
+
+impl RemixBackend {
+    pub fn new(_: String) -> Self {
+        Self {}
+    }
+}
+
+impl<S> FromRequestParts<S> for RemixBackend
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let headers = &parts.headers;
+        let raw_bearer = if let Some(v) = headers.get("authorization") {
+            v.to_str()
+        } else {
+            tracing::error!("Authorization header not found");
+            report_to_posthog("Authorization header not found").await;
+            return Err(FORBIDDEN_RESPONSE);
+        };
+        let Ok(clean_bearer) = raw_bearer else {
+            tracing::error!("Failed to parse authorization header");
+            report_to_posthog("Failed to parse authorization header").await;
+            return Err(FORBIDDEN_RESPONSE);
+        };
+
+        if clean_bearer != get_remix_key() {
+            tracing::error!("Bearer UUID does not match");
+            report_to_posthog("Bearer UUID does not match").await;
+            return Err(FORBIDDEN_RESPONSE);
+        }
+
+        Ok(Self::new(clean_bearer.to_string()))
     }
 }

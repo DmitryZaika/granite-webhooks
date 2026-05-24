@@ -800,7 +800,7 @@ mod local_tests {
         create_deal_list(&pool, "Second List", group_id, 1)
             .await
             .unwrap();
-        let first = create_deal_list(&pool, "First List", group_id, 0)
+        create_deal_list(&pool, "First List", group_id, 0)
             .await
             .unwrap();
         let template = CreateEmailTemplate {

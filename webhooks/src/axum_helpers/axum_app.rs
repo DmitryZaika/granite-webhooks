@@ -1,5 +1,5 @@
 use crate::amazonses::routes::{read_receipt_handler, receive_handler};
-use crate::cloudtalk::receive::sms_received;
+use crate::cloudtalk::receive::{sms_received, sync_cloudtalk};
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
 use crate::telegram::receive::webhook_handler;
@@ -35,6 +35,10 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         .route("/ses/read-receipt", post(read_receipt_handler))
         .route("/ses/receive-email", post(receive_handler))
         .route("/cloudtalk/sms/{company_id}", post(sms_received))
+        .route(
+            "/cloudtalk/sync/{company_id}/{customer_id}",
+            post(sync_cloudtalk),
+        )
         .layer(axum::middleware::from_fn(print_request_body))
         .with_state(pool)
 }
