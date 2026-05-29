@@ -75,7 +75,6 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Unable to parse email content from S3");
         }
     };
-    println!("ATTACHMENTS LENGTH: {}", attachments.len());
     let email_info = EmailInfo {
         parsed: &parsed,
         attachments,

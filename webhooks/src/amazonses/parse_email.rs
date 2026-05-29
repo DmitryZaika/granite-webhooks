@@ -145,7 +145,6 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
     let reply_body = EmailReplyParser::parse_reply(&body);
     let attachments = message.attachments();
     let final_attachments: Vec<Attachment> = attachments.filter_map(parse_attachment).collect();
-    println!("ATTACHMENTS LENGTH RAW: {}", final_attachments.len());
     let sender_emails = message.from().ok_or("Failed to parse sender email")?;
     let sender_email = sender_emails
         .first()
