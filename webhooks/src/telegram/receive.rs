@@ -1,4 +1,5 @@
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
+use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::crud::leads::create_deal;
 use crate::crud::leads::{assign_lead, get_default_list_id_from_company_id};
 use crate::crud::user_position::get_user_position;
@@ -16,6 +17,7 @@ use common::amazon::email::send_message;
 use common::crud::email_template::get_template_from_list_id;
 use common::crud::scheduled_emails::insert_scheduled_email;
 use lambda_http::tracing;
+use reqwest::Client;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, Update, UpdateKind};
@@ -259,6 +261,9 @@ async fn handle_assign_lead<T: Telegram>(
         .await
         .unwrap();
     }
+    let client = Client::new();
+    // For right now we log but ignore errors
+    sync_customer_to_cloud_talk(&pool, &client, position.user_id).await;
 
     let deal_id = result.last_insert_id();
     let lead_link = lead_url(deal_id);

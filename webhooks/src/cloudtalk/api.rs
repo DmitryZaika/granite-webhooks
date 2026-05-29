@@ -1,6 +1,4 @@
-use crate::cloudtalk::schemas::{
-    CleanText, ContactPayload, ContactSearchEnvelope, CountriesEnvelope,
-};
+use crate::cloudtalk::schemas::{ContactPayload, ContactSearchEnvelope, CountriesEnvelope};
 use crate::cloudtalk::utils::{
     build_payload, coerce_id, extract_id, extract_phones, find_contact_id, is_united_states,
     upsert_contact,

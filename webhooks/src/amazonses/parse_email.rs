@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use email_reply_parser::EmailReplyParser;
-use mail_parser::{Attribute, HeaderValue, MessageParser, MessagePart, MimeHeaders, PartType};
+use mail_parser::{HeaderValue, MessageParser, MessagePart, MimeHeaders, PartType};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -85,17 +85,6 @@ fn parse_header_value(value: &HeaderValue) -> Option<String> {
         HeaderValue::Text(s) => Some(s.to_string()),
         _ => None,
     }
-}
-
-fn extract_attribute(attributes: Option<&[Attribute<'_>]>, name: &str) -> Option<String> {
-    if let Some(attributes) = attributes {
-        for attribute in attributes {
-            if attribute.name == name {
-                return Some(attribute.value.to_string());
-            }
-        }
-    }
-    None
 }
 
 pub fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
