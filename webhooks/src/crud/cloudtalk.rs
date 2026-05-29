@@ -124,7 +124,7 @@ pub async fn get_auth_string(
     let creds = match row {
         Some(r) => match (r.cloudtalk_access_key, r.cloudtalk_access_secret) {
             (Some(key), Some(secret)) if !key.is_empty() && !secret.is_empty() => {
-                format!("{}:{}", key, secret)
+                format!("{key}:{secret}")
             }
             _ => return Err("CloudTalk API credentials not found".into()),
         },
@@ -170,12 +170,11 @@ pub async fn find_local_cloudtalk_id_by_phone(
     let placeholders = vec!["?"; e164_phones.len()].join(",");
     let sql = format!(
         "(SELECT cloudtalk_id FROM cloudtalk_contacts \
-          WHERE company_id = ? AND phone_e164_1 IN ({}) LIMIT 1) \
+          WHERE company_id = ? AND phone_e164_1 IN ({placeholders}) LIMIT 1) \
          UNION ALL \
          (SELECT cloudtalk_id FROM cloudtalk_contacts \
-          WHERE company_id = ? AND phone_e164_2 IN ({}) LIMIT 1) \
-         LIMIT 1",
-        placeholders, placeholders
+          WHERE company_id = ? AND phone_e164_2 IN ({placeholders}) LIMIT 1) \
+         LIMIT 1"
     );
 
     let mut query = sqlx::query_scalar::<_, i32>(&sql);

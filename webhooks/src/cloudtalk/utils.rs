@@ -6,7 +6,6 @@ use crate::crud::cloudtalk::CustomerWithMapping;
 use crate::crud::cloudtalk::{find_local_cloudtalk_id_by_phone, update_cloudtalk_phone};
 use crate::libs::constants::OK_RESPONSE;
 use crate::libs::types::BasicResponse;
-use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
 use sqlx::MySqlPool;
@@ -24,14 +23,12 @@ pub fn is_united_states(country: &CloudTalkCountry) -> bool {
         .as_deref()
         .or(country.iso.as_deref())
         .or(country.code.as_deref())
-        .map(|code| code == "US" || code == "USA")
-        .unwrap_or(false);
+        .is_some_and(|code| code == "US" || code == "USA");
 
     let name_match = country
         .name
         .as_deref()
-        .map(|name| name == "United States")
-        .unwrap_or(false);
+        .is_some_and(|name| name == "United States");
 
     iso_match || name_match
 }
@@ -52,7 +49,7 @@ pub fn coerce_id(value: &serde_json::Value) -> Option<u64> {
 
 // --- Lazy Static Globals ---
 
-static US_STATES: Lazy<HashSet<&'static str>> = Lazy::new(|| {
+static US_STATES: std::sync::LazyLock<HashSet<&'static str>> = std::sync::LazyLock::new(|| {
     [
         "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA",
         "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
@@ -60,18 +57,18 @@ static US_STATES: Lazy<HashSet<&'static str>> = Lazy::new(|| {
         "VA", "WA", "WV", "WI", "WY", "DC", "PR", "VI", "GU", "AS", "MP",
     ]
     .iter()
-    .cloned()
+    .copied()
     .collect()
 });
 
-static STATE_ZIP_RE: Lazy<Regex> = Lazy::new(|| {
+static STATE_ZIP_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r",\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)\s*(?:,\s*USA?\.?)?\s*$").unwrap()
 });
 
 // --- Phone Parsing Helpers ---
 
 pub fn phone_digits_only(phone: &str) -> String {
-    phone.chars().filter(|c| c.is_ascii_digit()).collect()
+    phone.chars().filter(char::is_ascii_digit).collect()
 }
 
 pub fn normalize_to_e164(phone: Option<&str>) -> Option<String> {
@@ -86,10 +83,10 @@ pub fn normalize_to_e164(phone: Option<&str>) -> Option<String> {
 
     let digits = phone_digits_only(trimmed);
     if digits.len() == 10 {
-        return Some(format!("+1{}", digits));
+        return Some(format!("+1{digits}"));
     }
     if digits.len() == 11 && digits.starts_with('1') {
-        return Some(format!("+{}", digits));
+        return Some(format!("+{digits}"));
     }
 
     None
@@ -215,10 +212,10 @@ pub fn build_payload(
         name: customer.name.clone(),
         contact_number: numbers,
         contact_email: build_emails(customer),
-        external_url: if !external_urls.is_empty() {
-            Some(external_urls)
-        } else {
+        external_url: if external_urls.is_empty() {
             None
+        } else {
+            Some(external_urls)
         },
         ..Default::default() // Sets the remaining Option fields to None
     };
@@ -259,21 +256,21 @@ pub async fn upsert_contact(
         .map(|n| n.public_number.clone())
         .collect();
 
-    let phone1 = phones.get(0).cloned();
+    let phone1 = phones.first().cloned();
     let phone2 = phones.get(1).cloned();
 
-    if let Some(cloudtalk_id) = customer.cloudtalk_id {
-        if let Some(cloudtalk_contact_id) = customer.cloudtalk_contact_id {
-            update_cloudtalk_contact(pool, client, company_id, cloudtalk_id, payload)
-                .await
-                .unwrap();
+    if let Some(cloudtalk_id) = customer.cloudtalk_id
+        && let Some(_cloudtalk_contact_id) = customer.cloudtalk_contact_id
+    {
+        update_cloudtalk_contact(pool, client, company_id, cloudtalk_id, payload)
+            .await
+            .unwrap();
 
-            update_cloudtalk_phone(pool, phone1, phone2, cloudtalk_id)
-                .await
-                .unwrap();
+        update_cloudtalk_phone(pool, phone1, phone2, cloudtalk_id)
+            .await
+            .unwrap();
 
-            return OK_RESPONSE;
-        }
+        return OK_RESPONSE;
     }
 
     let mut existing_id = find_local_cloudtalk_id_by_phone(pool, company_id, &phones)
@@ -287,7 +284,7 @@ pub async fn upsert_contact(
     }
 
     if let Some(id) = existing_id {
-        update_cloudtalk_contact(pool, client, company_id, id.try_into().unwrap(), payload)
+        update_cloudtalk_contact(pool, client, company_id, id.into(), payload)
             .await
             .unwrap();
     }
@@ -333,10 +330,10 @@ pub fn find_contact_id(json: &serde_json::Value) -> Option<u64> {
 
     if let Some(d) = data {
         // (data?.Contact)?.id
-        if let Some(contact) = d.get("Contact") {
-            if let Some(id) = contact.get("id") {
-                candidates.push(id);
-            }
+        if let Some(contact) = d.get("Contact")
+            && let Some(id) = contact.get("id")
+        {
+            candidates.push(id);
         }
         // data?.id
         if let Some(id) = d.get("id") {
@@ -345,10 +342,10 @@ pub fn find_contact_id(json: &serde_json::Value) -> Option<u64> {
     }
 
     // (obj.Contact)?.id
-    if let Some(contact) = json.get("Contact") {
-        if let Some(id) = contact.get("id") {
-            candidates.push(id);
-        }
+    if let Some(contact) = json.get("Contact")
+        && let Some(id) = contact.get("id")
+    {
+        candidates.push(id);
     }
 
     // obj.id
@@ -390,12 +387,12 @@ pub fn extract_phones(hit: &ContactSearchHit) -> Vec<String> {
     if let Some(objs) = contact_number_list {
         for p in objs {
             // Replaces: if (p?.public_number)
-            if let Some(ref pub_num) = p.public_number {
-                if !pub_num.is_empty() {
-                    // Mimics JS truthiness check
-                    if let Some(normalized_phone) = normalize_to_e164(Some(pub_num)) {
-                        phones.push(normalized_phone);
-                    }
+            if let Some(ref pub_num) = p.public_number
+                && !pub_num.is_empty()
+            {
+                // Mimics JS truthiness check
+                if let Some(normalized_phone) = normalize_to_e164(Some(pub_num)) {
+                    phones.push(normalized_phone);
                 }
             }
         }
@@ -404,7 +401,7 @@ pub fn extract_phones(hit: &ContactSearchHit) -> Vec<String> {
     phones
 }
 
-/// Extracts the ID from the contact or root hit and passes it to coerce_id.
+/// Extracts the ID from the contact or root hit and passes it to `coerce_id`.
 pub fn extract_id(hit: &ContactSearchHit) -> Option<u64> {
     // Replaces: hit.Contact?.id ?? hit.id
     let raw_id = hit
@@ -413,5 +410,5 @@ pub fn extract_id(hit: &ContactSearchHit) -> Option<u64> {
         .and_then(|c| c.id.as_ref())
         .or(hit.id.as_ref());
 
-    raw_id.and_then(|id| id.coerce())
+    raw_id.and_then(super::schemas::ContactId::coerce)
 }
