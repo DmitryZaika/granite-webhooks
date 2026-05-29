@@ -6,6 +6,7 @@ use crate::cloudtalk::utils::{
 use crate::crud::cloudtalk::{company_has_cloud_talk, get_auth_string, load_customer_with_mapping};
 use crate::libs::constants::{NOT_FOUND_RESPONSE, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
+use lambda_http::tracing;
 use reqwest::{Client, Method};
 use serde::{Serialize, de::DeserializeOwned};
 use sqlx::MySqlPool;
@@ -103,26 +104,48 @@ pub async fn sync_customer_to_cloud_talk(
     client: &Client,
     customer_id: i32,
 ) -> BasicResponse {
-    let Some(customer) = load_customer_with_mapping(pool, customer_id).await.unwrap() else {
-        return NOT_FOUND_RESPONSE;
+    let mapping = match load_customer_with_mapping(pool, customer_id).await {
+        Ok(Some(mapping)) => mapping,
+        Ok(None) => return NOT_FOUND_RESPONSE,
+        Err(error) => {
+            tracing::error!(?error, customer_id, "Failed to load customer with mapping");
+            return internal_error("Failed to load customer with mapping");
+        }
     };
-    let Some(company_id) = customer.company_id else {
+    let Some(company_id) = mapping.company_id else {
         return internal_error("The given user does not have a company");
     };
-    if !(company_has_cloud_talk(pool, company_id).await.unwrap()) {
-        return internal_error("Cloudtalk not configured for this company");
+    match company_has_cloud_talk(pool, company_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::error!(
+                company_id,
+                customer_id,
+                "Cloudtalk not configured for this company"
+            );
+            return internal_error("Cloudtalk not configured for this company");
+        }
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                company_id,
+                customer_id,
+                "Failed to check cloudtalk configuration"
+            );
+            return internal_error("Failed to check cloudtalk configuration");
+        }
     }
 
     let us_country_id =
         get_cloudtalk_us_country_id(pool, client, company_id.try_into().unwrap()).await;
-    let payload = build_payload(&customer, us_country_id);
+    let payload = build_payload(&mapping, us_country_id);
     let Some(clean_payload) = payload else {
         return internal_error("Failed to build payload");
     };
     upsert_contact(
         pool,
         client,
-        &customer,
+        &mapping,
         &clean_payload,
         company_id.try_into().unwrap(),
     )
