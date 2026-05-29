@@ -1,4 +1,6 @@
-use crate::cloudtalk::schemas::{ContactPayload, ContactSearchEnvelope, CountriesEnvelope};
+use crate::cloudtalk::schemas::{
+    CleanText, ContactPayload, ContactSearchEnvelope, CountriesEnvelope,
+};
 use crate::cloudtalk::utils::{
     build_payload, coerce_id, extract_id, extract_phones, find_contact_id, is_united_states,
     upsert_contact,
@@ -104,6 +106,7 @@ pub async fn sync_customer_to_cloud_talk(
     client: &Client,
     customer_id: i32,
 ) -> BasicResponse {
+    tracing::info!(customer_id, "Syncing customer to cloudtalk");
     let mapping = match load_customer_with_mapping(pool, customer_id).await {
         Ok(Some(mapping)) => mapping,
         Ok(None) => return NOT_FOUND_RESPONSE,
@@ -112,8 +115,16 @@ pub async fn sync_customer_to_cloud_talk(
             return internal_error("Failed to load customer with mapping");
         }
     };
+    tracing::info!(mapping.email, "Mapping successfully retrieved");
     let Some(company_id) = mapping.company_id else {
         return internal_error("The given user does not have a company");
+    };
+    let clean_company_id: u64 = match company_id.try_into() {
+        Ok(clean_company_id) => clean_company_id,
+        Err(error) => {
+            tracing::error!(?error, company_id, "Failed to convert company ID to i64");
+            return internal_error("Failed to convert company ID to i64");
+        }
     };
     match company_has_cloud_talk(pool, company_id).await {
         Ok(true) => {}
@@ -135,21 +146,17 @@ pub async fn sync_customer_to_cloud_talk(
             return internal_error("Failed to check cloudtalk configuration");
         }
     }
+    tracing::info!(company_id, "Company has cloudtalk configured");
 
-    let us_country_id =
-        get_cloudtalk_us_country_id(pool, client, company_id.try_into().unwrap()).await;
+    let us_country_id = get_cloudtalk_us_country_id(pool, client, clean_company_id).await;
+    tracing::info!(us_country_id, "US country ID retrieved");
     let payload = build_payload(&mapping, us_country_id);
+    tracing::info!("Payload built");
     let Some(clean_payload) = payload else {
         return internal_error("Failed to build payload");
     };
-    upsert_contact(
-        pool,
-        client,
-        &mapping,
-        &clean_payload,
-        company_id.try_into().unwrap(),
-    )
-    .await;
+    tracing::info!(clean_payload.name, "Payload cleaned");
+    upsert_contact(pool, client, &mapping, &clean_payload, clean_company_id).await;
     OK_RESPONSE
 }
 
