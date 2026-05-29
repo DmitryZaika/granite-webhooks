@@ -27,7 +27,7 @@ pub async fn sms_received(
 pub async fn sync_cloudtalk(
     _: RemixBackend,
     State(pool): State<MySqlPool>,
-    Path((company_id, customer_id)): Path<(i32, i32)>,
+    Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {
     let client = Client::new();
     sync_customer_to_cloud_talk(&pool, &client, customer_id).await

@@ -106,7 +106,6 @@ pub async fn sync_customer_to_cloud_talk(
     client: &Client,
     customer_id: i32,
 ) -> BasicResponse {
-    tracing::info!(customer_id, "Syncing customer to cloudtalk");
     let mapping = match load_customer_with_mapping(pool, customer_id).await {
         Ok(Some(mapping)) => mapping,
         Ok(None) => return NOT_FOUND_RESPONSE,
@@ -115,7 +114,6 @@ pub async fn sync_customer_to_cloud_talk(
             return internal_error("Failed to load customer with mapping");
         }
     };
-    tracing::info!(mapping.email, "Mapping successfully retrieved");
     let Some(company_id) = mapping.company_id else {
         return internal_error("The given user does not have a company");
     };
@@ -146,16 +144,11 @@ pub async fn sync_customer_to_cloud_talk(
             return internal_error("Failed to check cloudtalk configuration");
         }
     }
-    tracing::info!(company_id, "Company has cloudtalk configured");
-
     let us_country_id = get_cloudtalk_us_country_id(pool, client, clean_company_id).await;
-    tracing::info!(us_country_id, "US country ID retrieved");
     let payload = build_payload(&mapping, us_country_id);
-    tracing::info!("Payload built");
     let Some(clean_payload) = payload else {
         return internal_error("Failed to build payload");
     };
-    tracing::info!(clean_payload.name, "Payload cleaned");
     upsert_contact(pool, client, &mapping, &clean_payload, clean_company_id).await;
     OK_RESPONSE
 }
