@@ -41,7 +41,7 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
             "/cloudtalk/sync/{company_id}/{customer_id}",
             post(sync_cloudtalk),
         )
-        .route("/google/address-autocomplete", get(address_information))
+        .route("/google/address-autocomplete", post(address_information))
         .layer(axum::middleware::from_fn(print_request_body))
         .with_state(pool)
 }

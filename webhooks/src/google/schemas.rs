@@ -259,3 +259,8 @@ impl FinalSuggestion {
         }
     }
 }
+
+#[derive(Deserialize)]
+pub struct AddressRequest {
+    pub query: String,
+}
