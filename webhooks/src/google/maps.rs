@@ -1,121 +1,74 @@
+use crate::google::schemas::{
+    AutocompleteError, AutocompleteRequest, AutocompleteResponse, ComputeRouteMatrixRequest,
+    DistanceError, FinalSuggestion, MatrixElement, PlaceDetailsResponse, RouteMatrixDestination,
+    RouteMatrixOrigin, RouteModifiers, TextOrObject, Waypoint,
+};
+use lambda_http::tracing;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 
-#[derive(thiserror::Error, Debug)]
-pub enum DistanceError {
-    #[error("Google API error: {0}")]
-    Api(String),
-    #[error("Element status/condition: {0}")]
-    ElementStatus(String),
-    #[error("Network: {0}")]
-    Net(#[from] reqwest::Error),
-    #[error("Unexpected response shape")]
-    Shape,
+async fn generic_post_request<T, V>(
+    url: &str,
+    body: &T,
+    field_mask: &str,
+) -> Result<V, reqwest::Error>
+where
+    T: serde::Serialize + Send,
+    V: serde::de::DeserializeOwned + Send,
+{
+    let client = Client::new();
+    let api_key = std::env::var("GOOGLE_MAPS_API_KEY").expect("GOOGLE_MAPS_API_KEY must be set");
+    client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("X-Goog-Api-Key", &api_key)
+        .header("X-Goog-FieldMask", field_mask)
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()? // non-2xx -> error
+        .json::<V>() // REST returns a JSON array of elements
+        .await
 }
 
-// google.rpc.Status
-#[derive(Deserialize, Debug, Default)]
-struct RpcStatus {
-    #[serde(default)]
-    code: i32, // 0 == OK
-    #[serde(default)]
-    message: String,
-    // details omitted
-}
-
-// --- Routes API v2 response shape (only the fields we request via FieldMask) ---
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct MatrixElement {
-    origin_index: i32,
-    destination_index: i32,
-
-    #[serde(default)]
-    status: RpcStatus, // object, not a string
-
-    #[serde(default)]
-    distance_meters: Option<i64>,
-
-    // These can appear; keep them optional.
-    // #[serde(default)]
-    // duration: Option<String>, // e.g., "160s"
-    #[serde(default)]
-    condition: Option<String>, // e.g., "ROUTE_EXISTS"
-}
-
-// --- Request body types (minimal) ---
-#[derive(Serialize)]
-struct Waypoint {
-    address: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RouteModifiers {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    avoid_ferries: Option<bool>,
-}
-
-#[derive(Serialize)]
-struct RouteMatrixOrigin {
-    waypoint: Waypoint,
-    #[serde(rename = "routeModifiers", skip_serializing_if = "Option::is_none")]
-    route_modifiers: Option<RouteModifiers>,
-}
-
-#[derive(Serialize)]
-struct RouteMatrixDestination {
-    waypoint: Waypoint,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ComputeRouteMatrixRequest {
-    origins: Vec<RouteMatrixOrigin>,
-    destinations: Vec<RouteMatrixDestination>,
-    travel_mode: String,        // "DRIVE"
-    routing_preference: String, // "TRAFFIC_AWARE" or "TRAFFIC_UNAWARE"
+async fn generic_get_request<V>(url: &str, field_mask: &str) -> Result<V, reqwest::Error>
+where
+    V: serde::de::DeserializeOwned,
+{
+    let client = Client::new();
+    let api_key = std::env::var("GOOGLE_MAPS_API_KEY").expect("GOOGLE_MAPS_API_KEY must be set");
+    client
+        .get(url)
+        .header("Content-Type", "application/json")
+        .header("X-Goog-Api-Key", &api_key)
+        .header("X-Goog-FieldMask", field_mask)
+        .send()
+        .await?
+        .error_for_status()? // non-2xx -> error
+        .json::<V>() // REST returns a JSON array of elements
+        .await
 }
 
 /// Возвращает расстояние по дороге в милях между origin и destination (самый короткий маршрут).
 /// Использует Google Routes API Distance Matrix v2 и адресные строки.
 pub async fn driving_distance_miles(origin: &str, destination: &str) -> Result<f64, DistanceError> {
-    let client = Client::new();
-    let api_key = std::env::var("GOOGLE_MAPS_API_KEY").expect("GOOGLE_MAPS_API_KEY must be set");
-
     let body = ComputeRouteMatrixRequest {
         origins: vec![RouteMatrixOrigin {
-            waypoint: Waypoint {
-                address: origin.to_string(),
-            },
-            route_modifiers: Some(RouteModifiers {
-                avoid_ferries: Some(false),
-            }),
+            waypoint: Waypoint::new(origin),
+            route_modifiers: Some(RouteModifiers::default()),
         }],
-        destinations: vec![RouteMatrixDestination {
-            waypoint: Waypoint {
-                address: destination.to_string(),
-            },
-        }],
+        destinations: vec![RouteMatrixDestination::new(destination)],
         travel_mode: "DRIVE".into(),
         routing_preference: "TRAFFIC_AWARE".into(),
     };
 
+    let elements: Vec<MatrixElement> = generic_post_request(
+        "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix",
+        &body,
+        "originIndex,destinationIndex,status,distanceMeters,condition,duration",
+    )
+    .await?;
+
     // Ask only for what we use; include condition/duration if you want them.
-    let elements = client
-        .post("https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix")
-        .header("Content-Type", "application/json")
-        .header("X-Goog-Api-Key", &api_key)
-        .header(
-            "X-Goog-FieldMask",
-            "originIndex,destinationIndex,status,distanceMeters,condition,duration",
-        )
-        .json(&body)
-        .send()
-        .await?
-        .error_for_status()? // non-2xx -> error
-        .json::<Vec<MatrixElement>>() // REST returns a JSON array of elements
-        .await?;
 
     // With 1x1 matrix we expect a single element; still pick [0,0] to be explicit.
     let el = elements
@@ -124,12 +77,8 @@ pub async fn driving_distance_miles(origin: &str, destination: &str) -> Result<f
         .ok_or(DistanceError::Shape)?;
 
     // Status OK if code == 0 (empty object => defaults to 0/"").
-    if el.status.code != 0 {
-        return Err(DistanceError::Api(if el.status.message.is_empty() {
-            "non-OK status".into()
-        } else {
-            el.status.message.clone()
-        }));
+    if el.status_code() != 0 {
+        return Err(DistanceError::Api(el.message()));
     }
 
     // Some responses also include a condition; ensure route exists.
@@ -141,4 +90,53 @@ pub async fn driving_distance_miles(origin: &str, destination: &str) -> Result<f
 
     let meters = el.distance_meters.ok_or(DistanceError::Shape)? as f64;
     Ok(meters / 1609.344_f64)
+}
+
+pub async fn get_address_autocomplete(
+    query: &str,
+) -> Result<Option<FinalSuggestion>, AutocompleteError> {
+    let body = AutocompleteRequest::new(query);
+
+    let response: AutocompleteResponse = generic_post_request(
+        "https://places.googleapis.com/v1/places:autocomplete",
+        &body,
+        "suggestions.placePrediction.text,suggestions.placePrediction.placeId",
+    )
+    .await?;
+
+    if response.suggestions.is_empty() {
+        return Ok(None);
+    }
+
+    // Process suggestions sequentially, one at a time
+    for s in response.suggestions {
+        let place_id = s.place_prediction.place_id;
+
+        let description_text = match s.place_prediction.text {
+            TextOrObject::Object(pt) => pt.text,
+            TextOrObject::String(str_val) => str_val,
+        };
+
+        let details_url = format!("https://places.googleapis.com/v1/places/{place_id}");
+
+        if let Ok(address) =
+            generic_get_request::<PlaceDetailsResponse>(&details_url, "addressComponents")
+                .await
+                .inspect_err(|err| tracing::error!("Failed to get address details: {:?}", err))
+        {
+            let parsed_address = address.to_parsed_address();
+
+            // Validate that we got a real street and zip code
+            if !parsed_address.street.is_empty() && parsed_address.zip.is_some() {
+                // Short-circuit and return the single valid suggestion wrapped in Some
+                return Ok(Some(FinalSuggestion::new(
+                    description_text,
+                    place_id,
+                    parsed_address,
+                )));
+            }
+        }
+    }
+
+    Ok(None)
 }

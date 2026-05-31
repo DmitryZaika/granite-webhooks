@@ -4,18 +4,16 @@ use crate::cloudtalk::api::{
 use crate::cloudtalk::schemas::{CloudTalkCountry, ContactSearchHit};
 use crate::crud::cloudtalk::CustomerWithMapping;
 use crate::crud::cloudtalk::{find_local_cloudtalk_id_by_phone, update_cloudtalk_phone};
+use crate::google::maps::get_address_autocomplete;
 use crate::libs::constants::OK_RESPONSE;
 use crate::libs::types::BasicResponse;
-use regex::Regex;
+use lambda_http::tracing;
 use reqwest::Client;
 use sqlx::MySqlPool;
-use std::collections::HashSet;
 use std::env;
 
 // Bring in the structs from the previous step
-use crate::cloudtalk::schemas::{
-    ContactEmail, ContactNumber, ContactPayload, ExternalUrl, ParsedAddress,
-};
+use crate::cloudtalk::schemas::{ContactEmail, ContactNumber, ContactPayload, ExternalUrl};
 
 pub fn is_united_states(country: &CloudTalkCountry) -> bool {
     let iso_match = country
@@ -49,23 +47,12 @@ pub fn coerce_id(value: &serde_json::Value) -> Option<u64> {
 
 // --- Lazy Static Globals ---
 
-static US_STATES: std::sync::LazyLock<HashSet<&'static str>> = std::sync::LazyLock::new(|| {
-    [
-        "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA",
-        "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
-        "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT",
-        "VA", "WA", "WV", "WI", "WY", "DC", "PR", "VI", "GU", "AS", "MP",
-    ]
-    .iter()
-    .copied()
-    .collect()
-});
-
-static STATE_ZIP_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r",\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)\s*(?:,\s*USA?\.?)?\s*$").unwrap()
-});
-
-// --- Phone Parsing Helpers ---
+const US_STATES: [&str; 56] = [
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS",
+    "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY",
+    "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY", "DC", "PR", "VI", "GU", "AS", "MP",
+];
 
 pub fn phone_digits_only(phone: &str) -> String {
     phone.chars().filter(char::is_ascii_digit).collect()
@@ -139,64 +126,10 @@ pub fn build_external_urls(customer: &CustomerWithMapping) -> Vec<ExternalUrl> {
 // --- Address Parsing Helpers ---
 
 pub fn is_us_state(code: &str) -> bool {
-    US_STATES.contains(code)
+    US_STATES.contains(&code)
 }
 
-pub fn parse_us_address(raw: &Option<String>) -> Option<ParsedAddress> {
-    let trimmed = raw.as_ref()?.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    // Check regex match
-    let captures = STATE_ZIP_RE.captures(trimmed);
-
-    // Extract match index and codes safely
-    let (match_start, state, zip) = match captures {
-        Some(caps) => {
-            let state = caps.get(1).unwrap().as_str().to_string();
-            let zip = caps.get(2).unwrap().as_str().to_string();
-            let match_start = caps.get(0).unwrap().start();
-            (match_start, state, zip)
-        }
-        None => {
-            return Some(ParsedAddress {
-                street: trimmed.to_string(),
-                city: None,
-                state: None,
-                zip: None,
-            });
-        }
-    };
-
-    if !is_us_state(&state) {
-        return Some(ParsedAddress {
-            street: trimmed.to_string(),
-            city: None,
-            state: None,
-            zip: None,
-        });
-    }
-
-    let before = trimmed[..match_start].trim();
-
-    match before.rfind(',') {
-        Some(last_comma) => Some(ParsedAddress {
-            street: before[..last_comma].trim().to_string(),
-            city: Some(before[last_comma + 1..].trim().to_string()),
-            state: Some(state),
-            zip: Some(zip),
-        }),
-        None => Some(ParsedAddress {
-            street: before.to_string(),
-            city: None,
-            state: Some(state),
-            zip: Some(zip),
-        }),
-    }
-}
-
-pub fn build_payload(
+pub async fn build_payload(
     customer: &CustomerWithMapping,
     us_country_id: Option<u64>,
 ) -> Option<ContactPayload> {
@@ -207,37 +140,56 @@ pub fn build_payload(
 
     let external_urls = build_external_urls(customer);
 
+    let external_url = if external_urls.is_empty() {
+        None
+    } else {
+        Some(external_urls)
+    };
+
     // Initialize payload with required fields
     let mut payload = ContactPayload {
         name: customer.name.clone(),
         contact_number: numbers,
         contact_email: build_emails(customer),
-        external_url: if external_urls.is_empty() {
-            None
-        } else {
-            Some(external_urls)
-        },
+        external_url,
         ..Default::default() // Sets the remaining Option fields to None
     };
 
-    // Safely parse address if it exists
-    if let Some(parsed) = parse_us_address(&customer.address) {
-        payload.address = Some(parsed.street);
+    let Some(customer_address) = &customer.address else {
+        return Some(payload);
+    };
+    let parsed = match get_address_autocomplete(customer_address).await {
+        Ok(Some(parsed)) => parsed,
+        Ok(None) => {
+            tracing::error!(
+                "No valid address found for customer address: {}",
+                customer_address
+            );
+            return Some(payload);
+        }
+        Err(error) => {
+            tracing::error!(
+                "Failed to parse address for customer address: {}, error: {}",
+                customer_address,
+                error
+            );
+            return Some(payload);
+        }
+    };
+    payload.address = Some(parsed.address.street);
+    if parsed.address.city.is_some() {
+        payload.city = parsed.address.city;
+    }
+    if parsed.address.state.is_some() {
+        payload.state = parsed.address.state.clone();
+    }
+    if parsed.address.zip.is_some() {
+        payload.zip = parsed.address.zip.clone();
+    }
 
-        if parsed.city.is_some() {
-            payload.city = parsed.city;
-        }
-        if parsed.state.is_some() {
-            payload.state = parsed.state.clone();
-        }
-        if parsed.zip.is_some() {
-            payload.zip = parsed.zip.clone();
-        }
-
-        // Check condition: if state, zip, and us_country_id are all present
-        if parsed.state.is_some() && parsed.zip.is_some() && us_country_id.is_some() {
-            payload.country_id = us_country_id;
-        }
+    // Check condition: if state, zip, and us_country_id are all present
+    if parsed.address.state.is_some() && parsed.address.zip.is_some() && us_country_id.is_some() {
+        payload.country_id = us_country_id;
     }
 
     Some(payload)
@@ -411,4 +363,41 @@ pub fn extract_id(hit: &ContactSearchHit) -> Option<u64> {
         .or(hit.id.as_ref());
 
     raw_id.and_then(super::schemas::ContactId::coerce)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn build_payload_basic() {
+        let mapping = CustomerWithMapping {
+            id: 1,
+            company_id: Some(2),
+            name: Some("Test Company".to_string()),
+            phone: Some("+11234567890".to_string()),
+            phone_2: None,
+            email: None,
+            address: Some("2001 E Greyhound Pass C07, Carmel, IN 46033".to_string()),
+            cloudtalk_contact_id: None,
+            cloudtalk_id: None,
+        };
+        let result = ContactPayload {
+            name: Some("Test Company".to_string()),
+            contact_number: vec![ContactNumber {
+                public_number: "+11234567890".to_string(),
+            }],
+            contact_email: vec![],
+            external_url: None,
+            address: Some("2001 East Greyhound Pass".to_string()),
+            city: Some("Carmel".to_string()),
+            state: Some("IN".to_string()),
+            zip: Some("46033".to_string()),
+            country_id: Some(13),
+        };
+        let payload = build_payload(&mapping, Some(13)).await.unwrap();
+        assert_eq!(payload, result);
+        assert!(false);
+    }
 }

@@ -116,7 +116,7 @@ impl CountryItem {
     }
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
 pub struct ContactPayload {
     pub name: Option<String>,
     #[serde(rename = "ContactNumber")]
@@ -132,22 +132,23 @@ pub struct ContactPayload {
     pub country_id: Option<u64>,
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct ContactNumber {
     pub public_number: String,
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct ContactEmail {
     pub email: String,
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct ExternalUrl {
     pub name: String,
     pub url: String,
 }
 
+#[derive(PartialEq, Eq, Debug, Serialize)]
 pub struct ParsedAddress {
     pub street: String,
     pub city: Option<String>,

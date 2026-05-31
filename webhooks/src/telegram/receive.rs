@@ -263,7 +263,7 @@ async fn handle_assign_lead<T: Telegram>(
     }
     let client = Client::new();
     // For right now we log but ignore errors
-    sync_customer_to_cloud_talk(&pool, &client, position.user_id).await;
+    sync_customer_to_cloud_talk(pool, &client, lead_id).await;
 
     let deal_id = result.last_insert_id();
     let lead_link = lead_url(deal_id);

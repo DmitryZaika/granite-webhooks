@@ -144,7 +144,7 @@ pub async fn sync_customer_to_cloud_talk(
     }
     let us_country_id = get_cloudtalk_us_country_id(pool, client, clean_company_id).await;
     let payload = build_payload(&mapping, us_country_id);
-    let Some(clean_payload) = payload else {
+    let Some(clean_payload) = payload.await else {
         return internal_error("Failed to build payload");
     };
     upsert_contact(pool, client, &mapping, &clean_payload, clean_company_id).await;
