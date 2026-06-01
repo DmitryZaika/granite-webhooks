@@ -1,4 +1,4 @@
-use crate::axum_helpers::guards::MarketingUser;
+use crate::axum_helpers::guards::CloudTalkWebhookUser;
 use crate::cloudtalk::schemas::CloudtalkSMS;
 use crate::crud::cloudtalk::insert_cloudtalk_sms;
 use crate::libs::constants::{ERR_DB, OK_RESPONSE, internal_error};
@@ -8,7 +8,7 @@ use lambda_http::tracing;
 use sqlx::MySqlPool;
 
 pub async fn sms_received(
-    _: MarketingUser,
+    _: CloudTalkWebhookUser,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     Json(form): Json<CloudtalkSMS>,
@@ -23,6 +23,7 @@ pub async fn sms_received(
 }
 #[cfg(test)]
 mod tests {
+    use crate::axum_helpers::guards::CORRECT_ID;
     use crate::tests::utils::new_test_app;
     use axum::http::StatusCode;
     use sqlx::MySqlPool;
@@ -33,7 +34,7 @@ mod tests {
     }
 
     struct CloudtalkReceivedSMS {
-        pub sender: i64,
+        pub sender: Option<i64>,
         pub recipient: i64,
         pub text: String,
         pub agent: Option<String>,
@@ -54,15 +55,56 @@ mod tests {
     async fn test_basic_sms(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
-        let response = app.post("/cloudtalk/sms/42").json(&sms_json()).await;
+        let response = app
+            .post("/cloudtalk/sms/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&sms_json())
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let smss = get_sms_received(&pool).await;
         assert_eq!(smss.len(), 1);
-        assert_eq!(smss[0].sender, 6468956758);
+        assert_eq!(smss[0].sender, Some(6468956758));
         assert_eq!(smss[0].recipient, 3173161456);
         assert_eq!(smss[0].text, "Не пиши сюда".to_string());
         assert_eq!(smss[0].agent, Some("540273".to_string()));
         assert_eq!(smss[0].company_id, Some(42));
+    }
+
+    const MESSAGE_WITH_ID: &[u8] = b"{\"id\":2200000000,\"sender\":\"+16468956758[sender]\",\"recipient\":\"+13173161456[recipient]\",\"text\":\"[text]hello\",\"agent\":\"540273\"}";
+
+    fn sms_with_id_json() -> serde_json::Value {
+        serde_json::from_slice(MESSAGE_WITH_ID).expect("Failed to parse JSON")
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_echo_dedupe_via_cloudtalk_id(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+
+        let first = app
+            .post("/cloudtalk/sms/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&sms_with_id_json())
+            .await;
+        assert_eq!(first.status_code(), StatusCode::OK);
+
+        let second = app
+            .post("/cloudtalk/sms/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&sms_with_id_json())
+            .await;
+        assert_eq!(second.status_code(), StatusCode::OK);
+
+        let smss = get_sms_received(&pool).await;
+        assert_eq!(smss.len(), 1, "duplicate cloudtalk_id should be ignored");
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_sms_rejected_without_bearer_token(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+        let response = app.post("/cloudtalk/sms/42").json(&sms_json()).await;
+        assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
+        let smss = get_sms_received(&pool).await;
+        assert_eq!(smss.len(), 0, "unauthenticated webhook must not insert a row");
     }
 }

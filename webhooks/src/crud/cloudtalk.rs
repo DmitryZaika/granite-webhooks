@@ -9,8 +9,9 @@ pub async fn insert_cloudtalk_sms(
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     sqlx::query!(
         r#"
-        INSERT INTO cloudtalk_sms (id, sender, recipient, text, agent, company_id)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT IGNORE INTO cloudtalk_sms
+            (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status)
+        VALUES (?, ?, ?, ?, ?, ?, 'inbound', 'received')
         "#,
         sms.id,
         sms.sender(),
@@ -36,7 +37,7 @@ pub struct CustomerWithMapping {
 
     // From cloudtalk_contacts table (Optional due to LEFT JOIN)
     pub cloudtalk_contact_id: Option<i32>,
-    pub cloudtalk_id: Option<i32>,
+    pub cloudtalk_id: Option<i64>,
 }
 
 pub async fn load_customer_with_mapping(

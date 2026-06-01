@@ -13,7 +13,7 @@ use uuid::{Uuid, uuid};
 use crate::libs::constants::ERR_SEND_TELEGRAM;
 use crate::libs::constants::{FORBIDDEN_RESPONSE, internal_error};
 
-const CORRECT_ID: Uuid = uuid!("9ca4dfa8-0eec-46cc-967f-3385624be883");
+pub(crate) const CORRECT_ID: Uuid = uuid!("9ca4dfa8-0eec-46cc-967f-3385624be883");
 
 pub trait Telegram: Send + Sync {
     fn send_message<C, T>(
@@ -207,5 +207,31 @@ where
         }
 
         Ok(Self::new(bearer_uuid))
+    }
+}
+
+/// Strict auth for the CloudTalk SMS webhook: rejects any request whose bearer
+/// token is missing/invalid/not equal to `CORRECT_ID` (unlike `MarketingUser`).
+pub struct CloudTalkWebhookUser;
+
+impl<S> FromRequestParts<S> for CloudTalkWebhookUser
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let bearer_uuid = parts
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|token| parse_uuid_from_bearer(token));
+        match bearer_uuid {
+            Some(uuid) if uuid == CORRECT_ID => Ok(Self),
+            _ => {
+                tracing::error!("CloudTalk SMS webhook: missing or invalid bearer token");
+                Err((StatusCode::FORBIDDEN, "Forbidden"))
+            }
+        }
     }
 }
