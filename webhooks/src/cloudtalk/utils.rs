@@ -4,7 +4,7 @@ use crate::cloudtalk::api::{
 use crate::cloudtalk::schemas::{CloudTalkCountry, ContactSearchHit};
 use crate::crud::cloudtalk::CustomerWithMapping;
 use crate::crud::cloudtalk::{find_local_cloudtalk_id_by_phone, update_cloudtalk_phone};
-use crate::google::maps::get_address_autocomplete;
+use crate::google::maps::get_first_address_autocomplete;
 use crate::libs::constants::OK_RESPONSE;
 use crate::libs::types::BasicResponse;
 use lambda_http::tracing;
@@ -158,7 +158,7 @@ pub async fn build_payload(
     let Some(customer_address) = &customer.address else {
         return Some(payload);
     };
-    let parsed = match get_address_autocomplete(customer_address).await {
+    let parsed = match get_first_address_autocomplete(customer_address).await {
         Ok(Some(parsed)) => parsed,
         Ok(None) => {
             tracing::error!(
@@ -398,6 +398,5 @@ mod tests {
         };
         let payload = build_payload(&mapping, Some(13)).await.unwrap();
         assert_eq!(payload, result);
-        assert!(false);
     }
 }
