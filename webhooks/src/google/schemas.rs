@@ -125,20 +125,55 @@ pub enum AutocompleteError {
 }
 
 // --- Request body types ---
+#[derive(Serialize, Clone, Copy)]
+pub struct LatLng {
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+#[derive(Serialize)]
+pub struct Circle {
+    pub center: LatLng,
+    pub radius: f64, // Radius in meters (e.g., 10000.0 for 10km)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocationBias {
+    pub circle: Circle,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutocompleteRequest {
     pub input: String,
     pub language_code: String,
     pub included_region_codes: Vec<String>,
+    // Use skip_serializing_if so it won't break requests when coordinates aren't supplied
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_bias: Option<LocationBias>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<LatLng>,
 }
 
 impl AutocompleteRequest {
     pub fn new(address: &str) -> Self {
+        // Добав: , bias_coords: Option<LatLng>
+        /*
+        let location_bias = bias_coords.map(|coords| LocationBias {
+            circle: Circle {
+                center: coords,
+                radius: 100000.0, // 100 km
+            },
+        });
+        */
+
         Self {
             input: address.to_string(),
             language_code: "en".into(),
             included_region_codes: vec!["US".into()],
+            location_bias: None,
+            origin: None,
         }
     }
 }
