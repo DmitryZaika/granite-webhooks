@@ -60,9 +60,9 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
         tracing::error!(
             bucket = email_info.bucket,
             key = email_info.key,
-            "No prior email found"
+            "No prior email found. Processed as first email"
         );
-        return (StatusCode::BAD_REQUEST, "No prior email found");
+        return process_first_email(pool, client, email_info).await;
     };
 
     let uploaded_attachments = match upload_attachments(client, email_info.attachments).await {

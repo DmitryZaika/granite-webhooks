@@ -1,17 +1,93 @@
+use crate::amazon::bucket::S3Bucket;
 #[cfg(test)]
 use crate::axum_helpers::axum_app::new_main_app;
 #[cfg(test)]
 use axum_test::TestServer;
 use bytes::Bytes;
 use sqlx::MySqlPool;
+#[cfg(test)]
+use sqlx::mysql::MySqlQueryResult;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use uuid::Uuid;
 
+#[derive(Clone)]
+pub struct MockClient {
+    pub path: PathBuf,
+}
+
+impl MockClient {
+    pub fn new<P: Into<PathBuf>>(path: P) -> Self {
+        Self { path: path.into() }
+    }
+}
+
+impl S3Bucket for MockClient {
+    async fn read_bytes(&self, _bucket: &str, _key: &str) -> Result<Bytes, String> {
+        read_file_as_bytes(&self.path).map_err(|e| e.to_string())
+    }
+    fn send_file<'a>(
+        &'a self,
+        bucket: &'a str,
+        key: &'a str,
+        data: Bytes,
+    ) -> impl Future<Output = Result<String, String>> + Send + 'a {
+        async move { Ok(format!("s3://{bucket}/{key}")) }
+    }
+}
+
+pub struct Email {
+    pub id: i32,
+    pub receiver_user_id: Option<i32>,
+    pub receiver_email: Option<String>,
+    pub sender_user_id: Option<i32>,
+    pub subject: Option<String>,
+    pub body: Option<String>,
+    pub message_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub bucket: Option<String>,
+}
 pub fn read_file_as_bytes<P: AsRef<Path>>(path: P) -> std::io::Result<Bytes> {
     let data = fs::read(path)?;
     Ok(Bytes::from(data))
+}
+
+#[cfg(test)]
+pub async fn insert_email(
+    pool: &MySqlPool,
+    message_id: &str,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    let uuid: Uuid = Uuid::new_v4();
+    sqlx::query!(
+        r#"
+        INSERT INTO emails (sender_user_id, subject, body, message_id, thread_id)
+        VALUES (?, ?, ?, ?, ?)
+        "#,
+        1,
+        "Test Subject",
+        "Test Body",
+        message_id,
+        uuid.to_string()
+    )
+    .execute(pool)
+    .await
+}
+
+#[cfg(test)]
+pub async fn get_emails(pool: &MySqlPool) -> Result<Vec<Email>, sqlx::Error> {
+    sqlx::query_as!(
+        Email,
+        r#"
+        SELECT id, receiver_user_id, receiver_email, sender_user_id, subject, body, message_id, thread_id, bucket
+        FROM emails
+        ORDER BY id ASC
+        LIMIT 10
+        "#,
+    )
+    .fetch_all(pool)
+    .await
 }
 
 pub async fn insert_user(
