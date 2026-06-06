@@ -1,6 +1,6 @@
 use crate::axum_helpers::guards::CloudTalkWebhookUser;
 use crate::cloudtalk::schemas::CloudtalkSMS;
-use crate::crud::cloudtalk::insert_cloudtalk_sms;
+use crate::crud::cloudtalk::{insert_inbound_sms, insert_outbound_sms};
 use crate::libs::constants::{ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use axum::extract::{Json, Path, State};
@@ -13,10 +13,25 @@ pub async fn sms_received(
     Path(company_id): Path<i32>,
     Json(form): Json<CloudtalkSMS>,
 ) -> BasicResponse {
-    match insert_cloudtalk_sms(&pool, &form, company_id).await {
+    match insert_inbound_sms(&pool, &form, company_id).await {
         Ok(_) => OK_RESPONSE,
         Err(error) => {
             tracing::error!("Error inserting sms received into the database: {}", error);
+            internal_error(ERR_DB)
+        }
+    }
+}
+
+pub async fn sms_sent(
+    _: CloudTalkWebhookUser,
+    State(pool): State<MySqlPool>,
+    Path(company_id): Path<i32>,
+    Json(form): Json<CloudtalkSMS>,
+) -> BasicResponse {
+    match insert_outbound_sms(&pool, &form, company_id).await {
+        Ok(_) => OK_RESPONSE,
+        Err(error) => {
+            tracing::error!("Error inserting sms sent into the database: {}", error);
             internal_error(ERR_DB)
         }
     }
@@ -106,5 +121,60 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
         let smss = get_sms_received(&pool).await;
         assert_eq!(smss.len(), 0, "unauthenticated webhook must not insert a row");
+    }
+
+    // App-originated send (no CRM row to merge) → a fresh outbound row is inserted.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_sms_sent_inserts_outbound(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+
+        let response = app
+            .post("/cloudtalk/sms/sent/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&sms_with_id_json())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let row = sqlx::query!(
+            "SELECT COUNT(*) AS cnt FROM cloudtalk_sms \
+             WHERE direction = 'outbound' AND status = 'sent' AND cloudtalk_id = 2200000000"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.cnt, 1, "app-originated send should insert one outbound row");
+    }
+
+    // CRM-originated send: the CRM already inserted an outbound row with a NULL
+    // cloudtalk_id; the CloudTalk echo should merge into it, not duplicate.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_sms_sent_merges_crm_outbound_row(pool: MySqlPool) {
+        sqlx::query!(
+            "INSERT INTO cloudtalk_sms \
+                (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status) \
+             VALUES (NULL, NULL, 3173161456, 'hello', '540273', 42, 'outbound', 'pending')"
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let app = new_test_app(pool.clone());
+        let response = app
+            .post("/cloudtalk/sms/sent/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&sms_with_id_json())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let smss = get_sms_received(&pool).await;
+        assert_eq!(smss.len(), 1, "echo must merge into the CRM row, not duplicate");
+
+        let merged = sqlx::query!(
+            "SELECT cloudtalk_id FROM cloudtalk_sms WHERE company_id = 42 AND direction = 'outbound'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(merged.cloudtalk_id, Some(2200000000));
     }
 }

@@ -2,7 +2,7 @@ use crate::cloudtalk::schemas::CloudtalkSMS;
 use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
 
-pub async fn insert_cloudtalk_sms(
+pub async fn insert_inbound_sms(
     pool: &MySqlPool,
     sms: &CloudtalkSMS,
     company_id: i32,
@@ -12,6 +12,54 @@ pub async fn insert_cloudtalk_sms(
         INSERT IGNORE INTO cloudtalk_sms
             (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status)
         VALUES (?, ?, ?, ?, ?, ?, 'inbound', 'received')
+        "#,
+        sms.id,
+        sms.sender(),
+        sms.recipient(),
+        sms.text.0,
+        sms.agent,
+        company_id,
+    )
+    .execute(pool)
+    .await
+}
+
+pub async fn insert_outbound_sms(
+    pool: &MySqlPool,
+    sms: &CloudtalkSMS,
+    company_id: i32,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    if let Some(cloudtalk_id) = sms.id {
+        let merged = sqlx::query!(
+            r#"
+            UPDATE cloudtalk_sms
+               SET cloudtalk_id = ?
+             WHERE company_id = ?
+               AND direction = 'outbound'
+               AND cloudtalk_id IS NULL
+               AND recipient = ?
+               AND text = ?
+               AND created_date >= (NOW() - INTERVAL 10 MINUTE)
+             ORDER BY created_date DESC
+             LIMIT 1
+            "#,
+            cloudtalk_id,
+            company_id,
+            sms.recipient(),
+            sms.text.0,
+        )
+        .execute(pool)
+        .await?;
+        if merged.rows_affected() > 0 {
+            return Ok(merged);
+        }
+    }
+
+    sqlx::query!(
+        r#"
+        INSERT IGNORE INTO cloudtalk_sms
+            (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status)
+        VALUES (?, ?, ?, ?, ?, ?, 'outbound', 'sent')
         "#,
         sms.id,
         sms.sender(),
