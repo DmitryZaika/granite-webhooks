@@ -67,6 +67,164 @@ fn get_last_n_chars(s: &str, n: usize) -> &str {
     }
 }
 
+#[derive(Deserialize)]
+pub struct CloudTalkCountry {
+    pub id: Option<serde_json::Value>, // Dynamic type: can be String or Number
+    pub iso_code: Option<String>,
+    pub iso: Option<String>,
+    pub code: Option<String>,
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct CountriesEnvelope {
+    #[serde(rename = "responseData")]
+    pub response_data: Option<ResponseData>,
+}
+
+#[derive(Deserialize)]
+pub struct ResponseData {
+    pub data: Option<Vec<CountryItem>>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct ResponseDataHits {
+    pub data: Option<Vec<ContactSearchHit>>,
+}
+
+// Handles the `item.Country ?? item` fallback cleanly
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum CountryItem {
+    Wrapped {
+        #[serde(rename = "Country")]
+        country: CloudTalkCountry,
+    },
+    Direct(CloudTalkCountry),
+}
+
+impl CountryItem {
+    pub fn into_country(self) -> CloudTalkCountry {
+        match self {
+            Self::Wrapped { country } | Self::Direct(country) => country,
+        }
+    }
+}
+
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+pub struct ContactPayload {
+    pub name: Option<String>,
+    #[serde(rename = "ContactNumber")]
+    pub contact_number: Vec<ContactNumber>,
+    #[serde(rename = "ContactEmail")]
+    pub contact_email: Vec<ContactEmail>,
+    #[serde(rename = "ExternalUrl")]
+    pub external_url: Option<Vec<ExternalUrl>>,
+    pub address: Option<String>,
+    pub city: Option<String>,
+    pub state: Option<String>,
+    pub zip: Option<String>,
+    pub country_id: Option<u64>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct ContactNumber {
+    pub public_number: String,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct ContactEmail {
+    pub email: String,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct ExternalUrl {
+    pub name: String,
+    pub url: String,
+}
+
+#[derive(PartialEq, Eq, Debug, Serialize)]
+pub struct ParsedAddress {
+    pub street: String,
+    pub city: Option<String>,
+    pub state: Option<String>,
+    pub zip: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ContactId {
+    Number(i64),
+    String(String),
+}
+
+impl ContactId {
+    /// Coerces the contact ID into a valid, non-zero u64.
+    pub fn coerce(&self) -> Option<u64> {
+        match self {
+            Self::Number(n) => {
+                // safely attempt to convert i64 -> u64 (fails if negative)
+                let val: u64 = (*n).try_into().ok()?;
+                if val > 0 { Some(val) } else { None }
+            }
+            Self::String(s) => {
+                let val = s.parse::<u64>().ok()?;
+                if val > 0 { Some(val) } else { None }
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ContactNumberObj {
+    pub public_number: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ContactNode {
+    pub id: Option<ContactId>,
+    pub contact_numbers: Option<Vec<String>>,
+    #[serde(rename = "ContactNumber")]
+    pub contact_number: Option<Vec<ContactNumberObj>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ContactSearchHit {
+    #[serde(rename = "Contact")]
+    pub contact: Option<ContactNode>,
+    pub id: Option<ContactId>,
+    pub contact_numbers: Option<Vec<String>>,
+    #[serde(rename = "ContactNumber")]
+    pub contact_number: Option<Vec<ContactNumberObj>>,
+}
+
+/// Handles the flexible `number | string` type from the TypeScript interface.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum Id {
+    Integer(i64),
+    String(String),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PublicNumber {
+    pub public_number: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ContactDetails {
+    pub id: Option<Id>,
+    pub contact_numbers: Option<Vec<String>>,
+    #[serde(rename = "ContactNumber")]
+    pub contact_number: Option<Vec<PublicNumber>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ContactSearchEnvelope {
+    #[serde(rename = "responseData")]
+    pub response_data: Option<ResponseDataHits>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

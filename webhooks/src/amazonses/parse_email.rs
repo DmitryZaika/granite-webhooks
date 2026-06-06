@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use email_reply_parser::EmailReplyParser;
-use mail_parser::{Attribute, HeaderValue, MessageParser, MessagePart, MimeHeaders, PartType};
+use mail_parser::{HeaderValue, MessageParser, MessagePart, MimeHeaders, PartType};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -87,17 +87,6 @@ fn parse_header_value(value: &HeaderValue) -> Option<String> {
     }
 }
 
-fn extract_attribute(attributes: Option<&[Attribute<'_>]>, name: &str) -> Option<String> {
-    if let Some(attributes) = attributes {
-        for attribute in attributes {
-            if attribute.name == name {
-                return Some(attribute.value.to_string());
-            }
-        }
-    }
-    None
-}
-
 pub fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
     // 1. Support Text, HTML, and Binary parts. mail-parser decodes
     // text-based attachments (like .csv or .txt) as Text, not Binary!
@@ -145,7 +134,6 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
     let reply_body = EmailReplyParser::parse_reply(&body);
     let attachments = message.attachments();
     let final_attachments: Vec<Attachment> = attachments.filter_map(parse_attachment).collect();
-    println!("ATTACHMENTS LENGTH RAW: {}", final_attachments.len());
     let sender_emails = message.from().ok_or("Failed to parse sender email")?;
     let sender_email = sender_emails
         .first()

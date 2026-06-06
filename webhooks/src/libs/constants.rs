@@ -15,6 +15,9 @@ pub const BAD_REQUEST: (StatusCode, &str) = (StatusCode::BAD_REQUEST, "bad_reque
 pub const fn internal_error(error: &'static str) -> (StatusCode, &'static str) {
     (StatusCode::INTERNAL_SERVER_ERROR, error)
 }
+pub const fn not_acceptable(error: &'static str) -> (StatusCode, &'static str) {
+    (StatusCode::NOT_ACCEPTABLE, error)
+}
 
 pub const SALES_WORKER: i32 = 1;
 pub const SALES_MANAGER: i32 = 2;

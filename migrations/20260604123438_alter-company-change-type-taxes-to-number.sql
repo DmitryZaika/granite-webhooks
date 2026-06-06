@@ -1,0 +1,1 @@
+ALTER TABLE company MODIFY COLUMN state_taxes decimal(6, 4);

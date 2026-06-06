@@ -75,7 +75,6 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Unable to parse email content from S3");
         }
     };
-    println!("ATTACHMENTS LENGTH: {}", attachments.len());
     let email_info = EmailInfo {
         parsed: &parsed,
         attachments,
@@ -101,35 +100,14 @@ mod local_tests {
     use super::*;
     use crate::tests::data::ses_open_json::ses_open_event_json;
     use crate::tests::data::ses_received::ses_received_json;
-    use crate::tests::utils::{insert_user, new_test_app, read_file_as_bytes};
+    use crate::tests::utils::{MockClient, get_emails, insert_email, insert_user, new_test_app};
     use axum::http::StatusCode;
-    use bytes::Bytes;
     use sqlx::MySqlPool;
-    use sqlx::mysql::MySqlQueryResult;
-    use std::path::PathBuf;
-    use uuid::Uuid;
 
     struct ReadDb {
         message_id: String,
         user_agent: Option<String>,
         ip_address: Option<String>,
-    }
-
-    #[derive(Clone)]
-    pub struct MockClient {
-        pub path: PathBuf,
-    }
-
-    pub struct Email {
-        pub id: i32,
-        pub receiver_user_id: Option<i32>,
-        pub receiver_email: Option<String>,
-        pub sender_user_id: Option<i32>,
-        pub subject: Option<String>,
-        pub body: Option<String>,
-        pub message_id: Option<String>,
-        pub thread_id: Option<String>,
-        pub bucket: Option<String>,
     }
 
     pub struct Attachment {
@@ -139,48 +117,8 @@ mod local_tests {
         url: String,
     }
 
-    impl MockClient {
-        pub fn new<P: Into<PathBuf>>(path: P) -> Self {
-            Self { path: path.into() }
-        }
-    }
-
-    impl S3Bucket for MockClient {
-        async fn read_bytes(&self, _bucket: &str, _key: &str) -> Result<Bytes, String> {
-            read_file_as_bytes(&self.path).map_err(|e| e.to_string())
-        }
-        fn send_file<'a>(
-            &'a self,
-            bucket: &'a str,
-            key: &'a str,
-            data: Bytes,
-        ) -> impl Future<Output = Result<String, String>> + Send + 'a {
-            async move { Ok(format!("s3://{bucket}/{key}")) }
-        }
-    }
-
     const BUCKET_NAME: Option<&str> =
         Some("s3://granite-ses-inbound-emails/p51f95lgdaa8rpcjp0q7loemss3a17avpnc48ug1");
-
-    async fn insert_email(
-        pool: &MySqlPool,
-        message_id: &str,
-    ) -> Result<MySqlQueryResult, sqlx::Error> {
-        let uuid: Uuid = Uuid::new_v4();
-        sqlx::query!(
-            r#"
-            INSERT INTO emails (sender_user_id, subject, body, message_id, thread_id)
-            VALUES (?, ?, ?, ?, ?)
-            "#,
-            1,
-            "Test Subject",
-            "Test Body",
-            message_id,
-            uuid.to_string()
-        )
-        .execute(pool)
-        .await
-    }
 
     async fn check_db_email_reads(pool: &MySqlPool) -> Result<ReadDb, sqlx::Error> {
         sqlx::query_as!(
@@ -196,19 +134,6 @@ mod local_tests {
         .await
     }
 
-    async fn get_emails(pool: &MySqlPool) -> Result<Vec<Email>, sqlx::Error> {
-        sqlx::query_as!(
-            Email,
-            r#"
-            SELECT id, receiver_user_id, receiver_email, sender_user_id, subject, body, message_id, thread_id, bucket
-            FROM emails
-            ORDER BY id ASC
-            LIMIT 10
-            "#,
-        )
-        .fetch_all(pool)
-        .await
-    }
     async fn get_email_attachments(
         pool: &MySqlPool,
         email_id: u64,
@@ -281,6 +206,26 @@ mod local_tests {
         const MESSAGE_ID: &str =
             "CAG6QthbVR6eOBoEFup=bnuuBw=_JQWfP1rLzAjwDUGCpNV_wyg@mail.gmail.com";
         assert_eq!(result[1].message_id, Some(MESSAGE_ID.to_string()));
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn received_reply_invalid_message_id(pool: MySqlPool) {
+        const CLIENT_EMAIL: &str = "colin.delahunty@granite-manager.com";
+        insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
+        let mock_client = MockClient::new("src/tests/data/reply_email1.eml");
+
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+
+        assert_eq!(response, OK_RESPONSE);
+
+        // TODO: Check that correct email was added into the db
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].subject, Some("Re: COLINS TEST".to_string()));
+        const EMAIL_BODY: &str = "Please respond.";
+        assert_eq!(result[0].body.clone().unwrap(), EMAIL_BODY);
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -518,16 +463,6 @@ mod local_tests {
         );
         assert_eq!(result[1].bucket.as_deref(), BUCKET_NAME);
         assert_eq!(result[2].bucket.as_deref(), BUCKET_NAME);
-    }
-    #[sqlx::test(migrations = "../migrations")]
-    async fn received_no_sent(pool: MySqlPool) {
-        let mock_client = MockClient::new("src/tests/data/reply_email1.eml");
-
-        let data: S3Event = ses_received_json();
-        let response = process_ses_received_event(&pool, mock_client, &data).await;
-
-        const BAD: BasicResponse = (StatusCode::BAD_REQUEST, "No prior email found");
-        assert_eq!(response, BAD);
     }
     #[sqlx::test(migrations = "../migrations")]
     async fn four_attachments(pool: MySqlPool) {

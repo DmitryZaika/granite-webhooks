@@ -1,9 +1,11 @@
 use crate::amazonses::routes::{read_receipt_handler, receive_handler};
-use crate::cloudtalk::receive::{sms_received, sms_sent};
+use crate::cloudtalk::receive::{sms_received, sms_sent, sync_cloudtalk};
+use crate::google::receive::address_information;
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
 use crate::telegram::receive::webhook_handler;
 use crate::webhooks::receive::{facebook_contact_form, wordpress_contact_form};
+
 use axum::{
     Router,
     response::IntoResponse,
@@ -36,6 +38,11 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         .route("/ses/receive-email", post(receive_handler))
         .route("/cloudtalk/sms/{company_id}", post(sms_received))
         .route("/cloudtalk/sms/sent/{company_id}", post(sms_sent))
+        .route(
+            "/cloudtalk/sync/{company_id}/{customer_id}",
+            post(sync_cloudtalk),
+        )
+        .route("/google/address-autocomplete", post(address_information))
         .layer(axum::middleware::from_fn(print_request_body))
         .with_state(pool)
 }
