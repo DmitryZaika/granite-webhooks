@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CloudtalkSMS {
-    pub id: Option<i32>,
+    pub id: Option<i64>,
     sender: CleanedPhone,
     recipient: CleanedPhone,
     pub text: CleanText,
@@ -60,16 +60,11 @@ impl<'de> Deserialize<'de> for CleanText {
 }
 
 fn get_last_n_chars(s: &str, n: usize) -> &str {
-    // Find the byte index of the Nth character from the end.
-    // char_indices() provides the byte index and the character.
-    let byte_index = s
-        .char_indices()
-        .rev() // Reverse the iterator to start from the end
-        .nth(n - 1) // Get the Nth character's entry
-        .map(|(i, _)| i)
-        .unwrap(); // Extract only the byte index
-
-    &s[byte_index..]
+    // Return the whole string if it has fewer than n chars, instead of panicking.
+    match s.char_indices().rev().nth(n - 1).map(|(i, _)| i) {
+        Some(byte_index) => &s[byte_index..],
+        None => s,
+    }
 }
 
 #[derive(Deserialize)]

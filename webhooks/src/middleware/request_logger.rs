@@ -21,7 +21,7 @@ pub async fn print_request_body(
     let method = request.method().clone();
     let uri = request.uri().clone();
     let path = uri.path();
-    let request = log_request_body(request).await?;
+    let request = log_request_body(request, &uri).await?;
     tracing::info!(
         "Incoming request: {} {} (routing path: {})",
         method,
@@ -38,7 +38,7 @@ pub async fn print_request_body(
     Ok(response)
 }
 
-async fn log_request_body(request: Request) -> Result<Request, BasicResponse> {
+async fn log_request_body(request: Request, uri: &Uri) -> Result<Request, BasicResponse> {
     let (parts, body) = request.into_parts();
 
     // this won't work if the body is an long running stream
@@ -48,8 +48,12 @@ async fn log_request_body(request: Request) -> Result<Request, BasicResponse> {
         .map_err(|_| internal_error("Middleware could not parse request body"))?
         .to_bytes();
 
-    // We just want to log the body for debugging purposes
-    tracing::info!(body = ?bytes);
+    // Redact body for SMS routes — they contain customer phone numbers and message text (PII)
+    if uri.path().starts_with("/cloudtalk/sms/") {
+        tracing::info!(body_size = bytes.len(), path = %uri.path());
+    } else {
+        tracing::info!(body = ?bytes);
+    }
 
     Ok(Request::from_parts(parts, Body::from(bytes)))
 }
