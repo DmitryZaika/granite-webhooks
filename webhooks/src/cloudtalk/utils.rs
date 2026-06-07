@@ -202,14 +202,14 @@ pub async fn upsert_contact(
     payload: &ContactPayload,
     company_id: u64,
 ) -> BasicResponse {
-    let phones: Vec<String> = payload
+    let phone_array: Vec<String> = payload
         .contact_number
         .iter()
         .map(|n| n.public_number.clone())
         .collect();
 
-    let phone1 = phones.first().cloned();
-    let phone2 = phones.get(1).cloned();
+    let phone1 = phone_array.first().cloned();
+    let phone2 = phone_array.get(1).cloned();
 
     if let Some(cloudtalk_id) = customer.cloudtalk_id
         && let Some(_cloudtalk_contact_id) = customer.cloudtalk_contact_id
@@ -225,12 +225,12 @@ pub async fn upsert_contact(
         return OK_RESPONSE;
     }
 
-    let mut existing_id = find_local_cloudtalk_id_by_phone(pool, company_id, &phones)
+    let mut existing_id = find_local_cloudtalk_id_by_phone(pool, company_id, &phone_array)
         .await
         .unwrap();
 
     if existing_id.is_none() {
-        existing_id = find_cloudtalk_contact_by_phone(pool, client, company_id, &phones)
+        existing_id = find_cloudtalk_contact_by_phone(pool, client, company_id, &phone_array)
             .await
             .unwrap();
     }

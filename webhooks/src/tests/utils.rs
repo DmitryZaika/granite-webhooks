@@ -28,13 +28,8 @@ impl S3Bucket for MockClient {
     async fn read_bytes(&self, _bucket: &str, _key: &str) -> Result<Bytes, String> {
         read_file_as_bytes(&self.path).map_err(|e| e.to_string())
     }
-    fn send_file<'a>(
-        &'a self,
-        bucket: &'a str,
-        key: &'a str,
-        data: Bytes,
-    ) -> impl Future<Output = Result<String, String>> + Send + 'a {
-        async move { Ok(format!("s3://{bucket}/{key}")) }
+    async fn send_file(&self, bucket: &str, key: &str, _data: Bytes) -> Result<String, String> {
+        Ok(format!("s3://{bucket}/{key}"))
     }
 }
 

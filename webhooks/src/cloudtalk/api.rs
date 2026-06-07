@@ -13,7 +13,7 @@ use sqlx::MySqlPool;
 
 const BASE_URL: &str = "https://my.cloudtalk.io/api";
 
-pub async fn cloudtalk_request<T: Serialize, R: DeserializeOwned>(
+pub async fn cloudtalk_request<T: Serialize + Sync, R: DeserializeOwned + Send>(
     pool: &MySqlPool,
     client: &Client,
     path: &str,

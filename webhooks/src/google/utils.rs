@@ -11,7 +11,7 @@ pub async fn generic_post_request<T, V>(
     field_mask: &str,
 ) -> Result<V, reqwest::Error>
 where
-    T: serde::Serialize + Send,
+    T: serde::Serialize + Send + Sync,
     V: serde::de::DeserializeOwned + Send,
 {
     let client = Client::new();
@@ -21,7 +21,7 @@ where
         .header("Content-Type", "application/json")
         .header("X-Goog-Api-Key", &api_key)
         .header("X-Goog-FieldMask", field_mask)
-        .json(&body)
+        .json(body)
         .send()
         .await?
         .error_for_status()? // non-2xx -> error

@@ -1,4 +1,4 @@
-use crate::axum_helpers::guards::{CloudTalkWebhookUser, MarketingUser, RemixBackend};
+use crate::axum_helpers::guards::{CloudTalkWebhookUser, RemixBackend};
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::cloudtalk::schemas::CloudtalkSMS;
 use crate::crud::cloudtalk::{insert_inbound_sms, insert_outbound_sms};
