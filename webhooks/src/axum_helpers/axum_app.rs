@@ -4,6 +4,7 @@ use crate::google::receive::address_information;
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
 use crate::telegram::receive::webhook_handler;
+use crate::template::receive::{get_complete_template, get_template_variables};
 use crate::webhooks::receive::{facebook_contact_form, wordpress_contact_form};
 
 use axum::{
@@ -42,6 +43,8 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
             "/cloudtalk/sync/{company_id}/{customer_id}",
             post(sync_cloudtalk),
         )
+        .route("/template/variables/{user_id}", get(get_template_variables))
+        .route("/template/complete/{user_id}", post(get_complete_template))
         .route("/google/address-autocomplete", post(address_information))
         .layer(axum::middleware::from_fn(print_request_body))
         .with_state(pool)

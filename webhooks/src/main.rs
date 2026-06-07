@@ -21,6 +21,7 @@ pub mod middleware;
 pub mod posthog;
 pub mod schemas;
 pub mod telegram;
+pub mod template;
 pub mod tests;
 pub mod webhooks;
 use lambda_http::tracing;
