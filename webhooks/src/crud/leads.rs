@@ -316,32 +316,13 @@ pub async fn create_deal_from_lead(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::utils::*;
 
     async fn insert_company(pool: &MySqlPool) -> Result<i32, sqlx::Error> {
         let rec = sqlx::query!(r#"INSERT INTO company (name) VALUES ('Test Company')"#,)
             .execute(pool)
             .await?;
         Ok(rec.last_insert_id() as i32)
-    }
-
-    async fn insert_group_list(pool: &MySqlPool, company_id: i32) -> Result<u64, sqlx::Error> {
-        let rec = sqlx::query!(
-            r#"INSERT INTO groups_list (name, company_id, is_default) VALUES ('Test Group', ?, 1)"#,
-            company_id
-        )
-        .execute(pool)
-        .await?;
-        Ok(rec.last_insert_id())
-    }
-
-    async fn insert_deals_list(pool: &MySqlPool, group_id: u64) -> Result<u64, sqlx::Error> {
-        let rec = sqlx::query!(
-            r#"INSERT INTO deals_list (name, group_id, position) VALUES ('Test Deals List', ?, 0)"#,
-            group_id,
-        )
-        .execute(pool)
-        .await?;
-        Ok(rec.last_insert_id())
     }
 
     #[sqlx::test(migrations = "../migrations")]
