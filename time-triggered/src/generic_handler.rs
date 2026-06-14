@@ -1,4 +1,5 @@
 use common::amazon::email::send_message;
+use common::crud::scheduled_emails::mark_scheduled_email_as_sent;
 use common::crud::template::{fetch_template_variable_data, TemplateVariableData};
 use common::crud::{scheduled_emails::get_ready_scheduled_emails, setup::create_db_pool};
 use common::utils::template::replace_template_variables;
@@ -41,7 +42,7 @@ pub(crate) async fn function_handler(
 
     let pool = create_db_pool().await?;
     let ready_emails = get_ready_scheduled_emails(&pool).await?;
-    for email in ready_emails {
+    for email in &ready_emails {
         let data = fetch_template_variable_data(
             &pool,
             email.user_id,
@@ -52,10 +53,11 @@ pub(crate) async fn function_handler(
         .unwrap();
         let result = replace_template_variables(&email.template_body, &data);
         send_message(&[&email.email], &email.template_subject, &result).await?;
+        mark_scheduled_email_as_sent(&pool, email.id).await?;
     }
     let resp = OutgoingMessage {
         req_id: event.context.request_id,
-        msg: "Check CloudWatch logs for the payload structure.".to_string(),
+        msg: format!("Successfully processed {} emails", ready_emails.len()).to_string(),
     };
 
     Ok(resp)
