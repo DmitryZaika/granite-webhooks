@@ -1,18 +1,6 @@
 use crate::crud::template::TemplateVariableData;
 use chrono::Local;
-
-pub const VARIABLE_KEYS: &[&str] = &[
-    "user.name",
-    "user.first_name",
-    "customer.name",
-    "customer.first_name",
-    "current_date",
-    "company.name",
-    "company.address",
-    "customer.address",
-    "user.phone_number",
-    "user.email",
-];
+use std::collections::HashMap;
 
 fn get_first_name(full_name: &str) -> String {
     full_name.split(' ').next().unwrap_or(full_name).to_string()
@@ -28,34 +16,34 @@ fn format_current_date() -> String {
         .to_string()
 }
 
-fn get_variable_value(key: &str, data: &TemplateVariableData) -> Option<String> {
-    let value = match key {
-        "user.name" => data.user.name.clone(),
-        "user.first_name" => data.user.name.as_ref().map(|n| get_first_name(n)),
-        "user.email" => data.user.email.clone(),
-        "user.phone_number" => data.user.phone_number.clone(),
-        "customer.name" => data.customer.as_ref()?.name.clone(),
-        "customer.first_name" => {
-            let customer = data.customer.as_ref()?;
-            customer.name.as_ref().map(|n| get_first_name(n))
-        }
-        "customer.address" => data.customer.as_ref()?.address.clone(),
-        "company.name" => data.company.as_ref()?.name.clone(),
-        "company.address" => data.company.as_ref()?.address.clone(),
-        "current_date" => Some(format_current_date()),
-        _ => None,
-    };
+fn build_variable_map(data: &TemplateVariableData) -> HashMap<&'static str, String> {
+    let customer = data.customer.as_ref();
+    let company = data.company.as_ref();
+    let first_name = data.user.name.as_ref().map(|n| get_first_name(n));
+    let customer_name = customer.and_then(|c| c.name.as_ref().map(|n| get_first_name(n)));
 
-    value.filter(|s| !s.is_empty())
+    [
+        ("user.name", data.user.name.clone()),
+        ("user.first_name", first_name),
+        ("user.email", data.user.email.clone()),
+        ("user.phone_number", data.user.phone_number.clone()),
+        ("customer.name", customer.and_then(|c| c.name.clone())),
+        ("customer.first_name", customer_name),
+        ("customer.address", customer.and_then(|c| c.address.clone())),
+        ("company.name", company.and_then(|c| c.name.clone())),
+        ("company.address", company.and_then(|c| c.address.clone())),
+        ("current_date", Some(format_current_date())),
+    ]
+    .into_iter()
+    .filter_map(|(k, v)| v.filter(|s| !s.is_empty()).map(|val| (k, val)))
+    .collect()
 }
 
 pub fn replace_template_variables(template: &str, data: &TemplateVariableData) -> String {
     let mut result = template.to_string();
 
-    for &key in VARIABLE_KEYS {
-        if let Some(value) = get_variable_value(key, data) {
-            result = result.replace(&format!("{{{{{}}}}}", key), &value);
-        }
+    for (key, value) in &build_variable_map(data) {
+        result = result.replace(&format!("{{{{{}}}}}", key), value);
     }
 
     result
