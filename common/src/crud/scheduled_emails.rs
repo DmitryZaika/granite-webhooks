@@ -5,10 +5,13 @@ use sqlx::mysql::MySqlQueryResult;
 use crate::crud::email_template::EmailTemplate;
 
 pub struct ScheduledEmail {
-    id: i32,
-    template_body: String,
-    customer_id: i32,
-    email: String,
+    pub id: i32,
+    pub template_body: String,
+    pub template_subject: String,
+    pub customer_id: i32,
+    pub email: String,
+    pub user_id: i32,
+    pub deal_id: i32,
 }
 
 pub async fn insert_scheduled_email(
@@ -43,7 +46,7 @@ pub async fn get_ready_scheduled_emails(
     sqlx::query_as!(
         ScheduledEmail,
         r#"
-        SELECT scheduled_emails.id, template_body, customer_id, email
+        SELECT scheduled_emails.id, template_body, template_subject, customer_id, users.email, scheduled_emails.user_id, scheduled_emails.deal_id
         FROM scheduled_emails
         JOIN users ON scheduled_emails.user_id = users.id
         JOIN email_templates ON scheduled_emails.template_id = email_templates.id

@@ -1,4 +1,7 @@
+use common::amazon::email::send_message;
+use common::crud::template::{fetch_template_variable_data, TemplateVariableData};
 use common::crud::{scheduled_emails::get_ready_scheduled_emails, setup::create_db_pool};
+use common::utils::template::replace_template_variables;
 use lambda_runtime::{tracing, Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -38,8 +41,17 @@ pub(crate) async fn function_handler(
 
     let pool = create_db_pool().await?;
     let ready_emails = get_ready_scheduled_emails(&pool).await?;
-    for _email in ready_emails {
-        // println!("{:?}", email);
+    for email in ready_emails {
+        let data = fetch_template_variable_data(
+            &pool,
+            email.user_id,
+            Some(email.deal_id),
+            Some(email.customer_id),
+        )
+        .await
+        .unwrap();
+        let result = replace_template_variables(&email.template_body, &data);
+        send_message(&[&email.email], &email.template_subject, &result).await?;
     }
     let resp = OutgoingMessage {
         req_id: event.context.request_id,
