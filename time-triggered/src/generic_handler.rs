@@ -29,8 +29,18 @@ pub(crate) async fn function_handler(
         .await
         .unwrap();
         let result = replace_template_variables(&email.template_body, &data);
-        tracing::info!("Sending email to: {}", email.email);
-        send_message(&[&email.email], &email.template_subject, &result).await?;
+        let cleaned_email = match &email.email {
+            Some(email) => email,
+            None => {
+                tracing::warn!(
+                    "Skipping customer_id: {}, no email address",
+                    email.customer_id
+                );
+                continue;
+            }
+        };
+        tracing::info!("Sending email to: {}", cleaned_email);
+        send_message(&[&cleaned_email], &email.template_subject, &result).await?;
         mark_scheduled_email_as_sent(&pool, email.id).await?;
     }
     let message = format!("Successfully processed {} emails", ready_emails.len());

@@ -9,7 +9,7 @@ pub struct ScheduledEmail {
     pub template_body: String,
     pub template_subject: String,
     pub customer_id: i32,
-    pub email: String,
+    pub email: Option<String>,
     pub user_id: i32,
     pub deal_id: i32,
 }
@@ -46,11 +46,11 @@ pub async fn get_ready_scheduled_emails(
     sqlx::query_as!(
         ScheduledEmail,
         r#"
-        SELECT scheduled_emails.id, template_body, template_subject, customer_id, users.email, scheduled_emails.user_id, scheduled_emails.deal_id
+        SELECT scheduled_emails.id, template_body, template_subject, customer_id, customers.email, scheduled_emails.user_id, scheduled_emails.deal_id
         FROM scheduled_emails
-        JOIN users ON scheduled_emails.user_id = users.id
+        JOIN customers ON scheduled_emails.customer_id = customers.id
         JOIN email_templates ON scheduled_emails.template_id = email_templates.id
-        WHERE send_at <= NOW() and sent_at IS NULL
+        WHERE send_at <= NOW() AND sent_at IS NULL AND status = 'pending'
         "#
     )
     .fetch_all(pool)
@@ -65,6 +65,22 @@ pub async fn mark_scheduled_email_as_sent(
         r#"
         UPDATE scheduled_emails
         SET sent_at = NOW(), status = 'sent'
+        WHERE id = ?
+        "#,
+        id
+    )
+    .execute(pool)
+    .await
+}
+
+pub async fn mark_scheduled_email_as_failed(
+    pool: &MySqlPool,
+    id: i32,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    sqlx::query!(
+        r#"
+        UPDATE scheduled_emails
+        SET status = 'failed'
         WHERE id = ?
         "#,
         id
@@ -319,7 +335,8 @@ mod tests {
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(ready.len(), 1);
         assert_eq!(
-            ready[0].email, "test_email_join@example.com",
+            ready[0].email,
+            Some("test_email_join@example.com".to_string()),
             "should include the user's email from the JOIN"
         );
     }
@@ -482,5 +499,55 @@ mod tests {
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].template_body, "Ready one");
+    }
+
+    /// Test that mark_scheduled_email_as_failed sets status to 'failed' and does NOT set sent_at.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_mark_as_failed(pool: MySqlPool) {
+        let user_id = insert_test_user(&pool, "test_failed@example.com", "Test Failed").await;
+        let template_id = insert_test_template(&pool, "test_failed_tpl", "Fail me", Some(0)).await;
+        let template = make_template(template_id, Some(0));
+
+        insert_scheduled_email(&pool, template, 90070, 700, user_id, 1)
+            .await
+            .unwrap();
+
+        // Allow send_at to become <= NOW() in MySQL.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let ready = get_ready_scheduled_emails(&pool).await.unwrap();
+        assert_eq!(ready.len(), 1);
+        let email_id = ready[0].id;
+
+        // Mark as failed.
+        mark_scheduled_email_as_failed(&pool, email_id)
+            .await
+            .unwrap();
+
+        // Verify status is 'failed' and sent_at is still NULL.
+        let row = sqlx::query!(
+            "SELECT status, sent_at FROM scheduled_emails WHERE id = ?",
+            email_id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.status, "failed");
+        assert!(
+            row.sent_at.is_none(),
+            "sent_at should remain NULL when marking as failed"
+        );
+
+        // Should no longer appear in ready (status is not 'pending').
+        let ready_after = get_ready_scheduled_emails(&pool).await.unwrap();
+        assert!(ready_after.is_empty());
+    }
+
+    /// Test that marking a non-existent email as failed does not crash.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_mark_failed_nonexistent_id(pool: MySqlPool) {
+        let result = mark_scheduled_email_as_failed(&pool, -1).await;
+        assert!(result.is_ok(), "marking a non-existent id should not error");
+        assert_eq!(result.unwrap().rows_affected(), 0);
     }
 }
