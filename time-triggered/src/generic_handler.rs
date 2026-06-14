@@ -39,7 +39,6 @@ pub(crate) async fn function_handler(
                 continue;
             }
         };
-        tracing::info!("Sending email to: {}", cleaned_email);
         send_message(&[&cleaned_email], &email.template_subject, &result).await?;
         mark_scheduled_email_as_sent(&pool, email.id).await?;
     }
@@ -74,6 +73,6 @@ mod tests {
         let response = function_handler(&pool, event).await.unwrap();
 
         // Adjusting expectation to match the actual fields
-        assert!(response.msg.contains("Check"));
+        assert!(response.msg.contains("Successfully processed "));
     }
 }

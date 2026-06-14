@@ -50,7 +50,7 @@ pub async fn get_ready_scheduled_emails(
         FROM scheduled_emails
         JOIN customers ON scheduled_emails.customer_id = customers.id
         JOIN email_templates ON scheduled_emails.template_id = email_templates.id
-        WHERE send_at <= NOW() AND sent_at IS NULL AND status = 'pending'
+        WHERE send_at <= UTC_TIMESTAMP() AND sent_at IS NULL AND status = 'pending'
         "#
     )
     .fetch_all(pool)
@@ -108,6 +108,25 @@ mod tests {
         result.last_insert_id() as i32
     }
 
+    /// Helper: insert a customer and return its id.
+    async fn insert_test_customer(
+        pool: &MySqlPool,
+        email: &str,
+        name: &str,
+        company_id: i32,
+    ) -> i32 {
+        let result = sqlx::query!(
+            "INSERT INTO customers (email, name, company_id) VALUES (?, ?, ?)",
+            email,
+            name,
+            company_id
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to insert test customer");
+        result.last_insert_id() as i32
+    }
+
     /// Helper: insert an email template and return its id.
     async fn insert_test_template(
         pool: &MySqlPool,
@@ -136,10 +155,11 @@ mod tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_immediate_send_appears_in_ready(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_immediate@example.com", "Test Immediate").await;
+        let customer_id = insert_test_customer(&pool, "cust100@test.com", "Cust 100", 1).await;
         let template_id = insert_test_template(&pool, "test_immediate_tpl", "Hello", Some(0)).await;
         let template = make_template(template_id, Some(0));
 
-        insert_scheduled_email(&pool, template, 90001, 100, user_id, 1)
+        insert_scheduled_email(&pool, template, 90001, customer_id, user_id, 1)
             .await
             .expect("insert should succeed");
 
@@ -155,7 +175,7 @@ mod tests {
             1,
             "email with hour_delay=0 should appear in ready"
         );
-        assert_eq!(ready[0].customer_id, 100);
+        assert_eq!(ready[0].customer_id, customer_id);
         assert_eq!(ready[0].template_body, "Hello");
     }
 
@@ -163,10 +183,11 @@ mod tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_none_delay_defaults_to_zero(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_none@example.com", "Test None").await;
+        let customer_id = insert_test_customer(&pool, "cust101@test.com", "Cust 101", 1).await;
         let template_id = insert_test_template(&pool, "test_none_tpl", "Body", None).await;
         let template = make_template(template_id, None);
 
-        insert_scheduled_email(&pool, template, 90002, 101, user_id, 1)
+        insert_scheduled_email(&pool, template, 90002, customer_id, user_id, 1)
             .await
             .expect("insert should succeed");
 
@@ -188,11 +209,12 @@ mod tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_future_send_does_not_appear(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_future@example.com", "Test Future").await;
+        let customer_id = insert_test_customer(&pool, "cust102@test.com", "Cust 102", 1).await;
         let template_id =
             insert_test_template(&pool, "test_future_tpl", "Future body", Some(48)).await;
         let template = make_template(template_id, Some(48));
 
-        insert_scheduled_email(&pool, template, 90003, 102, user_id, 1)
+        insert_scheduled_email(&pool, template, 90003, customer_id, user_id, 1)
             .await
             .expect("insert should succeed");
 
@@ -211,10 +233,11 @@ mod tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_mark_sent_removes_from_ready(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_mark@example.com", "Test Mark").await;
+        let customer_id = insert_test_customer(&pool, "cust103@test.com", "Cust 103", 1).await;
         let template_id = insert_test_template(&pool, "test_mark_tpl", "Mark me", Some(0)).await;
         let template = make_template(template_id, Some(0));
 
-        insert_scheduled_email(&pool, template, 90004, 103, user_id, 1)
+        insert_scheduled_email(&pool, template, 90004, customer_id, user_id, 1)
             .await
             .expect("insert should succeed");
 
@@ -254,6 +277,10 @@ mod tests {
     async fn test_mixed_scenario(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_mixed@example.com", "Test Mixed").await;
 
+        let cust200 = insert_test_customer(&pool, "cust200@test.com", "Cust 200", 1).await;
+        let cust201 = insert_test_customer(&pool, "cust201@test.com", "Cust 201", 1).await;
+        let cust202 = insert_test_customer(&pool, "cust202@test.com", "Cust 202", 1).await;
+
         // Template with immediate send.
         let tpl_imm_id = insert_test_template(&pool, "test_mixed_imm", "Immediate", Some(0)).await;
         let tpl_imm = make_template(tpl_imm_id, Some(0));
@@ -267,13 +294,13 @@ mod tests {
         let tpl_mark = make_template(tpl_mark_id, Some(0));
 
         // Insert all three.
-        insert_scheduled_email(&pool, tpl_imm, 90010, 200, user_id, 1)
+        insert_scheduled_email(&pool, tpl_imm, 90010, cust200, user_id, 1)
             .await
             .unwrap();
-        insert_scheduled_email(&pool, tpl_fut, 90011, 201, user_id, 1)
+        insert_scheduled_email(&pool, tpl_fut, 90011, cust201, user_id, 1)
             .await
             .unwrap();
-        insert_scheduled_email(&pool, tpl_mark, 90012, 202, user_id, 1)
+        insert_scheduled_email(&pool, tpl_mark, 90012, cust202, user_id, 1)
             .await
             .unwrap();
 
@@ -315,17 +342,19 @@ mod tests {
             "only one email should be ready after marking one as sent"
         );
         assert_eq!(ready_after[0].template_body, "Immediate");
-        assert_eq!(ready_after[0].customer_id, 200);
+        assert_eq!(ready_after[0].customer_id, cust200);
     }
 
     /// Test that email from get_ready includes the user's email via JOIN.
     #[sqlx::test(migrations = "../migrations")]
     async fn test_ready_email_includes_user_email(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_email_join@example.com", "Join Test").await;
+        let customer_id =
+            insert_test_customer(&pool, "test_email_join@example.com", "Join Cust", 1).await;
         let template_id = insert_test_template(&pool, "test_join_tpl", "Join body", Some(0)).await;
         let template = make_template(template_id, Some(0));
 
-        insert_scheduled_email(&pool, template, 90020, 300, user_id, 1)
+        insert_scheduled_email(&pool, template, 90020, customer_id, user_id, 1)
             .await
             .unwrap();
 
@@ -337,7 +366,7 @@ mod tests {
         assert_eq!(
             ready[0].email,
             Some("test_email_join@example.com".to_string()),
-            "should include the user's email from the JOIN"
+            "should include the customer's email from the JOIN"
         );
     }
 
@@ -345,12 +374,13 @@ mod tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_negative_delay_appears_in_ready(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_negdelay@example.com", "NegDelay Test").await;
+        let customer_id = insert_test_customer(&pool, "cust400@test.com", "Cust 400", 1).await;
         let template_id =
             insert_test_template(&pool, "test_negdelay_tpl", "Past body", Some(-1)).await;
         let template = make_template(template_id, Some(-1));
 
         // send_at = now - 1 hour, which is in the past.
-        insert_scheduled_email(&pool, template, 90030, 400, user_id, 1)
+        insert_scheduled_email(&pool, template, 90030, customer_id, user_id, 1)
             .await
             .unwrap();
 
@@ -378,10 +408,11 @@ mod tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_double_mark_sent(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_double@example.com", "Double Mark").await;
+        let customer_id = insert_test_customer(&pool, "cust500@test.com", "Cust 500", 1).await;
         let template_id = insert_test_template(&pool, "test_double_tpl", "Double", Some(0)).await;
         let template = make_template(template_id, Some(0));
 
-        insert_scheduled_email(&pool, template, 90040, 500, user_id, 1)
+        insert_scheduled_email(&pool, template, 90040, customer_id, user_id, 1)
             .await
             .unwrap();
 
@@ -415,6 +446,10 @@ mod tests {
     async fn test_multiple_ready_emails(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_multi@example.com", "Multi Test").await;
 
+        let cust501 = insert_test_customer(&pool, "cust501@test.com", "Cust 501", 1).await;
+        let cust502 = insert_test_customer(&pool, "cust502@test.com", "Cust 502", 1).await;
+        let cust503 = insert_test_customer(&pool, "cust503@test.com", "Cust 503", 1).await;
+
         let template_id1 = insert_test_template(&pool, "test_multi_tpl1", "First", Some(0)).await;
         let template_id2 = insert_test_template(&pool, "test_multi_tpl2", "Second", Some(0)).await;
         let template_id3 = insert_test_template(&pool, "test_multi_tpl3", "Third", Some(0)).await;
@@ -423,7 +458,7 @@ mod tests {
             &pool,
             make_template(template_id1, Some(0)),
             90050,
-            501,
+            cust501,
             user_id,
             1,
         )
@@ -433,7 +468,7 @@ mod tests {
             &pool,
             make_template(template_id2, Some(0)),
             90051,
-            502,
+            cust502,
             user_id,
             1,
         )
@@ -443,7 +478,7 @@ mod tests {
             &pool,
             make_template(template_id3, Some(0)),
             90052,
-            503,
+            cust503,
             user_id,
             1,
         )
@@ -468,6 +503,9 @@ mod tests {
         let user_id =
             insert_test_user(&pool, "test_future_among@example.com", "Future Among").await;
 
+        let cust601 = insert_test_customer(&pool, "cust601@test.com", "Cust 601", 1).await;
+        let cust602 = insert_test_customer(&pool, "cust602@test.com", "Cust 602", 1).await;
+
         let tpl_ready_id = insert_test_template(&pool, "test_fa_ready", "Ready one", Some(0)).await;
         let tpl_future_id =
             insert_test_template(&pool, "test_fa_future", "Future one", Some(24)).await;
@@ -476,7 +514,7 @@ mod tests {
             &pool,
             make_template(tpl_ready_id, Some(0)),
             90060,
-            601,
+            cust601,
             user_id,
             1,
         )
@@ -486,7 +524,7 @@ mod tests {
             &pool,
             make_template(tpl_future_id, Some(24)),
             90061,
-            602,
+            cust602,
             user_id,
             1,
         )
@@ -505,10 +543,11 @@ mod tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_mark_as_failed(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_failed@example.com", "Test Failed").await;
+        let customer_id = insert_test_customer(&pool, "cust700@test.com", "Cust 700", 1).await;
         let template_id = insert_test_template(&pool, "test_failed_tpl", "Fail me", Some(0)).await;
         let template = make_template(template_id, Some(0));
 
-        insert_scheduled_email(&pool, template, 90070, 700, user_id, 1)
+        insert_scheduled_email(&pool, template, 90070, customer_id, user_id, 1)
             .await
             .unwrap();
 

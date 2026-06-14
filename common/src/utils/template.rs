@@ -15,7 +15,7 @@ pub const VARIABLE_KEYS: &[&str] = &[
 ];
 
 fn get_first_name(full_name: &str) -> String {
-    full_name.split(' ').next().unwrap_or("").to_string()
+    full_name.split(' ').next().unwrap_or(full_name).to_string()
 }
 
 fn format_current_date() -> String {
