@@ -64,7 +64,7 @@ pub async fn mark_scheduled_email_as_sent(
     sqlx::query!(
         r#"
         UPDATE scheduled_emails
-        SET sent_at = NOW()
+        SET sent_at = NOW(), status = 'sent'
         WHERE id = ?
         "#,
         id
@@ -191,7 +191,7 @@ mod tests {
         );
     }
 
-    /// Test that after marking an email as sent, it no longer appears in ready.
+    /// Test that after marking an email as sent, it no longer appears in ready and status is 'sent'.
     #[sqlx::test(migrations = "../migrations")]
     async fn test_mark_sent_removes_from_ready(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_mark@example.com", "Test Mark").await;
@@ -220,6 +220,16 @@ mod tests {
         assert!(
             ready_after.is_empty(),
             "after marking as sent, email should not appear in ready"
+        );
+
+        // Verify that status is now 'sent'.
+        let row = sqlx::query!("SELECT status FROM scheduled_emails WHERE id = ?", email_id)
+            .fetch_one(&pool)
+            .await
+            .expect("should fetch the marked email");
+        assert_eq!(
+            row.status, "sent",
+            "status should be 'sent' after marking as sent"
         );
     }
 
@@ -270,6 +280,16 @@ mod tests {
         mark_scheduled_email_as_sent(&pool, to_mark.id)
             .await
             .unwrap();
+
+        // Verify the marked email has status 'sent'.
+        let row = sqlx::query!(
+            "SELECT status FROM scheduled_emails WHERE id = ?",
+            to_mark.id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.status, "sent");
 
         // Now only 1 should be ready.
         let ready_after = get_ready_scheduled_emails(&pool).await.unwrap();
@@ -364,6 +384,13 @@ mod tests {
         // Still not in ready.
         let ready_after = get_ready_scheduled_emails(&pool).await.unwrap();
         assert!(ready_after.is_empty());
+
+        // Verify status remains 'sent' after double-mark.
+        let row = sqlx::query!("SELECT status FROM scheduled_emails WHERE id = ?", email_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.status, "sent");
     }
 
     /// Test that multiple ready emails are all returned.

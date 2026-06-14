@@ -29,6 +29,7 @@ pub(crate) async fn function_handler(
         .await
         .unwrap();
         let result = replace_template_variables(&email.template_body, &data);
+        tracing::info!("Sending email to: {}", email.email);
         send_message(&[&email.email], &email.template_subject, &result).await?;
         mark_scheduled_email_as_sent(&pool, email.id).await?;
     }
