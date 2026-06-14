@@ -1,6 +1,6 @@
 use common::amazon::email::send_message;
 use common::crud::scheduled_emails::mark_scheduled_email_as_sent;
-use common::crud::template::{fetch_template_variable_data, TemplateVariableData};
+use common::crud::template::fetch_template_variable_data;
 use common::crud::{scheduled_emails::get_ready_scheduled_emails, setup::create_db_pool};
 use common::utils::template::replace_template_variables;
 use lambda_runtime::{tracing, Error, LambdaEvent};
