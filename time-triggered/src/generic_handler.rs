@@ -1,35 +1,12 @@
+use crate::schemas::{EventBridgeEvent, OutgoingMessage};
 use common::amazon::email::send_message;
 use common::crud::scheduled_emails::mark_scheduled_email_as_sent;
 use common::crud::template::fetch_template_variable_data;
 use common::crud::{scheduled_emails::get_ready_scheduled_emails, setup::create_db_pool};
 use common::utils::template::replace_template_variables;
 use lambda_runtime::{tracing, Error, LambdaEvent};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sqlx::MySqlPool;
 
-#[derive(Deserialize, Debug)]
-pub(crate) struct EventBridgeEvent {
-    pub account: String,
-    pub detail: Value,
-    #[serde(rename = "detail-type")]
-    pub detail_type: String,
-    pub id: String,
-    pub region: String,
-    pub resources: Vec<String>,
-    pub source: String,
-    pub time: String,
-    pub version: String,
-}
-
-#[derive(Serialize)]
-pub(crate) struct OutgoingMessage {
-    req_id: String,
-    msg: String,
-}
-
-/// This is the main body for the function.
-/// Write your code inside it.
 /// There are some code example in the following URLs:
 /// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
 /// - https://github.com/aws-samples/serverless-rust-demo/
@@ -55,10 +32,9 @@ pub(crate) async fn function_handler(
         send_message(&[&email.email], &email.template_subject, &result).await?;
         mark_scheduled_email_as_sent(&pool, email.id).await?;
     }
-    let resp = OutgoingMessage {
-        req_id: event.context.request_id,
-        msg: format!("Successfully processed {} emails", ready_emails.len()).to_string(),
-    };
+    let message = format!("Successfully processed {} emails", ready_emails.len());
+    let resp = OutgoingMessage::new(event.context.request_id, message.clone());
+    tracing::info!("{}", message);
 
     Ok(resp)
 }
