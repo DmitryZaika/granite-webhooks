@@ -19,7 +19,7 @@ pub async fn send_message(to: &[&str], subject: &str, message: &str) -> Result<(
         .charset("UTF-8")
         .build()
         .expect("building Content");
-    let body = Body::builder().text(body_content).build();
+    let body = Body::builder().html(body_content).build();
 
     let msg = Message::builder()
         .subject(subject_content)
