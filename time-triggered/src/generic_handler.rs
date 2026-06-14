@@ -25,6 +25,7 @@ pub(crate) async fn function_handler(
             email.user_id,
             Some(email.deal_id),
             Some(email.customer_id),
+            email.company_id,
         )
         .await
         .unwrap();

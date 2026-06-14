@@ -12,6 +12,7 @@ pub struct ScheduledEmail {
     pub email: Option<String>,
     pub user_id: i32,
     pub deal_id: i32,
+    pub company_id: i32,
 }
 
 pub async fn insert_scheduled_email(
@@ -46,7 +47,7 @@ pub async fn get_ready_scheduled_emails(
     sqlx::query_as!(
         ScheduledEmail,
         r#"
-        SELECT scheduled_emails.id, template_body, template_subject, customer_id, customers.email, scheduled_emails.user_id, scheduled_emails.deal_id
+        SELECT scheduled_emails.id, template_body, template_subject, customer_id, customers.email, scheduled_emails.user_id, scheduled_emails.deal_id, scheduled_emails.company_id
         FROM scheduled_emails
         JOIN customers ON scheduled_emails.customer_id = customers.id
         JOIN email_templates ON scheduled_emails.template_id = email_templates.id

@@ -22,15 +22,20 @@ pub struct TemplateVariableData {
     pub company: Option<InfoVariableData>,
 }
 
+/// Like `fetch_template_variable_data`, but uses an explicit `company_id`
+/// for the customer lookup instead of deriving it from the user record.
+/// This is needed for scheduled emails where the user's current company
+/// may differ from the company that owns the deal/customer.
 pub async fn fetch_template_variable_data(
     pool: &MySqlPool,
     user_id: i32,
     deal_id: Option<i32>,
     customer_id: Option<i32>,
+    company_id: i32,
 ) -> Result<TemplateVariableData, sqlx::Error> {
     let user = get_user_template(pool, user_id).await?;
     let (customer_data, company_data) = tokio::try_join!(
-        fetch_customer_data(pool, deal_id, customer_id, user.company_id),
+        fetch_customer_data(pool, deal_id, customer_id, company_id),
         fetch_company_data(pool, user.company_id)
     )?;
 
@@ -51,7 +56,7 @@ async fn fetch_customer_data(
     pool: &MySqlPool,
     deal_id: Option<i32>,
     customer_id: Option<i32>,
-    company_id: Option<i32>,
+    company_id: i32,
 ) -> Result<Option<InfoVariableData>, sqlx::Error> {
     if deal_id.is_none() && customer_id.is_none() {
         return Ok(None);

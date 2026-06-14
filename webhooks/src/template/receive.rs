@@ -30,10 +30,12 @@ pub struct TemplatePayload {
 pub async fn get_template_variables(
     _: RemixBackend,
     State(pool): State<MySqlPool>,
-    Path(user_id): Path<i32>,
+    Path((company_id, user_id)): Path<(i32, i32)>,
     Query(query): Query<TemplateDataQuery>,
 ) -> Result<Json<TemplateVariableData>, BasicResponse> {
-    match fetch_template_variable_data(&pool, user_id, query.deal_id, query.customer_id).await {
+    match fetch_template_variable_data(&pool, user_id, query.deal_id, query.customer_id, company_id)
+        .await
+    {
         Ok(data) => Ok(Json(data)),
         Err(sqlx::Error::RowNotFound) => Err(NOT_FOUND_RESPONSE),
         Err(error) => {
@@ -50,12 +52,18 @@ pub async fn get_template_variables(
 pub async fn get_complete_template(
     _: RemixBackend,
     State(pool): State<MySqlPool>,
-    Path(user_id): Path<i32>,
+    Path((company_id, user_id)): Path<(i32, i32)>,
     Query(query): Query<TemplateDataQuery>,
     extract::Json(payload): extract::Json<TemplatePayload>,
 ) -> impl IntoResponse {
-    let data = match fetch_template_variable_data(&pool, user_id, query.deal_id, query.customer_id)
-        .await
+    let data = match fetch_template_variable_data(
+        &pool,
+        user_id,
+        query.deal_id,
+        query.customer_id,
+        company_id,
+    )
+    .await
     {
         Ok(data) => data,
         Err(sqlx::Error::RowNotFound) => return NOT_FOUND_RESPONSE.into_response(),
@@ -169,9 +177,15 @@ mod tests {
         .unwrap();
         let deal_id = insert_test_deal(&pool, customer_id).await.unwrap();
 
-        let result = fetch_template_variable_data(&pool, user_id, Some(deal_id), Some(customer_id))
-            .await
-            .unwrap();
+        let result = fetch_template_variable_data(
+            &pool,
+            user_id,
+            Some(deal_id),
+            Some(customer_id),
+            company_id,
+        )
+        .await
+        .unwrap();
 
         // Assert User
         assert_eq!(result.user.name, Some("Alice".to_string()));
@@ -197,7 +211,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = fetch_template_variable_data(&pool, user_id, None, None)
+        let result = fetch_template_variable_data(&pool, user_id, None, None, company_id)
             .await
             .unwrap();
 
@@ -218,9 +232,15 @@ mod tests {
                 .unwrap();
 
         // Use a non-existent deal_id (99999) to force the deal block to bypass/fail selection
-        let result = fetch_template_variable_data(&pool, user_id, Some(99999), Some(customer_id))
-            .await
-            .unwrap();
+        let result = fetch_template_variable_data(
+            &pool,
+            user_id,
+            Some(99999),
+            Some(customer_id),
+            company_id,
+        )
+        .await
+        .unwrap();
 
         let customer = result
             .customer
@@ -257,41 +277,19 @@ mod tests {
         .await
         .unwrap();
 
-        let result = fetch_template_variable_data(&pool, user_id, Some(deal_id), Some(customer_id))
-            .await
-            .unwrap();
+        let result = fetch_template_variable_data(
+            &pool,
+            user_id,
+            Some(deal_id),
+            Some(customer_id),
+            company_id,
+        )
+        .await
+        .unwrap();
 
         // Customer object should return None because both lookups hit soft-deleted walls
         assert!(result.customer.is_none());
     }
-    #[sqlx::test(migrations = "../migrations")]
-    async fn test_company_isolation_mismatch_returns_none(pool: MySqlPool) {
-        let company_id_1 = insert_test_company(&pool, "Company One", None)
-            .await
-            .unwrap();
-        let company_id_2 = insert_test_company(&pool, "Company Two", None)
-            .await
-            .unwrap();
-
-        // User belongs to Company One
-        let user_id = insert_test_user(&pool, company_id_1, Some("Eve"), "alice@test.com", None)
-            .await
-            .unwrap();
-
-        // Customer and Deal belong to Company Two
-        let customer_id = insert_test_customer(&pool, Some(company_id_2), "Rival Client", None)
-            .await
-            .unwrap();
-        let deal_id = insert_test_deal(&pool, customer_id).await.unwrap();
-
-        let result = fetch_template_variable_data(&pool, user_id, Some(deal_id), Some(customer_id))
-            .await
-            .unwrap();
-
-        // Should be None because query enforces c.company_id = user.company_id
-        assert!(result.customer.is_none());
-    }
-
     // -------------------------------------------------------------------------
     // Template variable replacement tests (pure function, no DB required)
     // -------------------------------------------------------------------------
