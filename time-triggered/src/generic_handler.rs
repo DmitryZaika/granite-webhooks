@@ -1,31 +1,12 @@
+use crate::schemas::{EventBridgeEvent, OutgoingMessage};
+use common::amazon::email::send_message;
+use common::crud::scheduled_emails::mark_scheduled_email_as_sent;
+use common::crud::template::fetch_template_variable_data;
 use common::crud::{scheduled_emails::get_ready_scheduled_emails, setup::create_db_pool};
+use common::utils::template::replace_template_variables;
 use lambda_runtime::{tracing, Error, LambdaEvent};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sqlx::MySqlPool;
 
-#[derive(Deserialize, Debug)]
-pub(crate) struct EventBridgeEvent {
-    pub account: String,
-    pub detail: Value,
-    #[serde(rename = "detail-type")]
-    pub detail_type: String,
-    pub id: String,
-    pub region: String,
-    pub resources: Vec<String>,
-    pub source: String,
-    pub time: String,
-    pub version: String,
-}
-
-#[derive(Serialize)]
-pub(crate) struct OutgoingMessage {
-    req_id: String,
-    msg: String,
-}
-
-/// This is the main body for the function.
-/// Write your code inside it.
 /// There are some code example in the following URLs:
 /// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
 /// - https://github.com/aws-samples/serverless-rust-demo/
@@ -38,13 +19,33 @@ pub(crate) async fn function_handler(
 
     let pool = create_db_pool().await?;
     let ready_emails = get_ready_scheduled_emails(&pool).await?;
-    for _email in ready_emails {
-        // println!("{:?}", email);
+    for email in &ready_emails {
+        let data = fetch_template_variable_data(
+            &pool,
+            email.user_id,
+            Some(email.deal_id),
+            Some(email.customer_id),
+            email.company_id,
+        )
+        .await
+        .unwrap();
+        let result = replace_template_variables(&email.template_body, &data);
+        let cleaned_email = match &email.email {
+            Some(email) => email,
+            None => {
+                tracing::warn!(
+                    "Skipping customer_id: {}, no email address",
+                    email.customer_id
+                );
+                continue;
+            }
+        };
+        send_message(&[&cleaned_email], &email.template_subject, &result).await?;
+        mark_scheduled_email_as_sent(&pool, email.id).await?;
     }
-    let resp = OutgoingMessage {
-        req_id: event.context.request_id,
-        msg: "Check CloudWatch logs for the payload structure.".to_string(),
-    };
+    let message = format!("Successfully processed {} emails", ready_emails.len());
+    let resp = OutgoingMessage::new(event.context.request_id, message.clone());
+    tracing::info!("{}", message);
 
     Ok(resp)
 }
@@ -73,6 +74,6 @@ mod tests {
         let response = function_handler(&pool, event).await.unwrap();
 
         // Adjusting expectation to match the actual fields
-        assert!(response.msg.contains("Check"));
+        assert!(response.msg.contains("Successfully processed "));
     }
 }

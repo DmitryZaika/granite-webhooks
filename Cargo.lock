@@ -899,7 +899,10 @@ dependencies = [
  "aws-config",
  "aws-sdk-sesv2",
  "chrono",
+ "serde",
+ "serde_json",
  "sqlx",
+ "tokio",
 ]
 
 [[package]]

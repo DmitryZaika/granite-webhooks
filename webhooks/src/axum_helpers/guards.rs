@@ -250,7 +250,7 @@ where
     }
 }
 
-/// Strict auth for the CloudTalk SMS webhook: rejects any request whose bearer
+/// Strict auth for the `CloudTalk` SMS webhook: rejects any request whose bearer
 /// token is missing/invalid/not equal to `CORRECT_ID` (unlike `MarketingUser`).
 pub struct CloudTalkWebhookUser;
 
@@ -265,7 +265,7 @@ where
             .headers
             .get("authorization")
             .and_then(|value| value.to_str().ok())
-            .and_then(|token| parse_uuid_from_bearer(token));
+            .and_then(parse_uuid_from_bearer);
         match bearer_uuid {
             Some(uuid) if uuid == CORRECT_ID => Ok(Self),
             _ => {

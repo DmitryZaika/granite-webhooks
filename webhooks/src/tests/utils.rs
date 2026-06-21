@@ -28,13 +28,8 @@ impl S3Bucket for MockClient {
     async fn read_bytes(&self, _bucket: &str, _key: &str) -> Result<Bytes, String> {
         read_file_as_bytes(&self.path).map_err(|e| e.to_string())
     }
-    fn send_file<'a>(
-        &'a self,
-        bucket: &'a str,
-        key: &'a str,
-        data: Bytes,
-    ) -> impl Future<Output = Result<String, String>> + Send + 'a {
-        async move { Ok(format!("s3://{bucket}/{key}")) }
+    async fn send_file(&self, bucket: &str, key: &str, _data: Bytes) -> Result<String, String> {
+        Ok(format!("s3://{bucket}/{key}"))
     }
 }
 
@@ -185,4 +180,26 @@ pub async fn positioned_user(
         .await
         .unwrap();
     sales_id
+}
+
+#[cfg(test)]
+pub async fn insert_group_list(pool: &MySqlPool, company_id: i32) -> Result<u64, sqlx::Error> {
+    let rec = sqlx::query!(
+        r#"INSERT INTO groups_list (name, company_id, is_default) VALUES ('Test Group', ?, 1)"#,
+        company_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(rec.last_insert_id())
+}
+
+#[cfg(test)]
+pub async fn insert_deals_list(pool: &MySqlPool, group_id: u64) -> Result<u64, sqlx::Error> {
+    let rec = sqlx::query!(
+        r#"INSERT INTO deals_list (name, group_id, position) VALUES ('Test Deals List', ?, 0)"#,
+        group_id,
+    )
+    .execute(pool)
+    .await?;
+    Ok(rec.last_insert_id())
 }
