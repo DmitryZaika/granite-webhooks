@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 common = { path = "../common" }
+utoipa = { version = "5.5.0", features = ["axum_extras"] }
 axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 lambda_http = "1.1"
@@ -29,6 +30,7 @@ thiserror = "2.0"
 base64 = "0.22"
 regex = "1"
 urlencoding = "2.1.3"
+tower-http = { version = "0.6", features = ["cors"] }
 
 [dev-dependencies]
 axum-test = "19"

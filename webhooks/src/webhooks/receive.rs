@@ -29,6 +29,13 @@ pub async fn facebook_contact_form(
     new_lead_form_inner(company_id, pool, contact_form, &tg_bot).await
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/webhooks/new-lead-form/{company_id}",
+    params(("company_id" = i32, Path, description = "Company ID")),
+    request_body = NewLeadForm,
+    responses((status = CREATED, body = str), (status = INTERNAL_SERVER_ERROR, body = str))
+)]
 pub async fn new_lead_form(
     _: MarketingUser,
     Path(company_id): Path<i32>,

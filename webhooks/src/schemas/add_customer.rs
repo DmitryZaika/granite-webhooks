@@ -9,6 +9,7 @@ use sqlx::mysql::MySqlQueryResult;
 use std::fmt;
 use std::fmt::Display;
 use std::fmt::Write as _;
+use utoipa::ToSchema;
 
 fn clean_phone<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
@@ -250,7 +251,7 @@ impl fmt::Display for FaceBookContactForm {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct NewLeadForm {
     pub name: String,
 

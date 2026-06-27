@@ -3,20 +3,31 @@ use crate::cloudtalk::receive::{sms_received, sms_sent, sync_cloudtalk};
 use crate::google::receive::address_information;
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
+use crate::schemas::add_customer::NewLeadForm;
 use crate::telegram::receive::webhook_handler;
 use crate::template::receive::{get_complete_template, get_template_variables};
-use crate::webhooks::receive::{facebook_contact_form, wordpress_contact_form};
-
+use crate::webhooks::receive::{
+    __path_new_lead_form, facebook_contact_form, new_lead_form, wordpress_contact_form,
+};
 use axum::{
-    Router,
+    Json, Router,
     response::IntoResponse,
     routing::{get, post},
 };
 use sqlx::MySqlPool;
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use utoipa::OpenApi;
 
-use crate::webhooks::receive::new_lead_form;
 async fn health_check() -> impl IntoResponse {
     OK_RESPONSE
+}
+
+#[derive(OpenApi)]
+#[openapi(paths(new_lead_form), components(schemas(NewLeadForm)))]
+struct ApiDoc;
+
+async fn openapi_spec() -> impl IntoResponse {
+    Json(ApiDoc::openapi())
 }
 
 pub fn new_main_app(pool: MySqlPool) -> Router {
@@ -52,6 +63,15 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
             post(get_complete_template),
         )
         .route("/google/address-autocomplete", post(address_information))
+        .route("/api-docs/openapi.json", get(openapi_spec))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::exact(
+                    "https://docs.granite-manager.com".parse().unwrap(),
+                ))
+                .allow_methods([axum::http::Method::GET])
+                .allow_headers(Any),
+        )
         .layer(axum::middleware::from_fn(print_request_body))
         .with_state(pool)
 }
