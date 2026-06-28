@@ -186,8 +186,8 @@ pub struct FaceBookContactForm {
     #[serde(rename = "share")]
     pub details: Option<String>,
 
-    #[serde(rename = "campaign")]
-    pub compaign_name: Option<String>,
+    #[serde(rename = "campaign", alias = "compaign_name", alias = "campaign_name")]
+    pub campaign_name: Option<String>,
 
     #[serde(rename = "adsetname")]
     pub adset_name: Option<String>,
@@ -243,7 +243,7 @@ impl fmt::Display for FaceBookContactForm {
             self.city.as_deref().unwrap_or("N/A"),
             self.postal_code.as_deref().unwrap_or("N/A"),
             self.details.as_deref().unwrap_or("N/A"),
-            self.compaign_name.as_deref().unwrap_or("N/A"),
+            self.campaign_name.as_deref().unwrap_or("N/A"),
             self.adset_name.as_deref().unwrap_or("N/A"),
             self.ad_name.as_deref().unwrap_or("N/A")
         );
@@ -296,7 +296,8 @@ pub struct NewLeadForm {
 
     pub adset_name: Option<String>,
 
-    pub compaign_name: Option<String>,
+    #[serde(alias = "compaign_name", alias = "campaign")]
+    pub campaign_name: Option<String>,
 
     #[serde(rename = "file")]
     pub attached_file: Option<String>,
@@ -388,8 +389,8 @@ impl fmt::Display for NewLeadForm {
         if let Some(adset_name) = &self.adset_name {
             writeln!(message, "Adset Name: {adset_name}").unwrap();
         }
-        if let Some(compaign_name) = &self.compaign_name {
-            writeln!(message, "Campaign Name: {compaign_name}").unwrap();
+        if let Some(campaign_name) = &self.campaign_name {
+            writeln!(message, "Campaign Name: {campaign_name}").unwrap();
         }
         if let Some(attached_file) = &self.attached_file {
             writeln!(message, "File: {attached_file}").unwrap();
@@ -571,7 +572,7 @@ mod tests {
         assert_eq!(form.city.clone().unwrap(), "Columbus");
         assert_eq!(form.postal_code.clone().unwrap(), "47201");
         assert_eq!(form.details.clone().unwrap(), "Full kitchen remodel");
-        assert_eq!(form.compaign_name.clone().unwrap(), "Fall Promo");
+        assert_eq!(form.campaign_name.clone().unwrap(), "Fall Promo");
         assert_eq!(form.adset_name.clone().unwrap(), "Indiana Leads");
         assert_eq!(form.ad_name.clone().unwrap(), "Kitchen Ad 1");
 
@@ -586,5 +587,87 @@ mod tests {
         assert!(text.contains("Campaign: Fall Promo"));
         assert!(text.contains("Adset: Indiana Leads"));
         assert!(text.contains("Ad: Kitchen Ad 1"));
+    }
+
+    #[test]
+    fn test_facebook_contact_form_campaign_name_key() {
+        // Deserialize with "campaign_name" key (alternative JSON format)
+        let data = json!({
+            "name": "John",
+            "phone": "317-555-0001",
+            "remove": "Yes",
+            "email": "john@example.com",
+            "city": "Indianapolis",
+            "zip": "46201",
+            "share": "Bathroom",
+            "campaign_name": "Spring Promo via campaign_name",
+            "adsetname": "Test Adset",
+            "adname": "Test Ad"
+        });
+
+        let form: FaceBookContactForm = serde_json::from_value(data).unwrap();
+        assert_eq!(
+            form.campaign_name.as_deref(),
+            Some("Spring Promo via campaign_name")
+        );
+    }
+
+    #[test]
+    fn test_facebook_contact_form_old_compaign_name_key() {
+        // Backwards compatibility: old "compaign_name" key still works
+        let data = json!({
+            "name": "Old",
+            "phone": "812-555-0002",
+            "remove": "No",
+            "email": "old@example.com",
+            "city": "Bloomington",
+            "zip": "47401",
+            "share": "Kitchen",
+            "compaign_name": "Legacy Campaign",
+            "adsetname": "Legacy Adset",
+            "adname": "Legacy Ad"
+        });
+
+        let form: FaceBookContactForm = serde_json::from_value(data).unwrap();
+        assert_eq!(form.campaign_name.as_deref(), Some("Legacy Campaign"));
+    }
+
+    #[test]
+    fn test_new_lead_form_campaign_key() {
+        // Deserialize NewLeadForm with "campaign" key (short form, like Facebook)
+        let data = json!({
+            "name": "Test User",
+            "campaign": "Short Key Campaign"
+        });
+
+        let form: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(form.campaign_name.as_deref(), Some("Short Key Campaign"));
+    }
+
+    #[test]
+    fn test_new_lead_form_campaign_name_key() {
+        // Deserialize NewLeadForm with "campaign_name" key (default, matches field name)
+        let data = json!({
+            "name": "Test User 2",
+            "campaign_name": "Default Key Campaign"
+        });
+
+        let form: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(form.campaign_name.as_deref(), Some("Default Key Campaign"));
+    }
+
+    #[test]
+    fn test_new_lead_form_old_compaign_name_key() {
+        // Backwards compatibility: old "compaign_name" key still works
+        let data = json!({
+            "name": "Old Lead",
+            "compaign_name": "Legacy NewLeadForm Campaign"
+        });
+
+        let form: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(
+            form.campaign_name.as_deref(),
+            Some("Legacy NewLeadForm Campaign")
+        );
     }
 }
