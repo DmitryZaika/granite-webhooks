@@ -35,4 +35,5 @@ tower-http = { version = "0.6", features = ["cors"] }
 [dev-dependencies]
 axum-test = "19"
 dotenvy = "0.15"
+serde_urlencoded = "0.7"
 tracing-test = "0.2.6"
