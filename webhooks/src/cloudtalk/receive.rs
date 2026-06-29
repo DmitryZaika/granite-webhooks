@@ -199,4 +199,40 @@ mod tests {
         .unwrap();
         assert_eq!(merged.cloudtalk_id, Some(2200000000));
     }
+
+    // Fallback echo: CRM stored 'cap' but the sent body (caption + links) differs.
+    // Tier-2 merge must absorb the echo, not duplicate the row.
+    const MESSAGE_FALLBACK_ECHO: &[u8] = b"{\"id\":2200000099,\"sender\":\"+16468956758[sender]\",\"recipient\":\"+13173161456[recipient]\",\"text\":\"[text]cap\\nPhoto 1: https://x/y.jpg\",\"agent\":\"540273\"}";
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_sms_sent_merges_crm_row_with_differing_text(pool: MySqlPool) {
+        sqlx::query!(
+            "INSERT INTO cloudtalk_sms \
+                (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status) \
+             VALUES (NULL, NULL, 3173161456, 'cap', '540273', 42, 'outbound', 'sent')"
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let app = new_test_app(pool.clone());
+        let body: serde_json::Value =
+            serde_json::from_slice(MESSAGE_FALLBACK_ECHO).expect("parse");
+        let response = app
+            .post("/cloudtalk/sms/sent/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&body)
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let smss = get_sms_received(&pool).await;
+        assert_eq!(smss.len(), 1, "differing-text echo must merge via tier 2, not duplicate");
+        let merged = sqlx::query!(
+            "SELECT cloudtalk_id FROM cloudtalk_sms WHERE company_id = 42 AND direction = 'outbound'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(merged.cloudtalk_id, Some(2200000099));
+    }
 }

@@ -32,6 +32,7 @@ pub async fn insert_outbound_sms(
     company_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     if let Some(cloudtalk_id) = sms.id {
+        // Tier 1: exact text match — normal text-only and true-MMS sends.
         let merged = sqlx::query!(
             r#"
             UPDATE cloudtalk_sms
@@ -39,10 +40,11 @@ pub async fn insert_outbound_sms(
              WHERE company_id = ?
                AND direction = 'outbound'
                AND cloudtalk_id IS NULL
+               AND status IN ('pending', 'sent')
                AND recipient = ?
                AND text = ?
                AND created_date >= (NOW() - INTERVAL 10 MINUTE)
-             ORDER BY created_date DESC
+             ORDER BY created_date DESC, id DESC
              LIMIT 1
             "#,
             cloudtalk_id,
@@ -54,6 +56,33 @@ pub async fn insert_outbound_sms(
         .await?;
         if merged.rows_affected() > 0 {
             return Ok(merged);
+        }
+
+        // Tier 2: the fallback sends "caption + links", so the stored caption is a prefix
+        // of the echoed body — match on that prefix so we never merge an unrelated row.
+        let merged_loose = sqlx::query!(
+            r#"
+            UPDATE cloudtalk_sms
+               SET cloudtalk_id = ?
+             WHERE company_id = ?
+               AND direction = 'outbound'
+               AND cloudtalk_id IS NULL
+               AND status IN ('pending', 'sent')
+               AND recipient = ?
+               AND ? LIKE CONCAT(text, '%')
+               AND created_date >= (NOW() - INTERVAL 10 MINUTE)
+             ORDER BY created_date DESC, id DESC
+             LIMIT 1
+            "#,
+            cloudtalk_id,
+            company_id,
+            sms.recipient(),
+            sms.text.0,
+        )
+        .execute(pool)
+        .await?;
+        if merged_loose.rows_affected() > 0 {
+            return Ok(merged_loose);
         }
     }
 
@@ -239,4 +268,43 @@ pub async fn find_local_cloudtalk_id_by_phone(
     }
 
     query.fetch_optional(pool).await
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::MySqlPool;
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_sms_attachments_cascade_delete(pool: MySqlPool) {
+        let parent = sqlx::query!(
+            "INSERT INTO cloudtalk_sms \
+                (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status) \
+             VALUES (NULL, NULL, 3173161456, 'caption', '540273', 42, 'outbound', 'sent')"
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+
+        sqlx::query!(
+            "INSERT INTO cloudtalk_sms_attachments \
+                (cloudtalk_sms_id, content_type, filename, s3_key, s3_url, width, height, position) \
+             VALUES (?, 'image/jpeg', 'a.jpg', '42/u/a.jpg', 's3://gd-sms-attachments/42/u/a.jpg', 800, 600, 0)",
+            parent as i32,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let before = sqlx::query!("SELECT COUNT(*) AS c FROM cloudtalk_sms_attachments")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(before.c, 1);
+
+        sqlx::query!("DELETE FROM cloudtalk_sms WHERE id = ?", parent as i32)
+            .execute(&pool).await.unwrap();
+
+        let after = sqlx::query!("SELECT COUNT(*) AS c FROM cloudtalk_sms_attachments")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(after.c, 0, "attachments must cascade-delete with the parent sms row");
+    }
 }
