@@ -4,7 +4,7 @@ use crate::cloudtalk::utils::{
     upsert_contact,
 };
 use crate::crud::cloudtalk::{company_has_cloud_talk, get_auth_string, load_customer_with_mapping};
-use crate::libs::constants::{NOT_FOUND_RESPONSE, OK_RESPONSE, internal_error};
+use crate::libs::constants::{NOT_FOUND_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use lambda_http::tracing;
 use reqwest::{Client, Method};
@@ -118,8 +118,8 @@ pub async fn sync_customer_to_cloud_talk(
     let clean_company_id: u64 = match company_id.try_into() {
         Ok(clean_company_id) => clean_company_id,
         Err(error) => {
-            tracing::error!(?error, company_id, "Failed to convert company ID to i64");
-            return internal_error("Failed to convert company ID to i64");
+            tracing::error!(?error, company_id, "Failed to convert company ID to u64");
+            return internal_error("Failed to convert company ID to u64");
         }
     };
     match company_has_cloud_talk(pool, company_id).await {
@@ -147,8 +147,7 @@ pub async fn sync_customer_to_cloud_talk(
     let Some(clean_payload) = payload.await else {
         return internal_error("Failed to build payload");
     };
-    upsert_contact(pool, client, &mapping, &clean_payload, clean_company_id).await;
-    OK_RESPONSE
+    upsert_contact(pool, client, &mapping, &clean_payload, clean_company_id).await
 }
 
 pub async fn create_cloudtalk_contact(
@@ -231,10 +230,10 @@ pub async fn find_cloudtalk_contact_by_phone(
     client: &Client,
     company_id: u64,
     e164_phones: &[String],
-) -> Result<Option<i32>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Option<i64>, Box<dyn std::error::Error + Send + Sync>> {
     for phone in e164_phones {
         if let Some(id) = find_contact_by_one_phone(pool, client, company_id, phone).await? {
-            return Ok(Some(id.try_into().unwrap()));
+            return Ok(Some(i64::try_from(id)?));
         }
     }
     Ok(None)

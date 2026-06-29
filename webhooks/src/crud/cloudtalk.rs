@@ -186,11 +186,13 @@ pub async fn get_auth_string(
     Ok(auth_string)
 }
 
+/// Refreshes the cached phone numbers on a `cloudtalk_contacts` row, keyed by
+/// its primary key (`cloudtalk_contacts.id`), and clears any stale error.
 pub async fn update_cloudtalk_phone(
     pool: &MySqlPool,
     phone1: Option<String>,
     phone2: Option<String>,
-    cloudtalk_id: i64,
+    contact_row_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     sqlx::query!(
         r#"
@@ -200,7 +202,7 @@ pub async fn update_cloudtalk_phone(
             "#,
         phone1,
         phone2,
-        cloudtalk_id
+        contact_row_id
     )
     .execute(pool)
     .await
@@ -210,7 +212,7 @@ pub async fn find_local_cloudtalk_id_by_phone(
     pool: &MySqlPool,
     company_id: u64,
     e164_phones: &[String],
-) -> Result<Option<i32>, sqlx::Error> {
+) -> Result<Option<i64>, sqlx::Error> {
     if e164_phones.is_empty() {
         return Ok(None);
     }
@@ -226,7 +228,9 @@ pub async fn find_local_cloudtalk_id_by_phone(
          LIMIT 1"
     );
 
-    let mut query = sqlx::query_scalar::<_, i32>(&sql);
+    // `cloudtalk_id` is a BIGINT, so decode it as i64 to avoid an overflow on
+    // large CloudTalk contact ids.
+    let mut query = sqlx::query_scalar::<_, i64>(&sql);
 
     // Bind parameters sequentially for UNION parts
     query = query.bind(company_id);
