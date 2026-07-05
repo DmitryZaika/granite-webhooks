@@ -1,7 +1,9 @@
 use bytes::Bytes;
 use email_reply_parser::EmailReplyParser;
 use mail_parser::{HeaderValue, MessageParser, MessagePart, MimeHeaders, PartType};
+use regex::Regex;
 use std::path::Path;
+use std::sync::LazyLock;
 use uuid::Uuid;
 
 use crate::amazon::bucket::S3Bucket;
@@ -131,7 +133,12 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         .body_text(0)
         .map(std::borrow::Cow::into_owned)
         .unwrap_or_default();
-    let reply_body = EmailReplyParser::parse_reply(&body);
+    // Strip angle brackets around URLs to prevent EmailReplyParser from
+    // incorrectly treating the closing `>` as an email quote marker.
+    static URL_BRACKET_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"<(https?://[^\s>]+)>").unwrap());
+    let clean_body = URL_BRACKET_RE.replace_all(&body, "$1");
+    let reply_body = EmailReplyParser::parse_reply(&clean_body);
     let attachments = message.attachments();
     let final_attachments: Vec<Attachment> = attachments.filter_map(parse_attachment).collect();
     let sender_emails = message.from().ok_or("Failed to parse sender email")?;
@@ -275,6 +282,22 @@ mod local_tests {
         let (email, attachments) = parse_email(&email_bytes).unwrap();
         assert_eq!(email.body, "".to_string());
         assert_eq!(attachments.len(), 1);
+    }
+    #[test]
+    fn test_parse_email_with_link() {
+        let email_bytes = read_file_as_bytes("src/tests/data/link.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(parsed_email.subject, Some("Link".to_string()));
+        assert!(
+            parsed_email.body.contains("https://www.reuters.com"),
+            "Expected body to contain the link URL, but got: {}",
+            parsed_email.body
+        );
+        assert!(
+            parsed_email.body.contains("open this"),
+            "Expected body to contain 'open this', but got: {}",
+            parsed_email.body
+        );
     }
     #[test]
     fn test_parse_email_attachments_filename_only() {

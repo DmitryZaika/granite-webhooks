@@ -6,6 +6,7 @@ use crate::cloudtalk::utils::{
 use crate::crud::cloudtalk::{company_has_cloud_talk, get_auth_string, load_customer_with_mapping};
 use crate::libs::constants::{NOT_FOUND_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
+use axum::http::StatusCode;
 use lambda_http::tracing;
 use reqwest::{Client, Method};
 use serde::{Serialize, de::DeserializeOwned};
@@ -130,7 +131,10 @@ pub async fn sync_customer_to_cloud_talk(
                 customer_id,
                 "Cloudtalk not configured for this company"
             );
-            return internal_error("Cloudtalk not configured for this company");
+            return (
+                StatusCode::UNAUTHORIZED,
+                "Cloudtalk not configured for this company",
+            );
         }
         Err(error) => {
             tracing::error!(
