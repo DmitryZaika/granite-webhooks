@@ -248,7 +248,9 @@ async fn handle_assign_lead<T: Telegram>(
         }
     };
     // If the group requires a scheduled email, add it
-    let email_template = get_template_from_list_id(pool, list_id).await.unwrap();
+    let email_template = get_template_from_list_id(pool, list_id, position.company_id)
+        .await
+        .unwrap();
     if let Some(template) = email_template {
         insert_scheduled_email(
             pool,
