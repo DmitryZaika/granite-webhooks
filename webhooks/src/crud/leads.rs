@@ -313,6 +313,20 @@ pub async fn create_deal_from_lead(
     .await;
 }
 
+pub async fn update_deal_list_id(
+    pool: &MySqlPool,
+    deal_id: u64,
+    list_id: i32,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    query!(
+        r#"UPDATE deals SET list_id = ? WHERE id = ? AND deleted_at IS NULL"#,
+        list_id,
+        deal_id
+    )
+    .execute(pool)
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

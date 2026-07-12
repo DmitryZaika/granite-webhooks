@@ -250,6 +250,48 @@ mod local_tests {
     }
 
     #[sqlx::test(migrations = "../migrations")]
+    async fn duplicate_lead_moves_deal_to_not_contacted_yet(pool: MySqlPool) {
+        let company_id = 1;
+        let data = json!({ "name": "Test", "phone": "+13179995973" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let bot = MockTelegram::new();
+
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
+
+        let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        let customers = get_customers(&pool).await.unwrap();
+        assert_eq!(customers.len(), 1);
+
+        create_deal(&pool, customers[0].id, 2, 0, sales_id)
+            .await
+            .unwrap();
+
+        let list_before = sqlx::query_scalar!(
+            r#"SELECT list_id FROM deals WHERE customer_id = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1"#,
+            customers[0].id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(list_before, 2);
+
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        let list_after = sqlx::query_scalar!(
+            r#"SELECT list_id FROM deals WHERE customer_id = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1"#,
+            customers[0].id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(list_after, 1);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
     async fn duplicate_lead_notifies_manager_also_sales(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
