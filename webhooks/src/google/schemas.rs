@@ -124,6 +124,16 @@ pub enum AutocompleteError {
     Config(String),
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum GeocodeError {
+    #[error("Network error: {0}")]
+    Net(#[from] reqwest::Error),
+    #[error("Geocoding API error: {0}")]
+    Api(String),
+    #[error("No results found for address")]
+    NoResults,
+}
+
 // --- Request body types ---
 #[derive(Serialize, Clone, Copy)]
 pub struct LatLng {
@@ -157,22 +167,19 @@ pub struct AutocompleteRequest {
 }
 
 impl AutocompleteRequest {
-    pub fn new(address: &str) -> Self {
-        // Добав: , bias_coords: Option<LatLng>
-        /*
+    pub fn new(address: &str, bias_coords: Option<LatLng>) -> Self {
         let location_bias = bias_coords.map(|coords| LocationBias {
             circle: Circle {
                 center: coords,
-                radius: 100000.0, // 100 km
+                radius: 160_934.4, // 100 miles in meters
             },
         });
-        */
 
         Self {
             input: address.to_string(),
             language_code: "en".into(),
             included_region_codes: vec!["US".into()],
-            location_bias: None,
+            location_bias,
             origin: None,
         }
     }
@@ -264,6 +271,29 @@ impl PlaceDetailsResponse {
             zip,
         }
     }
+}
+
+// --- Geocoding API response shapes ---
+#[derive(Deserialize, Debug)]
+pub struct GeocodeLocation {
+    pub lat: f64,
+    pub lng: f64,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct GeocodeGeometry {
+    pub location: GeocodeLocation,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct GeocodeResult {
+    pub geometry: GeocodeGeometry,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct GeocodeResponse {
+    pub results: Vec<GeocodeResult>,
+    pub status: String,
 }
 
 // --- Final output types returned by the handler ---

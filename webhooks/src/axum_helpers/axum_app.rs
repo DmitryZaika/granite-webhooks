@@ -1,6 +1,6 @@
 use crate::amazonses::routes::{read_receipt_handler, receive_handler};
 use crate::cloudtalk::receive::{sms_received, sms_sent, sync_cloudtalk};
-use crate::google::receive::address_information;
+use crate::google::receive::{address_information, fill_company_coordinates};
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
 use crate::schemas::add_customer::NewLeadForm;
@@ -62,7 +62,14 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
             "/template/complete/{company_id}/{user_id}",
             post(get_complete_template),
         )
-        .route("/google/address-autocomplete", post(address_information))
+        .route(
+            "/google/address-autocomplete/{company_id}",
+            post(address_information),
+        )
+        .route(
+            "/google/fill-coordinates/{company_id}",
+            post(fill_company_coordinates),
+        )
         .route("/api-docs/openapi.json", get(openapi_spec))
         .layer(
             CorsLayer::new()
