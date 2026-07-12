@@ -124,6 +124,10 @@ pub fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
 }
 
 pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>), String> {
+    // Strip angle brackets around URLs to prevent EmailReplyParser from
+    // incorrectly treating the closing `>` as an email quote marker.
+    static URL_BRACKET_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"<(https?://[^\s>]+)>").unwrap());
     let message = MessageParser::default()
         .parse(&email_bytes)
         .ok_or("Failed to parse email")?;
@@ -133,10 +137,6 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         .body_text(0)
         .map(std::borrow::Cow::into_owned)
         .unwrap_or_default();
-    // Strip angle brackets around URLs to prevent EmailReplyParser from
-    // incorrectly treating the closing `>` as an email quote marker.
-    static URL_BRACKET_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"<(https?://[^\s>]+)>").unwrap());
     let clean_body = URL_BRACKET_RE.replace_all(&body, "$1");
     let reply_body = EmailReplyParser::parse_reply(&clean_body);
     let attachments = message.attachments();
