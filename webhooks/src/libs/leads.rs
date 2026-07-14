@@ -1,7 +1,7 @@
 use crate::axum_helpers::guards::Telegram;
 use crate::crud::leads::{
     Deal, ExistingCustomer, create_deal_from_lead, find_existing_customer,
-    get_default_list_id_from_company_id, get_existing_deal,
+    get_default_list_id_from_company_id, get_existing_deal, update_deal_list_id,
 };
 use crate::crud::users::get_user_tg_info;
 use crate::libs::constants::{
@@ -38,6 +38,22 @@ where
             existing_id = existing.id,
             "Failed to update lead"
         );
+    }
+    let default_list_id = match get_default_list_id_from_company_id(pool, company_id).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(?e, company_id = company_id, "Failed to get default list");
+            return internal_error(ERR_DB);
+        }
+    };
+    if let Err(e) = update_deal_list_id(pool, deal.id, default_list_id).await {
+        tracing::error!(
+            ?e,
+            deal_id = deal.id,
+            list_id = default_list_id,
+            "Failed to move repeated lead to Not Contacted Yet"
+        );
+        return internal_error(ERR_DB);
     }
     let customer_id = u64::try_from(existing.id).unwrap();
     let user_info = match get_user_tg_info(pool, deal.user_id.unwrap()).await {
