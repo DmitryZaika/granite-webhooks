@@ -1,0 +1,275 @@
+Return-Path: <illisa.gibbs@gmail.com>
+Received: from mail-yw1-f197.google.com (mail-yw1-f197.google.com [209.85.128.197])
+ by inbound-smtp.us-east-2.amazonaws.com with SMTP id mmh1b22cbuo8h8g55eiso5feqcp92t8247j7kh01
+ for liza@granitedepotindy.com;
+ Thu, 16 Jul 2026 16:22:03 +0000 (UTC)
+Received-SPF: pass (spfCheck: domain of _spf.google.com designates 209.85.128.197 as permitted sender) client-ip=209.85.128.197; envelope-from=illisa.gibbs@gmail.com; helo=mail-yw1-f197.google.com;
+Authentication-Results: amazonses.com;
+ spf=pass (spfCheck: domain of _spf.google.com designates 209.85.128.197 as permitted sender) client-ip=209.85.128.197; envelope-from=illisa.gibbs@gmail.com; helo=mail-yw1-f197.google.com;
+ dkim=pass header.i=@gmail.com;
+ dmarc=pass header.from=gmail.com;
+X-SES-RECEIPT: AEFBQUFBQUFBQUFFamNpcUJJbG10cjJ5QnVBVHVzRVdsZ3lGK0pER0NXSE9IQ3dJWmpkaWdQZHJzYXdiTXpEdlV3YU9CdnJsekRDNFJOMEZ4Nk13UnlFOTNBSjVKWVUxSTNENjJnZzVrdDQ5NkFLaUNaQ3JxdGR3SjRacDRKQ1o2V2ZxQzBoYlJUZ1Y2UGwvclBTcHQ1MXBUUnVYZitiK3ZweTJ6bEk3cTAxZFhHdXpodGlRWDZxcVR0ZnpnbW1nSStxWnVvREdwSHlneDZza0lVQWNSaU1RbmUvUyt6bmV1UHg4WWdWSkVMQ21qaHB4d2tGczhsV1dHTFNyWUFQNEJIalFOc2ZNSzlydHdGWTVGWkpPNHJCWi9MYWt5SUhoMW1xc1BKaXhxb1pGWHY1ck5SVStwRUxPNWZ2djhZL3gzd1lCYlJYVjAvMXc9
+X-SES-DKIM-SIGNATURE: a=rsa-sha256; q=dns/txt; b=NI9veE71ToUwy9wJdmYnqWObhupxUOIi4y/K38beMzrT9N9s3OBxxcKmsvA5pveWH0d3Bj1vYb4c4j5/etY3FiUKud7PTXuk9tgeBMv6fi3WCRsIPGhUZEoDAjNnzVOAX25+PfiYP7quNgRnrkj9GXtoGLuhXTvLezugEjjctt4=; c=relaxed/simple; s=kra23psoka5qyyh6gdejiiuof3nluwuz; d=amazonses.com; t=1784218924; v=1; bh=FO0vo71j/aXdFO+gRwq6Si9PbHzE2ejxvRcyrviwH+s=; h=From:To:Cc:Bcc:Subject:Date:Message-ID:MIME-Version:Content-Type:X-SES-RECEIPT;
+Received: by mail-yw1-f197.google.com with SMTP id 00721157ae682-81aea53d559so24772667b3.0
+        for <liza@granitedepotindy.com>; Thu, 16 Jul 2026 09:22:03 -0700 (PDT)
+ARC-Seal: i=3; a=rsa-sha256; t=1784218923; cv=pass;
+        d=google.com; s=arc-20260327;
+        b=WXgipkUw3Y25lft4kloxVxgqiHBFifjBZFSW/yYvKZuqE9vHCCaORX00AU4sH2VTqW
+         M+sxfFl5F7UPDnNsKbTY891f7vZxU/d6z2ucPIARbbk6+2gxzbi2wqqBVtvdr7bH9DqA
+         s25E4gPUaiRQ4wNyOhfmMl7fuCcGXXOgqEiDYuc4Z/CjtezHCXvjnO+NBzKPSmGQ3w0X
+         zzOaLHEJPrHoRsBYI1MPx23rf2TmvijjWCRKdvOmoNIcGuK+6+yGnsONeP1OeLk56WfQ
+         iyrmDIWD83Z4Qw2uWOOkp0LrNbyLI1gGhOF0H4ys8TKNd9udBYDqY+LsXEY9El5IP3WB
+         mW1w==
+ARC-Message-Signature: i=3; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=Q69iUahFyFW0v4JLj6XMZJbvJoIK9ojJu0VOnMAf3Dk=;
+        fh=jNFuuPPAwzTi6kghrbljg9YnGjt0fP6CNw1aYlipngU=;
+        b=FmJN3c6WnTzBF10IP6zaA2NttZdd3JTqH3zwEA3SQyTYDBTTvyfyzIEhFMB1UmsVqW
+         ggG05dP7KL3AM3DobiXJnkZv91zWopQMKGwQXsaFMBeEqBhWqTjOGeFuQsR0ownwNWKS
+         i+vhOZBNMkkDJ4PrncwxOUlka50jKe3IL0fbPdry0ZboRA/jGW4ahb3QOb+s+YvcjStD
+         Zt4jfYUNKTjvrvp+1OiFZB0SFHz+HZhYBGsAfmfP3KU3X7zUPitE3fejC00lD6ih2sLN
+         vfh0nWrkLzSMZZWCRHFz9Cg27X47ccuof6L4pAqkgmcqGVrEH/Lo6lpHF69AwZzZ61n6
+         +Z6w==;
+        dara=google.com
+ARC-Authentication-Results: i=3; mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=DrL9mD+w;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of illisa.gibbs@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=illisa.gibbs@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20251104; t=1784218923; x=1784823723;
+        h=content-type:to:subject:message-id:date:from:in-reply-to:references
+         :mime-version:dkim-signature:x-gm-gg:x-gm-message-state:from:to:cc
+         :subject:date:message-id:reply-to:content-type;
+        bh=Q69iUahFyFW0v4JLj6XMZJbvJoIK9ojJu0VOnMAf3Dk=;
+        b=WR/IglJUx6TAFJuxUhyEw7CyS2ZeRXL/Y2pZ8Bjl/O5ruzFL1vl+rMMuKhhcQmLUbb
+         AKItTSE9eWNoXtIN0c98YhQzYp62zOZgfkjlWN+HzmGfwoQJCcAaWICeLFTIXF+4HT2l
+         BBY+U6LkIxFKhTrZ07io9egPmRTpLFDPPxaprxc59GoAUkVUyeXejFEWxjhmrShMo5Yv
+         6+gyh6o+AHZBJp2AT2sy46oUOcA26/AlzWNvDmyf4YMPeFqd2sLYGazsQS0q89Wy9vrO
+         Qh5z7xL5H0rp+CPh7B4VB3qm86H34wlQFa2YmexEaC3hOVUNbBIe88ZtKiBkqDiTzkrX
+         hmFg==
+X-Gm-Message-State: AOJu0YxTgosGuREbxYdAeA5BnRxGnLo1yksD7UFfR2jc7dN/c5rRHmtO
+	n9JBbdB94lkPWi/s0Udnal8K/4ub8KNjsTKl0SrQH8r/ONcUxCGW2wCSVGxOks23e6hrJRspsSJ
+	PyCGBpdpuTDErj/UmZm+7650vTzM2fX5zdPOK0/6LnPOemjGWD8jiqVnxUMSnd77x+Ls+QsJvoP
+	Y//Du0weg6nXfJUFYNFB/yttOgnrgpwXTjH3J66tKEycV3hdmjeisaUXIJysKykG/ERSndYeSb0
+	oLBLU8PwA==
+X-Gm-Gg: AfdE7cnTLeIPgb1NSb2ib3jv7VBSXO1ifBnHbdVQoAjIDUQjw0GldYHZvkQccaDOUwM
+	dray3POEThYCkJkVpPTKZDUG49HvU7MgrqkBiqS/1H54sVA8rNfNYxRT05mypz2w61Aegz1Q0+p
+	xpyR8R3h9bqwMLQP1boSpheBL4aI+e5qptUNDF8WOyWqQbogfRsuC6cbIKb2gznU62lsmoqa8CD
+	/5/snD7Foy9r9+sIg1rLrvmfxcIvnOqDGiSNrYg10q/9TQ6Gua8iTJUIgjA241Qr6ymV9RFfQqN
+	g0/xKVBcvVl7Yok5SvtBkDsNI9wGWbR3L88gcXTLr2QKbHwoo1MLdClQ19jHOSEiBhb8CZbszii
+	LW1SQ5Q==
+X-Received: by 2002:a05:690e:144d:b0:667:8b91:2454 with SMTP id 956f58d0204a3-668134bf52bmr5298108d50.107.1784218923198;
+        Thu, 16 Jul 2026 09:22:03 -0700 (PDT)
+X-Received: by 2002:a05:690e:144d:b0:667:8b91:2454 with SMTP id 956f58d0204a3-668134bf52bmr5298078d50.107.1784218921649;
+        Thu, 16 Jul 2026 09:22:01 -0700 (PDT)
+ARC-Seal: i=2; a=rsa-sha256; t=1784218921; cv=pass;
+        d=google.com; s=arc-20260327;
+        b=BzkOp5ykVIAM+xzUUzl7zkF0aigQi65O/X2d2AX8ysYK8t0VAjC/TNcgIy6qkhSeHy
+         d2x7AepnnhvbCT0jMzL3fE64HLteC8Cdh5UJoJ3z5moEUmOcmf8r0bDS5YpKtCPsl4f9
+         Yuj1HSxJlHQr7trPgE6Hs6Yegda9k4IrjXP9RIiEXwIITcLwe4p+eunKNQjxpvkE3rIm
+         oohCGz8KPIOQ7T1yW+G1Y4fpW5gA4pfUAVloNbw3y5iRMR5SMbKFqGWdUxVTqgCh9Fhj
+         3Irtmr74dF3F/MqdGs22ZGFrTwpJcOxzLF5L56qUZ/k/TIZXBMLIw/V9oqMli5xV1xWe
+         xIWw==
+ARC-Message-Signature: i=2; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=Q69iUahFyFW0v4JLj6XMZJbvJoIK9ojJu0VOnMAf3Dk=;
+        fh=jNFuuPPAwzTi6kghrbljg9YnGjt0fP6CNw1aYlipngU=;
+        b=kZIPKTVVfGlY4d6t/xQwDoikOhz1kCcrz2I1rRr0dsSSOQ+z7diNDIr8tEdS7tZ4Aa
+         NScnG1VVZi1TgAg4bVdL7x1FKwjAPJmnGS9y+udltxO0vLeJSLfDccUUo8tFLm6xtYZF
+         1ON+ciszR+G/KmuLUWEm+3tANIEIaBIeUE/VgUMUCHBLEf+f0joP1DZmeDNMzVvBPu2r
+         xndpd5IneirZnQwyIAjWN9YFF8bfUaCdcMOdArir5Bci72Dil6dbzb8/y7gXNlvjEl2n
+         fo+0MDISEwLLfCxg6Pqg/ZTagi9FkmlTsk5zNlIZJjLi1PASRlIhUNy12/cjsVv/nJIz
+         k7ow==;
+        dara=google.com
+ARC-Authentication-Results: i=2; mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=DrL9mD+w;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of illisa.gibbs@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=illisa.gibbs@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+Return-Path: <illisa.gibbs@gmail.com>
+Received: from mail-sor-f41.google.com (mail-sor-f41.google.com. [209.85.220.41])
+        by mx.google.com with SMTPS id 956f58d0204a3-667878d4cd7sor27480018d50.13.2026.07.16.09.22.01
+        for <liza@granitedepotindy.com>
+        (Google Transport Security);
+        Thu, 16 Jul 2026 09:22:01 -0700 (PDT)
+Received-SPF: pass (google.com: domain of illisa.gibbs@gmail.com designates 209.85.220.41 as permitted sender) client-ip=209.85.220.41;
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=DrL9mD+w;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of illisa.gibbs@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=illisa.gibbs@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+ARC-Seal: i=1; a=rsa-sha256; t=1784218921; cv=none;
+        d=google.com; s=arc-20260327;
+        b=lbBXRpbtovxdSKpys95HyxAfZGjQ9A0qHoZAVEENiiSCSgmOmAM9WehS6vCpL/7ZiB
+         owyc1vV3X7wt5AokI3EVRbXZs9BQN6Ee+ne64/7OIr8zZbStZuL+8XWCkhClA/XsmzCD
+         J+WLK7hdv8vypR2DAZfO1kO9kFcwRX01Kbu6bGr6cPUHR0oSLqxeRbkjjFxSMynR34S9
+         iceaoz9a34e5ynZgVkK4bAQLmCU4WL/eeSaj0mEnHMCyBiMCPW141lpH/ZMH3JoXb+yC
+         qL9JHA3jdMl4bptPRCOewifleoHz0qSdjaBXBspXXHUHqSpoieVx+gsFjMz8/CgiIjcU
+         FeXQ==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=Q69iUahFyFW0v4JLj6XMZJbvJoIK9ojJu0VOnMAf3Dk=;
+        fh=jNFuuPPAwzTi6kghrbljg9YnGjt0fP6CNw1aYlipngU=;
+        b=qNDxSSfIQSgsO2ahl/UlrXsX6QJVRZrJ8TsLscuvI3/ZBNtXyVWwChHz/3qn3ceTRR
+         wDE6W2KWSmghOxfxoGKozzgC4M9iDyWed9L+cuLUb2ZDaDA+CxD9pf7iQDjADTwtg1Dm
+         mz04Tb2wrY28ZsxDsu/lLOmlefen4AMfdcG6N1SZOFT2uAtAeTBh3DqOs/j1057tQo0K
+         OUqcUnVUo8KRbnwBJAZwZ9UivLEUJZFGJb1GRFVUAWOvF0XMQfMUFY+fsM5grwcjGL+3
+         Fus86WCmL+99ebNB20ct8xqYxgzT8FmVjCthQClcoMwD83U0NYIk1zY48hwlBT/GibtT
+         h5JA==;
+        darn=granitedepotindy.com
+ARC-Authentication-Results: i=1; mx.google.com; arc=none
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20251104; t=1784218921; x=1784823721; darn=granitedepotindy.com;
+        h=content-type:to:subject:message-id:date:from:in-reply-to:references
+         :mime-version:from:to:cc:subject:date:message-id:reply-to
+         :content-type;
+        bh=Q69iUahFyFW0v4JLj6XMZJbvJoIK9ojJu0VOnMAf3Dk=;
+        b=DrL9mD+wMOlZwdX8kx8JIxrBgLBuQxslGN32UddqUVki4BEXt4bepqbSRzZ0ovbBVC
+         r70RUUZrcTj17/glznlsIxTJW6K8rHm4Qg7F8TBlrL/LKLOxYbiZrWd58/dw4n8wz4x0
+         HAfjAQrJFoGqwLyGNr0AFK3zLmARz6zQOoQayNwz0bDB4/lh9S9mkJMxoVcYGmw/XXq9
+         /+denFj+ZRGEKzV7S+M+vsUXmO3VhbEhLq5YicLyNqKWTH5dSepZzIfRke3UZpdJCA1r
+         wpLEa6RdLiFLQHqbh/YUw2cooF3GPrwIkTnYhyPMl49M4AZuvhIRhbckGlWWxJCKx+O0
+         Rctw==
+X-Received: by 2002:a05:690e:bc7:b0:664:e429:dd22 with SMTP id
+ 956f58d0204a3-6681339e174mr5422054d50.56.1784218921027; Thu, 16 Jul 2026
+ 09:22:01 -0700 (PDT)
+MIME-Version: 1.0
+References: <CAMZmF4XottXdhPNLhiwaCkdTkOE4pZwgeuTL7HkQEROJwr9d-g@mail.gmail.com>
+ <CAAFMbKSaeaEyUSwrF4PddZchAxpRC59hF-ukDMeVezowj+P=QQ@mail.gmail.com>
+In-Reply-To: <CAAFMbKSaeaEyUSwrF4PddZchAxpRC59hF-ukDMeVezowj+P=QQ@mail.gmail.com>
+From: Illisa Gibbs <illisa.gibbs@gmail.com>
+Date: Thu, 16 Jul 2026 12:21:48 -0400
+X-Gm-Features: AUfX_mzrNisiVDhyzRHTsJRgNjo8buTr3Lae2GhQVE_oq0XX943jRTscgvtYV8M
+Message-ID: <CAAFMbKSfpZM7OhJB6Y7SW24GCpg_Kp-=OSo5ZN2j15t7KnPVxg@mail.gmail.com>
+Subject: Fwd: Granite Depot - Appointment Reminder: Install
+To: Liza Granite Depot <liza@granitedepotindy.com>
+Content-Type: multipart/alternative; boundary="000000000000fd53230656bcd641"
+
+--000000000000fd53230656bcd641
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+---------- Forwarded message ---------
+From: Illisa Gibbs <illisa.gibbs@gmail.com>
+Date: Thu, Jul 16, 2026 at 12:19=E2=80=AFPM
+Subject: Re: Granite Depot - Appointment Reminder: Install
+To: <granitedepot.appointments@gmail.com>
+
+
+This was confirmed rescheduled to 7/24 over the phone with Delaney.
+
+
+
+On Thu, Jul 16, 2026 at 11:00=E2=80=AFAM <granitedepot.appointments@gmail.c=
+om>
+wrote:
+
+> *Greetings from Granite Depot of Indianapolis!*
+>
+> This is a reminder for your upcoming *installation appointment:*
+>
+> =F0=9F=93=85 *Jul 17, 2026 01:00PM*
+>
+> Please allow a *3-hour arrival window* from your scheduled time.
+>
+> *To ensure everything goes smoothly, please:*
+>
+>    - Disconnect all plumbing fixtures and the cooktop (if any) if removal
+>    of existing countertops is required before installation.
+>    - Have your faucet and any other fixtures that require a hole ready.
+>    - Empty your base cabinets or cover their contents; also cover
+>    anything else you wish to protect.
+>    - If our technician advised you of any additional tasks during the
+>    template appointment (e.g., leveling, trim removal, etc.), please ensu=
+re
+>    those are completed before the installation crew arrives.
+>    - For safety, please keep out of the work area during installation.
+>
+> Your *balance is due upon completion* and can be paid to the installers
+> by *check, cash, card* (3% fee applies), or *Zelle.*
+>
+> *If you have any further questions or need to reschedule, please contact
+> your sales representative or call 317-600-3119.*
+>
+> =E2=80=94 Your Team at Granite Depot
+> ------------------------------
+>
+> This is an automated message. Please do not reply.
+>
+>
+
+--000000000000fd53230656bcd641
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<div><br><div class=3D"gmail_quote gmail_quote_container"><div dir=3D"ltr" =
+class=3D"gmail_attr">---------- Forwarded message ---------<br>From: <stron=
+g class=3D"gmail_sendername" dir=3D"auto">Illisa Gibbs</strong> <span dir=
+=3D"auto">&lt;<a href=3D"mailto:illisa.gibbs@gmail.com">illisa.gibbs@gmail.=
+com</a>&gt;</span><br>Date: Thu, Jul 16, 2026 at 12:19=E2=80=AFPM<br>Subjec=
+t: Re: Granite Depot - Appointment Reminder: Install<br>To:  &lt;<a href=3D=
+"mailto:granitedepot.appointments@gmail.com">granitedepot.appointments@gmai=
+l.com</a>&gt;<br></div><br><br><div dir=3D"auto">This was confirmed resched=
+uled to 7/24 over the phone with Delaney.=C2=A0</div><div dir=3D"auto"><br>=
+</div><div dir=3D"auto"><br></div><div dir=3D"auto"><br><div class=3D"gmail=
+_quote" dir=3D"auto"><div dir=3D"ltr" class=3D"gmail_attr">On Thu, Jul 16, =
+2026 at 11:00=E2=80=AFAM &lt;<a href=3D"mailto:granitedepot.appointments@gm=
+ail.com" target=3D"_blank">granitedepot.appointments@gmail.com</a>&gt; wrot=
+e:<br></div><blockquote class=3D"gmail_quote" style=3D"margin:0px 0px 0px 0=
+.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex"><p><strong st=
+yle=3D"font-size:17px">Greetings from Granite Depot of Indianapolis!</stron=
+g></p>
+
+<p style=3D"font-size:16px">This is a reminder for your upcoming <strong>in=
+stallation appointment:</strong></p>
+
+<p style=3D"font-size:15px;margin-bottom:4px">=F0=9F=93=85 <strong>Jul 17, =
+2026 01:00PM</strong></p>
+<p style=3D"font-size:15px;margin-top:4px">Please allow a <strong>3-hour ar=
+rival window</strong> from your scheduled time.</p>
+
+<p style=3D"margin-bottom:4px"><strong>To ensure everything goes smoothly, =
+please:</strong></p>
+<ul style=3D"margin-top:4px">
+  <li>Disconnect all plumbing fixtures and the cooktop (if any) if removal =
+of existing countertops is required before installation.</li>
+  <li>Have your faucet and any other fixtures that require a hole ready.</l=
+i>
+  <li>Empty your base cabinets or cover their contents; also cover anything=
+ else you wish to protect.</li>
+  <li>If our technician advised you of any additional tasks during the temp=
+late appointment (e.g., leveling, trim removal, etc.), please ensure those =
+are completed before the installation crew arrives.</li>
+  <li>For safety, please keep out of the work area during installation.</li=
+>
+</ul>
+
+<p style=3D"margin-bottom:4px">Your <strong>balance is due upon completion<=
+/strong> and can be paid to the installers by <strong>check, cash, card</st=
+rong> (3% fee applies), or <strong>Zelle.</strong>
+
+
+</p><p> <strong>If you have any further questions or need to reschedule, pl=
+ease contact your sales representative or call <strong><u>317-600-3119</u><=
+/strong>.</strong></p>
+
+
+<p>=E2=80=94 Your Team at Granite Depot</p>
+
+<hr style=3D"margin-top:20px;margin-bottom:10px">
+<p style=3D"font-size:14px;font-style:italic;color:rgb(136,136,136)">This i=
+s an automated message. Please do not reply.</p>
+
+
+<p></p>
+</blockquote></div></div>
+</div></div>
+
+--000000000000fd53230656bcd641--
