@@ -249,7 +249,7 @@ pub async fn find_existing_customer(
     }
     sqlx::query_as!(
         ExistingCustomer,
-        r#"SELECT id, name, sales_rep FROM customers WHERE company_id = ? AND (email = ? OR phone = ?) ORDER BY id DESC LIMIT 1"#,
+        r#"SELECT id, name, sales_rep FROM customers WHERE company_id = ? AND deleted_at IS NULL AND (email = ? OR phone = ?) ORDER BY id DESC LIMIT 1"#,
         company_id,
         email,
         phone

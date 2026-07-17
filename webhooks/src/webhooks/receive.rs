@@ -292,6 +292,113 @@ mod local_tests {
     }
 
     #[sqlx::test(migrations = "../migrations")]
+    async fn duplicate_lead_moves_existing_deal_without_copying(pool: MySqlPool) {
+        let company_id = 1;
+        let data = json!({ "name": "Test", "phone": "+13179995973" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let bot = MockTelegram::new();
+
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
+
+        let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        let customers = get_customers(&pool).await.unwrap();
+        assert_eq!(customers.len(), 1);
+
+        let deal_id = create_deal(&pool, customers[0].id, 2, 0, sales_id)
+            .await
+            .unwrap()
+            .last_insert_id();
+
+        let original_created_at =
+            chrono::DateTime::parse_from_rfc3339("2024-01-15T10:30:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+        sqlx::query!(
+            r#"UPDATE deals SET created_at = ? WHERE id = ?"#,
+            original_created_at,
+            deal_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let deals_before = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) as count FROM deals WHERE customer_id = ? AND deleted_at IS NULL"#,
+            customers[0].id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(deals_before, 1);
+
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        let deals_after = sqlx::query!(
+            r#"SELECT id, list_id, created_at FROM deals WHERE customer_id = ? AND deleted_at IS NULL"#,
+            customers[0].id
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(deals_after.len(), 1);
+        assert_eq!(deals_after[0].id, deal_id);
+        assert_eq!(deals_after[0].list_id, 1);
+        assert_eq!(deals_after[0].created_at, Some(original_created_at));
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn deleted_customer_does_not_create_deal(pool: MySqlPool) {
+        let company_id = 1;
+        let data = json!({ "name": "Test", "phone": "+13179995973" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let bot = MockTelegram::new();
+
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
+
+        let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        let customers = get_customers(&pool).await.unwrap();
+        assert_eq!(customers.len(), 1);
+        let deleted_customer_id = customers[0].id;
+
+        sqlx::query!(
+            r#"UPDATE customers SET sales_rep = ?, deleted_at = NOW() WHERE id = ?"#,
+            sales_id,
+            deleted_customer_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        let deals_on_deleted = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) as count FROM deals WHERE customer_id = ?"#,
+            deleted_customer_id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(deals_on_deleted, 0);
+
+        let active_customers = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) as count FROM customers WHERE deleted_at IS NULL"#
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(active_customers, 1);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
     async fn duplicate_lead_notifies_manager_also_sales(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
