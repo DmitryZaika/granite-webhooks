@@ -123,6 +123,60 @@ pub fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
     })
 }
 
+/// Matches a forward-preamble header line: a non-whitespace word followed
+/// by a colon (e.g. `From:`, `От:`, `Date:`, `Subject:`). Used to identify
+/// the block of header fields that Gmail inserts after the forward marker,
+/// regardless of the sender's UI language.
+static FORWARD_HEADER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\S+:").unwrap());
+
+/// Strips the forward header block ("---------- Forwarded message ---------"
+/// followed by `Label: value` header lines and blank-line separators) from a
+/// forwarded email body. Returns the remaining content — the body of the
+/// email that was forwarded.
+fn extract_forwarded_content(body: &str) -> Option<String> {
+    let forward_marker = "---------- Forwarded message ---------";
+    let pos = body.find(forward_marker)?;
+    let after_marker = &body[pos + forward_marker.len()..];
+
+    let lines: Vec<&str> = after_marker.lines().collect();
+    let mut i = 0;
+
+    // Skip any leading blank lines.
+    while i < lines.len() && lines[i].trim().is_empty() {
+        i += 1;
+    }
+
+    // Phase 1: skip the forward-preamble header block — consecutive
+    // non-blank lines that look like `Label: value`. Stop at the first
+    // blank line or the first line that does not match the pattern.
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if trimmed.is_empty() || !FORWARD_HEADER_RE.is_match(trimmed) {
+            break;
+        }
+        i += 1;
+    }
+
+    // Phase 2: skip blank lines that separate the header block from the
+    // forwarded email body.
+    while i < lines.len() && lines[i].trim().is_empty() {
+        i += 1;
+    }
+
+    if i >= lines.len() {
+        return None;
+    }
+
+    let content: String = lines[i..].join("\n");
+    let content = content.trim().to_string();
+
+    if content.is_empty() {
+        None
+    } else {
+        Some(content)
+    }
+}
+
 pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>), String> {
     let message = MessageParser::default()
         .parse(&email_bytes)
@@ -139,6 +193,18 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         LazyLock::new(|| Regex::new(r"<(https?://[^\s>]+)>").unwrap());
     let clean_body = URL_BRACKET_RE.replace_all(&body, "$1");
     let reply_body = EmailReplyParser::parse_reply(&clean_body);
+
+    // When a forward contains no new text from the forwarder, EmailReplyParser
+    // returns an empty body. Fall back to extracting the last email in the
+    // forwarded thread.
+    let final_body = if reply_body.trim().is_empty() {
+        extract_forwarded_content(&clean_body)
+            .map(|content| EmailReplyParser::parse_reply(&content))
+            .unwrap_or_default()
+    } else {
+        reply_body
+    };
+
     let attachments = message.attachments();
     let final_attachments: Vec<Attachment> = attachments.filter_map(parse_attachment).collect();
     let sender_emails = message.from().ok_or("Failed to parse sender email")?;
@@ -167,7 +233,7 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
 
     let parsed = ParsedEmail::new(
         subject.map(std::string::ToString::to_string),
-        reply_body,
+        final_body,
         sender_email,
         receiver_email,
         forward_to_email,
@@ -325,5 +391,111 @@ mod local_tests {
             assert_eq!(attachment.data.len(), size);
             assert!(!attachment.data.is_empty());
         }
+    }
+
+    #[test]
+    fn test_parse_forward_with_no_new_text() {
+        let email_bytes = read_file_as_bytes("src/tests/data/old_forward.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(
+            parsed_email.subject,
+            Some("Fwd: Granite Depot - Appointment Reminder: Install".to_string())
+        );
+        assert_eq!(
+            parsed_email.body,
+            "This was confirmed rescheduled to 7/24 over the phone with Delaney."
+        );
+    }
+
+    #[test]
+    fn test_parse_forward_from_user_no_new_text() {
+        let email_bytes = read_file_as_bytes("src/tests/data/forwarded_from_user.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(parsed_email.subject, Some("Fwd:".to_string()));
+        assert_eq!(parsed_email.body, "Hello");
+    }
+
+    #[test]
+    fn test_extract_forwarded_content_basic() {
+        let body = concat!(
+            "\n",
+            "---------- Forwarded message ---------\n",
+            "From: Alice <alice@example.com>\n",
+            "Date: Thu, Jul 16, 2026 at 12:00 PM\n",
+            "Subject: Hello\n",
+            "To: Bob <bob@example.com>\n",
+            "\n",
+            "\n",
+            "This is the forwarded content.\n"
+        );
+        let result = extract_forwarded_content(body);
+        assert_eq!(result, Some("This is the forwarded content.".to_string()));
+    }
+
+    #[test]
+    fn test_extract_forwarded_content_no_marker() {
+        let body = "Just a regular email body.";
+        let result = extract_forwarded_content(body);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_forwarded_content_empty_after_header() {
+        let body = concat!(
+            "---------- Forwarded message ---------\n",
+            "From: Alice <alice@example.com>\n",
+            "Date: Thu, Jul 16, 2026 at 12:00 PM\n",
+            "Subject: Test\n",
+            "To: Bob <bob@example.com>\n"
+        );
+        let result = extract_forwarded_content(body);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_forwarded_content_multilingual_headers() {
+        // The forward-preamble header block is detected by the `Word:`
+        // pattern rather than by a hard-coded list of field names, so it
+        // works for any language Gmail localizes into.
+        let body = concat!(
+            "---------- Forwarded message ---------\n",
+            "От: Alice <alice@example.com>\n",
+            "Date: Fri, 17 Jul 2026 at 19:06\n",
+            "Subject: Hello\n",
+            "To: Bob <bob@example.com>\n",
+            "\n",
+            "\n",
+            "This is the forwarded content.\n"
+        );
+        let result = extract_forwarded_content(body);
+        assert_eq!(result, Some("This is the forwarded content.".to_string()));
+    }
+
+    #[test]
+    fn test_extract_forwarded_content_header_like_body() {
+        // A body line like "Re: ..." that appears AFTER blank-line
+        // separators must not be treated as a forward-header line.
+        let body = concat!(
+            "---------- Forwarded message ---------\n",
+            "From: Alice <alice@example.com>\n",
+            "To: Bob <bob@example.com>\n",
+            "\n",
+            "\n",
+            "Re: This is body content, not a header.\n"
+        );
+        let result = extract_forwarded_content(body);
+        assert_eq!(
+            result,
+            Some("Re: This is body content, not a header.".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_forward_russian_locale() {
+        // Forward with Russian-localized header, no new text from forwarder.
+        let email_bytes = read_file_as_bytes("src/tests/data/forward_1.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(parsed_email.subject, Some("Fwd: First".to_string()));
+        assert_eq!(parsed_email.body, "Hello, will Dima see this?");
     }
 }
