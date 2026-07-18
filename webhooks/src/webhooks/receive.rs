@@ -207,9 +207,11 @@ mod local_tests {
 
         let second_message = messages.pop().unwrap();
         assert!(second_message.1.starts_with("Repeat lead "));
+        assert!(!second_message.1.ends_with("Choose a salesperson."));
         assert_eq!(second_message.0, 789);
         let first_message = messages.pop().unwrap();
         assert!(first_message.1.starts_with("Repeat lead "));
+        assert!(!first_message.1.ends_with("Choose a salesperson."));
         assert_eq!(first_message.0, 456);
     }
 
@@ -242,6 +244,7 @@ mod local_tests {
         // Assert manager received message
         let second_message = messages.pop().unwrap();
         assert!(second_message.1.starts_with("Repeat lead "));
+        assert!(!second_message.1.ends_with("Choose a salesperson."));
         assert_eq!(second_message.0, 456);
         // Assert sales recevied message
         let last_message = messages.pop().unwrap();
@@ -312,10 +315,9 @@ mod local_tests {
             .unwrap()
             .last_insert_id();
 
-        let original_created_at =
-            chrono::DateTime::parse_from_rfc3339("2024-01-15T10:30:00Z")
-                .unwrap()
-                .with_timezone(&chrono::Utc);
+        let original_created_at = chrono::DateTime::parse_from_rfc3339("2024-01-15T10:30:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
         sqlx::query!(
             r#"UPDATE deals SET created_at = ? WHERE id = ?"#,
             original_created_at,
@@ -466,6 +468,7 @@ mod local_tests {
                 .1
                 .starts_with("Repeat lead Test for sales rep Unknown")
         );
+        assert!(!last_message.1.ends_with("Choose a salesperson."));
         assert_eq!(last_message.0, 456);
 
         // Assert manager received message
@@ -475,6 +478,7 @@ mod local_tests {
                 .1
                 .starts_with("You received a REPEATED lead Test, click here:")
         );
+        assert!(!second_message.1.ends_with("Choose a salesperson."));
         assert_eq!(second_message.0, 123);
     }
 
@@ -506,6 +510,7 @@ mod local_tests {
                 .1
                 .starts_with("You received a REPEATED lead with no sales rep")
         );
+        assert!(!second_message.1.ends_with("Choose a salesperson."));
         assert_eq!(second_message.0, 456);
     }
     #[sqlx::test(migrations = "../migrations")]
@@ -536,6 +541,7 @@ mod local_tests {
                 .1
                 .starts_with("You received a REPEATED lead with no sales rep")
         );
+        assert!(!second_message.1.ends_with("Choose a salesperson."));
         assert_eq!(second_message.0, 456);
     }
 }

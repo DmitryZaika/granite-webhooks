@@ -44,13 +44,18 @@ pub async fn send_lead_manager_message_to_all<T, V>(
     lead_id: u64,
     telegram_ids: Vec<i64>,
     candidates: &[Candidate],
+    include_assignment_prompt: bool,
     raw_bot: Arc<V>,
 ) -> Result<Vec<Message>, teloxide::RequestError>
 where
     T: Display + Sync + ?Sized,
     V: Telegram + Send + Sync + 'static + Clone,
 {
-    let full_message = format!("{message}. Choose a salesperson.");
+    let full_message = if include_assignment_prompt {
+        format!("{message}. Choose a salesperson.")
+    } else {
+        message.to_string()
+    };
     let kb = kb_for_users(lead_id, candidates);
 
     let mut set = JoinSet::new();
@@ -96,6 +101,7 @@ pub async fn send_telegram_manager_assign<T: Display, V>(
     company_id: i32,
     data: T,
     customer_id: u64,
+    include_assignment_prompt: bool,
     bot: &V,
 ) -> Result<(), BasicResponse>
 where
@@ -135,6 +141,7 @@ where
         customer_id,
         telegram_ids.clone(),
         &candidates,
+        include_assignment_prompt,
         new_bot,
     )
     .await;
@@ -163,13 +170,11 @@ pub async fn send_lead_managers_dupliacate<V>(
 where
     V: Telegram + Send + Sync + 'static + Clone,
 {
-    let full_message = format!("{message}. Choose a salesperson.");
-
     let mut set = JoinSet::new();
 
     for user_id in telegram_ids.clone() {
         let bot = Arc::clone(&raw_bot);
-        let msg = full_message.clone();
+        let msg = message.clone();
 
         set.spawn(async move { send_plain_message_to_chat(user_id, &msg, bot.as_ref()).await });
     }

@@ -65,7 +65,9 @@ where
                 name.unwrap_or("Unknown"),
                 lead_url(deal.id)
             );
-            match send_telegram_manager_assign(pool, company_id, message, customer_id, bot).await {
+            match send_telegram_manager_assign(pool, company_id, message, customer_id, false, bot)
+                .await
+            {
                 Ok(()) => return CREATED_RESPONSE,
                 Err(e) => {
                     tracing::error!(
@@ -171,7 +173,7 @@ where
         "You received a REPEATED lead with no sales rep \n{form}",
         // form.to_string()
     );
-    match send_telegram_manager_assign(pool, company_id, message, clean_id, bot).await {
+    match send_telegram_manager_assign(pool, company_id, message, clean_id, false, bot).await {
         Ok(()) => Ok(None),
         Err(e) => {
             tracing::error!(
@@ -205,6 +207,7 @@ where
         company_id,
         &form.to_string(),
         result.last_insert_id(),
+        true,
         bot,
     )
     .await;
