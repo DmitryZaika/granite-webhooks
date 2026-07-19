@@ -2,17 +2,62 @@ use crate::schemas::add_customer::{FaceBookContactForm, NewLeadForm, WordpressCo
 use sqlx::mysql::MySqlQueryResult;
 use sqlx::{MySqlPool, query};
 
+async fn set_customer_email(
+    pool: &MySqlPool,
+    customer_id: i32,
+    email: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let Some(email) = email else {
+        return Ok(());
+    };
+    if email.is_empty() {
+        return Ok(());
+    }
+
+    let existing_email_id =
+        sqlx::query_scalar!(r#"SELECT email_id FROM customers WHERE id = ?"#, customer_id)
+            .fetch_one(pool)
+            .await?;
+
+    if let Some(email_id) = existing_email_id {
+        query!(
+            r#"UPDATE customers_emails SET email = ? WHERE id = ?"#,
+            email,
+            email_id
+        )
+        .execute(pool)
+        .await?;
+        return Ok(());
+    }
+
+    let inserted = query!(
+        r#"INSERT INTO customers_emails (customer_id, email) VALUES (?, ?)"#,
+        customer_id,
+        email
+    )
+    .execute(pool)
+    .await?;
+    let email_id = i32::try_from(inserted.last_insert_id()).unwrap_or(0);
+    query!(
+        r#"UPDATE customers SET email_id = ? WHERE id = ?"#,
+        email_id,
+        customer_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn create_lead_from_wordpress(
     pool: &MySqlPool,
     data: &WordpressContactForm,
     company_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
-    return query!(
+    let result = query!(
         r#"INSERT INTO customers
-           (name, email, phone, postal_code, address, remodal_type, project_size, contact_time, remove_and_dispose, improve_offer, sink, backsplash, kitchen_stove, your_message, attached_file, company_id, referral_source, source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+           (name, phone, postal_code, address, remodal_type, project_size, contact_time, remove_and_dispose, improve_offer, sink, backsplash, kitchen_stove, your_message, attached_file, company_id, referral_source, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         data.name,
-        data.email,
         data.phone,
         data.postal_code,
         data.address,
@@ -30,7 +75,11 @@ pub async fn create_lead_from_wordpress(
         "wordpress-form",
         "leads"
     )
-    .execute(pool).await;
+    .execute(pool)
+    .await?;
+    let customer_id = i32::try_from(result.last_insert_id()).unwrap_or(0);
+    set_customer_email(pool, customer_id, data.email.as_deref()).await?;
+    Ok(result)
 }
 
 pub async fn update_lead_from_wordpress(
@@ -39,12 +88,10 @@ pub async fn update_lead_from_wordpress(
     company_id: i32,
     id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
-    return query!(
+    let result = query!(
         r#"UPDATE customers
-           SET name = ?, email = ?, phone = ?, postal_code = ?, address = ?, remodal_type = ?, project_size = ?, contact_time = ?, remove_and_dispose = ?, improve_offer = ?, sink = ?, backsplash = ?, kitchen_stove = ?, your_message = ?, attached_file = ?, company_id = ?
+           SET phone = ?, postal_code = ?, address = ?, remodal_type = ?, project_size = ?, contact_time = ?, remove_and_dispose = ?, improve_offer = ?, sink = ?, backsplash = ?, kitchen_stove = ?, your_message = ?, attached_file = ?, company_id = ?
            WHERE id = ?"#,
-        data.name,
-        data.email,
         data.phone,
         data.postal_code,
         data.address,
@@ -61,7 +108,10 @@ pub async fn update_lead_from_wordpress(
         company_id,
         id,
     )
-    .execute(pool).await;
+    .execute(pool)
+    .await?;
+    set_customer_email(pool, id, data.email.as_deref()).await?;
+    Ok(result)
 }
 
 pub async fn create_lead_from_facebook(
@@ -69,26 +119,28 @@ pub async fn create_lead_from_facebook(
     data: &FaceBookContactForm,
     company_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
-    return query!(
-            r#"INSERT INTO customers
-               (name, phone, remove_and_dispose, details, email, city, postal_code, compaign_name, adset_name, ad_name, company_id, referral_source, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-            data.name,
-            data.phone,
-            data.remove_and_dispose,
-            data.details,
-            data.email,
-            data.city,
-            data.postal_code,
-            data.campaign_name,
-            data.adset_name,
-            data.ad_name,
-            company_id,
-            "facebook-form",
-            "leads"
-        )
-        .execute(pool)
-        .await;
+    let result = query!(
+        r#"INSERT INTO customers
+               (name, phone, remove_and_dispose, details, city, postal_code, compaign_name, adset_name, ad_name, company_id, referral_source, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        data.name,
+        data.phone,
+        data.remove_and_dispose,
+        data.details,
+        data.city,
+        data.postal_code,
+        data.campaign_name,
+        data.adset_name,
+        data.ad_name,
+        company_id,
+        "facebook-form",
+        "leads"
+    )
+    .execute(pool)
+    .await?;
+    let customer_id = i32::try_from(result.last_insert_id()).unwrap_or(0);
+    set_customer_email(pool, customer_id, data.email.as_deref()).await?;
+    Ok(result)
 }
 
 pub async fn update_lead_from_facebook(
@@ -97,24 +149,25 @@ pub async fn update_lead_from_facebook(
     company_id: i32,
     id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
-    return query!(
-            r#"UPDATE customers
-               SET phone = ?, remove_and_dispose = ?, details = ?, email = ?, city = ?, postal_code = ?, compaign_name = ?, adset_name = ?, ad_name = ?, company_id = ?
+    let result = query!(
+        r#"UPDATE customers
+               SET phone = ?, remove_and_dispose = ?, details = ?, city = ?, postal_code = ?, compaign_name = ?, adset_name = ?, ad_name = ?, company_id = ?
                WHERE id = ?"#,
-            data.phone,
-            data.remove_and_dispose,
-            data.details,
-            data.email,
-            data.city,
-            data.postal_code,
-            data.campaign_name,
-            data.adset_name,
-            data.ad_name,
-            company_id,
-            id,
-        )
-        .execute(pool)
-        .await;
+        data.phone,
+        data.remove_and_dispose,
+        data.details,
+        data.city,
+        data.postal_code,
+        data.campaign_name,
+        data.adset_name,
+        data.ad_name,
+        company_id,
+        id,
+    )
+    .execute(pool)
+    .await?;
+    set_customer_email(pool, id, data.email.as_deref()).await?;
+    Ok(result)
 }
 
 pub async fn assign_lead(
@@ -155,37 +208,39 @@ pub async fn create_lead_from_new_lead_form(
     data: &NewLeadForm,
     company_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
-    return query!(
-            r#"INSERT INTO customers
-               (name, phone, address, remove_and_dispose, details, email, city, postal_code, compaign_name, adset_name, ad_name, remodal_type, project_size, contact_time, when_start, improve_offer, sink, kitchen_stove, backsplash, your_message, attached_file, company_id, referral_source, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-            data.name,
-            data.phone,
-            data.address,
-            data.remove_and_dispose,
-            data.details,
-            data.email,
-            data.city,
-            data.postal_code,
-            data.campaign_name,
-            data.adset_name,
-            data.ad_name,
-            data.remodal_type,
-            data.project_size,
-            data.contact_time,
-            data.when_start,
-            data.improve_offer,
-            data.sink,
-            data.kitchen_stove,
-            data.backsplash,
-            data.your_message,
-            data.attached_file,
-            company_id,
-            data.referral_source,
-            "leads"
-        )
-        .execute(pool)
-        .await;
+    let result = query!(
+        r#"INSERT INTO customers
+               (name, phone, address, remove_and_dispose, details, city, postal_code, compaign_name, adset_name, ad_name, remodal_type, project_size, contact_time, when_start, improve_offer, sink, kitchen_stove, backsplash, your_message, attached_file, company_id, referral_source, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        data.name,
+        data.phone,
+        data.address,
+        data.remove_and_dispose,
+        data.details,
+        data.city,
+        data.postal_code,
+        data.campaign_name,
+        data.adset_name,
+        data.ad_name,
+        data.remodal_type,
+        data.project_size,
+        data.contact_time,
+        data.when_start,
+        data.improve_offer,
+        data.sink,
+        data.kitchen_stove,
+        data.backsplash,
+        data.your_message,
+        data.attached_file,
+        company_id,
+        data.referral_source,
+        "leads"
+    )
+    .execute(pool)
+    .await?;
+    let customer_id = i32::try_from(result.last_insert_id()).unwrap_or(0);
+    set_customer_email(pool, customer_id, data.email.as_deref()).await?;
+    Ok(result)
 }
 
 pub async fn update_lead_from_new_lead_form(
@@ -194,37 +249,38 @@ pub async fn update_lead_from_new_lead_form(
     company_id: i32,
     id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
-    return query!(
-            r#"UPDATE customers
-               SET phone = ?, address = ?, remove_and_dispose = ?, details = ?, email = ?, city = ?, postal_code = ?, compaign_name = ?, adset_name = ?, ad_name = ?, remodal_type = ?, project_size = ?, contact_time = ?, when_start = ?, improve_offer = ?, sink = ?, kitchen_stove = ?, backsplash = ?, your_message = ?, attached_file = ?, company_id = ?, referral_source = ?, source = ?
+    let result = query!(
+        r#"UPDATE customers
+               SET phone = ?, address = ?, remove_and_dispose = ?, details = ?, city = ?, postal_code = ?, compaign_name = ?, adset_name = ?, ad_name = ?, remodal_type = ?, project_size = ?, contact_time = ?, when_start = ?, improve_offer = ?, sink = ?, kitchen_stove = ?, backsplash = ?, your_message = ?, attached_file = ?, company_id = ?, referral_source = ?, source = ?
                WHERE id = ?"#,
-            data.phone,
-            data.address,
-            data.remove_and_dispose,
-            data.details,
-            data.email,
-            data.city,
-            data.postal_code,
-            data.campaign_name,
-            data.adset_name,
-            data.ad_name,
-            data.remodal_type,
-            data.project_size,
-            data.contact_time,
-            data.when_start,
-            data.improve_offer,
-            data.sink,
-            data.kitchen_stove,
-            data.backsplash,
-            data.your_message,
-            data.attached_file,
-            company_id,
-            data.referral_source,
-            "leads",
-            id,
-        )
-        .execute(pool)
-        .await;
+        data.phone,
+        data.address,
+        data.remove_and_dispose,
+        data.details,
+        data.city,
+        data.postal_code,
+        data.campaign_name,
+        data.adset_name,
+        data.ad_name,
+        data.remodal_type,
+        data.project_size,
+        data.contact_time,
+        data.when_start,
+        data.improve_offer,
+        data.sink,
+        data.kitchen_stove,
+        data.backsplash,
+        data.your_message,
+        data.attached_file,
+        company_id,
+        data.referral_source,
+        "leads",
+        id,
+    )
+    .execute(pool)
+    .await?;
+    set_customer_email(pool, id, data.email.as_deref()).await?;
+    Ok(result)
 }
 
 pub struct ExistingCustomer {
@@ -249,7 +305,16 @@ pub async fn find_existing_customer(
     }
     sqlx::query_as!(
         ExistingCustomer,
-        r#"SELECT id, name, sales_rep FROM customers WHERE company_id = ? AND deleted_at IS NULL AND (email = ? OR phone = ?) ORDER BY id DESC LIMIT 1"#,
+        r#"
+        SELECT c.id, c.name, c.sales_rep
+        FROM customers c
+        LEFT JOIN customers_emails ce ON ce.id = c.email_id
+        WHERE c.company_id = ?
+          AND c.deleted_at IS NULL
+          AND (ce.email = ? OR c.phone = ?)
+        ORDER BY c.id DESC
+        LIMIT 1
+        "#,
         company_id,
         email,
         phone

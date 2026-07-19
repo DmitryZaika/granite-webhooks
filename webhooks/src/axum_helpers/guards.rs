@@ -6,7 +6,6 @@ use lambda_http::tracing;
 use std::env::var;
 use teloxide::prelude::*;
 use teloxide::types::InlineKeyboardMarkup;
-use teloxide::types::MaybeInaccessibleMessage;
 use teloxide::types::{Message, Recipient};
 use uuid::{Uuid, uuid};
 
@@ -38,11 +37,18 @@ pub trait Telegram: Send + Sync {
 
     fn edit_message_text<T>(
         &self,
-        message: &MaybeInaccessibleMessage,
+        chat_id: i64,
+        message_id: i32,
         text: T,
     ) -> impl Future<Output = Result<Message, BasicResponse>> + Send
     where
         T: Into<String> + Send;
+
+    fn delete_message(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+    ) -> impl Future<Output = Result<(), BasicResponse>> + Send;
 }
 
 #[derive(Clone)]
@@ -96,21 +102,55 @@ impl Telegram for TelegramBot {
 
     fn edit_message_text<T>(
         &self,
-        message: &MaybeInaccessibleMessage,
+        chat_id: i64,
+        message_id: i32,
         text: T,
     ) -> impl Future<Output = Result<Message, BasicResponse>> + Send
     where
         T: Into<String> + Send,
     {
         let bot = self.bot.clone();
-        let msg_id = message.id();
-        let chat_id = message.chat().id;
+        let message_id = teloxide::types::MessageId(message_id);
 
         async move {
-            match bot.edit_message_text(chat_id, msg_id, text).await {
+            match bot
+                .edit_message_text(ChatId(chat_id), message_id, text)
+                .reply_markup(InlineKeyboardMarkup::default())
+                .await
+            {
                 Ok(message) => Ok(message),
                 Err(err) => {
-                    tracing::error!(?err, message_id = %msg_id, ERR_SEND_TELEGRAM);
+                    tracing::error!(
+                        ?err,
+                        chat_id = chat_id,
+                        message_id = %message_id,
+                        ERR_SEND_TELEGRAM
+                    );
+                    Err(internal_error(ERR_SEND_TELEGRAM))
+                }
+            }
+        }
+    }
+
+    fn delete_message(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+    ) -> impl Future<Output = Result<(), BasicResponse>> + Send {
+        let bot = self.bot.clone();
+        async move {
+            match bot
+                .delete_message(ChatId(chat_id), teloxide::types::MessageId(message_id))
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(err) => {
+                    tracing::error!(
+                        ?err,
+                        chat_id = chat_id,
+                        message_id = message_id,
+                        ERR_SEND_TELEGRAM
+                    );
                     Err(internal_error(ERR_SEND_TELEGRAM))
                 }
             }

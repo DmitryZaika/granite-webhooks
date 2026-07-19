@@ -102,11 +102,12 @@ pub async fn load_customer_with_mapping(
             c.name,
             c.phone,
             c.phone_2,
-            c.email,
+            ce.email,
             c.address,
             cc.id AS cloudtalk_contact_id,
             cc.cloudtalk_id
         FROM customers c
+        LEFT JOIN customers_emails ce ON ce.id = c.email_id
         LEFT JOIN cloudtalk_contacts cc ON cc.customer_id = c.id
         WHERE c.id = ? AND c.deleted_at IS NULL
         "#,

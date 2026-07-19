@@ -10,7 +10,8 @@ use crate::libs::constants::{
 use crate::libs::types::BasicResponse;
 use crate::schemas::add_customer::LeadPayload;
 use crate::telegram::send::{
-    send_plain_message_to_chat, send_telegram_duplicate_notification, send_telegram_manager_assign,
+    persist_lead_message, send_plain_message_to_chat, send_telegram_duplicate_notification,
+    send_telegram_manager_assign,
 };
 use crate::telegram::utils::lead_url;
 use common::amazon::email::send_message;
@@ -108,18 +109,24 @@ where
         lead_url(deal.id)
     );
     let tg_result = send_plain_message_to_chat(clean_tg_id, &repeted_lead_message, bot).await;
-    if let Err(request_error) = tg_result {
-        tracing::error!(
-            ?request_error,
-            lead_id = existing.id,
-            "Employee notify failed"
-        );
-        return internal_error(ERR_SEND_TELEGRAM);
+    match tg_result {
+        Ok(message) => {
+            persist_lead_message(pool, existing.id, company_id, &message).await;
+        }
+        Err(request_error) => {
+            tracing::error!(
+                ?request_error,
+                lead_id = existing.id,
+                "Employee notify failed"
+            );
+            return internal_error(ERR_SEND_TELEGRAM);
+        }
     }
     let name = existing.name.as_deref().unwrap_or("Unknown");
     send_telegram_duplicate_notification(
         pool,
         company_id,
+        existing.id,
         name,
         deal.user_id.unwrap(),
         form.to_string(),

@@ -2,6 +2,7 @@ use crate::axum_helpers::guards::{Telegram, TelegramBot};
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::crud::leads::create_deal;
 use crate::crud::leads::{assign_lead, get_default_list_id_from_company_id};
+use crate::crud::telegram_messages::list_active_manager_telegram_lead_messages;
 use crate::crud::user_position::get_user_position;
 use crate::crud::users::{email_exists, get_user_tg_info, user_has_telegram_id};
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
@@ -27,6 +28,44 @@ Invalid message. Please send one of the following commands:
 /email <email>
 <code>
 ";
+
+async fn update_manager_lead_messages<T: Telegram>(
+    pool: &MySqlPool,
+    bot: &T,
+    company_id: i32,
+    lead_id: i32,
+    content: &str,
+) {
+    let messages = match list_active_manager_telegram_lead_messages(pool, company_id, lead_id).await
+    {
+        Ok(messages) => messages,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                company_id = company_id,
+                lead_id = lead_id,
+                "Failed to load manager telegram lead messages"
+            );
+            return;
+        }
+    };
+
+    for message in messages {
+        if let Err(error) = bot
+            .edit_message_text(message.chat_id, message.message_id, content.to_string())
+            .await
+        {
+            tracing::error!(
+                ?error,
+                company_id = company_id,
+                lead_id = lead_id,
+                chat_id = message.chat_id,
+                message_id = message.message_id,
+                "Failed to update manager telegram lead message"
+            );
+        }
+    }
+}
 
 async fn handle_start_command<T: Telegram>(
     pool: &MySqlPool,
@@ -227,10 +266,6 @@ async fn handle_assign_lead<T: Telegram>(
 
     let user_name = tg_info.name.unwrap_or_else(|| "Unknown".to_string());
     let full_content = format!("{former_message}\n\nLead assigned to {user_name}");
-    let edit_result = bot.edit_message_text(&message, full_content).await;
-    if let Err(e) = edit_result {
-        return e;
-    }
 
     let list_id = get_default_list_id_from_company_id(pool, position.company_id)
         .await
@@ -247,6 +282,7 @@ async fn handle_assign_lead<T: Telegram>(
             return internal_error(ERR_DB);
         }
     };
+    update_manager_lead_messages(pool, bot, position.company_id, lead_id, &full_content).await;
     // If the group requires a scheduled email, add it
     let email_template = get_template_from_list_id(pool, list_id, position.company_id)
         .await
@@ -715,7 +751,7 @@ mod local_tests {
     async fn test_callback_one_user(pool: MySqlPool) {
         // Send a real lead
         let sales_id = positioned_user(&pool, 1, 1, 123).await;
-        let manager_id = positioned_user(&pool, 1, 2, 456).await;
+        positioned_user(&pool, 1, 2, 789).await;
         let (_, bot) = send_lead(&pool).await;
 
         // Mock the sale manager's response
@@ -731,7 +767,7 @@ mod local_tests {
         let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
         let cb = CallbackQuery {
             id: "a".into(),
-            from: telegram_user(manager_id as u64),
+            from: telegram_user(456),
             message: Some(full),
             inline_message_id: None,
             chat_instance: "".into(),
@@ -749,6 +785,199 @@ mod local_tests {
         assert_eq!(deals[0].list_id, 1);
         assert_eq!(deals[0].status, Some("New Customer".to_string()));
         assert_eq!(deals[0].position, 0);
+
+        let mut edited = bot.edited.lock().unwrap().clone();
+        edited.sort_by_key(|entry| entry.0);
+        assert_eq!(edited.len(), 2);
+        assert_eq!(edited[0].0, 456);
+        assert_eq!(edited[1].0, 789);
+        assert!(
+            edited
+                .iter()
+                .all(|entry| entry.2.contains("Lead assigned to"))
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_callback_updates_only_identified_manager_messages(pool: MySqlPool) {
+        use crate::crud::telegram_messages::insert_telegram_lead_message;
+
+        let sales_id = positioned_user(&pool, 1, 1, 123).await;
+        positioned_user(&pool, 1, 2, 789).await;
+        let (_, bot) = send_lead(&pool).await;
+
+        let customer_id =
+            sqlx::query_scalar!(r#"SELECT id FROM customers WHERE phone = '317-999-5973' LIMIT 1"#)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        insert_telegram_lead_message(&pool, customer_id, 1, 123, 99)
+            .await
+            .unwrap();
+        insert_telegram_lead_message(&pool, customer_id, 1, 999, 100)
+            .await
+            .unwrap();
+
+        let sent_options = bot.clone().sent.lock().unwrap().clone()[0]
+            .clone()
+            .2
+            .unwrap();
+        let option = match sent_options.inline_keyboard[0][0].clone().kind {
+            InlineKeyboardButtonKind::CallbackData(data) => data,
+            _ => unreachable!(),
+        };
+        let inner_m = generate_message(456, "hello");
+        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let cb = CallbackQuery {
+            id: "a".into(),
+            from: telegram_user(456),
+            message: Some(full),
+            inline_message_id: None,
+            chat_instance: "".into(),
+            data: Some(option),
+            game_short_name: None,
+        };
+        let res = handle_callback(cb, &pool, &bot).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+        let deals = get_all_deals(&pool).await;
+        assert_eq!(deals.len(), 1);
+        assert_eq!(deals[0].user_id, Some(sales_id));
+
+        let mut edited_chats: Vec<i64> = bot
+            .edited
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.0)
+            .collect();
+        edited_chats.sort();
+        edited_chats.dedup();
+        assert_eq!(edited_chats, vec![456, 789]);
+        assert!(!edited_chats.contains(&123));
+        assert!(!edited_chats.contains(&999));
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_callback_broadcasts_assignment_to_all_manager_messages(pool: MySqlPool) {
+        use crate::crud::telegram_messages::list_active_manager_telegram_lead_messages;
+
+        let sales_id = positioned_user(&pool, 1, 1, 123).await;
+        sqlx::query!(
+            r#"UPDATE users SET name = 'Alex Sales' WHERE id = ?"#,
+            sales_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        positioned_user(&pool, 1, 2, 789).await;
+        let (_, bot) = send_lead(&pool).await;
+
+        let customer_id =
+            sqlx::query_scalar!(r#"SELECT id FROM customers WHERE phone = '317-999-5973' LIMIT 1"#)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let persisted = list_active_manager_telegram_lead_messages(&pool, 1, customer_id)
+            .await
+            .unwrap();
+        assert_eq!(persisted.len(), 2);
+
+        let mut expected_pairs: Vec<(i64, i32)> = persisted
+            .iter()
+            .map(|message| (message.chat_id, message.message_id))
+            .collect();
+        expected_pairs.sort();
+
+        let original_text = "New lead details";
+        let sent_options = bot.clone().sent.lock().unwrap().clone()[0]
+            .clone()
+            .2
+            .unwrap();
+        let option = match sent_options.inline_keyboard[0][0].clone().kind {
+            InlineKeyboardButtonKind::CallbackData(data) => data,
+            _ => unreachable!(),
+        };
+        let inner_m = generate_message(456, original_text);
+        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let cb = CallbackQuery {
+            id: "a".into(),
+            from: telegram_user(456),
+            message: Some(full),
+            inline_message_id: None,
+            chat_instance: "".into(),
+            data: Some(option),
+            game_short_name: None,
+        };
+        let res = handle_callback(cb, &pool, &bot).await;
+        assert_eq!(res.0, StatusCode::OK);
+
+        let deals = get_all_deals(&pool).await;
+        assert_eq!(deals.len(), 1);
+        assert_eq!(deals[0].user_id, Some(sales_id));
+
+        let mut edited = bot.edited.lock().unwrap().clone();
+        edited.sort_by_key(|entry| (entry.0, entry.1));
+        let edited_pairs: Vec<(i64, i32)> = edited.iter().map(|entry| (entry.0, entry.1)).collect();
+        assert_eq!(edited_pairs, expected_pairs);
+
+        let expected_text = format!("{original_text}\n\nLead assigned to Alex Sales");
+        assert!(edited.iter().all(|entry| entry.2 == expected_text));
+
+        let assigned_notice = bot
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|entry| entry.0 == 123)
+            .cloned();
+        assert!(assigned_notice.is_some());
+        assert!(
+            assigned_notice
+                .unwrap()
+                .1
+                .contains("You were assigned a lead")
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_callback_continues_when_one_manager_edit_fails(pool: MySqlPool) {
+        let sales_id = positioned_user(&pool, 1, 1, 123).await;
+        positioned_user(&pool, 1, 2, 789).await;
+        let (_, bot) = send_lead(&pool).await;
+        bot.fail_edit_chat_ids.lock().unwrap().push(456);
+
+        let sent_options = bot.clone().sent.lock().unwrap().clone()[0]
+            .clone()
+            .2
+            .unwrap();
+        let option = match sent_options.inline_keyboard[0][0].clone().kind {
+            InlineKeyboardButtonKind::CallbackData(data) => data,
+            _ => unreachable!(),
+        };
+        let inner_m = generate_message(456, "hello");
+        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let cb = CallbackQuery {
+            id: "a".into(),
+            from: telegram_user(456),
+            message: Some(full),
+            inline_message_id: None,
+            chat_instance: "".into(),
+            data: Some(option),
+            game_short_name: None,
+        };
+        let res = handle_callback(cb, &pool, &bot).await;
+
+        assert_eq!(res.0, StatusCode::OK);
+        let deals = get_all_deals(&pool).await;
+        assert_eq!(deals.len(), 1);
+        assert_eq!(deals[0].user_id, Some(sales_id));
+
+        let edited = bot.edited.lock().unwrap().clone();
+        assert_eq!(edited.len(), 1);
+        assert_eq!(edited[0].0, 789);
+        assert!(edited[0].2.contains("Lead assigned to"));
     }
 
     #[sqlx::test(migrations = "../migrations")]

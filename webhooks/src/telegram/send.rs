@@ -5,6 +5,7 @@ use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 use tokio::task::JoinSet;
 
+use crate::crud::telegram_messages::insert_telegram_lead_message;
 use crate::crud::users::{SalesUser, get_sales_users};
 use crate::libs::constants::{ERR_DB, OK_RESPONSE, SALES_MANAGER, SALES_WORKER, internal_error};
 use crate::libs::types::BasicResponse;
@@ -96,6 +97,43 @@ fn get_manager_telegram_ids(users: &[SalesUser]) -> Vec<i64> {
         .collect()
 }
 
+async fn persist_lead_messages(
+    pool: &MySqlPool,
+    customer_id: i32,
+    company_id: i32,
+    messages: &[Message],
+) {
+    for message in messages {
+        if let Err(error) = insert_telegram_lead_message(
+            pool,
+            customer_id,
+            company_id,
+            message.chat.id.0,
+            message.id.0,
+        )
+        .await
+        {
+            tracing::error!(
+                ?error,
+                customer_id = customer_id,
+                company_id = company_id,
+                chat_id = message.chat.id.0,
+                message_id = message.id.0,
+                "Failed to persist telegram lead message"
+            );
+        }
+    }
+}
+
+pub async fn persist_lead_message(
+    pool: &MySqlPool,
+    customer_id: i32,
+    company_id: i32,
+    message: &Message,
+) {
+    persist_lead_messages(pool, customer_id, company_id, std::slice::from_ref(message)).await;
+}
+
 pub async fn send_telegram_manager_assign<T: Display, V>(
     pool: &MySqlPool,
     company_id: i32,
@@ -146,17 +184,29 @@ where
     )
     .await;
 
-    if send_message.is_err() {
-        let telegram_ids_str = telegram_ids
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        tracing::error!(
-            ?send_message,
-            telegram_ids = %telegram_ids_str,
-            "Error sending message to lead manager 1"
-        );
+    match send_message {
+        Ok(messages) => {
+            if let Ok(customer_id_i32) = i32::try_from(customer_id) {
+                persist_lead_messages(pool, customer_id_i32, company_id, &messages).await;
+            } else {
+                tracing::error!(
+                    customer_id = customer_id,
+                    "Customer id out of range for telegram message persistence"
+                );
+            }
+        }
+        Err(error) => {
+            let telegram_ids_str = telegram_ids
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            tracing::error!(
+                ?error,
+                telegram_ids = %telegram_ids_str,
+                "Error sending message to lead manager 1"
+            );
+        }
     }
 
     Ok(())
@@ -212,6 +262,7 @@ where
 pub async fn send_telegram_duplicate_notification<T>(
     pool: &MySqlPool,
     company_id: i32,
+    customer_id: i32,
     lead_name: &str,
     assigned_id: i32,
     lead_body: String,
@@ -242,7 +293,11 @@ where
     }
     let message = format!("Repeat lead {lead_name} for sales rep {assigned_name}\n\n{lead_body}");
     let new_bot = Arc::new(bot.clone());
-    send_lead_managers_dupliacate(message, telegram_ids, new_bot)
-        .await
-        .is_err()
+    match send_lead_managers_dupliacate(message, telegram_ids, new_bot).await {
+        Ok(messages) => {
+            persist_lead_messages(pool, customer_id, company_id, &messages).await;
+            false
+        }
+        Err(_) => true,
+    }
 }

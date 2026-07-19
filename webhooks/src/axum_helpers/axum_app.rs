@@ -4,6 +4,7 @@ use crate::google::receive::address_information;
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
 use crate::schemas::add_customer::NewLeadForm;
+use crate::telegram::cleanup::delete_lead_telegram_messages;
 use crate::telegram::receive::webhook_handler;
 use crate::template::receive::{get_complete_template, get_template_variables};
 use crate::webhooks::receive::{
@@ -12,7 +13,7 @@ use crate::webhooks::receive::{
 use axum::{
     Json, Router,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use sqlx::MySqlPool;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
@@ -46,6 +47,10 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
             post(new_lead_form),
         )
         .route("/telegram/webhook", post(webhook_handler))
+        .route(
+            "/telegram/lead-messages/{company_id}/{customer_id}",
+            delete(delete_lead_telegram_messages),
+        )
         .route("/ses/read-receipt", post(read_receipt_handler))
         .route("/ses/receive-email", post(receive_handler))
         .route("/cloudtalk/sms/{company_id}", post(sms_received))

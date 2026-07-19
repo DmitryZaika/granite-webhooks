@@ -47,9 +47,10 @@ pub async fn get_ready_scheduled_emails(
     sqlx::query_as!(
         ScheduledEmail,
         r#"
-        SELECT scheduled_emails.id, template_body, template_subject, customer_id, customers.email, scheduled_emails.user_id, scheduled_emails.deal_id, scheduled_emails.company_id
+        SELECT scheduled_emails.id, template_body, template_subject, scheduled_emails.customer_id, customers_emails.email, scheduled_emails.user_id, scheduled_emails.deal_id, scheduled_emails.company_id
         FROM scheduled_emails
         JOIN customers ON scheduled_emails.customer_id = customers.id
+        LEFT JOIN customers_emails ON customers.email_id = customers_emails.id
         JOIN email_templates ON scheduled_emails.template_id = email_templates.id
         WHERE send_at <= UTC_TIMESTAMP() AND sent_at IS NULL AND status = 'pending'
         "#
@@ -117,15 +118,32 @@ mod tests {
         company_id: i32,
     ) -> i32 {
         let result = sqlx::query!(
-            "INSERT INTO customers (email, name, company_id) VALUES (?, ?, ?)",
-            email,
+            "INSERT INTO customers (name, company_id) VALUES (?, ?)",
             name,
             company_id
         )
         .execute(pool)
         .await
         .expect("Failed to insert test customer");
-        result.last_insert_id() as i32
+        let customer_id = result.last_insert_id() as i32;
+        let email_row = sqlx::query!(
+            "INSERT INTO customers_emails (customer_id, email) VALUES (?, ?)",
+            customer_id,
+            email
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to insert test customer email");
+        let email_id = email_row.last_insert_id() as i32;
+        sqlx::query!(
+            "UPDATE customers SET email_id = ? WHERE id = ?",
+            email_id,
+            customer_id
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to link test customer email");
+        customer_id
     }
 
     /// Helper: insert an email template and return its id.

@@ -296,13 +296,32 @@ mod local_tests {
     ) -> Result<u64, sqlx::Error> {
         let rec = sqlx::query!(
             r#"
-            INSERT INTO customers (company_id, name, phone, phone_2, email, address)
-            VALUES (?, 'Acme Co', ?, ?, 'a@b.com', ?)
+            INSERT INTO customers (company_id, name, phone, phone_2, address)
+            VALUES (?, 'Acme Co', ?, ?, ?)
             "#,
             company_id,
             phone,
             phone_2,
             address
+        )
+        .execute(pool)
+        .await?;
+
+        let customer_id = i32::try_from(rec.last_insert_id()).unwrap_or(0);
+        let email_row = sqlx::query!(
+            r#"
+            INSERT INTO customers_emails (customer_id, email)
+            VALUES (?, 'a@b.com')
+            "#,
+            customer_id
+        )
+        .execute(pool)
+        .await?;
+        let email_id = i32::try_from(email_row.last_insert_id()).unwrap_or(0);
+        sqlx::query!(
+            r#"UPDATE customers SET email_id = ? WHERE id = ?"#,
+            email_id,
+            customer_id
         )
         .execute(pool)
         .await?;

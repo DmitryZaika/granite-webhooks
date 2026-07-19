@@ -1,11 +1,12 @@
 use crate::axum_helpers::guards::Telegram;
 use crate::libs::types::BasicResponse;
 use chrono::Utc;
-use teloxide::types::{InlineKeyboardMarkup, MaybeInaccessibleMessage};
+use teloxide::types::InlineKeyboardMarkup;
 use teloxide::types::{Message, Recipient};
 
 use crate::libs::constants::ERR_SEND_TELEGRAM;
 use crate::libs::constants::internal_error;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use teloxide::types::{
     Chat, ChatId, ChatKind, ChatPrivate, EffectId, MediaKind, MediaText, MessageCommon,
@@ -29,9 +30,9 @@ pub fn generate_message_common(text: &str) -> MessageCommon {
     MessageCommon {
         author_signature: Some("Bot".to_string()),
         paid_star_count: Some(10),
-        effect_id: Some(EffectId::default()), // или ваш конструктор
+        effect_id: Some(EffectId::default()),
         forward_origin: None,
-        reply_to_message: None, // или Some(Box::new(...))
+        reply_to_message: None,
         external_reply: None,
         quote: None,
         reply_to_story: None,
@@ -41,7 +42,7 @@ pub fn generate_message_common(text: &str) -> MessageCommon {
             text: text.to_string(),
             entities: Vec::new(),
             link_preview_options: None,
-        }), // замените нужным вариантом
+        }),
         reply_markup: None,
         is_automatic_forward: false,
         has_protected_content: false,
@@ -63,9 +64,13 @@ const fn get_chat(chat_id: i64) -> Chat {
 }
 
 pub fn generate_message(chat_id: i64, text: &str) -> Message {
+    generate_message_with_id(chat_id, 1, text)
+}
+
+pub fn generate_message_with_id(chat_id: i64, message_id: i32, text: &str) -> Message {
     let from_user = telegram_user(1);
     Message {
-        id: teloxide::types::MessageId(1),
+        id: teloxide::types::MessageId(message_id),
         thread_id: None,
         from: Some(from_user),
         sender_chat: None,
@@ -82,11 +87,32 @@ pub fn generate_message(chat_id: i64, text: &str) -> Message {
 }
 
 type MockTelegramSent = Arc<Mutex<Vec<(i64, String, Option<InlineKeyboardMarkup>)>>>;
+type MockTelegramDeleted = Arc<Mutex<Vec<(i64, i32)>>>;
+type MockTelegramEdited = Arc<Mutex<Vec<(i64, i32, String)>>>;
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct MockTelegram {
     pub sent: MockTelegramSent,
+    pub deleted: MockTelegramDeleted,
+    pub edited: MockTelegramEdited,
     pub fail: bool,
+    pub fail_delete: bool,
+    pub fail_edit_chat_ids: Arc<Mutex<Vec<i64>>>,
+    next_message_id: Arc<AtomicI32>,
+}
+
+impl Default for MockTelegram {
+    fn default() -> Self {
+        Self {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            deleted: Arc::new(Mutex::new(Vec::new())),
+            edited: Arc::new(Mutex::new(Vec::new())),
+            fail: false,
+            fail_delete: false,
+            fail_edit_chat_ids: Arc::new(Mutex::new(Vec::new())),
+            next_message_id: Arc::new(AtomicI32::new(1)),
+        }
+    }
 }
 
 impl MockTelegram {
@@ -94,8 +120,9 @@ impl MockTelegram {
         Self::default()
     }
 
-    fn dummy_message(chat_id: i64, text: &str) -> Message {
-        generate_message(chat_id, text)
+    fn dummy_message(&self, chat_id: i64, text: &str) -> Message {
+        let message_id = self.next_message_id.fetch_add(1, Ordering::SeqCst);
+        generate_message_with_id(chat_id, message_id, text)
     }
 }
 
@@ -110,7 +137,7 @@ impl Telegram for MockTelegram {
 
         let chat_id = match recipient {
             Recipient::Id(id) => id.0,
-            Recipient::ChannelUsername(_) => 0, // для тестов можно забить
+            Recipient::ChannelUsername(_) => 0,
         };
 
         self.sent
@@ -121,7 +148,7 @@ impl Telegram for MockTelegram {
         if self.fail {
             Err(internal_error(ERR_SEND_TELEGRAM))
         } else {
-            Ok(Self::dummy_message(chat_id, &text))
+            Ok(self.dummy_message(chat_id, &text))
         }
     }
     async fn send_repliable_message<C, T>(
@@ -139,7 +166,7 @@ impl Telegram for MockTelegram {
 
         let chat_id = match recipient {
             Recipient::Id(id) => id.0,
-            Recipient::ChannelUsername(_) => 0, // для тестов можно забить
+            Recipient::ChannelUsername(_) => 0,
         };
         self.sent
             .lock()
@@ -148,20 +175,35 @@ impl Telegram for MockTelegram {
         if self.fail {
             Err(teloxide::RequestError::Api(teloxide::ApiError::BotBlocked))
         } else {
-            Ok(Self::dummy_message(chat_id, &text))
+            Ok(self.dummy_message(chat_id, &text))
         }
     }
 
     async fn edit_message_text<T>(
         &self,
-        _message: &MaybeInaccessibleMessage,
+        chat_id: i64,
+        message_id: i32,
         text: T,
     ) -> Result<Message, BasicResponse>
     where
         T: Into<String> + Send,
     {
-        // Если нужно — тоже логируешь
         let text = text.into();
-        Ok(Self::dummy_message(0, &text))
+        if self.fail_edit_chat_ids.lock().unwrap().contains(&chat_id) {
+            return Err(internal_error(ERR_SEND_TELEGRAM));
+        }
+        self.edited
+            .lock()
+            .unwrap()
+            .push((chat_id, message_id, text.clone()));
+        Ok(generate_message_with_id(chat_id, message_id, &text))
+    }
+
+    async fn delete_message(&self, chat_id: i64, message_id: i32) -> Result<(), BasicResponse> {
+        if self.fail_delete {
+            return Err(internal_error(ERR_SEND_TELEGRAM));
+        }
+        self.deleted.lock().unwrap().push((chat_id, message_id));
+        Ok(())
     }
 }

@@ -167,14 +167,15 @@ mod local_tests {
 
         let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
-        let mut messages = bot.sent.lock().unwrap();
+        let messages = bot.sent.lock().unwrap();
         assert_eq!(messages.len(), 2);
-        let second_message = messages.pop().unwrap();
-        assert!(second_message.1.ends_with("Choose a salesperson."));
-        assert_eq!(second_message.0, 789);
-        let first_message = messages.pop().unwrap();
-        assert!(first_message.1.ends_with("Choose a salesperson."));
-        assert_eq!(first_message.0, 456);
+        let mut manager_chat_ids: Vec<i64> = messages
+            .iter()
+            .filter(|message| message.1.ends_with("Choose a salesperson."))
+            .map(|message| message.0)
+            .collect();
+        manager_chat_ids.sort();
+        assert_eq!(manager_chat_ids, vec![456, 789]);
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -202,17 +203,19 @@ mod local_tests {
         assert_eq!(response.0, StatusCode::CREATED);
         let customers = get_customers(&pool).await.unwrap();
         assert_eq!(customers.len(), 1);
-        let mut messages = bot.sent.lock().unwrap();
+        let messages = bot.sent.lock().unwrap();
         assert_eq!(messages.len(), 5);
 
-        let second_message = messages.pop().unwrap();
-        assert!(second_message.1.starts_with("Repeat lead "));
-        assert!(!second_message.1.ends_with("Choose a salesperson."));
-        assert_eq!(second_message.0, 789);
-        let first_message = messages.pop().unwrap();
-        assert!(first_message.1.starts_with("Repeat lead "));
-        assert!(!first_message.1.ends_with("Choose a salesperson."));
-        assert_eq!(first_message.0, 456);
+        let mut manager_chat_ids: Vec<i64> = messages
+            .iter()
+            .filter(|message| {
+                message.1.starts_with("Repeat lead ")
+                    && !message.1.ends_with("Choose a salesperson.")
+            })
+            .map(|message| message.0)
+            .collect();
+        manager_chat_ids.sort();
+        assert_eq!(manager_chat_ids, vec![456, 789]);
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -426,16 +429,16 @@ mod local_tests {
 
         let response = new_lead_form_inner(1, pool, lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
-        assert_eq!(bot.sent.lock().unwrap().len(), 3);
-
-        // Assert manager received message
-        let second_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(second_message.1.starts_with("Repeat lead "));
-        assert_eq!(second_message.0, 456);
-        // Assert sales recevied message
-        let last_message = bot.sent.lock().unwrap().pop().unwrap();
-        assert!(last_message.1.starts_with("You received a REPEATED lead "));
-        assert_eq!(last_message.0, 123);
+        let messages = bot.sent.lock().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert!(
+            messages
+                .iter()
+                .any(|message| { message.0 == 456 && message.1.starts_with("Repeat lead ") })
+        );
+        assert!(messages.iter().any(|message| {
+            message.0 == 123 && message.1.starts_with("You received a REPEATED lead ")
+        }));
     }
 
     #[sqlx::test(migrations = "../migrations")]
