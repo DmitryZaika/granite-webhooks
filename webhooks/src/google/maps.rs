@@ -1,6 +1,7 @@
 use crate::google::schemas::{
-    AutocompleteError, ComputeRouteMatrixRequest, DistanceError, FinalSuggestion, MatrixElement,
-    RouteMatrixDestination, RouteMatrixOrigin, RouteModifiers, Waypoint,
+    AutocompleteError, ComputeRouteMatrixRequest, DistanceError, FinalSuggestion, GeocodeError,
+    GeocodeResponse, LatLng, MatrixElement, RouteMatrixDestination, RouteMatrixOrigin,
+    RouteModifiers, Waypoint,
 };
 use crate::google::utils::{
     fetch_autocomplete_suggestions, generic_post_request, process_single_suggestion,
@@ -53,8 +54,9 @@ pub async fn driving_distance_miles(origin: &str, destination: &str) -> Result<f
 /// Retrieves the FIRST valid address suggestion found, short-circuiting immediately.
 pub async fn get_first_address_autocomplete(
     query: &str,
+    bias_coords: Option<LatLng>,
 ) -> Result<Option<FinalSuggestion>, AutocompleteError> {
-    let suggestions = fetch_autocomplete_suggestions(query).await?;
+    let suggestions = fetch_autocomplete_suggestions(query, bias_coords).await?;
 
     for s in suggestions {
         if let Some(final_suggestion) = process_single_suggestion(s).await {
@@ -68,8 +70,9 @@ pub async fn get_first_address_autocomplete(
 /// Retrieves ALL valid address suggestions found from the query.
 pub async fn get_all_address_autocompletes(
     query: &str,
+    bias_coords: Option<LatLng>,
 ) -> Result<Vec<FinalSuggestion>, AutocompleteError> {
-    let suggestions = fetch_autocomplete_suggestions(query).await?;
+    let suggestions = fetch_autocomplete_suggestions(query, bias_coords).await?;
     let mut valid_suggestions = Vec::new();
 
     for s in suggestions {
@@ -79,4 +82,31 @@ pub async fn get_all_address_autocompletes(
     }
 
     Ok(valid_suggestions)
+}
+
+/// Converts a street address into latitude/longitude using the Google Geocoding API.
+pub async fn geocode_address(address: &str) -> Result<LatLng, GeocodeError> {
+    let api_key = std::env::var("GOOGLE_MAPS_API_KEY").expect("GOOGLE_MAPS_API_KEY must be set");
+    let url = format!(
+        "https://maps.googleapis.com/maps/api/geocode/json?address={}&key={}",
+        urlencoding::encode(address),
+        api_key
+    );
+
+    let response: GeocodeResponse = reqwest::get(&url).await?.json().await?;
+
+    if response.status != "OK" {
+        return Err(GeocodeError::Api(response.status));
+    }
+
+    let result = response
+        .results
+        .into_iter()
+        .next()
+        .ok_or(GeocodeError::NoResults)?;
+
+    Ok(LatLng {
+        latitude: result.geometry.location.lat,
+        longitude: result.geometry.location.lng,
+    })
 }

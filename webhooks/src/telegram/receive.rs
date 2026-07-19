@@ -20,7 +20,7 @@ use lambda_http::tracing;
 use reqwest::Client;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, Update, UpdateKind};
+use teloxide::types::{ChatId, MaybeInaccessibleMessage, Update, UpdateKind};
 
 const MESSAGE: &str = r"
 Invalid message. Please send one of the following commands:
@@ -176,6 +176,12 @@ async fn handle_message<T: Telegram>(msg: Message, pool: &MySqlPool, bot: &T) ->
         .map_or_else(|e| e, |_| (StatusCode::OK, "Invalid code"))
 }
 
+fn message_with_assigned(message: &MaybeInaccessibleMessage, name: Option<&str>) -> String {
+    let former_message = extract_message(message).unwrap_or_default();
+    let user_name = name.unwrap_or_else(|| "Unknown");
+    format!("{former_message}\n\nLead assigned to {user_name}")
+}
+
 async fn handle_assign_lead<T: Telegram>(
     pool: &MySqlPool,
     lead_id: i32,
@@ -223,11 +229,8 @@ async fn handle_assign_lead<T: Telegram>(
         }
     };
 
-    let former_message = extract_message(&message).unwrap_or_default();
-
-    let user_name = tg_info.name.unwrap_or_else(|| "Unknown".to_string());
-    let full_content = format!("{former_message}\n\nLead assigned to {user_name}");
-    let edit_result = bot.edit_message_text(&message, full_content).await;
+    let new_message = message_with_assigned(&message, tg_info.name.as_deref());
+    let edit_result = bot.edit_message_text(&message, new_message).await;
     if let Err(e) = edit_result {
         return e;
     }

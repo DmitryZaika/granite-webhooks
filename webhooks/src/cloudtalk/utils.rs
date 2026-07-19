@@ -158,7 +158,7 @@ pub async fn build_payload(
     let Some(customer_address) = &customer.address else {
         return Some(payload);
     };
-    let parsed = match get_first_address_autocomplete(customer_address).await {
+    let parsed = match get_first_address_autocomplete(customer_address, None).await {
         Ok(Some(parsed)) => parsed,
         Ok(None) => {
             tracing::error!(

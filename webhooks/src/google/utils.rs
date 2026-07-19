@@ -48,8 +48,9 @@ where
 }
 pub async fn fetch_autocomplete_suggestions(
     query: &str,
+    bias_coords: Option<crate::google::schemas::LatLng>,
 ) -> Result<Vec<Suggestion>, AutocompleteError> {
-    let body = AutocompleteRequest::new(query);
+    let body = AutocompleteRequest::new(query, bias_coords);
 
     let response: AutocompleteResponse = generic_post_request(
         "https://places.googleapis.com/v1/places:autocomplete",

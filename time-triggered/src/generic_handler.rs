@@ -40,7 +40,7 @@ pub(crate) async fn function_handler(
                 continue;
             }
         };
-        send_message(&[&cleaned_email], &email.template_subject, &result).await?;
+        send_message(&[cleaned_email], &email.template_subject, &result).await?;
         mark_scheduled_email_as_sent(&pool, email.id).await?;
     }
     let message = format!("Successfully processed {} emails", ready_emails.len());
