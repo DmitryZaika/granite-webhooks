@@ -31,7 +31,6 @@ pub async fn get_due_activity_deadline_reminders(
         JOIN users u ON u.id = n.user_id
         WHERE n.notification_type = 'activity_deadline_reminder'
           AND n.is_done = 0
-          AND u.telegram_activity_notifications = TRUE
           AND (n.actor_name IS NULL OR n.actor_name != ?)
           AND n.due_at <= UTC_TIMESTAMP()
           AND EXISTS (

@@ -49,9 +49,6 @@ where
     let Some(telegram_id) = user.telegram_id else {
         return Ok(());
     };
-    if !user.telegram_activity_notifications {
-        return Ok(());
-    }
 
     let text = format_activity_notification(
         &payload.notification_type,
