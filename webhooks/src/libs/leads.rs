@@ -5,7 +5,7 @@ use crate::crud::leads::{
 };
 use crate::crud::users::get_user_tg_info;
 use crate::libs::constants::{
-    CREATED_RESPONSE, ERR_DB, ERR_SEND_EMAIL, ERR_SEND_TELEGRAM, internal_error,
+    CREATED_RESPONSE, ERR_DB, internal_error,
 };
 use crate::libs::types::BasicResponse;
 use crate::schemas::add_customer::LeadPayload;
@@ -76,7 +76,7 @@ where
                         company_id = company_id,
                         "Failed to send message to Telegram"
                     );
-                    return e;
+                    return CREATED_RESPONSE;
                 }
             }
         }
@@ -99,7 +99,7 @@ where
                     company_id = company_id,
                     "Failed to send message to email"
                 );
-                return internal_error(ERR_SEND_EMAIL);
+                return CREATED_RESPONSE;
             }
         }
     };
@@ -119,7 +119,6 @@ where
                 lead_id = existing.id,
                 "Employee notify failed"
             );
-            return internal_error(ERR_SEND_TELEGRAM);
         }
     }
     let name = existing.name.as_deref().unwrap_or("Unknown");
@@ -188,7 +187,7 @@ where
                 company_id = company_id,
                 "Failed to send message to Telegram"
             );
-            Err(e)
+            Ok(None)
         }
     }
 }
@@ -224,7 +223,6 @@ where
             company_id = company_id,
             "Error sending message to Telegram"
         );
-        return internal_error("Error sending message to Telegram");
     }
     CREATED_RESPONSE
 }

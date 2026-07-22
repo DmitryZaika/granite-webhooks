@@ -5,10 +5,12 @@ use sqlx::MySqlPool;
 use crate::amazon::bucket::S3Bucket;
 use crate::amazonses::parse_email::{Attachment, ParsedEmail};
 use crate::amazonses::upload::upload_attachments;
-use crate::crud::email::{PriorEmail, SendEmail, create_email_with_attachments, get_prior_email};
-use crate::crud::users::{ReceivingEmail, get_id_by_email, get_id_by_email_with_forward};
+use crate::crud::email::{PriorEmail, SendEmail, create_email_with_attachments, get_inbound_email_notify_context, get_prior_email};
+use crate::crud::users::{ReceivingEmail, get_id_by_email, get_id_by_email_with_forward, get_user_tg_info};
 use crate::libs::constants::{OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
+use crate::telegram::crm::{InboundEmailTelegramNotify, send_inbound_email_telegram_notification};
+use crate::axum_helpers::guards::TelegramBot;
 
 pub struct EmailInfo<'a> {
     pub bucket: &'a str,
@@ -95,6 +97,7 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
         );
         return internal_error("Failed to insert email into the database");
     }
+    maybe_send_inbound_email_telegram(pool, &send_email).await;
     OK_RESPONSE
 }
 
@@ -141,5 +144,67 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
         );
         return internal_error("Failed to insert email into the database");
     }
+    maybe_send_inbound_email_telegram(pool, &send_email).await;
     OK_RESPONSE
+}
+
+async fn maybe_send_inbound_email_telegram(pool: &MySqlPool, send: &SendEmail) {
+    let Some(receiver_user_id) = send.receiver_user_id() else {
+        return;
+    };
+    let user = match get_user_tg_info(pool, receiver_user_id).await {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                receiver_user_id = receiver_user_id,
+                "Failed to load receiver telegram info for inbound email"
+            );
+            return;
+        }
+    };
+    let Some(user) = user else {
+        return;
+    };
+    let Some(telegram_id) = user.telegram_id else {
+        return;
+    };
+    if !user.telegram_email_notifications {
+        return;
+    }
+
+    let context = match get_inbound_email_notify_context(pool, send.thread_id()).await {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                thread_id = send.thread_id(),
+                "Failed to load inbound email notify context"
+            );
+            return;
+        }
+    };
+    let (deal_id, customer_name) = match context {
+        Some(value) => (value.deal_id, value.customer_name),
+        None => (None, None),
+    };
+
+    let payload = InboundEmailTelegramNotify {
+        receiver_user_id,
+        thread_id: send.thread_id().to_string(),
+        subject: send.subject().map(str::to_string),
+        deal_id,
+        customer_name,
+    };
+    let bot = TelegramBot::default();
+    if let Err(error) =
+        send_inbound_email_telegram_notification(&bot, &payload, telegram_id).await
+    {
+        tracing::error!(
+            ?error,
+            receiver_user_id = receiver_user_id,
+            thread_id = send.thread_id(),
+            "Failed to send inbound email telegram notification"
+        );
+    }
 }

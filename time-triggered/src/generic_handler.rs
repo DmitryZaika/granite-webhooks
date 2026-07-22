@@ -1,11 +1,50 @@
 use crate::schemas::{EventBridgeEvent, OutgoingMessage};
 use common::amazon::email::send_message;
+use common::crud::notifications::{
+    get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
+};
 use common::crud::scheduled_emails::mark_scheduled_email_as_sent;
 use common::crud::template::fetch_template_variable_data;
 use common::crud::{scheduled_emails::get_ready_scheduled_emails, setup::create_db_pool};
 use common::utils::template::replace_template_variables;
 use lambda_runtime::{tracing, Error, LambdaEvent};
 use sqlx::MySqlPool;
+use teloxide::prelude::*;
+
+async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize, Error> {
+    let reminders = get_due_activity_deadline_reminders(pool).await?;
+    let bot = teloxide::Bot::from_env();
+    let mut sent_count = 0usize;
+
+    for reminder in reminders {
+        let Some(telegram_id) = reminder.telegram_id else {
+            continue;
+        };
+        let text = common::telegram::crm::format_activity_notification(
+            "activity_deadline_reminder",
+            reminder.customer_name.as_deref(),
+            None,
+            &reminder.message,
+            i32::try_from(reminder.deal_id).unwrap_or(i32::MAX),
+        );
+        match bot.send_message(ChatId(telegram_id), text).await {
+            Ok(_) => {
+                mark_deadline_reminder_telegram_sent(pool, reminder.id).await?;
+                sent_count += 1;
+            }
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    notification_id = reminder.id,
+                    user_id = reminder.user_id,
+                    "Failed to send activity deadline reminder telegram notification"
+                );
+            }
+        }
+    }
+
+    Ok(sent_count)
+}
 
 /// There are some code example in the following URLs:
 /// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
@@ -43,7 +82,12 @@ pub(crate) async fn function_handler(
         send_message(&[&cleaned_email], &email.template_subject, &result).await?;
         mark_scheduled_email_as_sent(&pool, email.id).await?;
     }
-    let message = format!("Successfully processed {} emails", ready_emails.len());
+    let reminder_count = send_due_activity_deadline_reminders(&pool).await?;
+    let message = format!(
+        "Successfully processed {} emails and {} activity deadline reminders",
+        ready_emails.len(),
+        reminder_count
+    );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);
 
