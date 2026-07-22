@@ -168,7 +168,7 @@ async fn maybe_send_inbound_email_telegram(pool: &MySqlPool, send: &SendEmail) {
     };
     let Some(telegram_id) = user.telegram_id else {
         return;
-    }
+    };
 
     let context = match get_inbound_email_notify_context(pool, send.thread_id()).await {
         Ok(value) => value,
