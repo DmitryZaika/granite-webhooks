@@ -1,16 +1,17 @@
 use crate::axum_helpers::guards::Telegram;
 use crate::crud::leads::{
     Deal, ExistingCustomer, create_deal_from_lead, find_existing_customer,
-    get_default_list_id_from_company_id, get_existing_deal,
+    get_default_list_id_from_company_id, get_existing_deal, update_deal_list_id,
 };
 use crate::crud::users::get_user_tg_info;
 use crate::libs::constants::{
-    CREATED_RESPONSE, ERR_DB, ERR_SEND_EMAIL, ERR_SEND_TELEGRAM, internal_error,
+    CREATED_RESPONSE, ERR_DB, internal_error,
 };
 use crate::libs::types::BasicResponse;
 use crate::schemas::add_customer::LeadPayload;
 use crate::telegram::send::{
-    send_plain_message_to_chat, send_telegram_duplicate_notification, send_telegram_manager_assign,
+    persist_lead_message, send_plain_message_to_chat, send_telegram_duplicate_notification,
+    send_telegram_manager_assign,
 };
 use crate::telegram::utils::lead_url;
 use common::amazon::email::send_message;
@@ -39,6 +40,22 @@ where
             "Failed to update lead"
         );
     }
+    let default_list_id = match get_default_list_id_from_company_id(pool, company_id).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(?e, company_id = company_id, "Failed to get default list");
+            return internal_error(ERR_DB);
+        }
+    };
+    if let Err(e) = update_deal_list_id(pool, deal.id, default_list_id).await {
+        tracing::error!(
+            ?e,
+            deal_id = deal.id,
+            list_id = default_list_id,
+            "Failed to move repeated lead to Not Contacted Yet"
+        );
+        return internal_error(ERR_DB);
+    }
     let customer_id = u64::try_from(existing.id).unwrap();
     let user_info = match get_user_tg_info(pool, deal.user_id.unwrap()).await {
         Ok(Some(info)) => info,
@@ -49,7 +66,9 @@ where
                 name.unwrap_or("Unknown"),
                 lead_url(deal.id)
             );
-            match send_telegram_manager_assign(pool, company_id, message, customer_id, bot).await {
+            match send_telegram_manager_assign(pool, company_id, message, customer_id, false, bot)
+                .await
+            {
                 Ok(()) => return CREATED_RESPONSE,
                 Err(e) => {
                     tracing::error!(
@@ -57,7 +76,7 @@ where
                         company_id = company_id,
                         "Failed to send message to Telegram"
                     );
-                    return e;
+                    return CREATED_RESPONSE;
                 }
             }
         }
@@ -80,7 +99,7 @@ where
                     company_id = company_id,
                     "Failed to send message to email"
                 );
-                return internal_error(ERR_SEND_EMAIL);
+                return CREATED_RESPONSE;
             }
         }
     };
@@ -90,18 +109,23 @@ where
         lead_url(deal.id)
     );
     let tg_result = send_plain_message_to_chat(clean_tg_id, &repeted_lead_message, bot).await;
-    if let Err(request_error) = tg_result {
-        tracing::error!(
-            ?request_error,
-            lead_id = existing.id,
-            "Employee notify failed"
-        );
-        return internal_error(ERR_SEND_TELEGRAM);
+    match tg_result {
+        Ok(message) => {
+            persist_lead_message(pool, existing.id, company_id, &message).await;
+        }
+        Err(request_error) => {
+            tracing::error!(
+                ?request_error,
+                lead_id = existing.id,
+                "Employee notify failed"
+            );
+        }
     }
     let name = existing.name.as_deref().unwrap_or("Unknown");
     send_telegram_duplicate_notification(
         pool,
         company_id,
+        existing.id,
         name,
         deal.user_id.unwrap(),
         form.to_string(),
@@ -155,7 +179,7 @@ where
         "You received a REPEATED lead with no sales rep \n{form}",
         // form.to_string()
     );
-    match send_telegram_manager_assign(pool, company_id, message, clean_id, bot).await {
+    match send_telegram_manager_assign(pool, company_id, message, clean_id, false, bot).await {
         Ok(()) => Ok(None),
         Err(e) => {
             tracing::error!(
@@ -163,7 +187,7 @@ where
                 company_id = company_id,
                 "Failed to send message to Telegram"
             );
-            Err(e)
+            Ok(None)
         }
     }
 }
@@ -189,6 +213,7 @@ where
         company_id,
         &form.to_string(),
         result.last_insert_id(),
+        true,
         bot,
     )
     .await;
@@ -198,7 +223,6 @@ where
             company_id = company_id,
             "Error sending message to Telegram"
         );
-        return internal_error("Error sending message to Telegram");
     }
     CREATED_RESPONSE
 }

@@ -11,3 +11,5 @@ lambda_runtime = "1.0.1"
 serde = "1"
 tokio = { version = "1", features = ["macros"] }
 serde_json = "1.0"
+teloxide = { git = "https://github.com/colin99d/teloxide", features = ["macros"] }
+openssl-sys = { version = "0.9", features = ["vendored"] }

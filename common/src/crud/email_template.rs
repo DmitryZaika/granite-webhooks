@@ -9,11 +9,8 @@ pub struct EmailTemplate {
 pub async fn get_template_from_list_id(
     pool: &MySqlPool,
     list_id: i32,
+    company_id: i32,
 ) -> Result<Option<EmailTemplate>, sqlx::Error> {
-    if list_id == 1 {
-        // Don't send templates on the default group
-        return Ok(None);
-    }
     sqlx::query_as!(
         EmailTemplate,
         r#"
@@ -22,10 +19,11 @@ pub async fn get_template_from_list_id(
         JOIN groups_list ON email_templates.lead_group_id = groups_list.id
         JOIN deals_list ON deals_list.group_id = groups_list.id
         WHERE deals_list.id = ?
-          AND groups_list.id != 1
+          AND email_templates.company_id = ?
         LIMIT 1
         "#,
-        list_id
+        list_id,
+        company_id,
     )
     .fetch_optional(pool)
     .await

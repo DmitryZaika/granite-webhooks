@@ -18,7 +18,9 @@ use crate::libs::constants::{ERR_DB, NOT_FOUND_RESPONSE, internal_error};
 
 #[derive(Deserialize)]
 pub struct TemplateDataQuery {
+    #[serde(alias = "dealId")]
     pub deal_id: Option<i32>,
+    #[serde(alias = "customerId")]
     pub customer_id: Option<i32>,
 }
 
@@ -643,5 +645,56 @@ mod tests {
         let result = replace_template_variables(template, &data);
         // The ampersand is not HTML-escaped by replace_template_variables
         assert_eq!(result, "<p>Granite Depot & Sons</p>");
+    }
+
+    // -------------------------------------------------------------------------
+    // Query parameter deserialization tests (ensure camelCase from frontend works)
+    // -------------------------------------------------------------------------
+
+    /// Verify that camelCase query params (`dealId`, `customerId`) sent by the
+    /// Remix frontend are correctly deserialized into snake_case struct fields.
+    #[test]
+    fn test_query_deserializes_camel_case_params() {
+        let query = "dealId=2396&customerId=100213";
+        let params: TemplateDataQuery = serde_urlencoded::from_str(query).unwrap();
+        assert_eq!(params.deal_id, Some(2396));
+        assert_eq!(params.customer_id, Some(100213));
+    }
+
+    /// Verify that snake_case query params (used in internal/scheduled flows)
+    /// are also accepted for backward compatibility.
+    #[test]
+    fn test_query_deserializes_snake_case_params() {
+        let query = "deal_id=2396&customer_id=100213";
+        let params: TemplateDataQuery = serde_urlencoded::from_str(query).unwrap();
+        assert_eq!(params.deal_id, Some(2396));
+        assert_eq!(params.customer_id, Some(100213));
+    }
+
+    /// When no query params are provided, both fields should be None.
+    #[test]
+    fn test_query_deserializes_empty_params() {
+        let query = "";
+        let params: TemplateDataQuery = serde_urlencoded::from_str(query).unwrap();
+        assert_eq!(params.deal_id, None);
+        assert_eq!(params.customer_id, None);
+    }
+
+    /// When only dealId is provided, customer_id should be None.
+    #[test]
+    fn test_query_deserializes_deal_id_only() {
+        let query = "dealId=42";
+        let params: TemplateDataQuery = serde_urlencoded::from_str(query).unwrap();
+        assert_eq!(params.deal_id, Some(42));
+        assert_eq!(params.customer_id, None);
+    }
+
+    /// When only customerId is provided, deal_id should be None.
+    #[test]
+    fn test_query_deserializes_customer_id_only() {
+        let query = "customerId=7";
+        let params: TemplateDataQuery = serde_urlencoded::from_str(query).unwrap();
+        assert_eq!(params.deal_id, None);
+        assert_eq!(params.customer_id, Some(7));
     }
 }

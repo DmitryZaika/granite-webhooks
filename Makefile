@@ -17,6 +17,17 @@ build-webhooks:
 deploy-webhooks: build-webhooks
 	$(DEPLOY_BASE) --binary-name webhooks granite-webhooks
 
+# --- Local ---
+WATCH_BASE := uvx cargo-lambda lambda watch --release
+
+.PHONY: local-webhooks
+local-webhooks:
+	$(WATCH_BASE) -p webhooks --bin webhooks
+
+.PHONY: local-time-triggered
+local-time-triggered:
+	$(WATCH_BASE) -p time-triggered --bin time-triggered
+
 # --- Time-Triggered ---
 .PHONY: build-time-triggered
 build-time-triggered:

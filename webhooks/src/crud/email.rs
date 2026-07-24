@@ -124,6 +124,53 @@ impl SendEmail {
             message_id: email.message_id.clone(),
         }
     }
+
+    pub fn thread_id(&self) -> &str {
+        &self.thread_id
+    }
+
+    pub fn receiver_user_id(&self) -> Option<i32> {
+        self.receiver_user_id
+    }
+
+    pub fn subject(&self) -> Option<&str> {
+        self.subject.as_deref()
+    }
+}
+
+pub struct InboundEmailNotifyContext {
+    pub deal_id: Option<u64>,
+    pub customer_name: Option<String>,
+}
+
+pub async fn get_inbound_email_notify_context(
+    pool: &MySqlPool,
+    thread_id: &str,
+) -> Result<Option<InboundEmailNotifyContext>, sqlx::Error> {
+    sqlx::query_as!(
+        InboundEmailNotifyContext,
+        r#"
+        SELECT
+            COALESCE(e.deal_id, td.deal_id) AS deal_id,
+            c.name AS customer_name
+        FROM emails e
+        LEFT JOIN (
+            SELECT thread_id, MAX(deal_id) AS deal_id
+            FROM emails
+            WHERE deleted_at IS NULL AND thread_id IS NOT NULL AND deal_id IS NOT NULL
+            GROUP BY thread_id
+        ) td ON td.thread_id = e.thread_id
+        LEFT JOIN deals d ON d.id = COALESCE(e.deal_id, td.deal_id) AND d.deleted_at IS NULL
+        LEFT JOIN customers c ON c.id = d.customer_id
+        WHERE e.deleted_at IS NULL
+          AND e.thread_id = ?
+        ORDER BY e.sent_at DESC
+        LIMIT 1
+        "#,
+        thread_id
+    )
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn create_email_with_attachments(

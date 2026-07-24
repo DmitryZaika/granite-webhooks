@@ -1,0 +1,184 @@
+Return-Path: <colin.delahunty@invisible.email>
+Received: from mail-qv1-f69.google.com (mail-qv1-f69.google.com [209.85.219.69])
+ by inbound-smtp.us-east-2.amazonaws.com with SMTP id jg00338e439jt0ocf6drik3frovpoofvtaeg2fo1
+ for dema@granitedepotindy.com;
+ Fri, 17 Jul 2026 23:06:42 +0000 (UTC)
+Received-SPF: pass (spfCheck: domain of invisible.email.hosted.spf-report.com designates 209.85.219.69 as permitted sender) client-ip=209.85.219.69; envelope-from=colin.delahunty@invisible.email; helo=mail-qv1-f69.google.com;
+Authentication-Results: amazonses.com;
+ spf=pass (spfCheck: domain of invisible.email.hosted.spf-report.com designates 209.85.219.69 as permitted sender) client-ip=209.85.219.69; envelope-from=colin.delahunty@invisible.email; helo=mail-qv1-f69.google.com;
+ dkim=pass header.i=@invisible.email;
+ dmarc=pass header.from=invisible.email;
+X-SES-RECEIPT: AEFBQUFBQUFBQUFITmxnRUFpN2R6RXFrLzZtNmNiTzB5S0t4VXpCUnV1Q1l0dFFCTStTMXM2RWNPZ21rR2lWTnd2bnJVTGMyYyt0RExVc3dwSkhZZ3BYM3V4cDYwL015ZTR4N0FkTDZUM3o3T21nV0NaVzhxRkJlQnBDdXVRZ2lPOHF1MkJXOGxrK2V3aTM3Qkxtb0o5dm5hMzNuQmZUWGhvRm9LTjJGcm9EcDVxeEw2WFIxZ0tDNldSVWRxWmFrSFlQTW5PRWFuQzlFM2tPTk5Cc2hNM0ZxVER0cSttRkdmZ3hscHNnQkhkV1RWQ1Y5dHZGT1BUaFBOL3dLRk1YQUlybmhxR3lYTDNkYm1iWTVnZXE4UWZOeldYVmpVWGRmMWtSWUxITmRBOFpEdjE5UzBKNy9vSUk4SERDTTNkUmVjYjFOTmpFNEQvNW89
+X-SES-DKIM-SIGNATURE: a=rsa-sha256; q=dns/txt; b=dBm79FCTPj4jR4FdYG0XhmspCioyRxs9ZXZOa6mzFc3nR/P+FsbFefP+hIsyWXek+2VmWELPdtK34gFTOrlzLoEVGoRwzaQyjcOBQvrPehZ8sCK0sLuVHxYqiwaWOxvm4Eok2qDoR0vpA6pxew8Dj+BntnygBHTVuyolX8+SzwI=; c=relaxed/simple; s=kra23psoka5qyyh6gdejiiuof3nluwuz; d=amazonses.com; t=1784329603; v=1; bh=5JmofIlaCLrLfM8OAQu6kYAHqdP7AngUGQD7qTxC+iA=; h=From:To:Cc:Bcc:Subject:Date:Message-ID:MIME-Version:Content-Type:X-SES-RECEIPT;
+Received: by mail-qv1-f69.google.com with SMTP id 6a1803df08f44-8f000e221d7so106188576d6.0
+        for <dema@granitedepotindy.com>; Fri, 17 Jul 2026 16:06:42 -0700 (PDT)
+ARC-Seal: i=3; a=rsa-sha256; t=1784329602; cv=pass;
+        d=google.com; s=arc-20260327;
+        b=UlanXVbWTl+BERG/8ZJujmaYMeMjh8MMLOhDIlQlidGncwFdapvQ4Fh0a3VOOcQQVz
+         Ag2zGcpYVA8RnoQlJcj2FcDPYQ97FHAK0Phas4rBpUXd8xc+GJZ44g8trf8lLcTrNk6+
+         ojNfmVyUUVVUzcIK4eSr+IYdZOReSnNxU68zB0Ybn0UQ9rn6H0TW7OvYZdVuuA2+qySo
+         YIJLx+8HsyCGjhqrH72d5ti6JqB38+ef7vUbPO7GFSZ0xG+/QsJKJ6Aj52HlyhbJ4rQk
+         8HMH9PLq5x5vzWeAnWr1JliGf9QHGuppyO0AEAgc4Pz0T4MepCGMHAB+C5gOc6256Ty0
+         QznQ==
+ARC-Message-Signature: i=3; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=K0IftKGpdzXQKkWD5llxyqi0fBEJf4CfMVEx0IqJ5/Q=;
+        fh=PQcMe8zExCuvYmrGZFaHt9kFnxNvbAceuUeQUS6Ve0s=;
+        b=lCz9Ceel3PHsNpHt28EpcF4Ur8XR2QO9cn3RJEuxfBIsaCxW0ETTBZB4IlEJPfKSjL
+         3Lbf09yna6OYGB4DsdQXWlANStjuTvnzLnJx185CiIph+94qNR0LQ3CwgD7MLreVdlre
+         rSaOnAsMfI6JzoqWU8ZQLfzcYdURzpDucBdILJV9N29DgbRvLBpiTVlGmNb+uyrkF9M3
+         D8PFlepzQA2u5tu7AvEGv1+uBlQr20GIzI7edDIkCXBB1Nw6z/wECVR4wAvsFoJSg+CU
+         JaFJ1K1/sMWqrZXcuS8bBGVUnpdaZBQbr2LG1xG6fn94Ky12MtLgJt3l3uprcbsLmB1N
+         StJQ==;
+        dara=google.com
+ARC-Authentication-Results: i=3; mx.google.com;
+       dkim=pass header.i=@invisible.email header.s=google header.b=M9EKnXmz;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of colin.delahunty@invisible.email designates 209.85.220.41 as permitted sender) smtp.mailfrom=colin.delahunty@invisible.email;
+       dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=invisible.email;
+       dara=neutral header.i=@granitedepotindy.com
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20251104; t=1784329602; x=1784934402;
+        h=content-type:to:subject:message-id:date:from:in-reply-to:references
+         :mime-version:dkim-signature:x-gm-gg:x-gm-message-state:from:to:cc
+         :subject:date:message-id:reply-to:content-type;
+        bh=K0IftKGpdzXQKkWD5llxyqi0fBEJf4CfMVEx0IqJ5/Q=;
+        b=i0365NgXTzDDKEnjmnL9DvV3Yz69+yubpd4IX5SaNH6OvQH+NKJk8pICYp7TLJQ4Xq
+         /kdENpMURVYjHjN/rPMIVHaf+f+inthSI+QUYx0uty9xIaVicRCWOkMgsIazd3ToT5Y5
+         8it3FVwYonICSMC7h1EQxjWehMyRbSmrU3yGbZ6sFkO1/BsgPctfePN8wyxbxGSNe6WA
+         5IdJDPwPDMkbtOu1y+hS2oHwDOkXJL7Ay9sRR4BELU9hi2NK03iwdFtjkGQ0Au8au06i
+         5TFbDG5u6+IPKLwanJg7BgXiRCcNQgUp3HpBivtZua6PtX9Sn0gKQWo/vDldYU/2EjHd
+         272w==
+X-Gm-Message-State: AOJu0YyMJkAC8++dQs+bYts9vmkYCJRj50mUYViY5FVNwNsckLOYu6hx
+	zIf8k3XfugOUuDPeQO6phrpodLWKtdR5jh/ZmAOsnZeTAaQr1vuiGuDQPzKvKqlquAgQV3a7hPi
+	SjYj7tVdO0bKCT6ouOrXJpYYQz/2NMC0SfDrFv5mqTkEHkBQ8A2fN2Xs5RPDg9GUKJpzzpt/GtT
+	aP6LjKrNtyyA7VTocg5bOoLKzHW0rdC35ux+KRXOWa3EuVu9BjRwi3YV6XaYCTIzHTq0CwbQTWc
+	AAckoFMbA==
+X-Gm-Gg: AfdE7ckov0yolDSRGjig9YNKh1MKoShutXflmx/LR8uFywiRogIoKny+czUMO4Q6viJ
+	xlClneY94C4EKcUgXsDflXXia7qlVSCCa8T2diIagSslChdzsTdn8VuZRxTVwZZjEeSeyPz/zD9
+	ThOFqKBPd5fmq73J5bAMG/loRVt/sBHLtUyVuqniLquy3gLLB6akj7yYfxAgESc+xzzj9iOn3//
+	qGV6axQY5+SpqIJ4jFQzDkQ9CfX1fB0ZFwPNoK6r40hUD/i/pyi5SWKm8QBpfpRt7UvKGC946a0
+	vRvvO48MKDlHmExt3fCjMYboAH3KGvkj29i6BMe/jWVlWIowyr0FAs4j
+X-Received: by 2002:ac8:59d2:0:b0:51c:7b12:5ff2 with SMTP id d75a77b69052e-5213d7a6561mr45595141cf.78.1784329601852;
+        Fri, 17 Jul 2026 16:06:41 -0700 (PDT)
+X-Received: by 2002:ac8:59d2:0:b0:51c:7b12:5ff2 with SMTP id d75a77b69052e-5213d7a6561mr45594711cf.78.1784329600830;
+        Fri, 17 Jul 2026 16:06:40 -0700 (PDT)
+ARC-Seal: i=2; a=rsa-sha256; t=1784329600; cv=pass;
+        d=google.com; s=arc-20260327;
+        b=UbSkp8AvftVOw89e4IXGlZlN1aujD+4pyrPURpXUHfBCh1otFYYS4FziLm9MHaUFUg
+         k13ugXK0SMlYo1hB6eLy1QSMocKbKfOmB6m0iQznOrMEUnF1WZVtzX79PdyDyGxKOWD3
+         fnjBjhJ6e5ldr0NS8r45bGhbh7G6SiLxS/qfslaVTBmn8Y1BMiUUpFUQGozQ2DsJTiIo
+         1eNZ3/6rGPCM8PyXyiPSH7Tfe2+tPSdmZMWThsZDy36MDXWTn52JH4z7Cyph8RX/EMhS
+         40V79D7sm0rzpxyeAaP8O4hmGF0IrrF2tG86xu48b1ACEXGVbInAUIVQdtoaRhPeAEch
+         xrNw==
+ARC-Message-Signature: i=2; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=K0IftKGpdzXQKkWD5llxyqi0fBEJf4CfMVEx0IqJ5/Q=;
+        fh=PQcMe8zExCuvYmrGZFaHt9kFnxNvbAceuUeQUS6Ve0s=;
+        b=N7HoZt6IUaHiaNO7oh6PRx5Bs8HCecMUS6LDSopxnnlTGtMMyTXq2lsV+3wDjCGCjR
+         miB8pmKAFPBp8xbO+nk+U6EnrKLhQeRQGxcFI8tD8Tz4W1PszVBuB3W5nT53J5nuTFgH
+         CSWhxDQmxJ+mt6NujnERzWoi+TZYMh1B8uZiRxKcWWRAez9Vb7amkaCYlS5hRR0BmgQq
+         qA718qnWXQv/pyJTYy9uuKY/+l7j5SzvzrGDdYULN5tBZ7lSPv6VQgnCgE0K6ZTccOoB
+         iKepnWFouIJpPezfAlvwZ59+kVZ49A/lQ2Ii2XTN2nOK65kQefdw5c1oehhASkAlbTF0
+         bUQQ==;
+        dara=google.com
+ARC-Authentication-Results: i=2; mx.google.com;
+       dkim=pass header.i=@invisible.email header.s=google header.b=M9EKnXmz;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of colin.delahunty@invisible.email designates 209.85.220.41 as permitted sender) smtp.mailfrom=colin.delahunty@invisible.email;
+       dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=invisible.email;
+       dara=neutral header.i=@granitedepotindy.com
+Return-Path: <colin.delahunty@invisible.email>
+Received: from mail-sor-f41.google.com (mail-sor-f41.google.com. [209.85.220.41])
+        by mx.google.com with SMTPS id d75a77b69052e-5214feceac1sor26261291cf.5.2026.07.17.16.06.40
+        for <dema@granitedepotindy.com>
+        (Google Transport Security);
+        Fri, 17 Jul 2026 16:06:40 -0700 (PDT)
+Received-SPF: pass (google.com: domain of colin.delahunty@invisible.email designates 209.85.220.41 as permitted sender) client-ip=209.85.220.41;
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@invisible.email header.s=google header.b=M9EKnXmz;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of colin.delahunty@invisible.email designates 209.85.220.41 as permitted sender) smtp.mailfrom=colin.delahunty@invisible.email;
+       dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=invisible.email;
+       dara=neutral header.i=@granitedepotindy.com
+ARC-Seal: i=1; a=rsa-sha256; t=1784329600; cv=none;
+        d=google.com; s=arc-20260327;
+        b=lI0ynn3GEOKhL6As8JzWJfCJ7sBbAaXNrWdVvelk97S0xJ6PP94UaEfQxh9YawuUri
+         a0R142TMQdMwRU9tb4CxMZmOlv/5pbz3VCAZ8H0CTM+U+TAf22Ws58Rh/wqQiYyGa7LV
+         DHRTs2VtMHLDSPvv9Ag+vp/mhidjO1J3sC+MRhb2y9nDGPeW+rFmvQizxRlrcx2GTfzC
+         N9Dv4emidiWtoulhegP1mVwRfhFsOOzC9VNnJ+CzUJyc6Y5DPkzPZMU2M3C+ru1UCsEN
+         9zLCZQIXUHnuPtdsgJZODktZrlA2Uv+X8gfN0HH6FBNhCj79LwvetV0nKY3mT5JOwTzR
+         xnxQ==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=K0IftKGpdzXQKkWD5llxyqi0fBEJf4CfMVEx0IqJ5/Q=;
+        fh=PQcMe8zExCuvYmrGZFaHt9kFnxNvbAceuUeQUS6Ve0s=;
+        b=dTz7vFa6TozDqAh2dTKfzSXN9LHs7IrupCzE3VhY7yPH2Ri9CdBC3WfoWtMRrOjfjJ
+         VGPwc81BiotxJC6mrpqDNmAhb3oOJ75fMu4Gr4jm90bC5xzNGNR6bAg1uvicRHwhq1q+
+         7hpUuaG3fTuS9tzUaKGZnYOQvCNx+lNBREzoFPEkl4ac0oNStuoHswYT9Vs5yKdYrCd7
+         G5Z+9GaJGDh20NtXmDU9qkNlEUO0dNAbHsg3RgL6k6ta29WGJwULEZJmdcA74/DRKgWV
+         KVsSIKbJzbZpkhx8X91j8H/LDxXDsX10RrlSCWTSbgoDb4GjeGbWwJV+l0FFh5ro6+wY
+         kb2A==;
+        darn=granitedepotindy.com
+ARC-Authentication-Results: i=1; mx.google.com; arc=none
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=invisible.email; s=google; t=1784329600; x=1784934400; darn=granitedepotindy.com;
+        h=content-type:to:subject:message-id:date:from:in-reply-to:references
+         :mime-version:from:to:cc:subject:date:message-id:reply-to
+         :content-type;
+        bh=K0IftKGpdzXQKkWD5llxyqi0fBEJf4CfMVEx0IqJ5/Q=;
+        b=M9EKnXmzXwQbncnxHk7jNUvb0lq68id0N1XOQ2K88LifKCXfrrcVmoDkkuDt6M9ouO
+         aZGR6LuhPDkkditzRtAfogAyHLpnLXMefzm/H/DK7+m9xSg78mDnozl6lcAy6xFlJQAD
+         PMlmXDtCzlzgbjNXrXaQqrfxhatjAZxGcR+j8=
+X-Received: by 2002:a05:622a:2595:b0:51c:844f:28da with SMTP id
+ d75a77b69052e-5213aa6e34amr46396661cf.5.1784329600100; Fri, 17 Jul 2026
+ 16:06:40 -0700 (PDT)
+MIME-Version: 1.0
+References: <CAG6QthauZtoX7i=6mBH7ikf5Av8ck5bGE0gxE_A-EUKkgBNRUQ@mail.gmail.com>
+In-Reply-To: <CAG6QthauZtoX7i=6mBH7ikf5Av8ck5bGE0gxE_A-EUKkgBNRUQ@mail.gmail.com>
+From: Colin Delahunty <colin.delahunty@invisible.email>
+Date: Fri, 17 Jul 2026 19:06:29 -0400
+X-Gm-Features: AUfX_myLruNoSdQnhLubDSMczKvJyomXrftthVTx4SmmOb3ddibV6CZ9RsvUkhk
+Message-ID: <CADgOA1EbXqXd1Cvq-d0ai5oUPGy=8O9ydr1daDB2=j87s=unyg@mail.gmail.com>
+Subject: Fwd: First
+To: dema@granitedepotindy.com
+Content-Type: multipart/alternative; boundary="000000000000f9ff560656d69bd8"
+
+--000000000000f9ff560656d69bd8
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+---------- Forwarded message ---------
+=D0=9E=D1=82: Colin Delahunty <colin99delahunty@gmail.com>
+Date: =D0=BF=D1=82, 17 =D0=B8=D1=8E=D0=BB. 2026=E2=80=AF=D0=B3. =D0=B2 19:0=
+6
+Subject: First
+To: <colin.delahunty@invisible.email>
+
+
+Hello, will Dima see this?
+
+--=20
+*Colin Delahunty*
+
+--000000000000f9ff560656d69bd8
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<div dir=3D"ltr"><br><br><div class=3D"gmail_quote gmail_quote_container"><=
+div dir=3D"ltr" class=3D"gmail_attr">---------- Forwarded message ---------=
+<br>=D0=9E=D1=82: <strong class=3D"gmail_sendername" dir=3D"auto">Colin Del=
+ahunty</strong> <span dir=3D"auto">&lt;<a href=3D"mailto:colin99delahunty@g=
+mail.com">colin99delahunty@gmail.com</a>&gt;</span><br>Date: =D0=BF=D1=82, =
+17 =D0=B8=D1=8E=D0=BB. 2026=E2=80=AF=D0=B3. =D0=B2 19:06<br>Subject: First<=
+br>To:  &lt;colin.delahunty@invisible.email&gt;<br></div><br><br><div dir=
+=3D"ltr"><div>Hello, will Dima see this?</div><div><br></div><span class=3D=
+"gmail_signature_prefix">-- </span><br><div dir=3D"ltr" class=3D"gmail_sign=
+ature" data-smartmail=3D"gmail_signature"><div><strong>Colin Delahunty</str=
+ong></div></div></div>
+</div></div>
+
+--000000000000f9ff560656d69bd8--
