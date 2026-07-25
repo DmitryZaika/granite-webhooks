@@ -5,7 +5,7 @@ use sqlx::MySqlPool;
 use crate::amazon::bucket::S3Bucket;
 use crate::amazonses::parse_email::{Attachment, ParsedEmail};
 use crate::amazonses::upload::upload_attachments;
-use crate::crud::email::{PriorEmail, SendEmail, create_email_with_attachments, get_inbound_email_notify_context, get_prior_email};
+use crate::crud::email::{PriorEmail, SendEmail, create_email_with_attachments, get_inbound_email_notify_context, get_prior_email, resolve_inbound_customer_name};
 use crate::crud::users::{ReceivingEmail, get_id_by_email, get_id_by_email_with_forward, get_user_tg_info};
 use crate::libs::constants::{OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
@@ -170,7 +170,7 @@ async fn maybe_send_inbound_email_telegram(pool: &MySqlPool, send: &SendEmail) {
         return;
     };
 
-    let context = match get_inbound_email_notify_context(pool, send.thread_id()).await {
+    let context = match get_inbound_email_notify_context(pool, send.thread_id(), receiver_user_id).await {
         Ok(value) => value,
         Err(error) => {
             tracing::error!(
@@ -182,7 +182,10 @@ async fn maybe_send_inbound_email_telegram(pool: &MySqlPool, send: &SendEmail) {
         }
     };
     let (deal_id, customer_name) = match context {
-        Some(value) => (value.deal_id, value.customer_name),
+        Some(value) => (
+            value.deal_id,
+            resolve_inbound_customer_name(value.customer_name, value.sender_email.as_deref()),
+        ),
         None => (None, None),
     };
 

@@ -3,7 +3,7 @@ REGION := us-east-2
 IAM_ROLE := arn:aws:iam::741448943665:role/cargo-lambda-role-2ed5069c-8882-460d-bdc8-192d9b724756
 
 # Tool commands
-BUILD_BASE := uvx cargo-lambda lambda build --release
+BUILD_BASE := uvx cargo-lambda lambda build --release --x86-64
 
 # We use AWS_PROFILE=default at the start of the command to force the credential choice
 DEPLOY_BASE := AWS_PROFILE=default uvx cargo-lambda lambda deploy --iam-role $(IAM_ROLE) --region $(REGION)
