@@ -6,11 +6,11 @@ use crate::amazon::bucket::S3Bucket;
 use crate::amazonses::parse_email::{Attachment, ParsedEmail};
 use crate::amazonses::upload::upload_attachments;
 use crate::crud::email::{PriorEmail, SendEmail, create_email_with_attachments, get_inbound_email_notify_context, get_prior_email, resolve_inbound_customer_name};
-use crate::crud::users::{ReceivingEmail, get_id_by_email, get_id_by_email_with_forward, get_user_tg_info};
+use crate::crud::users::{ReceivingEmail, get_id_by_email, get_id_by_email_with_forward};
 use crate::libs::constants::{OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use crate::telegram::crm::{InboundEmailTelegramNotify, send_inbound_email_telegram_notification};
-use crate::axum_helpers::guards::TelegramBot;
+use crate::axum_helpers::guards::NotificationsTelegramBot;
 
 pub struct EmailInfo<'a> {
     pub bucket: &'a str,
@@ -152,23 +152,6 @@ async fn maybe_send_inbound_email_telegram(pool: &MySqlPool, send: &SendEmail) {
     let Some(receiver_user_id) = send.receiver_user_id() else {
         return;
     };
-    let user = match get_user_tg_info(pool, receiver_user_id).await {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                receiver_user_id = receiver_user_id,
-                "Failed to load receiver telegram info for inbound email"
-            );
-            return;
-        }
-    };
-    let Some(user) = user else {
-        return;
-    };
-    let Some(telegram_id) = user.telegram_id else {
-        return;
-    };
 
     let context = match get_inbound_email_notify_context(pool, send.thread_id(), receiver_user_id).await {
         Ok(value) => value,
@@ -196,10 +179,8 @@ async fn maybe_send_inbound_email_telegram(pool: &MySqlPool, send: &SendEmail) {
         deal_id,
         customer_name,
     };
-    let bot = TelegramBot::default();
-    if let Err(error) =
-        send_inbound_email_telegram_notification(&bot, &payload, telegram_id).await
-    {
+    let bot = NotificationsTelegramBot::default();
+    if let Err(error) = send_inbound_email_telegram_notification(&pool, &bot, &payload).await {
         tracing::error!(
             ?error,
             receiver_user_id = receiver_user_id,

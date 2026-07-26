@@ -53,7 +53,8 @@ where
     V: Telegram + Send + Sync + 'static + Clone,
 {
     let full_message = if include_assignment_prompt {
-        format!("{message}. Choose a salesperson.")
+        let body = message.to_string();
+        format!("{}\nChoose a salesperson.", body.trim_end())
     } else {
         message.to_string()
     };

@@ -13,11 +13,17 @@ use teloxide::prelude::*;
 
 async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize, Error> {
     let reminders = get_due_activity_deadline_reminders(pool).await?;
-    let bot = teloxide::Bot::from_env();
+    let token = std::env::var("TELOXIDE_NOTIFICATIONS_TOKEN")
+        .or_else(|_| std::env::var("TELEGRAM_NOTIFICATIONS_BOT_TOKEN"))
+        .map_err(|error| Error::from(error.to_string()))?;
+    let bot = teloxide::Bot::new(token);
     let mut sent_count = 0usize;
 
     for reminder in reminders {
-        let Some(telegram_id) = reminder.telegram_id else {
+        if !reminder.telegram_activity_notifications {
+            continue;
+        }
+        let Some(telegram_id) = reminder.notifications_telegram_id else {
             continue;
         };
         let text = common::telegram::crm::format_activity_notification(

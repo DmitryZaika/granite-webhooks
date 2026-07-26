@@ -6,7 +6,7 @@ use crate::crud::telegram_messages::list_active_manager_telegram_lead_messages;
 use crate::crud::user_position::get_user_position;
 use crate::crud::users::{email_exists, get_user_tg_info, user_has_telegram_id};
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
-use crate::libs::constants::{ERR_DB, ERR_SEND_EMAIL, OK_RESPONSE, TELEGRAM_UPDATES_CHANNEL_URL};
+use crate::libs::constants::{ERR_DB, ERR_SEND_EMAIL, OK_RESPONSE};
 use crate::libs::constants::{FORBIDDEN_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use crate::telegram::utils::extract_message;
@@ -167,12 +167,7 @@ async fn handle_telegram_code<T: Telegram>(
             return internal_error(ERR_DB);
         }
         return bot
-            .send_message(
-                chat_id,
-                format!(
-                    "Accepted, you are now registered.\n\nJoin our updates channel:\n{TELEGRAM_UPDATES_CHANNEL_URL}"
-                ),
-            )
+            .send_message(chat_id, "Accepted, you are now registered.")
             .await
             .map_or_else(|e| e, |_| OK_RESPONSE);
     }
@@ -677,7 +672,6 @@ mod local_tests {
         assert_eq!(user.telegram_id, Some(4));
         let sent = bot.sent.lock().unwrap();
         assert!(sent[0].1.contains("Accepted, you are now registered"));
-        assert!(sent[0].1.contains(TELEGRAM_UPDATES_CHANNEL_URL));
     }
 
     // -----------------------------

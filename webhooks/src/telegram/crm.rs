@@ -3,7 +3,7 @@ use common::telegram::crm::{
 };
 
 use crate::axum_helpers::guards::Telegram;
-use crate::crud::users::get_user_tg_info;
+use crate::crud::users::get_user_notifications_tg_info;
 use crate::libs::constants::ERR_SEND_TELEGRAM;
 use crate::libs::constants::internal_error;
 use crate::libs::types::BasicResponse;
@@ -28,6 +28,12 @@ pub struct InboundEmailTelegramNotify {
     pub customer_name: Option<String>,
 }
 
+pub struct InboundSmsTelegramNotify {
+    pub receiver_user_id: i32,
+    pub sender_phone: String,
+    pub message: String,
+}
+
 pub async fn send_crm_telegram_notification<T>(
     pool: &MySqlPool,
     bot: &T,
@@ -36,7 +42,7 @@ pub async fn send_crm_telegram_notification<T>(
 where
     T: Telegram + Send + Sync,
 {
-    let user = match get_user_tg_info(pool, payload.user_id).await {
+    let user = match get_user_notifications_tg_info(pool, payload.user_id).await {
         Ok(value) => value,
         Err(error) => {
             tracing::error!(?error, user_id = payload.user_id, "Failed to load user telegram info");
@@ -46,7 +52,10 @@ where
     let Some(user) = user else {
         return Ok(());
     };
-    let Some(telegram_id) = user.telegram_id else {
+    if !user.telegram_activity_notifications {
+        return Ok(());
+    }
+    let Some(telegram_id) = user.notifications_telegram_id else {
         return Ok(());
     };
 
@@ -61,18 +70,80 @@ where
 }
 
 pub async fn send_inbound_email_telegram_notification<T>(
+    pool: &MySqlPool,
     bot: &T,
     payload: &InboundEmailTelegramNotify,
-    telegram_id: i64,
 ) -> Result<(), BasicResponse>
 where
     T: Telegram + Send + Sync,
 {
+    let user = match get_user_notifications_tg_info(pool, payload.receiver_user_id).await {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                receiver_user_id = payload.receiver_user_id,
+                "Failed to load receiver telegram info for inbound email"
+            );
+            return Err(internal_error(ERR_SEND_TELEGRAM));
+        }
+    };
+    let Some(user) = user else {
+        return Ok(());
+    };
+    if !user.telegram_email_notifications {
+        return Ok(());
+    }
+    let Some(telegram_id) = user.notifications_telegram_id else {
+        return Ok(());
+    };
+
     let text = format_email_notification(
         payload.customer_name.as_deref(),
         payload.subject.as_deref(),
         payload.deal_id,
         &payload.thread_id,
+    );
+    send_plain_crm_message(bot, telegram_id, &text).await
+}
+
+pub async fn send_inbound_sms_telegram_notification<T>(
+    pool: &MySqlPool,
+    bot: &T,
+    payload: &InboundSmsTelegramNotify,
+) -> Result<(), BasicResponse>
+where
+    T: Telegram + Send + Sync,
+{
+    let user = match get_user_notifications_tg_info(pool, payload.receiver_user_id).await {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                receiver_user_id = payload.receiver_user_id,
+                "Failed to load receiver telegram info for inbound sms"
+            );
+            return Err(internal_error(ERR_SEND_TELEGRAM));
+        }
+    };
+    let Some(user) = user else {
+        return Ok(());
+    };
+    if !user.telegram_sms_notifications {
+        return Ok(());
+    }
+    let Some(telegram_id) = user.notifications_telegram_id else {
+        return Ok(());
+    };
+
+    let phone_digits: String = payload
+        .sender_phone
+        .chars()
+        .filter(|character| character.is_ascii_digit())
+        .collect();
+    let text = format!(
+        "New CloudTalk SMS from {}\n\n{}\n\nOpen thread: /employee/cloudtalk/thread/{}",
+        payload.sender_phone, payload.message, phone_digits
     );
     send_plain_crm_message(bot, telegram_id, &text).await
 }
