@@ -2,7 +2,7 @@ use crate::axum_helpers::guards::{CloudTalkWebhookUser, RemixBackend};
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::cloudtalk::schemas::CloudtalkSMS;
 use crate::crud::cloudtalk::{insert_inbound_sms, insert_outbound_sms};
-use crate::libs::constants::{ERR_DB, OK_RESPONSE, internal_error};
+use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use axum::extract::{Json, Path, State};
 use lambda_http::tracing;
@@ -13,13 +13,25 @@ pub async fn sms_received(
     _: CloudTalkWebhookUser,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
-    Json(form): Json<CloudtalkSMS>,
+    body: String,
 ) -> BasicResponse {
-    match insert_inbound_sms(&pool, &form, company_id).await {
-        Ok(_) => OK_RESPONSE,
-        Err(error) => {
-            tracing::error!("Error inserting sms received into the database: {}", error);
-            internal_error(ERR_DB)
+    // TEMP MMS capture (inbound spike) — remove after the real payload is captured
+    let digits = std::env::var("MMS_CAPTURE_DIGITS").unwrap_or_default();
+    if !digits.is_empty() && body.contains(digits.as_str()) {
+        tracing::info!("MMS_CAPTURE company_id={company_id} body={body}");
+    }
+
+    match serde_json::from_str::<CloudtalkSMS>(&body) {
+        Ok(form) => match insert_inbound_sms(&pool, &form, company_id).await {
+            Ok(_) => OK_RESPONSE,
+            Err(error) => {
+                tracing::error!("Error inserting sms received into the database: {}", error);
+                internal_error(ERR_DB)
+            }
+        },
+        Err(e) => {
+            tracing::error!("Error parsing sms received payload: {e}");
+            BAD_REQUEST
         }
     }
 }
@@ -123,6 +135,21 @@ mod tests {
 
         let smss = get_sms_received(&pool).await;
         assert_eq!(smss.len(), 1, "duplicate cloudtalk_id should be ignored");
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_sms_received_malformed_json(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+
+        let response = app
+            .post("/cloudtalk/sms/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .text("{not json")
+            .await;
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+
+        let smss = get_sms_received(&pool).await;
+        assert_eq!(smss.len(), 0, "malformed payload must not insert a row");
     }
 
     #[sqlx::test(migrations = "../migrations")]
