@@ -4,6 +4,7 @@ use crate::cloudtalk::schemas::CloudtalkSMS;
 use crate::crud::cloudtalk::{insert_inbound_sms, insert_outbound_sms};
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
+use axum::body::Bytes;
 use axum::extract::{Json, Path, State};
 use lambda_http::tracing;
 use reqwest::Client;
@@ -13,15 +14,20 @@ pub async fn sms_received(
     _: CloudTalkWebhookUser,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
-    body: String,
+    body: Bytes,
 ) -> BasicResponse {
-    // TEMP MMS capture (inbound spike) — remove after the real payload is captured
+    // TEMP MMS capture (inbound spike): remove after the real payload is captured.
+    // `Bytes` (not `String`) so a non-UTF-8 body still reaches the parse-failure path below,
+    // rather than being rejected earlier by axum's `String` extractor.
     let digits = std::env::var("MMS_CAPTURE_DIGITS").unwrap_or_default();
-    if !digits.is_empty() && body.contains(digits.as_str()) {
-        tracing::info!("MMS_CAPTURE company_id={company_id} body={body}");
+    if !digits.is_empty() {
+        let body_lossy = String::from_utf8_lossy(&body);
+        if body_lossy.contains(digits.as_str()) {
+            tracing::info!("MMS_CAPTURE company_id={company_id} body={body_lossy}");
+        }
     }
 
-    match serde_json::from_str::<CloudtalkSMS>(&body) {
+    match serde_json::from_slice::<CloudtalkSMS>(&body) {
         Ok(form) => match insert_inbound_sms(&pool, &form, company_id).await {
             Ok(_) => OK_RESPONSE,
             Err(error) => {
@@ -30,7 +36,15 @@ pub async fn sms_received(
             }
         },
         Err(e) => {
-            tracing::error!("Error parsing sms received payload: {e}");
+            // Structured position/category only: never the serde Display message, which for some
+            // payload shapes echoes fragments of the offending value.
+            let category = e.classify();
+            tracing::error!(
+                "Error parsing sms received payload: {:?} at {}:{}",
+                category,
+                e.line(),
+                e.column()
+            );
             BAD_REQUEST
         }
     }
@@ -233,10 +247,23 @@ mod tests {
 
     #[sqlx::test(migrations = "../migrations")]
     async fn test_sms_sent_merges_crm_row_with_differing_text(pool: MySqlPool) {
-        sqlx::query!(
+        let parent = sqlx::query!(
             "INSERT INTO cloudtalk_sms \
                 (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status) \
              VALUES (NULL, NULL, 3173161456, 'cap', '540273', 42, 'outbound', 'sent')"
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+
+        // Tier 2 is gated on an attachment existing (it exists solely for image-send fallbacks);
+        // seed one the same way the cascade-delete test in crud/cloudtalk.rs does.
+        sqlx::query!(
+            "INSERT INTO cloudtalk_sms_attachments \
+                (cloudtalk_sms_id, content_type, filename, s3_key, s3_url, width, height, position) \
+             VALUES (?, 'image/jpeg', 'a.jpg', '42/u/a.jpg', 's3://gd-sms-attachments/42/u/a.jpg', 800, 600, 0)",
+            i32::try_from(parent).expect("test id fits i32"),
         )
         .execute(&pool)
         .await

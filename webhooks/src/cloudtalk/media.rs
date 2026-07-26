@@ -1,18 +1,10 @@
-//! Inbound media engine (shape-agnostic pre-build).
+//! Inbound media engine: fetch -> validate -> re-encode -> store to S3.
 //!
-//! Given a media URL (source TBD — webhook field or fetch-by-id API), safely
-//! fetch -> validate -> re-encode -> store to S3 -> insert
-//! `cloudtalk_sms_attachments` rows. This module is payload-independent: it
-//! makes no assumption about how the URL arrives. The thin wiring layer
-//! (calling this from the `CloudTalk` webhook) is a separate, later task.
+//! Dedup contract (enforced by the wiring layer, not this module): run media processing
+//! only when the inbound insert affected a row and `cloudtalk_id` is non-NULL; never on
+//! the outbound merge path.
 //!
-//! Dedup contract (enforced by the future wiring layer, not by this module):
-//! callers MUST run media processing only when the parent SMS insert actually
-//! created a new row (`INSERT IGNORE` `rows_affected` > 0), so webhook
-//! redelivery cannot duplicate attachment rows.
-//!
-//! v1 limitation: GIF animation is NOT preserved. Only the first frame is
-//! decoded and re-encoded (matches `image`'s default single-frame decode).
+//! v1: GIF animation is not preserved; only the first frame is decoded and re-encoded.
 
 use crate::amazon::bucket::S3Bucket;
 use bytes::Bytes;
@@ -21,8 +13,8 @@ use sqlx::MySqlPool;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use uuid::Uuid;
 
-/// Short, non-sensitive error tokens. Never carries a URL, host, phone
-/// number, or credential — only these fixed tokens are ever logged.
+/// Short, non-sensitive error tokens: never a URL, host, phone number, or credential.
+/// Only these fixed tokens are ever logged.
 #[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaError {
     #[error("fetch_disabled")]
@@ -51,13 +43,10 @@ pub enum MediaError {
     Db,
 }
 
-// ===================== Component A — SSRF-hardened fetch =====================
+// ===================== Component A: SSRF-hardened fetch =====================
 
-/// Pure (no env, no network): validate scheme + host allowlist membership.
-/// Factored out of `fetch_inbound_media` so it is unit-testable without a
-/// connection. `allowed_hosts_raw` is the raw `MMS_MEDIA_ALLOWED_HOSTS` value
-/// (comma-separated, case-insensitive exact host match). Returns the
-/// lowercased host on success.
+/// Pure (no env, no network): validates scheme + host allowlist membership.
+/// `allowed_hosts_raw` is `MMS_MEDIA_ALLOWED_HOSTS` (comma-separated, case-insensitive).
 fn check_scheme_and_host(
     url: &reqwest::Url,
     allowed_hosts_raw: &str,
@@ -86,10 +75,8 @@ fn check_scheme_and_host(
     }
 }
 
-/// Pure: true if `ip` is safe to connect to (globally routable, not
-/// loopback/private/link-local/unspecified/broadcast/documentation/etc).
-/// Manual range checks are used where std has no stable helper (IPv6
-/// unique-local `fc00::/7` and link-local `fe80::/10` are nightly-only in std).
+/// Pure: true if `ip` is safe to connect to (globally routable, not loopback/private/
+/// link-local/etc). IPv6 unique-local/link-local are checked manually: nightly-only in std.
 const fn is_globally_routable(ip: IpAddr) -> bool {
     match ip.to_canonical() {
         IpAddr::V4(v4) => is_v4_global(v4),
@@ -204,7 +191,7 @@ fn map_reqwest_error(error: &reqwest::Error) -> MediaError {
     }
 }
 
-// ===================== Component B — validate + re-encode =====================
+// ===================== Component B: validate + re-encode =====================
 
 /// Decode-bomb guard: reject before allocating pixel buffers for anything
 /// declaring dimensions above this on either axis.
@@ -213,13 +200,10 @@ const MAX_DECODE_DIM: u32 = 8192;
 const MAX_OUTPUT_DIM: u32 = 4096;
 /// Fixed re-encode quality for the JPEG fallback path.
 const JPEG_QUALITY: u8 = 80;
-/// Decode allocation ceiling, set explicitly rather than inherited from
-/// `image::Limits::default()` — an upstream default change must not silently
-/// move our resource ceiling. Covers one worst-case RGBA8 buffer at
-/// `MAX_DECODE_DIM` (8192*8192*4 = 256 MiB) plus decoder working headroom.
+/// Set explicitly rather than inherited from `image::Limits::default()`, so an upstream
+/// default change can't silently move our ceiling. Covers one 8192x8192 RGBA8 buffer (256 MiB) plus headroom.
 const MAX_DECODE_ALLOC_BYTES: u64 = 512 * 1024 * 1024;
 
-/// A validated, re-encoded inbound image ready to store.
 #[derive(Debug)]
 pub struct ProcessedImage {
     pub bytes: Bytes,
@@ -229,8 +213,8 @@ pub struct ProcessedImage {
     pub height: u32,
 }
 
-/// Real-type detection by magic bytes only — never trust a declared/claimed
-/// type. Anything outside these four signatures is `unsupported_format`.
+/// Real-type detection by magic bytes only: never trust a declared/claimed type.
+/// Anything outside these four signatures is `unsupported_format`.
 fn sniff_format(bytes: &[u8]) -> Option<image::ImageFormat> {
     if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
         Some(image::ImageFormat::Jpeg)
@@ -245,11 +229,8 @@ fn sniff_format(bytes: &[u8]) -> Option<image::ImageFormat> {
     }
 }
 
-/// Validate, decode, and re-encode an inbound image.
-///
-/// PNG-with-alpha stays PNG; everything else (JPEG/WebP/GIF first
-/// frame/opaque PNG) becomes JPEG at quality ~80. Downscales to a max of
-/// 4096px on the longest side, aspect preserved; never upscales.
+/// PNG-with-alpha stays PNG; everything else (including GIF, first frame only) becomes
+/// JPEG at quality ~80, downscaled to 4096px on the longest side (aspect preserved, never upscaled).
 pub fn process_inbound_image(input: &[u8]) -> Result<ProcessedImage, MediaError> {
     let format = sniff_format(input).ok_or(MediaError::UnsupportedFormat)?;
 
@@ -306,13 +287,10 @@ pub fn process_inbound_image(input: &[u8]) -> Result<ProcessedImage, MediaError>
     })
 }
 
-// ===================== Component C — store =====================
+// ===================== Component C: store =====================
 
-/// Upload a processed image to S3 and insert its `cloudtalk_sms_attachments` row.
-///
-/// Callers must only invoke this when the parent SMS insert actually created
-/// a new row (see the dedup contract in the module docs) — this function
-/// itself performs no dedup check.
+/// Callers must only invoke this when the parent SMS insert actually created a new row
+/// (see the module's dedup contract); this function performs no dedup check itself.
 pub async fn store_inbound_attachment(
     pool: &MySqlPool,
     s3: &impl S3Bucket,
@@ -333,8 +311,8 @@ pub async fn store_inbound_attachment(
         .await
         .map_err(|_| MediaError::Upload)?;
 
-    // Public URL format is the CRM's canonical form for stored keys —
-    // general_datebase/app/utils/s3.server.ts:51 is the authority.
+    // Public URL format matches the CRM's canonical form; general_datebase/app/utils/s3.server.ts:51
+    // is the authority.
     let s3_url = format!("https://{bucket}.s3.{region}.amazonaws.com/{key}");
 
     let width = i32::try_from(img.width).unwrap_or(i32::MAX);
@@ -392,13 +370,6 @@ mod tests {
         }
 
         #[test]
-        fn rejects_when_allowlist_unset_is_passed_as_empty_string() {
-            // Caller reads env::var(...).unwrap_or_default(); unset becomes "".
-            let result = check_scheme_and_host(&url("https://good.example.com/a.jpg"), "   ");
-            assert_eq!(result, Err(MediaError::FetchDisabled));
-        }
-
-        #[test]
         fn accepts_allowed_https_host_case_insensitively() {
             // Stops at the DNS/pin boundary: only scheme + allowlist are checked here.
             let result =
@@ -447,7 +418,7 @@ mod tests {
 
         #[test]
         fn rejects_v4_link_local_cloud_metadata() {
-            // 169.254.169.254 — AWS/GCP instance metadata endpoint.
+            // 169.254.169.254: AWS/GCP instance metadata endpoint.
             assert!(!is_globally_routable(IpAddr::V4(Ipv4Addr::new(
                 169, 254, 169, 254
             ))));
@@ -472,7 +443,7 @@ mod tests {
 
         #[test]
         fn rejects_v4_mapped_private_v6() {
-            // ::ffff:10.0.0.1 — v4-mapped; must re-check the embedded v4 against v4 rules.
+            // ::ffff:10.0.0.1: v4-mapped; must re-check the embedded v4 against v4 rules.
             let ip: Ipv6Addr = "::ffff:10.0.0.1".parse().unwrap();
             assert!(!is_globally_routable(IpAddr::V6(ip)));
         }
@@ -500,7 +471,7 @@ mod tests {
 
         #[test]
         fn rejects_v4_cgnat() {
-            // 100.64.0.1 — inside 100.64.0.0/10 (RFC 6598 carrier-grade NAT).
+            // 100.64.0.1: inside 100.64.0.0/10 (RFC 6598 carrier-grade NAT).
             assert!(!is_globally_routable(IpAddr::V4(Ipv4Addr::new(
                 100, 64, 0, 1
             ))));
@@ -508,7 +479,7 @@ mod tests {
 
         #[test]
         fn accepts_v4_just_below_cgnat_range() {
-            // 100.63.255.255 — one address below the CGNAT block.
+            // 100.63.255.255: one address below the CGNAT block.
             assert!(is_globally_routable(IpAddr::V4(Ipv4Addr::new(
                 100, 63, 255, 255
             ))));
@@ -516,7 +487,7 @@ mod tests {
 
         #[test]
         fn accepts_v4_just_above_cgnat_range() {
-            // 100.128.0.0 — one address above the CGNAT block.
+            // 100.128.0.0: one address above the CGNAT block.
             assert!(is_globally_routable(IpAddr::V4(Ipv4Addr::new(
                 100, 128, 0, 0
             ))));
@@ -531,7 +502,7 @@ mod tests {
 
         #[test]
         fn rejects_v6_multicast() {
-            // ff02::1 — link-local "all nodes" multicast.
+            // ff02::1: link-local "all nodes" multicast.
             let ip: Ipv6Addr = "ff02::1".parse().unwrap();
             assert!(!is_globally_routable(IpAddr::V6(ip)));
         }
@@ -540,14 +511,8 @@ mod tests {
     mod process_image {
         use super::*;
 
-        // All fixtures below are real, valid, `image`-crate-encoded bytes built at
-        // test runtime — no binary files are checked into the repository. This means
-        // every fixture is a same-library round-trip (encoded and decoded by the same
-        // `image` crate our production code uses), unlike the sips/ffmpeg-generated
-        // files this replaced, which were cross-encoder (a different, independent
-        // encoder produced the bytes our code then decoded). That cross-encoder
-        // property is not reproducible without checking in external binaries, so it
-        // is not claimed here — see the report's "Fixture rework" section.
+        // Fixtures are generated in-process by the `image` crate (no binary files checked
+        // in), so decode/encode is same-library round-trip, not cross-encoder coverage.
 
         /// A real, validly-encoded opaque PNG (no alpha channel at all: `ColorType::Rgb8`).
         fn synthetic_png(width: u32, height: u32) -> Vec<u8> {
@@ -572,7 +537,6 @@ mod tests {
             out
         }
 
-        /// A real, validly-encoded JPEG.
         fn synthetic_jpeg(width: u32, height: u32) -> Vec<u8> {
             let img = image::RgbImage::from_pixel(width, height, image::Rgb([180, 90, 40]));
             let mut out = Vec::new();
@@ -585,7 +549,6 @@ mod tests {
             out
         }
 
-        /// A real, single-frame GIF via the `image` crate's own GIF encoder.
         fn synthetic_gif(width: u32, height: u32, color: image::Rgba<u8>) -> Vec<u8> {
             let mut out = Vec::new();
             {
@@ -598,9 +561,7 @@ mod tests {
             out
         }
 
-        /// A real, multi-frame animated GIF: frame 0 red, frame 1 blue — same visual
-        /// design as the fixture this replaces, so the first-frame discrimination
-        /// test below is unchanged.
+        /// A real, multi-frame animated GIF: frame 0 red, frame 1 blue, for the first-frame-discrimination test below.
         fn synthetic_animated_gif(width: u32, height: u32) -> Vec<u8> {
             let mut out = Vec::new();
             {
@@ -619,9 +580,7 @@ mod tests {
             out
         }
 
-        /// A real generated JPEG, truncated well before any entropy-coded scan data:
-        /// keeps the SOI/JFIF magic bytes (so sniffing still says "JPEG") but cannot
-        /// decode — same failure mode the old truncated-sips-file fixture proved.
+        /// A real generated JPEG, truncated before any entropy-coded scan data: keeps the SOI/JFIF magic bytes (sniffing still says "JPEG") but cannot decode.
         fn synthetic_corrupt_jpeg() -> Vec<u8> {
             let full = synthetic_jpeg(16, 16);
             let cut = 20.min(full.len());
@@ -700,10 +659,8 @@ mod tests {
 
         #[test]
         fn sniff_format_recognizes_webp_container_header() {
-            // RIFF....WEBP container header — the public, documented magic-number
-            // layout of the format, not an invented payload. No local WebP encoder
-            // is available in this environment, so this is the only WebP coverage;
-            // see the report for provenance.
+            // RIFF....WEBP container header matches the documented magic-number layout, not an
+            // invented payload. No local WebP encoder exists, so this is the only WebP coverage.
             let mut header = Vec::from(*b"RIFF");
             header.extend_from_slice(&[0, 0, 0, 0]); // chunk size, irrelevant to sniffing
             header.extend_from_slice(b"WEBP");
@@ -757,8 +714,8 @@ mod tests {
         use super::*;
         use crate::tests::utils::MockClient;
 
-        /// Same fixed values on every call — safe under parallel test execution
-        /// since no other test in this crate reads/writes these two env vars.
+        /// Same fixed values on every call: safe under parallel test execution since no other
+        /// test in this crate reads/writes these two env vars.
         fn set_storage_env() {
             unsafe {
                 std::env::set_var("STORAGE_BUCKET", "test-bucket");

@@ -32,7 +32,8 @@ pub async fn insert_outbound_sms(
     company_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     if let Some(cloudtalk_id) = sms.id {
-        // Tier 1: exact text match — normal text-only and true-MMS sends.
+        // Tier 1: exact text match for normal text-only and true-MMS sends.
+        // Oldest unclaimed row first: echoes arrive in send order, so it is the one waiting.
         let merged = sqlx::query!(
             r#"
             UPDATE cloudtalk_sms
@@ -44,7 +45,7 @@ pub async fn insert_outbound_sms(
                AND recipient = ?
                AND text = ?
                AND created_date >= (NOW() - INTERVAL 10 MINUTE)
-             ORDER BY created_date DESC, id DESC
+             ORDER BY created_date ASC, id ASC
              LIMIT 1
             "#,
             cloudtalk_id,
@@ -58,8 +59,8 @@ pub async fn insert_outbound_sms(
             return Ok(merged);
         }
 
-        // Tier 2: the fallback sends "caption + links", so the stored caption is a prefix
-        // of the echoed body — match on that prefix so we never merge an unrelated row.
+        // Tier 2 matches image-send fallback echoes only (see buildFallbackSmsBody); byte-exact
+        // LEFT/CONCAT (not LIKE) stops a caption's own '%'/'_' acting as a wildcard, gated on an attachment existing.
         let merged_loose = sqlx::query!(
             r#"
             UPDATE cloudtalk_sms
@@ -69,14 +70,27 @@ pub async fn insert_outbound_sms(
                AND cloudtalk_id IS NULL
                AND status IN ('pending', 'sent')
                AND recipient = ?
-               AND ? LIKE CONCAT(text, '%')
+               AND EXISTS (
+                   SELECT 1 FROM cloudtalk_sms_attachments a
+                    WHERE a.cloudtalk_sms_id = cloudtalk_sms.id
+               )
+               AND (
+                   (text = '' AND ? LIKE 'Photo 1: %')
+                   OR (
+                       text <> ''
+                       AND LEFT(?, CHAR_LENGTH(text) + 1) = CONCAT(text, '\n')
+                       AND ? LIKE CONCAT('%', 'Photo 1: ', '%')
+                   )
+               )
                AND created_date >= (NOW() - INTERVAL 10 MINUTE)
-             ORDER BY created_date DESC, id DESC
+             ORDER BY created_date ASC, id ASC
              LIMIT 1
             "#,
             cloudtalk_id,
             company_id,
             sms.recipient(),
+            sms.text.0,
+            sms.text.0,
             sms.text.0,
         )
         .execute(pool)
@@ -273,6 +287,8 @@ pub async fn find_local_cloudtalk_id_by_phone(
 
 #[cfg(test)]
 mod tests {
+    use super::insert_outbound_sms;
+    use crate::cloudtalk::schemas::CloudtalkSMS;
     use sqlx::MySqlPool;
 
     #[sqlx::test(migrations = "../migrations")]
@@ -307,5 +323,216 @@ mod tests {
         let after = sqlx::query!("SELECT COUNT(*) AS c FROM cloudtalk_sms_attachments")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(after.c, 0, "attachments must cascade-delete with the parent sms row");
+    }
+
+    // Builds an outbound-echo fixture like the real webhook body, without the "[text]"
+    // marker (that's only relevant to the raw-HTTP-body capture tests in receive.rs).
+    fn echo_fixture(cloudtalk_id: i64, text: &str) -> CloudtalkSMS {
+        let payload = serde_json::json!({
+            "id": cloudtalk_id,
+            "sender": "+16468956758",
+            "recipient": "+13173161456",
+            "text": text,
+            "agent": "540273",
+        });
+        serde_json::from_value(payload).expect("valid CloudtalkSMS fixture")
+    }
+
+    // Seeds a CRM-originated outbound row (cloudtalk_id NULL, awaiting the
+    // CloudTalk echo) for recipient 3173161456 / company 42, and returns its id.
+    async fn insert_pending_outbound(pool: &MySqlPool, text: &str, status: &str) -> i32 {
+        let id = sqlx::query!(
+            "INSERT INTO cloudtalk_sms \
+                (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status) \
+             VALUES (NULL, NULL, 3173161456, ?, '540273', 42, 'outbound', ?)",
+            text,
+            status,
+        )
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+        i32::try_from(id).unwrap()
+    }
+
+    // Seeds an attachment row for `sms_id` (same pattern as the cascade-delete test above);
+    // tier 2 requires at least one to exist.
+    async fn insert_attachment_for(pool: &MySqlPool, sms_id: i32) {
+        sqlx::query!(
+            "INSERT INTO cloudtalk_sms_attachments \
+                (cloudtalk_sms_id, content_type, filename, s3_key, s3_url, width, height, position) \
+             VALUES (?, 'image/jpeg', 'a.jpg', '42/u/a.jpg', 's3://gd-sms-attachments/42/u/a.jpg', 800, 600, 0)",
+            sms_id,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn cloudtalk_id_of(pool: &MySqlPool, sms_id: i32) -> Option<i64> {
+        sqlx::query!(
+            "SELECT cloudtalk_id FROM cloudtalk_sms WHERE id = ?",
+            sms_id
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        .cloudtalk_id
+    }
+
+    async fn outbound_row_count(pool: &MySqlPool) -> i64 {
+        sqlx::query!(
+            "SELECT COUNT(*) AS c FROM cloudtalk_sms WHERE company_id = 42 AND direction = 'outbound'"
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        .c
+    }
+
+    // (b) Image-only fallback: empty caption means the fallback body is the bare "Photo 1:
+    // <url>" line (buildFallbackSmsBody's empty-caption branch); with an attachment, must merge.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_tier2_merges_image_only_fallback_echo(pool: MySqlPool) {
+        let row_id = insert_pending_outbound(&pool, "", "sent").await;
+        insert_attachment_for(&pool, row_id).await;
+
+        let sms = echo_fixture(2_200_000_101, "Photo 1: https://x/y.jpg");
+        insert_outbound_sms(&pool, &sms, 42).await.unwrap();
+
+        assert_eq!(cloudtalk_id_of(&pool, row_id).await, Some(2_200_000_101));
+        assert_eq!(
+            outbound_row_count(&pool).await,
+            1,
+            "must merge, not duplicate"
+        );
+    }
+
+    // (c) Caption fallback: body is "<caption>\nPhoto 1: <url>" (buildFallbackSmsBody's
+    // non-empty-caption branch); with an attachment present, must merge.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_tier2_merges_caption_fallback_echo(pool: MySqlPool) {
+        let row_id = insert_pending_outbound(&pool, "cap", "sent").await;
+        insert_attachment_for(&pool, row_id).await;
+
+        let sms = echo_fixture(2_200_000_102, "cap\nPhoto 1: https://x/y.jpg");
+        insert_outbound_sms(&pool, &sms, 42).await.unwrap();
+
+        assert_eq!(cloudtalk_id_of(&pool, row_id).await, Some(2_200_000_102));
+        assert_eq!(
+            outbound_row_count(&pool).await,
+            1,
+            "must merge, not duplicate"
+        );
+    }
+
+    // (d) An unrelated echo to the same recipient must never be absorbed by an image-only
+    // row just because its text is empty; that was the BLOCKER data-loss bug this redesign fixes.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_tier2_does_not_merge_unrelated_echo_into_image_only_row(pool: MySqlPool) {
+        let row_id = insert_pending_outbound(&pool, "", "sent").await;
+        insert_attachment_for(&pool, row_id).await;
+
+        let sms = echo_fixture(2_200_000_103, "Thanks, see you at 3");
+        insert_outbound_sms(&pool, &sms, 42).await.unwrap();
+
+        assert_eq!(
+            cloudtalk_id_of(&pool, row_id).await,
+            None,
+            "unrelated echo must not merge into the image-only row"
+        );
+        assert_eq!(
+            outbound_row_count(&pool).await,
+            2,
+            "unrelated echo must insert its own row"
+        );
+    }
+
+    // (e) Prefix collision: a plain-text send of "Hi" must not absorb an
+    // unrelated echo that merely starts with "Hi" ("Hi there!").
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_tier2_does_not_merge_prefix_collision(pool: MySqlPool) {
+        let row_id = insert_pending_outbound(&pool, "Hi", "sent").await;
+        insert_attachment_for(&pool, row_id).await;
+
+        let sms = echo_fixture(2_200_000_104, "Hi there!");
+        insert_outbound_sms(&pool, &sms, 42).await.unwrap();
+
+        assert_eq!(
+            cloudtalk_id_of(&pool, row_id).await,
+            None,
+            "prefix collision must not merge"
+        );
+        assert_eq!(outbound_row_count(&pool).await, 2);
+    }
+
+    // (f) A text-only send (no attachment rows) must never tier-2 merge, even against an
+    // echo with the exact fallback shape; tier 2 exists solely for image-send fallbacks.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_tier2_never_merges_row_without_attachment(pool: MySqlPool) {
+        let row_id = insert_pending_outbound(&pool, "", "sent").await;
+        // Deliberately no insert_attachment_for(&pool, row_id) call.
+
+        let sms = echo_fixture(2_200_000_105, "Photo 1: https://x/y.jpg");
+        insert_outbound_sms(&pool, &sms, 42).await.unwrap();
+
+        assert_eq!(
+            cloudtalk_id_of(&pool, row_id).await,
+            None,
+            "row without an attachment must never tier-2 merge"
+        );
+        assert_eq!(outbound_row_count(&pool).await, 2);
+    }
+
+    // (g1) A literal '%' inside the caption must be treated as an ordinary
+    // character (equality, not LIKE), so its real fallback echo still merges.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_tier2_merges_fallback_with_percent_in_caption(pool: MySqlPool) {
+        let row_id = insert_pending_outbound(&pool, "save 50% now", "sent").await;
+        insert_attachment_for(&pool, row_id).await;
+
+        let sms = echo_fixture(2_200_000_106, "save 50% now\nPhoto 1: https://x/y.jpg");
+        insert_outbound_sms(&pool, &sms, 42).await.unwrap();
+
+        assert_eq!(cloudtalk_id_of(&pool, row_id).await, Some(2_200_000_106));
+    }
+
+    // (g2) An unrelated echo starting with "save 50" must not merge, even though the old
+    // `LIKE CONCAT(text, '%')` tier-2 let the caption's own '%' act as a SQL wildcard.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_tier2_does_not_merge_unrelated_echo_with_percent_caption(pool: MySqlPool) {
+        let row_id = insert_pending_outbound(&pool, "save 50% now", "sent").await;
+        insert_attachment_for(&pool, row_id).await;
+
+        let sms = echo_fixture(2_200_000_107, "save 50 different times right now");
+        insert_outbound_sms(&pool, &sms, 42).await.unwrap();
+
+        assert_eq!(
+            cloudtalk_id_of(&pool, row_id).await,
+            None,
+            "unrelated echo must not merge just because the stored '%' acted as a wildcard"
+        );
+    }
+
+    // FIFO: echoes arrive in send order, so the oldest unclaimed candidate
+    // row must absorb first, not the newest.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_merge_picks_oldest_unclaimed_row_first(pool: MySqlPool) {
+        let older_id = insert_pending_outbound(&pool, "hello", "pending").await;
+        let newer_id = insert_pending_outbound(&pool, "hello", "pending").await;
+        assert!(
+            older_id < newer_id,
+            "test setup: older row must have the lower id"
+        );
+
+        let sms = echo_fixture(2_200_000_108, "hello");
+        insert_outbound_sms(&pool, &sms, 42).await.unwrap();
+
+        assert_eq!(
+            cloudtalk_id_of(&pool, older_id).await,
+            Some(2_200_000_108),
+            "the oldest unclaimed row must absorb the echo first"
+        );
+        assert_eq!(cloudtalk_id_of(&pool, newer_id).await, None);
     }
 }
