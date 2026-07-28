@@ -167,7 +167,7 @@ async fn handle_telegram_code<T: Telegram>(
             return internal_error(ERR_DB);
         }
         return bot
-            .send_message(chat_id, "Accepted, you are now registered")
+            .send_message(chat_id, "Accepted, you are now registered.")
             .await
             .map_or_else(|e| e, |_| OK_RESPONSE);
     }
@@ -671,7 +671,7 @@ mod local_tests {
             .unwrap();
         assert_eq!(user.telegram_id, Some(4));
         let sent = bot.sent.lock().unwrap();
-        assert_eq!(sent[0].1, "Accepted, you are now registered");
+        assert!(sent[0].1.contains("Accepted, you are now registered"));
     }
 
     // -----------------------------

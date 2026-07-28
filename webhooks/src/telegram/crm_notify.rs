@@ -1,4 +1,4 @@
-use crate::axum_helpers::guards::{RemixBackend, TelegramBot};
+use crate::axum_helpers::guards::{NotificationsTelegramBot, RemixBackend};
 use crate::libs::constants::OK_RESPONSE;
 use crate::libs::types::BasicResponse;
 use crate::telegram::crm::{CrmTelegramNotify, send_crm_telegram_notification};
@@ -23,7 +23,7 @@ pub async fn crm_notify_handler(
     State(pool): State<MySqlPool>,
     Json(body): Json<CrmNotifyRequest>,
 ) -> BasicResponse {
-    let bot = TelegramBot::default();
+    let bot = NotificationsTelegramBot::default();
     let payload = CrmTelegramNotify {
         user_id: body.user_id,
         deal_id: body.deal_id,

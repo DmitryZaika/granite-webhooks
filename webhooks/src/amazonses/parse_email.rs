@@ -129,6 +129,73 @@ pub fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
 /// regardless of the sender's UI language.
 static FORWARD_HEADER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\S+:").unwrap());
 
+static OUTLOOK_CID_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[cid:[^\]]+\]").unwrap());
+
+fn strip_outlook_cid_markers(body: &str) -> String {
+    OUTLOOK_CID_RE
+        .replace_all(body, "")
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+static ON_WROTE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)(?:^|\n)On .{10,500}? wrote:\s*").unwrap());
+
+static PARTIAL_ON_WROTE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)(?:^|\n+)On .+?(?:<\s*)?$").unwrap());
+
+static QUOTED_LINE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^>.*$").unwrap());
+
+static HTML_BLOCKQUOTE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?is)(<blockquote[\s\S]*?</blockquote>|<div[^>]*class="[^"]*gmail_quote[^"]*"[^>]*>[\s\S]*)"#,
+    )
+    .unwrap()
+});
+
+static HTML_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
+
+fn strip_leaked_quote_content(body: &str) -> String {
+    let mut text = QUOTED_LINE_RE.replace_all(body, "").to_string();
+    if let Some(found) = ON_WROTE_RE.find(&text) {
+        text = text[..found.start()].to_string();
+    }
+    text = PARTIAL_ON_WROTE_RE.replace_all(&text, "").into_owned();
+    text.trim().to_string()
+}
+
+fn html_body_to_reply_text(html: &str) -> String {
+    let without_quotes = HTML_BLOCKQUOTE_RE.replace_all(html, "");
+    let text = HTML_TAG_RE.replace_all(&without_quotes, "\n");
+    let text = text
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">");
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn extract_reply_body(clean_body: &str) -> String {
+    let reply_body = EmailReplyParser::parse_reply(clean_body);
+    let reply_body = if reply_body.trim().is_empty() {
+        extract_forwarded_content(clean_body)
+            .map(|content| EmailReplyParser::parse_reply(&content))
+            .unwrap_or_default()
+    } else {
+        reply_body
+    };
+    strip_leaked_quote_content(&reply_body)
+}
+
 /// Strips the forward header block ("---------- Forwarded message ---------"
 /// followed by `Label: value` header lines and blank-line separators) from a
 /// forwarded email body. Returns the remaining content — the body of the
@@ -192,18 +259,21 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
     static URL_BRACKET_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"<(https?://[^\s>]+)>").unwrap());
     let clean_body = URL_BRACKET_RE.replace_all(&body, "$1");
-    let reply_body = EmailReplyParser::parse_reply(&clean_body);
-
-    // When a forward contains no new text from the forwarder, EmailReplyParser
-    // returns an empty body. Fall back to extracting the last email in the
-    // forwarded thread.
-    let final_body = if reply_body.trim().is_empty() {
-        extract_forwarded_content(&clean_body)
-            .map(|content| EmailReplyParser::parse_reply(&content))
-            .unwrap_or_default()
+    let in_reply_to_raw = message.in_reply_to();
+    let in_reply_to = parse_header_value(in_reply_to_raw);
+    let mut final_body = if in_reply_to.is_some() {
+        extract_reply_body(&clean_body)
     } else {
-        reply_body
+        clean_body.into_owned()
     };
+    if final_body.trim().is_empty() && in_reply_to.is_some() {
+        if let Some(html) = message.body_html(0) {
+            let html_text = html_body_to_reply_text(html.as_ref());
+            let clean_html = URL_BRACKET_RE.replace_all(&html_text, "$1");
+            final_body = extract_reply_body(&clean_html);
+        }
+    }
+    let final_body = strip_outlook_cid_markers(&final_body);
 
     let attachments = message.attachments();
     let final_attachments: Vec<Attachment> = attachments.filter_map(parse_attachment).collect();
@@ -223,8 +293,6 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         .as_ref()
         .ok_or("Failed to parse receiver email")?
         .to_string();
-    let in_reply_to_raw = message.in_reply_to();
-    let in_reply_to = parse_header_value(in_reply_to_raw);
     let forward_to_email = if let Some(forwarded_to_email_raw) = message.header("X-Forwarded-To") {
         parse_header_value(forwarded_to_email_raw)
     } else {
@@ -497,5 +565,98 @@ mod local_tests {
         let (parsed_email, _) = parse_email(&email_bytes).unwrap();
         assert_eq!(parsed_email.subject, Some("Fwd: First".to_string()));
         assert_eq!(parsed_email.body, "Hello, will Dima see this?");
+    }
+
+    #[test]
+    fn test_parse_outlook_bullet_list_first_email() {
+        let email_bytes = read_file_as_bytes("src/tests/data/outlook_bullet_list.eml").unwrap();
+        let (parsed_email, attachments) = parse_email(&email_bytes).unwrap();
+        assert_eq!(parsed_email.subject, Some("Templates".to_string()));
+        assert!(
+            parsed_email.body.contains("3950-2B"),
+            "Expected bullet list item in body, got: {}",
+            parsed_email.body
+        );
+        assert!(
+            parsed_email.body.contains("Please let me know your availability"),
+            "Expected closing paragraph in body, got: {}",
+            parsed_email.body
+        );
+        assert!(
+            !parsed_email.body.contains("[cid:"),
+            "Expected cid markers to be stripped, got: {}",
+            parsed_email.body
+        );
+        assert_eq!(parsed_email.in_reply_to, None);
+        assert_eq!(attachments.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_julie_partial_quote_reply() {
+        let email_bytes = read_file_as_bytes("src/tests/data/julie_partial_quote.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(parsed_email.body, "Great - thanks for the update!");
+    }
+
+    #[test]
+    fn test_parse_julie_empty_quote_only_reply() {
+        let email_bytes = read_file_as_bytes("src/tests/data/julie_empty_reply.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(parsed_email.body, "");
+    }
+
+    #[test]
+    fn test_strip_leaked_quote_content_removes_partial_on_wrote_header() {
+        let body = "Great - thanks for the update!\n\nOn Fri, Jul 17, 2026 at 12:09 PM Tania Granite Depot <";
+        assert_eq!(
+            strip_leaked_quote_content(body),
+            "Great - thanks for the update!"
+        );
+    }
+
+    #[test]
+    fn test_strip_leaked_quote_content_removes_quote_only_body() {
+        let body = "On Fri, Jul 17, 2026 at 5:12 PM Tania Granite Depot <tania@example.com> wrote:\n\n> quoted";
+        assert_eq!(strip_leaked_quote_content(body), "");
+    }
+
+    #[test]
+    fn test_strip_leaked_quote_content_preserves_new_reply_text() {
+        let body = "Thanks!\n\nOn Fri, Jul 17, 2026 at 12:09 PM Tania Granite Depot <tania@example.com> wrote:\n\n> quoted";
+        assert_eq!(strip_leaked_quote_content(body), "Thanks!");
+    }
+
+    #[test]
+    fn test_html_body_to_reply_text_extracts_content_before_gmail_quote() {
+        let html = concat!(
+            "<div>Approved, please proceed.</div>",
+            "<div class=\"gmail_quote\"><blockquote>quoted content</blockquote></div>"
+        );
+        assert_eq!(
+            html_body_to_reply_text(html),
+            "Approved, please proceed."
+        );
+    }
+
+    #[test]
+    fn test_html_body_to_reply_text_returns_empty_when_only_quote_present() {
+        let html = "<div><br></div><div class=\"gmail_quote\"><blockquote>quoted only</blockquote></div>";
+        assert_eq!(html_body_to_reply_text(html), "");
+    }
+
+    #[test]
+    fn test_reply_email_still_extracts_new_content() {
+        let email_bytes = read_file_as_bytes("src/tests/data/reply_email1.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(parsed_email.body, "Please respond.");
+        assert!(parsed_email.in_reply_to.is_some());
+    }
+
+    #[test]
+    fn test_first_email_does_not_use_reply_parser_on_bullet_list() {
+        let email_bytes = read_file_as_bytes("src/tests/data/outlook_bullet_list.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        assert!(parsed_email.body.contains("3854-2A"));
+        assert!(parsed_email.in_reply_to.is_none());
     }
 }

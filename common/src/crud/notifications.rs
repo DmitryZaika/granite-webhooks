@@ -9,7 +9,8 @@ pub struct DueActivityDeadlineReminder {
     pub deal_id: u64,
     pub message: String,
     pub customer_name: Option<String>,
-    pub telegram_id: Option<i64>,
+    pub notifications_telegram_id: Option<i64>,
+    pub telegram_activity_notifications: bool,
 }
 
 pub async fn get_due_activity_deadline_reminders(
@@ -24,7 +25,8 @@ pub async fn get_due_activity_deadline_reminders(
             n.deal_id AS "deal_id!",
             n.message,
             c.name AS customer_name,
-            u.telegram_id
+            u.notifications_telegram_id,
+            u.telegram_activity_notifications as "telegram_activity_notifications!: bool"
         FROM notifications n
         JOIN deals d ON d.id = n.deal_id AND d.deleted_at IS NULL
         JOIN customers c ON c.id = d.customer_id

@@ -6,6 +6,7 @@ pub fn notification_type_title(notification_type: &str) -> &'static str {
         "activity_edited" => "Edited an Activity",
         "activity_deleted" => "Deleted an Activity",
         "activity_deadline_reminder" => "Activity Reminder",
+        "estimate_appointment_reminder" => "In-Home Estimate Reminder",
         "note_added" => "Added a Note",
         "note_edited" => "Edited a Note",
         "note_deleted" => "Deleted a Note",
@@ -54,7 +55,7 @@ pub fn format_email_notification(
     deal_id: Option<u64>,
     thread_id: &str,
 ) -> String {
-    let customer = customer_name.unwrap_or("New email");
+    let customer = customer_name.unwrap_or("Customer");
     let subject_line = subject.unwrap_or("New email");
     let url = match deal_id.and_then(|value| i32::try_from(value).ok()) {
         Some(deal_id) => deal_email_chat_url(deal_id, thread_id),

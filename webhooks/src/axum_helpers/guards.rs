@@ -158,6 +158,118 @@ impl Telegram for TelegramBot {
     }
 }
 
+#[derive(Clone)]
+pub struct NotificationsTelegramBot {
+    bot: teloxide::Bot,
+}
+
+impl Default for NotificationsTelegramBot {
+    fn default() -> Self {
+        let token = std::env::var("TELOXIDE_NOTIFICATIONS_TOKEN")
+            .or_else(|_| std::env::var("TELEGRAM_NOTIFICATIONS_BOT_TOKEN"))
+            .unwrap_or_else(|error| {
+                panic!("TELOXIDE_NOTIFICATIONS_TOKEN must be set: {error}");
+            });
+        Self {
+            bot: teloxide::Bot::new(token),
+        }
+    }
+}
+
+impl Telegram for NotificationsTelegramBot {
+    fn send_message<C, T>(
+        &self,
+        chat: C,
+        text: T,
+    ) -> impl Future<Output = Result<Message, BasicResponse>> + Send
+    where
+        C: Into<Recipient> + Send,
+        T: Into<String> + Send,
+    {
+        let bot = self.bot.clone();
+        async move {
+            match bot.send_message(chat, text).await {
+                Ok(message) => Ok(message),
+                Err(err) => {
+                    tracing::error!(?err, ERR_SEND_TELEGRAM);
+                    Err(internal_error(ERR_SEND_TELEGRAM))
+                }
+            }
+        }
+    }
+
+    fn send_repliable_message<C, T>(
+        &self,
+        chat: C,
+        text: T,
+        repliable: InlineKeyboardMarkup,
+    ) -> impl Future<Output = Result<Message, teloxide::RequestError>> + Send
+    where
+        C: Into<Recipient> + Send,
+        T: Into<String> + Send,
+    {
+        let bot = self.bot.clone();
+        async move { bot.send_message(chat, text).reply_markup(repliable).await }
+    }
+
+    fn edit_message_text<T>(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+        text: T,
+    ) -> impl Future<Output = Result<Message, BasicResponse>> + Send
+    where
+        T: Into<String> + Send,
+    {
+        let bot = self.bot.clone();
+        let message_id = teloxide::types::MessageId(message_id);
+
+        async move {
+            match bot
+                .edit_message_text(ChatId(chat_id), message_id, text)
+                .reply_markup(InlineKeyboardMarkup::default())
+                .await
+            {
+                Ok(message) => Ok(message),
+                Err(err) => {
+                    tracing::error!(
+                        ?err,
+                        chat_id = chat_id,
+                        message_id = %message_id,
+                        ERR_SEND_TELEGRAM
+                    );
+                    Err(internal_error(ERR_SEND_TELEGRAM))
+                }
+            }
+        }
+    }
+
+    fn delete_message(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+    ) -> impl Future<Output = Result<(), BasicResponse>> + Send {
+        let bot = self.bot.clone();
+        async move {
+            match bot
+                .delete_message(ChatId(chat_id), teloxide::types::MessageId(message_id))
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(err) => {
+                    tracing::error!(
+                        ?err,
+                        chat_id = chat_id,
+                        message_id = message_id,
+                        ERR_SEND_TELEGRAM
+                    );
+                    Err(internal_error(ERR_SEND_TELEGRAM))
+                }
+            }
+        }
+    }
+}
+
 impl<S> FromRequestParts<S> for TelegramBot
 where
     S: Send + Sync,

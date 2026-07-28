@@ -384,7 +384,7 @@ pub async fn update_deal_list_id(
     list_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     query!(
-        r#"UPDATE deals SET list_id = ? WHERE id = ? AND deleted_at IS NULL"#,
+        r#"UPDATE deals SET list_id = ?, is_won = NULL, lost_reason = NULL WHERE id = ? AND deleted_at IS NULL"#,
         list_id,
         deal_id
     )

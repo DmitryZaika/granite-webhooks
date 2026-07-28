@@ -4344,6 +4344,7 @@ dependencies = [
  "common",
  "lambda_runtime",
  "openssl-sys",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",

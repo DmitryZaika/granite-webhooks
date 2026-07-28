@@ -21,3 +21,5 @@ pub const fn not_acceptable(error: &'static str) -> (StatusCode, &'static str) {
 
 pub const SALES_WORKER: i32 = 1;
 pub const SALES_MANAGER: i32 = 2;
+
+pub const TELEGRAM_UPDATES_CHANNEL_URL: &str = "https://t.me/granite_manager";

@@ -275,6 +275,14 @@ mod local_tests {
             .await
             .unwrap();
 
+        sqlx::query!(
+            r#"UPDATE deals SET is_won = 0, lost_reason = 'Price too high' WHERE customer_id = ? AND deleted_at IS NULL"#,
+            customers[0].id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
         let list_before = sqlx::query_scalar!(
             r#"SELECT list_id FROM deals WHERE customer_id = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1"#,
             customers[0].id
@@ -287,14 +295,16 @@ mod local_tests {
         let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
         assert_eq!(response.0, StatusCode::CREATED);
 
-        let list_after = sqlx::query_scalar!(
-            r#"SELECT list_id FROM deals WHERE customer_id = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1"#,
+        let deal_after = sqlx::query!(
+            r#"SELECT list_id, is_won, lost_reason FROM deals WHERE customer_id = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1"#,
             customers[0].id
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(list_after, 1);
+        assert_eq!(deal_after.list_id, 1);
+        assert_eq!(deal_after.is_won, None);
+        assert_eq!(deal_after.lost_reason, None);
     }
 
     #[sqlx::test(migrations = "../migrations")]

@@ -16,6 +16,13 @@ pub struct UserTgInfo {
     pub email: String,
 }
 
+pub struct UserNotificationsTgInfo {
+    pub notifications_telegram_id: Option<i64>,
+    pub telegram_sms_notifications: bool,
+    pub telegram_email_notifications: bool,
+    pub telegram_activity_notifications: bool,
+}
+
 pub async fn get_sales_users(
     pool: &MySqlPool,
     company_id: i32,
@@ -113,6 +120,48 @@ pub async fn get_user_tg_info(
         UserTgInfo,
         r#"SELECT telegram_id, email, name FROM users WHERE id = ?"#,
         user_id
+    )
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_user_notifications_tg_info(
+    pool: &MySqlPool,
+    user_id: i32,
+) -> Result<Option<UserNotificationsTgInfo>, sqlx::Error> {
+    sqlx::query_as!(
+        UserNotificationsTgInfo,
+        r#"
+        SELECT
+            notifications_telegram_id,
+            telegram_sms_notifications as "telegram_sms_notifications!: bool",
+            telegram_email_notifications as "telegram_email_notifications!: bool",
+            telegram_activity_notifications as "telegram_activity_notifications!: bool"
+        FROM users
+        WHERE id = ?
+        "#,
+        user_id
+    )
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_user_id_by_cloudtalk_agent(
+    pool: &MySqlPool,
+    company_id: i32,
+    agent_id: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"
+        SELECT id
+        FROM users
+        WHERE company_id = ?
+          AND cloudtalk_agent_id = ?
+          AND is_deleted = 0
+        LIMIT 1
+        "#,
+        company_id,
+        agent_id
     )
     .fetch_optional(pool)
     .await

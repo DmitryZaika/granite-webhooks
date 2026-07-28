@@ -1,0 +1,218 @@
+Return-Path: <julieyancy0425@gmail.com>
+Received: from mail-pj1-f71.google.com (mail-pj1-f71.google.com [209.85.216.71])
+ by inbound-smtp.us-east-2.amazonaws.com with SMTP id epc9rpvm9b9u1c4gc46k3fkq678773milam303g1
+ for tania@granitedepotindy.com;
+ Sat, 18 Jul 2026 00:19:13 +0000 (UTC)
+Received-SPF: pass (spfCheck: domain of _spf.google.com designates 209.85.216.71 as permitted sender) client-ip=209.85.216.71; envelope-from=julieyancy0425@gmail.com; helo=mail-pj1-f71.google.com;
+Authentication-Results: amazonses.com;
+ spf=pass (spfCheck: domain of _spf.google.com designates 209.85.216.71 as permitted sender) client-ip=209.85.216.71; envelope-from=julieyancy0425@gmail.com; helo=mail-pj1-f71.google.com;
+ dkim=pass header.i=@gmail.com;
+ dmarc=pass header.from=gmail.com;
+X-SES-RECEIPT: AEFBQUFBQUFBQUFIVDI1bEtMNkNod29uOWhiTjlHOVpjQy9FYW5PbDMyT3BHN1BUbW5UTkpzUW5qOHVxdzFucnB3ZFg4aUdwaU1YOUdVUkRYVlp2RmxNMG5Hc0pQSFJVUWFuV0NIQVRQVEIxK1o4bzlSRWdjeTlrbHREbFpkbnd1bEhacnZRY0RvSTJrMWoxRlZyRnl4VDkyUEVHY2E0QkZDQXhNODRFMWVXcU1DaXhwd0xETGs0bUhsdVFzd210SHdWY3NrQkhuelFEdFFRNUNxTDhBVDdWakI3SG1YOUN6WXc1QUF5ZWFqdXczbndjbnhtT2R4dC9MMUNEYndsb2d5bmVYM0ZpREozSEdxTjFFVnNBZ2R6R0c2VTNYcURUYUZGaW4xL0lmcFZoeS9waWJmZEo2blkva3VhUHlIL3IyQmRMN0pDTVl3cEk9
+X-SES-DKIM-SIGNATURE: a=rsa-sha256; q=dns/txt; b=bA7hn5lU7ws705SPdvZI8UETBvMuEqe/SpyiFwWFIz8wlh0wP2hudEel28lfFmc7uX/O/etbXWTzBvr8oCE8Yt3RPJIdrCuFGGB6vHAJA/Xk9aDJM+mLTBGGoONKymo55E1TYXhqWCLpJGxRqmyLHTSyGJq0I31M6US/LqDd4Zg=; c=relaxed/simple; s=kra23psoka5qyyh6gdejiiuof3nluwuz; d=amazonses.com; t=1784333953; v=1; bh=uHyeHCxWphWTt5jHlCnlIMmTPcke70CmU+qkznlA978=; h=From:To:Cc:Bcc:Subject:Date:Message-ID:MIME-Version:Content-Type:X-SES-RECEIPT;
+Received: by mail-pj1-f71.google.com with SMTP id 98e67ed59e1d1-38e095fd889so9967759a91.2
+        for <tania@granitedepotindy.com>; Fri, 17 Jul 2026 17:19:12 -0700 (PDT)
+ARC-Seal: i=3; a=rsa-sha256; t=1784333952; cv=pass;
+        d=google.com; s=arc-20260327;
+        b=lswmQq8kYX/VEwPGvbrNZvmeoY56Z7e8b/zRdXdrKg2Qcz0nPGy5O6J2EwJnzIdS18
+         biKD4MD+4LCSzUbVQilh+fj3mU3nVUxY5PIWw5kfRTIm1MOZ365i5wv2sMH8Eoxm7L/y
+         Bu3NcCFgIqN84qeYXBRadmAFIt50pDZv/MK/U628qKi9CxMG3IqS2YMQRXCL3eDXZ66S
+         cG7Fxea1THneJVbF484+Py8329J1eGqPLBX6/9UWE6/sH5PMzKIHWr8jhfWdW/2b/DJO
+         kWX1Kx/pTXP+9M3W3+xQV9hcF2JMc+UTGsWM3FeX3kxelpUv+UeTHWUC6rMcyxzBVPLs
+         EEpA==
+ARC-Message-Signature: i=3; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=4p+BhkvdBjSQXBXE33YkpyPFjlXt/lDfLXdp6BfhxOU=;
+        fh=apSRg0VLxaWTJA634dsF6sRyOsEZfHxSLf1Y7QE0RtE=;
+        b=rPNcSwg5vWsSCQKHQ7hGAfG6qI3fQcvThUH8e8i6tzPbLaP44ZRpQZoZXkMj5J40Q6
+         hnL1+X3UuTIbFBbVBIj1Jybqj9sQzEqcOdDfK2dw8zxBP8BnegjPO8UhCMqo4vWQlHa9
+         AuqKIO/Olg2ZZM2VtqP009RKAixlyJ59/bl+d9JfJWaqvjQmacxRtLIZ1exxV7Q/wNsj
+         OnUykM3m64UmsFyOW7kX21+cU+TNr1Q2fIetFJ1pNL4UY26mhczy1MaKhp1CGpVlHg98
+         Sl86y2Jh7ws8YEynAc+ZAD0q8F5rEjnOoMzV/G5dbdQ53Cur8K6OEtLrGUfhoHV1AcQD
+         lc3Q==;
+        dara=google.com
+ARC-Authentication-Results: i=3; mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b="hsf/Gdsz";
+       arc=pass (i=1);
+       spf=pass (google.com: domain of julieyancy0425@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=julieyancy0425@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20251104; t=1784333952; x=1784938752;
+        h=content-type:to:subject:message-id:date:from:in-reply-to:references
+         :mime-version:dkim-signature:x-gm-gg:x-gm-message-state:from:to:cc
+         :subject:date:message-id:reply-to:content-type;
+        bh=4p+BhkvdBjSQXBXE33YkpyPFjlXt/lDfLXdp6BfhxOU=;
+        b=Jd9h+NX9609ch7bIm11uSd4HcLS4bWPIp/wNQmsZIIU5cw/9GwUy4rRVPYAwzIWiTF
+         T53DNbRwe5hk1VTn/oCIRybcw/Cr/fYL5fYLKijMYfx33/ZXoCXSBUnaZZvL9R5UgjH9
+         /5gKh123UywcYQJuyNdM+Gj7lN7HNSbNE9YgwZJabTPZbGxSnWXtcAwTYhY5D7Zo1ckw
+         TNT8T9BGy0QIZAVC24KRxJzytpooJ2Jyy4kXFqh3EiHYLwlDiE8hg/JCQUV8a+31Qn7i
+         Zdd0UmvNgivf15stdUb9I9oJw/oSj3l585OsFC2G1CPZVHlIt66uSvPKRV362tLR0joi
+         xhRw==
+X-Gm-Message-State: AOJu0YyslAlConasDtmxp7+aBkvexCMB/g0E6gJ6d3jvv3wBhyeipiYg
+	zBLuwkJvi0uKzpH7p2SSLDZIjf7iKul1+/6ro15GTty2x21s3KuWs0uPHEzGnw8EzCZ2N/pHE/B
+	XPdYfNDADiHsv54QxJZVOiIlnRfVNT+MTfF25q2RQVZ0YrBcG+9ka9Kej7xx012qW/E6FQ6ZNCB
+	AUuUtAtgeBdjQGujBuXLl3Gy+J4KG80l8J01xoR4EQj/Fc+aXn+GEsniKBTwAC9+VQbMpJqE0hX
+	LtB4BSGVIYt
+X-Gm-Gg: AfdE7cmXyW+naJp0nG4eCEn2MSidFg0lG5qnDWA0CyqAGgooukJd5gQ0glZ3IGt2OYM
+	mLbzd/UtXMXcqqOO5iUsjcVsfBfrnPFaegu+BmLZow9VWOfMSe8pU2ve9m/w2pmYc6Mc1teEDev
+	VJush1Zhg5sTjsRloccqXtQKFGos7LIbinrCnXSgIHGGpeDLYuDhK06QPQHwZ9OL9U0O5J0n0Se
+	Zqk3AueUCCIaFZJTiJy0AcqFaKgXmMWNPCoHgGDgB5ECqmB2QOI1FRv58Rj9onDanIh7optCDMF
+	desdPIR+ofZ2yWVDeswRpQK2
+X-Received: by 2002:a17:90a:dfc3:b0:38e:79f:76c6 with SMTP id 98e67ed59e1d1-38e4b5455b4mr5090969a91.24.1784333951948;
+        Fri, 17 Jul 2026 17:19:11 -0700 (PDT)
+X-Received: by 2002:a17:90a:dfc3:b0:38e:79f:76c6 with SMTP id 98e67ed59e1d1-38e4b5455b4mr5090905a91.24.1784333950830;
+        Fri, 17 Jul 2026 17:19:10 -0700 (PDT)
+ARC-Seal: i=2; a=rsa-sha256; t=1784333950; cv=pass;
+        d=google.com; s=arc-20260327;
+        b=GX+y3JJHmu8ZAMLG2FebouaKtXC6Ps3g1iigZ7fphAh/8PkCrse/mJG6SJQ7itAufj
+         TXyBMJIfs2k9GLVul7IvPRNp8s+Rm+IUpkyPSFzFM5oTr+VQde1G6qdSKK3nQ1h9MrQ3
+         khKoz+4pTwHhcq5cyTAyvuc+nsKFhBkhhUlTJxmYnLCLzUYu7F2/AcpLOtcNkVySKgQP
+         s5700g1wkeg/V3CQS5MDt4qFvqLw3j/vnlC04ItzFIc5RkmuwuJYjHl6xJIv7chonLEe
+         JqC5SbWvcqT/X/5mDPZcz6PtRlcTbBqFtM4oCPCBgm/+rxQ/FjfVWdOtUwJROjFk/LmI
+         XGOw==
+ARC-Message-Signature: i=2; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=4p+BhkvdBjSQXBXE33YkpyPFjlXt/lDfLXdp6BfhxOU=;
+        fh=apSRg0VLxaWTJA634dsF6sRyOsEZfHxSLf1Y7QE0RtE=;
+        b=fu99/E8JRxsdG3hkOpFtxfQTvjUz8IDtmnJYaJJkA4UhBwuh001H9NaNUExr2VZ4oK
+         wgqsFP8Qq5rFD3pXBEJD7qgIKLycSh5EITILDIUmZCuPnBr1N4qWN1YV2MqiRXAbuGvo
+         mk9GqsEki1G7bXOyNA/8aXdLixUARM3dYkmgjjne0VYs8brRURTuhPaqfpxUST/Y33QZ
+         Z5e+hJWuu3M3PK+LuD0kMINTvz8BFo5+VqPcg2Q9VEkpxu7Gdo7uLp9xwiHPRorrooyQ
+         5NeXjoDVv32nRFriC4Bcf+6oi81GcXuS0Q/UYaQ01fP3tjxrUDtLGx16lMYq26SKIqcd
+         N7NQ==;
+        dara=google.com
+ARC-Authentication-Results: i=2; mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b="hsf/Gdsz";
+       arc=pass (i=1);
+       spf=pass (google.com: domain of julieyancy0425@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=julieyancy0425@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+Return-Path: <julieyancy0425@gmail.com>
+Received: from mail-sor-f41.google.com (mail-sor-f41.google.com. [209.85.220.41])
+        by mx.google.com with SMTPS id 98e67ed59e1d1-38e5b50cea8sor377681a91.0.2026.07.17.17.19.10
+        for <tania@granitedepotindy.com>
+        (Google Transport Security);
+        Fri, 17 Jul 2026 17:19:10 -0700 (PDT)
+Received-SPF: pass (google.com: domain of julieyancy0425@gmail.com designates 209.85.220.41 as permitted sender) client-ip=209.85.220.41;
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b="hsf/Gdsz";
+       arc=pass (i=1);
+       spf=pass (google.com: domain of julieyancy0425@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=julieyancy0425@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+ARC-Seal: i=1; a=rsa-sha256; t=1784333950; cv=none;
+        d=google.com; s=arc-20260327;
+        b=mrH76r87Xg9Tq6JK4Vtdz+SqYi9KBpJ2mUFmaMP+dWTbLtAiFMuUCzOPGznf/gGyXc
+         /3R6feRfRJT86bI9TrLmUaosuSPMUAAT//xdrYZo2GUULofKBqHKzvHiI38QEjGgoZM7
+         CNJCXEuw3m9BpwlTz2HSyGRpPRffPPnM0/q8SWCMv0QtuMlUYu4o3kIb0COOMppH0KkB
+         1JDFmvDIrmyYQg8YKm62JGt/pedxqeZYEOkmQGCy5jLkQxYNVfUhGux8PtsGmLfbwZPg
+         ECrHl7PO7gwYJXb+f/5qCgg5lF4sySfEv/B1KXw3bx0kM4q4uIFRQRoXP+zlhT0KVZgl
+         pB0Q==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=4p+BhkvdBjSQXBXE33YkpyPFjlXt/lDfLXdp6BfhxOU=;
+        fh=apSRg0VLxaWTJA634dsF6sRyOsEZfHxSLf1Y7QE0RtE=;
+        b=g49JdK4ZK/fs0NezUrMVj6QG9RgZVFoEmOTZWEYTc1Gp48wIK4MyyNl+HfkSng3HUD
+         okDBwZffjG+hFaarTFZhcIhmTB+Kk5C8JAdhtT99W8nWBZFL2RWOGXIm+n3Hd+FWcz+8
+         5KkdgDgQQT7uwgc3idxMVRz1SfXUxIiQ3el4+OUEkLWQOiW4nh5Xs0LMkUwhjJyvLpXR
+         XPrH/d+908oCR+m1+7elx0NlbGb25jfSzJMVlky9DWKyGtq0Xpn99izJYmRB+4ahGzx5
+         9RAnVfGk2lPHc2j2U8t0F2qiwW8wHFU/IjIUoMingvQUJa6YdDRPgxJUx8Dtfo+9v2rK
+         XmVw==;
+        darn=granitedepotindy.com
+ARC-Authentication-Results: i=1; mx.google.com; arc=none
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20251104; t=1784333950; x=1784938750; darn=granitedepotindy.com;
+        h=content-type:to:subject:message-id:date:from:in-reply-to:references
+         :mime-version:from:to:cc:subject:date:message-id:reply-to
+         :content-type;
+        bh=4p+BhkvdBjSQXBXE33YkpyPFjlXt/lDfLXdp6BfhxOU=;
+        b=hsf/GdszOeZ/TZiPqR/UAmgx4le7dSpF0xlgygPaun5WP3iN20mh+J36Dm9DcIl7GO
+         eHpOpF7pBlDssEkTehLKoDNC6KsKtAFWs4cWneCVBD8kBN1GcCkFe+9TWiG4WHwxqfcU
+         EOfyj6PHWb2XqEkPOISrnGw4hfTKLaR6dycG+eF6NNPYPYVDaa0gKU+iTXIvyNSLBFtZ
+         /4JBjBhB2CAAlzijKSAUc6BIR2T0M4m0rG5z83FlI35TM/6oA5ZU9Mw7Pl670mvr5kpE
+         lW/RsK3Pa+a0+3GcfT6DfPqujyEHsq2tYvyaO3E0WpmlUNq6VGXmwAoyjuQRlnymUN92
+         lBSg==
+X-Received: by 2002:a17:90b:4c50:b0:38d:fe7d:2a83 with SMTP id
+ 98e67ed59e1d1-38e4b4e94f9mr3262045a91.3.1784333949564; Fri, 17 Jul 2026
+ 17:19:09 -0700 (PDT)
+MIME-Version: 1.0
+References: <CAFShn6fBEbs2fYO2mnbXJYf1OW5-bUj25E0-GVk3fwiD26WrOw@mail.gmail.com>
+ <010f019f71ecc255-44f80d72-9036-482e-822b-b326c29099c4-000000@us-east-2.amazonses.com>
+In-Reply-To: <010f019f71ecc255-44f80d72-9036-482e-822b-b326c29099c4-000000@us-east-2.amazonses.com>
+From: Julie <julieyancy0425@gmail.com>
+Date: Fri, 17 Jul 2026 20:18:57 -0400
+X-Gm-Features: AUfX_mzn4a4rHoBXEflNXl_yvC5kFtbvnvSjpFDsIfLrtQ7DCv1gTJh792PVTMM
+Message-ID: <CAFShn6ftP_m1US0oBqcdOwd2jx1JMeswVZh=sgAqsUNhG_g59A@mail.gmail.com>
+Subject: Re: Granite Depot - Template Approval Required
+To: Tania Granite Depot <tania@granitedepotindy.com>
+Content-Type: multipart/alternative; boundary="00000000000039796e0656d79f4b"
+
+--00000000000039796e0656d79f4b
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+On Fri, Jul 17, 2026 at 5:12=E2=80=AFPM Tania Granite Depot <
+tania@granitedepotindy.com> wrote:
+
+> Here is the slab layout for your project. If you=E2=80=99d like to make a=
+ny
+> changes, please let us know. You can either mark up the layout or describ=
+e
+> which section of the slab you=E2=80=99d like moved and where you=E2=80=99=
+d like it placed
+> https://fusiondrivecloud.com/matchreport/?license=3D8cce4f312b9efa5c47572=
+c79d628588c&ProjectID=3DWw5pvUXEnB2__eFiC0cd4w
+> =E2=80=94 Tania Andreeva Granite Depot of Indianapolis =F0=9F=93=9E (317)=
+ 941-9741 =F0=9F=8C=90
+> granite-manager.com =F0=9F=93=8D1175 W 16th Street, Indianapolis IN 46202
+> <https://www.google.com/maps/search/1175+W+16th+Street,+Indianapolis+IN+4=
+6202?entry=3Dgmail&source=3Dg>
+> If you'd prefer I stop, just reply and tell me.
+>
+
+--00000000000039796e0656d79f4b
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<div><br></div><div><br><div class=3D"gmail_quote gmail_quote_container"><d=
+iv dir=3D"ltr" class=3D"gmail_attr">On Fri, Jul 17, 2026 at 5:12=E2=80=AFPM=
+ Tania Granite Depot &lt;<a href=3D"mailto:tania@granitedepotindy.com">tani=
+a@granitedepotindy.com</a>&gt; wrote:<br></div><blockquote class=3D"gmail_q=
+uote" style=3D"margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1e=
+x">
+    <div>
+      <div style=3D"white-space:pre-wrap">Here is the slab layout for your =
+project.
+
+If you=E2=80=99d like to make any changes, please let us know. You can eith=
+er mark up the layout or describe which section of the slab you=E2=80=99d l=
+ike moved and where you=E2=80=99d like it placed
+
+<a href=3D"https://fusiondrivecloud.com/matchreport/?license=3D8cce4f312b9e=
+fa5c47572c79d628588c&amp;ProjectID=3DWw5pvUXEnB2__eFiC0cd4w" target=3D"_bla=
+nk">https://fusiondrivecloud.com/matchreport/?license=3D8cce4f312b9efa5c475=
+72c79d628588c&amp;ProjectID=3DWw5pvUXEnB2__eFiC0cd4w</a>
+
+=E2=80=94
+Tania Andreeva
+Granite Depot of Indianapolis
+=F0=9F=93=9E (317) 941-9741
+=F0=9F=8C=90 <a href=3D"http://granite-manager.com" target=3D"_blank">grani=
+te-manager.com</a>
+=F0=9F=93=8D<a href=3D"https://www.google.com/maps/search/1175+W+16th+Stree=
+t,+Indianapolis+IN+46202?entry=3Dgmail&amp;source=3Dg">1175 W 16th Street, =
+Indianapolis IN 46202</a></div></div><div>
+      <div style=3D"margin-top:24px;font-size:12px;color:#666666">
+        If you&#39;d prefer I stop, just reply and tell me.
+      </div>
+    <img alt=3D"" src=3D"https://j4lhg80e.r.us-east-2.awstrack.me/I0/010f01=
+9f71ecc255-44f80d72-9036-482e-822b-b326c29099c4-000000/MKC7NvG3H11e6Kb3Mwbo=
+dl-X6RE=3D258" style=3D"display:none;width:1px;height:1px">
+</div>
+  </blockquote></div></div>
+
+--00000000000039796e0656d79f4b--

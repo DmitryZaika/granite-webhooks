@@ -1,9 +1,11 @@
-use crate::axum_helpers::guards::{CloudTalkWebhookUser, RemixBackend};
+use crate::axum_helpers::guards::{CloudTalkWebhookUser, NotificationsTelegramBot};
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::cloudtalk::schemas::CloudtalkSMS;
 use crate::crud::cloudtalk::{insert_inbound_sms, insert_outbound_sms};
+use crate::crud::users::get_user_id_by_cloudtalk_agent;
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
+use crate::telegram::crm::{InboundSmsTelegramNotify, send_inbound_sms_telegram_notification};
 use axum::body::Bytes;
 use axum::extract::{Json, Path, State};
 use lambda_http::tracing;
@@ -29,7 +31,32 @@ pub async fn sms_received(
 
     match serde_json::from_slice::<CloudtalkSMS>(&body) {
         Ok(form) => match insert_inbound_sms(&pool, &form, company_id).await {
-            Ok(_) => OK_RESPONSE,
+            Ok(_) => {
+                if let Some(agent) = form.agent.as_deref() {
+                    if let Ok(Some(user_id)) =
+                        get_user_id_by_cloudtalk_agent(&pool, company_id, agent).await
+                    {
+                        let sender_phone = form.sender().to_string();
+                        let payload = InboundSmsTelegramNotify {
+                            receiver_user_id: user_id,
+                            sender_phone,
+                            message: form.text.0.clone(),
+                        };
+                        let bot = NotificationsTelegramBot::default();
+                        if let Err(error) =
+                            send_inbound_sms_telegram_notification(&pool, &bot, &payload).await
+                        {
+                            tracing::error!(
+                                ?error,
+                                user_id = user_id,
+                                company_id = company_id,
+                                "Failed to send inbound sms telegram notification"
+                            );
+                        }
+                    }
+                }
+                OK_RESPONSE
+            }
             Err(error) => {
                 tracing::error!("Error inserting sms received into the database: {}", error);
                 internal_error(ERR_DB)
@@ -65,7 +92,7 @@ pub async fn sms_sent(
     }
 }
 pub async fn sync_cloudtalk(
-    _: RemixBackend,
+    _: crate::axum_helpers::guards::RemixBackend,
     State(pool): State<MySqlPool>,
     Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {
@@ -179,7 +206,6 @@ mod tests {
         );
     }
 
-    // App-originated send (no CRM row to merge) → a fresh outbound row is inserted.
     #[sqlx::test(migrations = "../migrations")]
     async fn test_sms_sent_inserts_outbound(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
@@ -204,8 +230,6 @@ mod tests {
         );
     }
 
-    // CRM-originated send: the CRM already inserted an outbound row with a NULL
-    // cloudtalk_id; the CloudTalk echo should merge into it, not duplicate.
     #[sqlx::test(migrations = "../migrations")]
     async fn test_sms_sent_merges_crm_outbound_row(pool: MySqlPool) {
         sqlx::query!(

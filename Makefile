@@ -3,10 +3,9 @@ REGION := us-east-2
 IAM_ROLE := arn:aws:iam::741448943665:role/cargo-lambda-role-2ed5069c-8882-460d-bdc8-192d9b724756
 
 # Tool commands
-BUILD_BASE := uvx cargo-lambda lambda build --release
+BUILD_BASE := uvx cargo-lambda lambda build --release --x86-64
 
-# We use AWS_PROFILE=default at the start of the command to force the credential choice
-DEPLOY_BASE := AWS_PROFILE=default uvx cargo-lambda lambda deploy --iam-role $(IAM_ROLE) --region $(REGION)
+# Deploy exports credentials because cargo-lambda does not support AWS login_session profiles.
 
 # --- Webhooks ---
 .PHONY: build-webhooks
@@ -15,7 +14,13 @@ build-webhooks:
 
 .PHONY: deploy-webhooks
 deploy-webhooks: build-webhooks
-	$(DEPLOY_BASE) --binary-name webhooks granite-webhooks
+	@eval "$$(aws configure export-credentials --format env)" && \
+	unset AWS_PROFILE && \
+	uvx cargo-lambda lambda deploy \
+		--iam-role $(IAM_ROLE) \
+		--region $(REGION) \
+		--binary-name webhooks \
+		granite-webhooks
 
 # --- Local ---
 WATCH_BASE := uvx cargo-lambda lambda watch --release
@@ -35,4 +40,10 @@ build-time-triggered:
 
 .PHONY: deploy-time-triggered
 deploy-time-triggered: build-time-triggered
-	$(DEPLOY_BASE) --binary-name time-triggered time-triggered
+	@eval "$$(aws configure export-credentials --format env)" && \
+	unset AWS_PROFILE && \
+	uvx cargo-lambda lambda deploy \
+		--iam-role $(IAM_ROLE) \
+		--region $(REGION) \
+		--binary-name time-triggered \
+		time-triggered

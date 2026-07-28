@@ -141,18 +141,73 @@ impl SendEmail {
 pub struct InboundEmailNotifyContext {
     pub deal_id: Option<u64>,
     pub customer_name: Option<String>,
+    pub sender_email: Option<String>,
+}
+
+pub fn resolve_inbound_customer_name(
+    customer_name: Option<String>,
+    sender_email: Option<&str>,
+) -> Option<String> {
+    if let Some(name) = customer_name {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    let Some(sender) = sender_email.map(str::trim).filter(|value| !value.is_empty()) else {
+        return None;
+    };
+
+    if let Some(lt_idx) = sender.find('<') {
+        let display = sender[..lt_idx].trim().trim_matches('"');
+        if !display.is_empty() {
+            return Some(display.to_string());
+        }
+        let address = sender[lt_idx + 1..].trim_end_matches('>').trim();
+        let normalized = normalize_email_address(address);
+        if !normalized.is_empty() {
+            return Some(normalized);
+        }
+    }
+
+    let normalized = normalize_email_address(sender);
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn normalize_email_address(email: &str) -> String {
+    email.trim().trim_matches('"').to_lowercase()
 }
 
 pub async fn get_inbound_email_notify_context(
     pool: &MySqlPool,
     thread_id: &str,
+    receiver_user_id: i32,
 ) -> Result<Option<InboundEmailNotifyContext>, sqlx::Error> {
     sqlx::query_as!(
         InboundEmailNotifyContext,
         r#"
         SELECT
             COALESCE(e.deal_id, td.deal_id) AS deal_id,
-            c.name AS customer_name
+            COALESCE(
+                c.name,
+                (
+                    SELECT c2.name
+                    FROM customers c2
+                    INNER JOIN customers_emails ce ON ce.customer_id = c2.id
+                    INNER JOIN users u ON u.id = ?
+                    WHERE c2.company_id = u.company_id
+                      AND c2.deleted_at IS NULL
+                      AND LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(ce.email, '<', -1), '>', 1))) =
+                          LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(e.sender_email, '<', -1), '>', 1)))
+                    LIMIT 1
+                )
+            ) AS customer_name,
+            e.sender_email AS sender_email
         FROM emails e
         LEFT JOIN (
             SELECT thread_id, MAX(deal_id) AS deal_id
@@ -164,13 +219,43 @@ pub async fn get_inbound_email_notify_context(
         LEFT JOIN customers c ON c.id = d.customer_id
         WHERE e.deleted_at IS NULL
           AND e.thread_id = ?
-        ORDER BY e.sent_at DESC
+        ORDER BY e.sent_at DESC, e.id DESC
         LIMIT 1
         "#,
+        receiver_user_id,
         thread_id
     )
     .fetch_optional(pool)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_inbound_customer_name_prefers_database_name() {
+        assert_eq!(
+            resolve_inbound_customer_name(Some("Chew Customer".to_string()), Some("x@y.com")),
+            Some("Chew Customer".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_inbound_customer_name_uses_sender_display_name() {
+        assert_eq!(
+            resolve_inbound_customer_name(None, Some("Chew <chew@example.com>")),
+            Some("Chew".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_inbound_customer_name_uses_sender_email_address() {
+        assert_eq!(
+            resolve_inbound_customer_name(None, Some("chew@example.com")),
+            Some("chew@example.com".to_string())
+        );
+    }
 }
 
 pub async fn create_email_with_attachments(
