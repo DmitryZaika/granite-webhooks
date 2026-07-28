@@ -5,14 +5,18 @@ use common::crud::notifications::{
 };
 use common::crud::scheduled_emails::mark_scheduled_email_as_sent;
 use common::crud::template::fetch_template_variable_data;
-use common::crud::{scheduled_emails::get_ready_scheduled_emails, setup::create_db_pool};
+use common::crud::{scheduled_emails::get_ready_scheduled_emails};
 use common::utils::template::replace_template_variables;
 use lambda_runtime::{tracing, Error, LambdaEvent};
+use reqwest::Client;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
 
 async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize, Error> {
     let reminders = get_due_activity_deadline_reminders(pool).await?;
+    if reminders.is_empty() {
+        return Ok(0);
+    }
     let token = std::env::var("TELOXIDE_NOTIFICATIONS_TOKEN")
         .or_else(|_| std::env::var("TELEGRAM_NOTIFICATIONS_BOT_TOKEN"))
         .map_err(|error| Error::from(error.to_string()))?;
@@ -52,21 +56,67 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
     Ok(sent_count)
 }
 
+async fn process_estimate_appointment_reminders() -> Result<usize, Error> {
+    let app_url = match std::env::var("APP_URL") {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(?error, "APP_URL is not set; skipping estimate reminders");
+            return Ok(0);
+        }
+    };
+    let lambda_key = match std::env::var("LAMBDA_KEY") {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(?error, "LAMBDA_KEY is not set; skipping estimate reminders");
+            return Ok(0);
+        }
+    };
+
+    let url = format!(
+        "{}/api/estimate-reminders/process",
+        app_url.trim_end_matches('/')
+    );
+    let client = Client::new();
+    let response = client
+        .post(url)
+        .header("Authorization", lambda_key)
+        .send()
+        .await
+        .map_err(|error| Error::from(error.to_string()))?;
+
+    if !response.status().is_success() {
+        tracing::warn!(
+            status = response.status().as_u16(),
+            "Failed to process estimate appointment reminders"
+        );
+        return Ok(0);
+    }
+
+    let body = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| Error::from(error.to_string()))?;
+    let processed = body
+        .get("processed")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    Ok(usize::try_from(processed).unwrap_or(0))
+}
+
 /// There are some code example in the following URLs:
 /// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
 /// - https://github.com/aws-samples/serverless-rust-demo/
 pub(crate) async fn function_handler(
-    _pool: &MySqlPool,
+    pool: &MySqlPool,
     event: LambdaEvent<EventBridgeEvent>,
 ) -> Result<OutgoingMessage, Error> {
     // This will now print the full JSON structure to your CloudWatch logs
     tracing::info!("Received event: {:?}", event.payload);
 
-    let pool = create_db_pool().await?;
-    let ready_emails = get_ready_scheduled_emails(&pool).await?;
+    let ready_emails = get_ready_scheduled_emails(pool).await?;
     for email in &ready_emails {
         let data = fetch_template_variable_data(
-            &pool,
+            pool,
             email.user_id,
             Some(email.deal_id),
             Some(email.customer_id),
@@ -86,13 +136,15 @@ pub(crate) async fn function_handler(
             }
         };
         send_message(&[&cleaned_email], &email.template_subject, &result).await?;
-        mark_scheduled_email_as_sent(&pool, email.id).await?;
+        mark_scheduled_email_as_sent(pool, email.id).await?;
     }
-    let reminder_count = send_due_activity_deadline_reminders(&pool).await?;
+    let reminder_count = send_due_activity_deadline_reminders(pool).await?;
+    let estimate_reminder_count = process_estimate_appointment_reminders().await?;
     let message = format!(
-        "Successfully processed {} emails and {} activity deadline reminders",
+        "Successfully processed {} emails, {} activity deadline reminders, and {} estimate appointment reminders",
         ready_emails.len(),
-        reminder_count
+        reminder_count,
+        estimate_reminder_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);
@@ -105,7 +157,7 @@ mod tests {
     use super::*;
     use lambda_runtime::{Context, LambdaEvent};
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../migrations")]
     async fn test_generic_handler(pool: MySqlPool) {
         // Mocking the data we saw in the logs
         let incoming = EventBridgeEvent {

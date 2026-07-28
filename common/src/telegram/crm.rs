@@ -6,6 +6,7 @@ pub fn notification_type_title(notification_type: &str) -> &'static str {
         "activity_edited" => "Edited an Activity",
         "activity_deleted" => "Deleted an Activity",
         "activity_deadline_reminder" => "Activity Reminder",
+        "estimate_appointment_reminder" => "In-Home Estimate Reminder",
         "note_added" => "Added a Note",
         "note_edited" => "Edited a Note",
         "note_deleted" => "Deleted a Note",
