@@ -2,6 +2,7 @@ use crate::{
     amazonses::parse_email::{ParsedEmail, UploadedAttachment},
     crud::users::ReceivingEmail,
 };
+use lambda_http::tracing;
 use sqlx::{MySqlPool, mysql::MySqlQueryResult};
 use uuid::Uuid;
 
@@ -94,6 +95,7 @@ pub async fn insert_email_attachment(
 pub struct SendEmail {
     subject: Option<String>,
     body: String,
+    html_body: Option<String>,
     thread_id: String,
     receiver_user_id: Option<i32>,
     sender_email: String,
@@ -117,6 +119,7 @@ impl SendEmail {
         Self {
             subject: email.subject.clone(),
             body: email.body.clone(),
+            html_body: email.html_body.clone(),
             thread_id: final_thread_id,
             receiver_user_id,
             sender_email: email.sender_email.clone(),
@@ -282,6 +285,17 @@ pub async fn create_email_with_attachments(
     .await?;
 
     let email_id = result.last_insert_id();
+
+    if let Some(html_body) = send.html_body.as_deref().filter(|value| !value.is_empty()) {
+        if let Err(error) = sqlx::query("UPDATE emails SET html_body = ? WHERE id = ?")
+            .bind(html_body)
+            .bind(email_id)
+            .execute(pool)
+            .await
+        {
+            tracing::warn!(?error, email_id, "Failed to store email html_body");
+        }
+    }
 
     for attachment in attachments {
         insert_email_attachment(pool, email_id, attachment).await?;

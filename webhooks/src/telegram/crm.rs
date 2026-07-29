@@ -1,5 +1,5 @@
 use common::telegram::crm::{
-    format_activity_notification, format_email_notification,
+    format_activity_notification, format_email_notification, format_sms_notification,
 };
 
 use crate::axum_helpers::guards::Telegram;
@@ -141,9 +141,10 @@ where
         .chars()
         .filter(|character| character.is_ascii_digit())
         .collect();
-    let text = format!(
-        "New CloudTalk SMS from {}\n\n{}\n\nOpen thread: /employee/cloudtalk/thread/{}",
-        payload.sender_phone, payload.message, phone_digits
+    let text = format_sms_notification(
+        &payload.sender_phone,
+        &payload.message,
+        &phone_digits,
     );
     send_plain_crm_message(bot, telegram_id, &text).await
 }

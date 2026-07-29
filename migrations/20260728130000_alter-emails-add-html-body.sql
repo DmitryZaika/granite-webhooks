@@ -1,0 +1,2 @@
+ALTER TABLE emails
+    ADD COLUMN html_body MEDIUMTEXT NULL AFTER body;

@@ -53,6 +53,7 @@ impl Attachment {
 pub struct ParsedEmail {
     pub subject: Option<String>,
     pub body: String,
+    pub html_body: Option<String>,
     pub sender_email: String,
     pub receiver_email: String,
     pub forward_to_email: Option<String>,
@@ -64,6 +65,7 @@ impl ParsedEmail {
     pub const fn new(
         subject: Option<String>,
         body: String,
+        html_body: Option<String>,
         sender_email: String,
         receiver_email: String,
         forward_to_email: Option<String>,
@@ -73,6 +75,7 @@ impl ParsedEmail {
         Self {
             subject,
             body,
+            html_body,
             sender_email,
             receiver_email,
             forward_to_email,
@@ -159,6 +162,18 @@ static HTML_BLOCKQUOTE_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static HTML_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
+
+static CID_IMG_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<img\b[^>]*\bsrc\s*=\s*["']cid:[^"']*["'][^>]*/?>"#).unwrap()
+});
+
+fn strip_html_quoted_content(html: &str) -> String {
+    HTML_BLOCKQUOTE_RE.replace_all(html, "").trim().to_string()
+}
+
+fn strip_cid_image_tags(html: &str) -> String {
+    CID_IMG_RE.replace_all(html, "").into_owned()
+}
 
 fn strip_leaked_quote_content(body: &str) -> String {
     let mut text = QUOTED_LINE_RE.replace_all(body, "").to_string();
@@ -275,6 +290,18 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
     }
     let final_body = strip_outlook_cid_markers(&final_body);
 
+    let html_body = message
+        .body_html(0)
+        .map(|html| {
+            let cleaned = if in_reply_to.is_some() {
+                strip_html_quoted_content(html.as_ref())
+            } else {
+                html.into_owned()
+            };
+            strip_cid_image_tags(&cleaned)
+        })
+        .filter(|html| !HTML_TAG_RE.replace_all(html, "").trim().is_empty());
+
     let attachments = message.attachments();
     let final_attachments: Vec<Attachment> = attachments.filter_map(parse_attachment).collect();
     let sender_emails = message.from().ok_or("Failed to parse sender email")?;
@@ -302,6 +329,7 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
     let parsed = ParsedEmail::new(
         subject.map(std::string::ToString::to_string),
         final_body,
+        html_body,
         sender_email,
         receiver_email,
         forward_to_email,
@@ -658,5 +686,65 @@ mod local_tests {
         let (parsed_email, _) = parse_email(&email_bytes).unwrap();
         assert!(parsed_email.body.contains("3854-2A"));
         assert!(parsed_email.in_reply_to.is_none());
+    }
+
+    #[test]
+    fn test_html_body_present_for_first_email_with_link() {
+        let email_bytes = read_file_as_bytes("src/tests/data/link.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        let html_body = parsed_email
+            .html_body
+            .expect("expected an html body to be captured");
+        assert!(
+            html_body.contains("href=\"https://www.reuters.com"),
+            "Expected html body to keep the real link markup, got: {html_body}"
+        );
+        assert!(html_body.contains("open this"));
+    }
+
+    #[test]
+    fn test_html_body_strips_cid_images_on_first_email() {
+        let email_bytes = read_file_as_bytes("src/tests/data/outlook_bullet_list.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        let html_body = parsed_email
+            .html_body
+            .expect("expected an html body to be captured");
+        assert!(
+            html_body.contains("Please let me know your availability"),
+            "Expected the real content to survive, got: {html_body}"
+        );
+        assert!(
+            !html_body.contains("cid:"),
+            "Expected the broken inline cid image to be stripped, got: {html_body}"
+        );
+    }
+
+    #[test]
+    fn test_html_body_strips_gmail_quote_for_reply() {
+        let email_bytes = read_file_as_bytes("src/tests/data/julie_partial_quote.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        let html_body = parsed_email
+            .html_body
+            .expect("expected an html body to be captured");
+        assert!(html_body.contains("Great - thanks for the update!"));
+        assert!(
+            !html_body.contains("gmail_quote"),
+            "Expected the quoted thread history to be stripped, got: {html_body}"
+        );
+        assert!(!html_body.contains("Dasha is handling the slab layout"));
+    }
+
+    #[test]
+    fn test_html_body_none_when_quote_only_reply() {
+        let email_bytes = read_file_as_bytes("src/tests/data/julie_empty_reply.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(parsed_email.html_body, None);
+    }
+
+    #[test]
+    fn test_html_body_none_when_no_html_part() {
+        let email_bytes = read_file_as_bytes("src/tests/data/image_only.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(parsed_email.html_body, None);
     }
 }
