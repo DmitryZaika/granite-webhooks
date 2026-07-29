@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use email_reply_parser::EmailReplyParser;
-use mail_parser::{HeaderValue, MessageParser, MessagePart, MimeHeaders, PartType};
+use mail_parser::{Address, HeaderValue, MessageParser, MessagePart, MimeHeaders, PartType};
 use regex::Regex;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::LazyLock;
 use uuid::Uuid;
@@ -50,39 +51,97 @@ impl Attachment {
     }
 }
 
+/// One address from a `To:` or `Cc:` header, with its display name kept so the
+/// CRM can render "Jane Doe" rather than the bare address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedRecipient {
+    /// Lowercased, trimmed, bare address — the form stored and compared against.
+    pub address: String,
+    pub display_name: Option<String>,
+}
+
 pub struct ParsedEmail {
     pub subject: Option<String>,
     pub body: String,
     pub html_body: Option<String>,
     pub sender_email: String,
+    /// First `To:` address. Retained verbatim so existing callers and the
+    /// `emails.receiver_email` column keep their current meaning.
     pub receiver_email: String,
+    /// Every `To:` address, in header order.
+    pub to_recipients: Vec<ParsedRecipient>,
+    /// Every `Cc:` address, in header order.
+    pub cc_recipients: Vec<ParsedRecipient>,
+    /// Every `Bcc:` address. Normally absent on inbound mail — a BCC'd
+    /// recipient's copy does not carry the header — but stored when present.
+    pub bcc_recipients: Vec<ParsedRecipient>,
     pub forward_to_email: Option<String>,
     pub in_reply_to: Option<String>,
+    /// `References:` chain, oldest first. Used as a threading fallback when
+    /// `In-Reply-To` does not match anything we issued.
+    pub references: Vec<String>,
     pub message_id: String,
 }
 
-impl ParsedEmail {
-    pub const fn new(
-        subject: Option<String>,
-        body: String,
-        html_body: Option<String>,
-        sender_email: String,
-        receiver_email: String,
-        forward_to_email: Option<String>,
-        in_reply_to: Option<String>,
-        message_id: String,
-    ) -> Self {
-        Self {
-            subject,
-            body,
-            html_body,
-            sender_email,
-            receiver_email,
-            forward_to_email,
-            in_reply_to,
-            message_id,
+/// The single normalization used for every stored or compared address:
+/// unwrap `Name <addr>`, drop angle brackets, trim, lowercase.
+pub fn normalize_address(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let inner = match (trimmed.rfind('<'), trimmed.rfind('>')) {
+        (Some(open), Some(close)) if close > open => &trimmed[open + 1..close],
+        _ => trimmed,
+    };
+    inner.trim().to_lowercase()
+}
+
+/// Collect every address in a `To:`/`Cc:` header, skipping entries with no
+/// address part and de-duplicating on the normalized form.
+fn collect_recipients(address: Option<&Address<'_>>) -> Vec<ParsedRecipient> {
+    let Some(address) = address else {
+        return Vec::new();
+    };
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out = Vec::new();
+    for addr in address.iter() {
+        let Some(raw) = addr.address.as_ref() else {
+            continue;
+        };
+        let normalized = normalize_address(raw);
+        if normalized.is_empty() || !seen.insert(normalized.clone()) {
+            continue;
         }
+        out.push(ParsedRecipient {
+            address: normalized,
+            display_name: addr
+                .name
+                .as_ref()
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty()),
+        });
     }
+    out
+}
+
+/// `References:` arrives as either a single text header or a list, depending on
+/// how the sending client folded it.
+fn collect_references(value: &HeaderValue<'_>) -> Vec<String> {
+    let raw: Vec<String> = match value {
+        HeaderValue::Text(text) => vec![text.to_string()],
+        HeaderValue::TextList(list) => list.iter().map(std::string::ToString::to_string).collect(),
+        _ => Vec::new(),
+    };
+    let mut seen: HashSet<String> = HashSet::new();
+    raw.iter()
+        .flat_map(|entry| entry.split_whitespace())
+        .map(|entry| {
+            entry
+                .trim_matches(|c| c == '<' || c == '>')
+                .trim()
+                .to_string()
+        })
+        .filter(|entry| !entry.is_empty())
+        .filter(|entry| seen.insert(entry.clone()))
+        .collect()
 }
 
 fn parse_header_value(value: &HeaderValue) -> Option<String> {
@@ -132,8 +191,7 @@ pub fn parse_attachment(part: &MessagePart) -> Option<Attachment> {
 /// regardless of the sender's UI language.
 static FORWARD_HEADER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\S+:").unwrap());
 
-static OUTLOOK_CID_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[cid:[^\]]+\]").unwrap());
+static OUTLOOK_CID_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[cid:[^\]]+\]").unwrap());
 
 fn strip_outlook_cid_markers(body: &str) -> String {
     OUTLOOK_CID_RE
@@ -320,22 +378,30 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         .as_ref()
         .ok_or("Failed to parse receiver email")?
         .to_string();
+    let to_recipients = collect_recipients(message.to());
+    let cc_recipients = collect_recipients(message.cc());
+    let bcc_recipients = collect_recipients(message.bcc());
+    let references = collect_references(message.references());
     let forward_to_email = if let Some(forwarded_to_email_raw) = message.header("X-Forwarded-To") {
         parse_header_value(forwarded_to_email_raw)
     } else {
         None
     };
 
-    let parsed = ParsedEmail::new(
-        subject.map(std::string::ToString::to_string),
-        final_body,
+    let parsed = ParsedEmail {
+        subject: subject.map(std::string::ToString::to_string),
+        body: final_body,
         html_body,
         sender_email,
         receiver_email,
+        to_recipients,
+        cc_recipients,
+        bcc_recipients,
         forward_to_email,
         in_reply_to,
-        message_id.to_string(),
-    );
+        references,
+        message_id: message_id.to_string(),
+    };
     Ok((parsed, final_attachments))
 }
 
@@ -606,7 +672,9 @@ mod local_tests {
             parsed_email.body
         );
         assert!(
-            parsed_email.body.contains("Please let me know your availability"),
+            parsed_email
+                .body
+                .contains("Please let me know your availability"),
             "Expected closing paragraph in body, got: {}",
             parsed_email.body
         );
@@ -660,15 +728,13 @@ mod local_tests {
             "<div>Approved, please proceed.</div>",
             "<div class=\"gmail_quote\"><blockquote>quoted content</blockquote></div>"
         );
-        assert_eq!(
-            html_body_to_reply_text(html),
-            "Approved, please proceed."
-        );
+        assert_eq!(html_body_to_reply_text(html), "Approved, please proceed.");
     }
 
     #[test]
     fn test_html_body_to_reply_text_returns_empty_when_only_quote_present() {
-        let html = "<div><br></div><div class=\"gmail_quote\"><blockquote>quoted only</blockquote></div>";
+        let html =
+            "<div><br></div><div class=\"gmail_quote\"><blockquote>quoted only</blockquote></div>";
         assert_eq!(html_body_to_reply_text(html), "");
     }
 
@@ -746,5 +812,156 @@ mod local_tests {
         let email_bytes = read_file_as_bytes("src/tests/data/image_only.eml").unwrap();
         let (parsed_email, _) = parse_email(&email_bytes).unwrap();
         assert_eq!(parsed_email.html_body, None);
+    }
+
+    /// Several To:, Cc: and Bcc: addresses plus a References: chain — the
+    /// shape reply-all and CC visibility depend on.
+    const MULTI_RECIPIENT_EML: &[u8] = b"Message-ID: <multi-1@example.com>\r\n\
+From: Customer Name <customer@example.com>\r\n\
+To: rep@granite-manager.com, Shared Inbox <SHARED@granite-manager.com>\r\n\
+Cc: Manager <manager@granite-manager.com>, spouse@example.com\r\n\
+Bcc: silent@granite-manager.com, Quiet Partner <QUIET@example.com>\r\n\
+References: <root@example.com> <middle@example.com>\r\n\
+In-Reply-To: <middle@example.com>\r\n\
+Subject: Kitchen quote\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+Please confirm the slab.\r\n";
+
+    #[test]
+    fn parses_every_to_recipient() {
+        let (parsed, _) = parse_email(&Bytes::from_static(MULTI_RECIPIENT_EML)).unwrap();
+        let addresses: Vec<&str> = parsed
+            .to_recipients
+            .iter()
+            .map(|r| r.address.as_str())
+            .collect();
+        assert_eq!(
+            addresses,
+            vec!["rep@granite-manager.com", "shared@granite-manager.com"]
+        );
+    }
+
+    #[test]
+    fn receiver_email_still_holds_the_first_to_for_backward_compatibility() {
+        let (parsed, _) = parse_email(&Bytes::from_static(MULTI_RECIPIENT_EML)).unwrap();
+        assert_eq!(parsed.receiver_email, "rep@granite-manager.com");
+    }
+
+    #[test]
+    fn parses_cc_recipients_with_display_names() {
+        let (parsed, _) = parse_email(&Bytes::from_static(MULTI_RECIPIENT_EML)).unwrap();
+        assert_eq!(parsed.cc_recipients.len(), 2);
+        assert_eq!(
+            parsed.cc_recipients[0].address,
+            "manager@granite-manager.com"
+        );
+        assert_eq!(
+            parsed.cc_recipients[0].display_name.as_deref(),
+            Some("Manager")
+        );
+        assert_eq!(parsed.cc_recipients[1].address, "spouse@example.com");
+        assert_eq!(parsed.cc_recipients[1].display_name, None);
+    }
+
+    #[test]
+    fn parses_references_chain_without_brackets() {
+        let (parsed, _) = parse_email(&Bytes::from_static(MULTI_RECIPIENT_EML)).unwrap();
+        assert_eq!(
+            parsed.references,
+            vec![
+                "root@example.com".to_string(),
+                "middle@example.com".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_bcc_recipients_when_present() {
+        let (parsed, _) = parse_email(&Bytes::from_static(MULTI_RECIPIENT_EML)).unwrap();
+        assert_eq!(parsed.bcc_recipients.len(), 2);
+        assert_eq!(
+            parsed.bcc_recipients[0].address,
+            "silent@granite-manager.com"
+        );
+        assert_eq!(parsed.bcc_recipients[0].display_name, None);
+        assert_eq!(parsed.bcc_recipients[1].address, "quiet@example.com");
+        assert_eq!(
+            parsed.bcc_recipients[1].display_name.as_deref(),
+            Some("Quiet Partner")
+        );
+    }
+
+    #[test]
+    fn bcc_is_empty_when_the_header_is_absent() {
+        let email_bytes = read_file_as_bytes("src/tests/data/reply_email1.eml").unwrap();
+        let (parsed, _) = parse_email(&email_bytes).unwrap();
+        assert!(parsed.bcc_recipients.is_empty());
+    }
+
+    #[test]
+    fn parses_many_cc_and_bcc_addresses() {
+        const MANY_EML: &[u8] = b"Message-ID: <many-1@example.com>\r\n\
+From: customer@example.com\r\n\
+To: rep@granite-manager.com\r\n\
+Cc: a@example.com, B@example.com, c@example.com, d@example.com\r\n\
+Bcc: e@example.com, F@example.com\r\n\
+Subject: Many\r\n\
+\r\n\
+Body\r\n";
+        let (parsed, _) = parse_email(&Bytes::from_static(MANY_EML)).unwrap();
+        let cc: Vec<&str> = parsed
+            .cc_recipients
+            .iter()
+            .map(|r| r.address.as_str())
+            .collect();
+        let bcc: Vec<&str> = parsed
+            .bcc_recipients
+            .iter()
+            .map(|r| r.address.as_str())
+            .collect();
+        assert_eq!(
+            cc,
+            vec![
+                "a@example.com",
+                "b@example.com",
+                "c@example.com",
+                "d@example.com"
+            ]
+        );
+        assert_eq!(bcc, vec!["e@example.com", "f@example.com"]);
+    }
+
+    #[test]
+    fn cc_is_empty_when_the_header_is_absent() {
+        let email_bytes = read_file_as_bytes("src/tests/data/reply_email1.eml").unwrap();
+        let (parsed, _) = parse_email(&email_bytes).unwrap();
+        assert!(parsed.cc_recipients.is_empty());
+        assert_eq!(parsed.to_recipients.len(), 1);
+    }
+
+    #[test]
+    fn normalizes_addresses_consistently() {
+        assert_eq!(
+            normalize_address("Jane Doe <Jane.Doe@Example.COM>"),
+            "jane.doe@example.com"
+        );
+        assert_eq!(normalize_address("  BARE@example.com "), "bare@example.com");
+        assert_eq!(
+            normalize_address("<wrapped@example.com>"),
+            "wrapped@example.com"
+        );
+    }
+
+    #[test]
+    fn deduplicates_an_address_repeated_in_one_header() {
+        const DUP_EML: &[u8] = b"Message-ID: <dup-1@example.com>\r\n\
+From: customer@example.com\r\n\
+To: rep@granite-manager.com, REP@granite-manager.com\r\n\
+Subject: Dup\r\n\
+\r\n\
+Body\r\n";
+        let (parsed, _) = parse_email(&Bytes::from_static(DUP_EML)).unwrap();
+        assert_eq!(parsed.to_recipients.len(), 1);
     }
 }
