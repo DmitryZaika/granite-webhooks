@@ -1,22 +1,7 @@
 -- Email participants: CC / BCC / reply-all / forward support.
 --
--- Supersedes `20260717234741_separate-out-email.sql` on the `better-emails`
--- branch. Same table name, column names and type enum as that PR, so the two
--- are interchangeable from application code's point of view, with three
--- deliberate differences:
---
---   1. The old `emails` columns (sender_email, receiver_email, sender_user_id,
---      receiver_user_id) are NOT dropped. 220 references across 28 TypeScript
---      files still read them; `email_participants` is the authority and those
---      columns are kept as a denormalized cache of the `from`/first `to`.
---      Dropping them is a separate, later cleanup once those callers move over.
---   2. `customer_id` and `position` are added — the first so a participant can
---      be resolved to a CRM customer, the second to preserve header order.
---   3. `emails.company_id` is added, because participant rows widen who can see
---      a thread and tenancy was previously reconstructed per-query by address
---      matching alone.
---
--- Only ONE of this file and 20260717234741 may ever be applied. Retire that one.
+-- Supersedes 20260717234741_separate-out-email.sql. Only one of the two may
+-- ever be applied.
 
 CREATE TABLE email_participants (
     id INT AUTO_INCREMENT PRIMARY KEY,
