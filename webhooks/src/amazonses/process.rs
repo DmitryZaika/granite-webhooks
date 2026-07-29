@@ -5,12 +5,17 @@ use sqlx::MySqlPool;
 use crate::amazon::bucket::S3Bucket;
 use crate::amazonses::parse_email::{Attachment, ParsedEmail};
 use crate::amazonses::upload::upload_attachments;
-use crate::crud::email::{PriorEmail, SendEmail, create_email_with_attachments, get_inbound_email_notify_context, get_prior_email, resolve_inbound_customer_name};
-use crate::crud::users::{ReceivingEmail, get_id_by_email, get_id_by_email_with_forward};
+use crate::axum_helpers::guards::NotificationsTelegramBot;
+use crate::crud::email::{
+    PriorEmail, SendEmail, create_email_with_attachments, get_inbound_email_notify_context,
+    get_prior_email, resolve_inbound_customer_name,
+};
+use crate::crud::users::{
+    ReceivingEmail, get_company_id_by_user_id, get_id_by_email, get_id_by_email_with_forward,
+};
 use crate::libs::constants::{OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use crate::telegram::crm::{InboundEmailTelegramNotify, send_inbound_email_telegram_notification};
-use crate::axum_helpers::guards::NotificationsTelegramBot;
 
 pub struct EmailInfo<'a> {
     pub bucket: &'a str,
@@ -22,6 +27,24 @@ pub struct EmailInfo<'a> {
 impl EmailInfo<'_> {
     pub fn s3_url(&self) -> String {
         format!("s3://{}/{}", self.bucket, self.key)
+    }
+}
+
+/// Owning company for an inbound message, taken from the resolved receiver.
+/// A lookup failure is not fatal — the message is still stored, just without
+/// company attribution, which leaves it legacy-visible rather than lost.
+async fn resolve_company_id(pool: &MySqlPool, user_id: Option<i32>) -> Option<i32> {
+    let user_id = user_id?;
+    match get_company_id_by_user_id(pool, user_id).await {
+        Ok(company_id) => company_id,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                user_id,
+                "Failed to resolve company for inbound email"
+            );
+            None
+        }
     }
 }
 
@@ -39,14 +62,35 @@ pub async fn get_prior_email_backwards_compatible(
     get_prior_email(pool, clean).await
 }
 
+/// Find the thread an inbound message belongs to.
+///
+/// `In-Reply-To` is tried first, then each `References` entry from nearest
+/// ancestor backwards, since some clients drop `In-Reply-To` on a forwarded
+/// message but keep the chain.
+pub async fn find_prior_email(
+    pool: &MySqlPool,
+    parsed: &ParsedEmail,
+) -> Result<Option<PriorEmail>, sqlx::Error> {
+    if let Some(in_reply_to) = parsed.in_reply_to.as_deref()
+        && let Some(prior) = get_prior_email_backwards_compatible(pool, in_reply_to).await?
+    {
+        return Ok(Some(prior));
+    }
+    for reference in parsed.references.iter().rev() {
+        if let Some(prior) = get_prior_email_backwards_compatible(pool, reference).await? {
+            return Ok(Some(prior));
+        }
+    }
+    Ok(None)
+}
+
 pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
     pool: &MySqlPool,
     client: C,
-    message_id: &str,
     email_info: EmailInfo<'_>,
 ) -> BasicResponse {
     let s3_url = email_info.s3_url();
-    let prior_raw = match get_prior_email_backwards_compatible(pool, message_id).await {
+    let prior_raw = match find_prior_email(pool, email_info.parsed).await {
         Ok(email) => email,
         Err(error) => {
             tracing::error!(
@@ -86,13 +130,15 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
             .unwrap()
             .map(ReceivingEmail::To),
     };
-    let send_email = SendEmail::new(email_info.parsed, prior.thread_id, received_id);
+    let company_id = resolve_company_id(pool, received_id.map(ReceivingEmail::inner)).await;
+    let send_email =
+        SendEmail::new(email_info.parsed, prior.thread_id, received_id).with_company_id(company_id);
     let result =
         create_email_with_attachments(pool, &send_email, &s3_url, &uploaded_attachments).await;
     if let Err(error) = result {
         tracing::error!(
             "Error inserting email: {} into the db: {}",
-            message_id,
+            email_info.parsed.message_id,
             error
         );
         return internal_error("Failed to insert email into the database");
@@ -133,7 +179,9 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
         );
         return (StatusCode::NOT_FOUND, "receiver email not found");
     };
-    let send_email = SendEmail::new(email_info.parsed, None, Some(receiver));
+    let company_id = resolve_company_id(pool, Some(receiver.inner())).await;
+    let send_email =
+        SendEmail::new(email_info.parsed, None, Some(receiver)).with_company_id(company_id);
     let result =
         create_email_with_attachments(pool, &send_email, &s3_url, &uploaded_attachments).await;
     if let Err(error) = result {
@@ -153,17 +201,18 @@ async fn maybe_send_inbound_email_telegram(pool: &MySqlPool, send: &SendEmail) {
         return;
     };
 
-    let context = match get_inbound_email_notify_context(pool, send.thread_id(), receiver_user_id).await {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                thread_id = send.thread_id(),
-                "Failed to load inbound email notify context"
-            );
-            return;
-        }
-    };
+    let context =
+        match get_inbound_email_notify_context(pool, send.thread_id(), receiver_user_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    thread_id = send.thread_id(),
+                    "Failed to load inbound email notify context"
+                );
+                return;
+            }
+        };
     let (deal_id, customer_name) = match context {
         Some(value) => (
             value.deal_id,
