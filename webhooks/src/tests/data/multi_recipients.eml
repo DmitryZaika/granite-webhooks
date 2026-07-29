@@ -1,0 +1,13 @@
+Return-Path: <alice@example.com>
+From: Alice Sender <alice@example.com>
+To: Primary Receiver <primary@granitedepotindy.com>, Second Receiver <second@example.com>
+Cc: Carbon Copy <cc1@example.com>, cc2@example.com
+Bcc: Blind Copy <bcc@example.com>
+Subject: Multi recipient test
+Message-ID: <multi-recipients-fixture@example.com>
+Date: Tue, 28 Jul 2026 12:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: 7bit
+
+Hello multi recipients.

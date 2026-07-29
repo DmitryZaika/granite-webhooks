@@ -1,16 +1,15 @@
 use crate::{
-    amazonses::parse_email::{ParsedEmail, UploadedAttachment},
-    crud::users::ReceivingEmail,
+    amazonses::parse_email::{EmailParticipant, ParsedEmail, ParticipantRole, UploadedAttachment},
+    crud::users::{ReceivingEmail, get_id_by_email},
 };
 use lambda_http::tracing;
-use sqlx::{MySqlPool, mysql::MySqlQueryResult};
+use sqlx::{MySqlPool, mysql::MySqlQueryResult, Row};
 use uuid::Uuid;
 
 pub async fn get_full_message_id(
     pool: &sqlx::MySqlPool,
     message_id: &str,
 ) -> Result<Option<String>, sqlx::Error> {
-    // Create the search pattern (e.g., "abc" becomes "abc%")
     let pattern = format!("{message_id}%");
 
     sqlx::query_scalar!(
@@ -55,15 +54,36 @@ pub async fn get_prior_email(
     pool: &MySqlPool,
     message_id: &str,
 ) -> Result<Option<PriorEmail>, sqlx::Error> {
-    sqlx::query_as!(
-        PriorEmail,
+    let row = sqlx::query(
         r#"
-        SELECT thread_id, receiver_user_id FROM emails WHERE message_id = ?
+        SELECT
+            e.thread_id AS thread_id,
+            (
+                SELECT ep.user_id
+                FROM email_participants ep
+                WHERE ep.email_id = e.id
+                  AND ep.type = 'to'
+                  AND ep.user_id IS NOT NULL
+                ORDER BY ep.id ASC
+                LIMIT 1
+            ) AS receiver_user_id
+        FROM emails e
+        WHERE e.message_id = ?
+        LIMIT 1
         "#,
-        message_id
     )
+    .bind(message_id)
     .fetch_optional(pool)
-    .await
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    Ok(Some(PriorEmail {
+        thread_id: row.try_get("thread_id")?,
+        receiver_user_id: row.try_get("receiver_user_id")?,
+    }))
 }
 
 pub async fn insert_email_attachment(
@@ -98,8 +118,7 @@ pub struct SendEmail {
     html_body: Option<String>,
     thread_id: String,
     receiver_user_id: Option<i32>,
-    sender_email: String,
-    pub receiver_email: Option<String>,
+    participants: Vec<EmailParticipant>,
     message_id: String,
 }
 
@@ -110,11 +129,6 @@ impl SendEmail {
         receiver_id: Option<ReceivingEmail>,
     ) -> Self {
         let final_thread_id = thread_id.unwrap_or_else(|| Uuid::new_v4().to_string());
-        let receiver_email = match receiver_id {
-            Some(ReceivingEmail::To(_)) => Some(email.receiver_email.clone()),
-            Some(ReceivingEmail::Forward(_)) => email.forward_to_email.clone(),
-            None => None,
-        };
         let receiver_user_id = receiver_id.map(super::users::ReceivingEmail::inner);
         Self {
             subject: email.subject.clone(),
@@ -122,8 +136,7 @@ impl SendEmail {
             html_body: email.html_body.clone(),
             thread_id: final_thread_id,
             receiver_user_id,
-            sender_email: email.sender_email.clone(),
-            receiver_email,
+            participants: email.participants.clone(),
             message_id: email.message_id.clone(),
         }
     }
@@ -138,6 +151,13 @@ impl SendEmail {
 
     pub fn subject(&self) -> Option<&str> {
         self.subject.as_deref()
+    }
+
+    pub fn primary_from_email(&self) -> Option<&str> {
+        self.participants
+            .iter()
+            .find(|participant| participant.role == ParticipantRole::From)
+            .map(|participant| participant.email.as_str())
     }
 }
 
@@ -191,8 +211,7 @@ pub async fn get_inbound_email_notify_context(
     thread_id: &str,
     receiver_user_id: i32,
 ) -> Result<Option<InboundEmailNotifyContext>, sqlx::Error> {
-    sqlx::query_as!(
-        InboundEmailNotifyContext,
+    let row = sqlx::query(
         r#"
         SELECT
             COALESCE(e.deal_id, td.deal_id) AS deal_id,
@@ -206,12 +225,14 @@ pub async fn get_inbound_email_notify_context(
                     WHERE c2.company_id = u.company_id
                       AND c2.deleted_at IS NULL
                       AND LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(ce.email, '<', -1), '>', 1))) =
-                          LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(e.sender_email, '<', -1), '>', 1)))
+                          LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(from_p.email, '<', -1), '>', 1)))
                     LIMIT 1
                 )
             ) AS customer_name,
-            e.sender_email AS sender_email
+            from_p.email AS sender_email
         FROM emails e
+        LEFT JOIN email_participants from_p
+            ON from_p.email_id = e.id AND from_p.type = 'from'
         LEFT JOIN (
             SELECT thread_id, MAX(deal_id) AS deal_id
             FROM emails
@@ -225,11 +246,77 @@ pub async fn get_inbound_email_notify_context(
         ORDER BY e.sent_at DESC, e.id DESC
         LIMIT 1
         "#,
-        receiver_user_id,
-        thread_id
     )
+    .bind(receiver_user_id)
+    .bind(thread_id)
     .fetch_optional(pool)
-    .await
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    Ok(Some(InboundEmailNotifyContext {
+        deal_id: row.try_get::<Option<i64>, _>("deal_id")?.map(|value| value as u64),
+        customer_name: row.try_get("customer_name")?,
+        sender_email: row.try_get("sender_email")?,
+    }))
+}
+
+async fn insert_email_participants(
+    pool: &MySqlPool,
+    email_id: u64,
+    participants: &[EmailParticipant],
+    receiver_user_id: Option<i32>,
+) -> Result<(), sqlx::Error> {
+    let mut has_receiver_user = false;
+    for participant in participants {
+        let user_id = if participant.role == ParticipantRole::From {
+            None
+        } else {
+            get_id_by_email(pool, &participant.email).await?
+        };
+        if let (Some(expected), Some(actual)) = (receiver_user_id, user_id) {
+            if expected == actual {
+                has_receiver_user = true;
+            }
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO email_participants (email_id, email, display_name, user_id, type)
+            VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(email_id)
+        .bind(&participant.email)
+        .bind(&participant.display_name)
+        .bind(user_id)
+        .bind(participant.role.as_db_str())
+        .execute(pool)
+        .await?;
+    }
+
+    if let Some(receiver_user_id) = receiver_user_id {
+        if !has_receiver_user {
+            sqlx::query(
+                r#"
+                UPDATE email_participants ep
+                INNER JOIN users u ON u.id = ?
+                SET ep.user_id = ?
+                WHERE ep.email_id = ?
+                  AND ep.type IN ('to', 'cc')
+                  AND LOWER(TRIM(ep.email)) = LOWER(TRIM(u.email))
+                "#,
+            )
+            .bind(receiver_user_id)
+            .bind(receiver_user_id)
+            .bind(email_id)
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -267,20 +354,17 @@ pub async fn create_email_with_attachments(
     location: &str,
     attachments: &[UploadedAttachment],
 ) -> Result<MySqlQueryResult, sqlx::Error> {
-    let result = sqlx::query!(
+    let result = sqlx::query(
         r#"
-        INSERT INTO emails (subject, body, thread_id, receiver_user_id, sender_email, receiver_email, message_id, bucket)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO emails (subject, body, thread_id, message_id, bucket)
+        VALUES (?, ?, ?, ?, ?)
         "#,
-        send.subject,
-        send.body,
-        send.thread_id,
-        send.receiver_user_id,
-        send.sender_email,
-        send.receiver_email,
-        send.message_id,
-        location
     )
+    .bind(&send.subject)
+    .bind(&send.body)
+    .bind(&send.thread_id)
+    .bind(&send.message_id)
+    .bind(location)
     .execute(pool)
     .await?;
 
@@ -296,6 +380,8 @@ pub async fn create_email_with_attachments(
             tracing::warn!(?error, email_id, "Failed to store email html_body");
         }
     }
+
+    insert_email_participants(pool, email_id, &send.participants, send.receiver_user_id).await?;
 
     for attachment in attachments {
         insert_email_attachment(pool, email_id, attachment).await?;

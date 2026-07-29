@@ -100,7 +100,9 @@ mod local_tests {
     use super::*;
     use crate::tests::data::ses_open_json::ses_open_event_json;
     use crate::tests::data::ses_received::ses_received_json;
-    use crate::tests::utils::{MockClient, get_emails, insert_email, insert_user, new_test_app};
+    use crate::tests::utils::{
+        MockClient, get_email_participants, get_emails, insert_email, insert_user, new_test_app,
+    };
     use axum::http::StatusCode;
     use sqlx::MySqlPool;
 
@@ -464,6 +466,40 @@ mod local_tests {
         assert_eq!(result[1].bucket.as_deref(), BUCKET_NAME);
         assert_eq!(result[2].bucket.as_deref(), BUCKET_NAME);
     }
+    #[sqlx::test(migrations = "../migrations")]
+    async fn received_multi_recipients_participants(pool: MySqlPool) {
+        const CLIENT_EMAIL: &str = "primary@granitedepotindy.com";
+        let user_id = insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
+        let mock_client = MockClient::new("src/tests/data/multi_recipients.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response.0, StatusCode::OK);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].receiver_user_id, Some(user_id));
+        assert_eq!(result[0].receiver_email.as_deref(), Some(CLIENT_EMAIL));
+
+        let participants = get_email_participants(&pool, result[0].id).await.unwrap();
+        assert_eq!(
+            participants
+                .iter()
+                .map(|row| (row.participant_type.as_str(), row.email.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("from", "alice@example.com"),
+                ("to", "primary@granitedepotindy.com"),
+                ("to", "second@example.com"),
+                ("cc", "cc1@example.com"),
+                ("cc", "cc2@example.com"),
+                ("bcc", "bcc@example.com"),
+            ]
+        );
+        assert_eq!(participants[0].display_name.as_deref(), Some("Alice Sender"));
+        assert_eq!(participants[1].user_id, Some(user_id));
+    }
+
     #[sqlx::test(migrations = "../migrations")]
     async fn four_attachments(pool: MySqlPool) {
         let message_id = "CAG6QthaOtf0GWH6Ba9eOfRkfbviRi-RJw_vVnRc4U5cW_9GPmA@mail.gmail.com";

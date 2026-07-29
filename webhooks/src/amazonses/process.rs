@@ -3,7 +3,7 @@ use lambda_http::tracing;
 use sqlx::MySqlPool;
 
 use crate::amazon::bucket::S3Bucket;
-use crate::amazonses::parse_email::{Attachment, ParsedEmail};
+use crate::amazonses::parse_email::{Attachment, ParsedEmail, ParticipantRole};
 use crate::amazonses::upload::upload_attachments;
 use crate::crud::email::{PriorEmail, SendEmail, create_email_with_attachments, get_inbound_email_notify_context, get_prior_email, resolve_inbound_customer_name};
 use crate::crud::users::{ReceivingEmail, get_id_by_email, get_id_by_email_with_forward};
@@ -37,6 +37,34 @@ pub async fn get_prior_email_backwards_compatible(
         None => message_id,
     };
     get_prior_email(pool, clean).await
+}
+
+async fn resolve_receiving_user(
+    pool: &MySqlPool,
+    parsed: &ParsedEmail,
+) -> Result<Option<ReceivingEmail>, sqlx::Error> {
+    for participant in &parsed.participants {
+        if participant.role != ParticipantRole::To {
+            continue;
+        }
+        if let Some(user_id) = get_id_by_email(pool, &participant.email).await? {
+            return Ok(Some(ReceivingEmail::To(user_id)));
+        }
+    }
+    for participant in &parsed.participants {
+        if participant.role != ParticipantRole::Cc {
+            continue;
+        }
+        if let Some(user_id) = get_id_by_email(pool, &participant.email).await? {
+            return Ok(Some(ReceivingEmail::To(user_id)));
+        }
+    }
+    get_id_by_email_with_forward(
+        pool,
+        &parsed.receiver_email,
+        parsed.forward_to_email.as_deref(),
+    )
+    .await
 }
 
 pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
@@ -81,10 +109,13 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
     };
     let received_id = match prior.receiver_user_id {
         Some(user_id) => Some(ReceivingEmail::To(user_id)),
-        None => get_id_by_email(pool, &email_info.parsed.receiver_email)
-            .await
-            .unwrap()
-            .map(ReceivingEmail::To),
+        None => match resolve_receiving_user(pool, email_info.parsed).await {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(?error, "Failed to resolve receiving user for reply");
+                None
+            }
+        },
     };
     let send_email = SendEmail::new(email_info.parsed, prior.thread_id, received_id);
     let result =
@@ -119,19 +150,20 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Failed to upload attachments");
         }
     };
-    let Some(receiver) = get_id_by_email_with_forward(
-        pool,
-        &email_info.parsed.receiver_email,
-        email_info.parsed.forward_to_email.as_deref(),
-    )
-    .await
-    .unwrap() else {
-        tracing::error!(
-            bucket = email_info.bucket,
-            to_email = email_info.parsed.receiver_email,
-            "Reciever email not found"
-        );
-        return (StatusCode::NOT_FOUND, "receiver email not found");
+    let receiver = match resolve_receiving_user(pool, email_info.parsed).await {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            tracing::error!(
+                bucket = email_info.bucket,
+                to_email = email_info.parsed.receiver_email,
+                "Reciever email not found"
+            );
+            return (StatusCode::NOT_FOUND, "receiver email not found");
+        }
+        Err(error) => {
+            tracing::error!(?error, "Failed to resolve receiving user");
+            return internal_error("Failed to resolve receiving user");
+        }
     };
     let send_email = SendEmail::new(email_info.parsed, None, Some(receiver));
     let result =

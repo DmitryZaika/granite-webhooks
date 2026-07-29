@@ -1,12 +1,39 @@
 use bytes::Bytes;
 use email_reply_parser::EmailReplyParser;
-use mail_parser::{HeaderValue, MessageParser, MessagePart, MimeHeaders, PartType};
+use mail_parser::{Address, HeaderValue, MessageParser, MessagePart, MimeHeaders, PartType};
 use regex::Regex;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
 use crate::amazon::bucket::S3Bucket;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ParticipantRole {
+    From,
+    To,
+    Cc,
+    Bcc,
+}
+
+impl ParticipantRole {
+    pub const fn as_db_str(self) -> &'static str {
+        match self {
+            Self::From => "from",
+            Self::To => "to",
+            Self::Cc => "cc",
+            Self::Bcc => "bcc",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmailParticipant {
+    pub email: String,
+    pub display_name: Option<String>,
+    pub role: ParticipantRole,
+}
 
 pub fn filename_to_uuid(original: &str) -> String {
     let path = Path::new(original);
@@ -56,32 +83,101 @@ pub struct ParsedEmail {
     pub html_body: Option<String>,
     pub sender_email: String,
     pub receiver_email: String,
+    pub participants: Vec<EmailParticipant>,
     pub forward_to_email: Option<String>,
     pub in_reply_to: Option<String>,
     pub message_id: String,
 }
 
 impl ParsedEmail {
-    pub const fn new(
+    pub fn new(
         subject: Option<String>,
         body: String,
         html_body: Option<String>,
-        sender_email: String,
-        receiver_email: String,
+        participants: Vec<EmailParticipant>,
         forward_to_email: Option<String>,
         in_reply_to: Option<String>,
         message_id: String,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, String> {
+        let sender_email = participants
+            .iter()
+            .find(|participant| participant.role == ParticipantRole::From)
+            .map(|participant| participant.email.clone())
+            .ok_or_else(|| "Failed to parse sender email".to_string())?;
+        let receiver_email = participants
+            .iter()
+            .find(|participant| participant.role == ParticipantRole::To)
+            .map(|participant| participant.email.clone())
+            .ok_or_else(|| "Failed to parse receiver email".to_string())?;
+        Ok(Self {
             subject,
             body,
             html_body,
             sender_email,
             receiver_email,
+            participants,
             forward_to_email,
             in_reply_to,
             message_id,
-        }
+        })
+    }
+
+    pub fn to_emails(&self) -> impl Iterator<Item = &str> {
+        self.participants.iter().filter_map(|participant| {
+            (participant.role == ParticipantRole::To).then_some(participant.email.as_str())
+        })
+    }
+
+    pub fn cc_emails(&self) -> impl Iterator<Item = &str> {
+        self.participants.iter().filter_map(|participant| {
+            (participant.role == ParticipantRole::Cc).then_some(participant.email.as_str())
+        })
+    }
+}
+
+fn normalize_participant_email(email: &str) -> String {
+    email.trim().trim_matches('"').to_lowercase()
+}
+
+fn push_participant(
+    participants: &mut Vec<EmailParticipant>,
+    seen: &mut HashSet<(ParticipantRole, String)>,
+    role: ParticipantRole,
+    email: &str,
+    display_name: Option<String>,
+) {
+    let normalized = normalize_participant_email(email);
+    if normalized.is_empty() {
+        return;
+    }
+    if !seen.insert((role, normalized.clone())) {
+        return;
+    }
+    let display_name = display_name
+        .map(|value| value.trim().trim_matches('"').to_string())
+        .filter(|value| !value.is_empty());
+    participants.push(EmailParticipant {
+        email: normalized,
+        display_name,
+        role,
+    });
+}
+
+fn collect_address_participants(
+    participants: &mut Vec<EmailParticipant>,
+    seen: &mut HashSet<(ParticipantRole, String)>,
+    role: ParticipantRole,
+    address: Option<&Address<'_>>,
+) {
+    let Some(address) = address else {
+        return;
+    };
+    for addr in address.iter() {
+        let Some(email) = addr.address.as_ref() else {
+            continue;
+        };
+        let display_name = addr.name.as_ref().map(|value| value.to_string());
+        push_participant(participants, seen, role, email, display_name);
     }
 }
 
@@ -304,38 +400,58 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
 
     let attachments = message.attachments();
     let final_attachments: Vec<Attachment> = attachments.filter_map(parse_attachment).collect();
-    let sender_emails = message.from().ok_or("Failed to parse sender email")?;
-    let sender_email = sender_emails
-        .first()
-        .ok_or("Failed to parse sender email")?
-        .address
-        .as_ref()
-        .ok_or("Failed to parse sender email")?
-        .to_string();
-    let receiver_emails = message.to().ok_or("Failed to parse receiver email")?;
-    let receiver_email = receiver_emails
-        .first()
-        .ok_or("Failed to parse receiver email")?
-        .address
-        .as_ref()
-        .ok_or("Failed to parse receiver email")?
-        .to_string();
+
+    let mut participants = Vec::new();
+    let mut seen = HashSet::new();
+    collect_address_participants(
+        &mut participants,
+        &mut seen,
+        ParticipantRole::From,
+        message.from(),
+    );
+    collect_address_participants(
+        &mut participants,
+        &mut seen,
+        ParticipantRole::To,
+        message.to(),
+    );
+    collect_address_participants(
+        &mut participants,
+        &mut seen,
+        ParticipantRole::Cc,
+        message.cc(),
+    );
+    collect_address_participants(
+        &mut participants,
+        &mut seen,
+        ParticipantRole::Bcc,
+        message.bcc(),
+    );
+
     let forward_to_email = if let Some(forwarded_to_email_raw) = message.header("X-Forwarded-To") {
         parse_header_value(forwarded_to_email_raw)
     } else {
         None
     };
+    if let Some(forward_email) = forward_to_email.as_deref() {
+        push_participant(
+            &mut participants,
+            &mut seen,
+            ParticipantRole::To,
+            forward_email,
+            None,
+        );
+    }
 
     let parsed = ParsedEmail::new(
         subject.map(std::string::ToString::to_string),
         final_body,
         html_body,
-        sender_email,
-        receiver_email,
+        participants,
         forward_to_email,
         in_reply_to,
         message_id.to_string(),
-    );
+    )?;
     Ok((parsed, final_attachments))
 }
 
@@ -361,6 +477,49 @@ mod local_tests {
                 .to_string(),
         );
         assert_eq!(parsed_email.in_reply_to, correct);
+    }
+
+    #[test]
+    fn test_parse_multi_recipients_participants() {
+        let email_bytes = read_file_as_bytes("src/tests/data/multi_recipients.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(parsed_email.sender_email, "alice@example.com");
+        assert_eq!(parsed_email.receiver_email, "primary@granitedepotindy.com");
+        assert_eq!(
+            parsed_email.participants,
+            vec![
+                EmailParticipant {
+                    email: "alice@example.com".to_string(),
+                    display_name: Some("Alice Sender".to_string()),
+                    role: ParticipantRole::From,
+                },
+                EmailParticipant {
+                    email: "primary@granitedepotindy.com".to_string(),
+                    display_name: Some("Primary Receiver".to_string()),
+                    role: ParticipantRole::To,
+                },
+                EmailParticipant {
+                    email: "second@example.com".to_string(),
+                    display_name: Some("Second Receiver".to_string()),
+                    role: ParticipantRole::To,
+                },
+                EmailParticipant {
+                    email: "cc1@example.com".to_string(),
+                    display_name: Some("Carbon Copy".to_string()),
+                    role: ParticipantRole::Cc,
+                },
+                EmailParticipant {
+                    email: "cc2@example.com".to_string(),
+                    display_name: None,
+                    role: ParticipantRole::Cc,
+                },
+                EmailParticipant {
+                    email: "bcc@example.com".to_string(),
+                    display_name: Some("Blind Copy".to_string()),
+                    role: ParticipantRole::Bcc,
+                },
+            ]
+        );
     }
 
     #[test]

@@ -44,6 +44,14 @@ pub struct Email {
     pub thread_id: Option<String>,
     pub bucket: Option<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmailParticipantRow {
+    pub email: String,
+    pub display_name: Option<String>,
+    pub user_id: Option<i32>,
+    pub participant_type: String,
+}
 pub fn read_file_as_bytes<P: AsRef<Path>>(path: P) -> std::io::Result<Bytes> {
     let data = fs::read(path)?;
     Ok(Bytes::from(data))
@@ -55,34 +63,125 @@ pub async fn insert_email(
     message_id: &str,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     let uuid: Uuid = Uuid::new_v4();
-    sqlx::query!(
+    let result = sqlx::query(
         r#"
-        INSERT INTO emails (sender_user_id, subject, body, message_id, thread_id)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO emails (subject, body, message_id, thread_id)
+        VALUES (?, ?, ?, ?)
         "#,
-        1,
-        "Test Subject",
-        "Test Body",
-        message_id,
-        uuid.to_string()
     )
+    .bind("Test Subject")
+    .bind("Test Body")
+    .bind(message_id)
+    .bind(uuid.to_string())
     .execute(pool)
-    .await
+    .await?;
+
+    let email_id = result.last_insert_id();
+    sqlx::query(
+        r#"
+        INSERT INTO email_participants (email_id, email, user_id, type)
+        VALUES (?, ?, NULL, 'from')
+        "#,
+    )
+    .bind(email_id)
+    .bind("sender@example.com")
+    .execute(pool)
+    .await?;
+
+    Ok(result)
 }
 
 #[cfg(test)]
 pub async fn get_emails(pool: &MySqlPool) -> Result<Vec<Email>, sqlx::Error> {
-    sqlx::query_as!(
-        Email,
+    let rows = sqlx::query(
         r#"
-        SELECT id, receiver_user_id, receiver_email, sender_user_id, subject, body, message_id, thread_id, bucket
-        FROM emails
-        ORDER BY id ASC
+        SELECT
+            e.id AS id,
+            (
+                SELECT ep.user_id
+                FROM email_participants ep
+                WHERE ep.email_id = e.id
+                  AND ep.type = 'to'
+                  AND ep.user_id IS NOT NULL
+                ORDER BY ep.id ASC
+                LIMIT 1
+            ) AS receiver_user_id,
+            (
+                SELECT ep.email
+                FROM email_participants ep
+                WHERE ep.email_id = e.id
+                  AND ep.type = 'to'
+                  AND ep.user_id IS NOT NULL
+                ORDER BY ep.id ASC
+                LIMIT 1
+            ) AS receiver_email,
+            (
+                SELECT ep.user_id
+                FROM email_participants ep
+                WHERE ep.email_id = e.id
+                  AND ep.type = 'from'
+                ORDER BY ep.id ASC
+                LIMIT 1
+            ) AS sender_user_id,
+            e.subject AS subject,
+            e.body AS body,
+            e.message_id AS message_id,
+            e.thread_id AS thread_id,
+            e.bucket AS bucket
+        FROM emails e
+        ORDER BY e.id ASC
         LIMIT 10
         "#,
     )
     .fetch_all(pool)
-    .await
+    .await?;
+
+    let mut emails = Vec::with_capacity(rows.len());
+    for row in rows {
+        use sqlx::Row;
+        emails.push(Email {
+            id: row.try_get("id")?,
+            receiver_user_id: row.try_get("receiver_user_id")?,
+            receiver_email: row.try_get("receiver_email")?,
+            sender_user_id: row.try_get("sender_user_id")?,
+            subject: row.try_get("subject")?,
+            body: row.try_get("body")?,
+            message_id: row.try_get("message_id")?,
+            thread_id: row.try_get("thread_id")?,
+            bucket: row.try_get("bucket")?,
+        });
+    }
+    Ok(emails)
+}
+
+#[cfg(test)]
+pub async fn get_email_participants(
+    pool: &MySqlPool,
+    email_id: i32,
+) -> Result<Vec<EmailParticipantRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT email, display_name, user_id, type AS participant_type
+        FROM email_participants
+        WHERE email_id = ?
+        ORDER BY id ASC
+        "#,
+    )
+    .bind(email_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut participants = Vec::with_capacity(rows.len());
+    for row in rows {
+        use sqlx::Row;
+        participants.push(EmailParticipantRow {
+            email: row.try_get("email")?,
+            display_name: row.try_get("display_name")?,
+            user_id: row.try_get("user_id")?,
+            participant_type: row.try_get("participant_type")?,
+        });
+    }
+    Ok(participants)
 }
 
 pub async fn insert_user(
