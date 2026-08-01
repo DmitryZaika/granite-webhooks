@@ -1,0 +1,9 @@
+Message-ID: <multi-recipient-1@example.com>
+From: Customer Name <customer@example.com>
+To: colin.delahunty@granite-manager.com, Shared Inbox <SHARED@granite-manager.com>
+Cc: Manager <manager@granite-manager.com>, spouse@example.com
+Bcc: silent@granite-manager.com, Quiet Partner <QUIET@example.com>
+Subject: Kitchen quote
+Content-Type: text/plain; charset=utf-8
+
+Please confirm the slab.
