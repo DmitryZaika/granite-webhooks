@@ -226,6 +226,15 @@ static CID_IMG_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 fn strip_html_quoted_content(html: &str) -> String {
+    // A gmail_quote wrapper div alone isn't a reliable signal of genuine
+    // quoted history — Gmail also wraps multiply-forwarded HTML (e.g.
+    // marketing emails re-sent as a reply) in the same div with no
+    // `<blockquote>` or "On ... wrote:" attribution. Only strip when a real
+    // `<blockquote>` is present, otherwise we'd delete the only content the
+    // email has.
+    if !html.to_ascii_lowercase().contains("<blockquote") {
+        return html.trim().to_string();
+    }
     HTML_BLOCKQUOTE_RE.replace_all(html, "").trim().to_string()
 }
 
@@ -798,6 +807,35 @@ mod local_tests {
             "Expected the quoted thread history to be stripped, got: {html_body}"
         );
         assert!(!html_body.contains("Dasha is handling the slab layout"));
+    }
+
+    #[test]
+    fn test_html_body_keeps_content_for_forwarded_html_with_no_blockquote() {
+        let email_bytes =
+            read_file_as_bytes("src/tests/data/gmail_reply_full_quote.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        let html_body = parsed_email
+            .html_body
+            .expect("expected the forwarded marketing html to be kept");
+        assert!(
+            html_body.contains("ActionFlow") || html_body.contains("WEBINAR"),
+            "Expected the forwarded HTML content to survive since it has no \
+             <blockquote>, got: {html_body}"
+        );
+    }
+
+    #[test]
+    fn test_html_body_keeps_content_for_second_forward_with_no_blockquote() {
+        let email_bytes = read_file_as_bytes("src/tests/data/gmail_forward_8293.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        let html_body = parsed_email
+            .html_body
+            .expect("expected the forwarded marketing html to be kept");
+        assert!(
+            html_body.contains("ActionFlow") || html_body.contains("WEBINAR"),
+            "Expected the forwarded HTML content to survive since it has no \
+             <blockquote>, got: {html_body}"
+        );
     }
 
     #[test]
