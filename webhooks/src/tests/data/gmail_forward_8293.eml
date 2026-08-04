@@ -1,0 +1,407 @@
+Return-Path: <majukita777@gmail.com>
+Received: from mail-vs1-f70.google.com (mail-vs1-f70.google.com [209.85.217.70])
+ by inbound-smtp.us-east-2.amazonaws.com with SMTP id a73mp4aslt4um342ha35gp8cqcp938ce5bn74j01
+ for dema@granitedepotindy.com;
+ Sun, 02 Aug 2026 00:34:24 +0000 (UTC)
+Received-SPF: pass (spfCheck: domain of _spf.google.com designates 209.85.217.70 as permitted sender) client-ip=209.85.217.70; envelope-from=majukita777@gmail.com; helo=mail-vs1-f70.google.com;
+Authentication-Results: amazonses.com;
+ spf=pass (spfCheck: domain of _spf.google.com designates 209.85.217.70 as permitted sender) client-ip=209.85.217.70; envelope-from=majukita777@gmail.com; helo=mail-vs1-f70.google.com;
+ dkim=pass header.i=@gmail.com;
+ dmarc=pass header.from=gmail.com;
+X-SES-RECEIPT: AEFBQUFBQUFBQUFIaHZHNGN6VFlIdldOV3gybDE4RVFYSlZUZ3V3d1ZLVHpvVFlpRFMwVlFMVVJ6c2tqZUZZWVptWE1DYnpSV3pqenIza1A5M2tsNnVsdUlNejQ0RStCZStpWTloSCtCZmhtYWdkTjlYelB5ZklVQmVTOGFEQXlycFRGQ2prWU1vZGdLR2pJbFVHYTVoQWVuVk5MT0hkUWU4WHVQWElSMFhhVThaMVdwWDE2UU9WR3ZnbVlibmZQdGNiUmxKNkJwMG5DL3Ezc1RTMzh4d1IvdGtmbkl5RHZ4Rk11NTNhNjZGN3lxSXRHcmJQbDJXWmJQR09PRWFTTlFyMXdGZVA3TmJnam1NVkJzdnNHWVVoNU8veWlvNGpINFlrRUhJRGw0V0pmMHh4cjRQNjFaQUE9PQ==
+X-SES-DKIM-SIGNATURE: a=rsa-sha256; q=dns/txt; b=S/X0Dujr3AGsAwDINj6ZRZ2Jl7ikQHm6O3xCrNqyDfef2mW2kcRgEsXNKK1Wd9vump/vLnVXi/WzPgx8TskXqCU9/VX7KH4oveDqQ+dz5wKCYKNef8H0jh2sEDo8l8yyuDFDq0YiqUYH+kvVL456adrhOhCxnvWUQ1AavaSHm/o=; c=relaxed/simple; s=kra23psoka5qyyh6gdejiiuof3nluwuz; d=amazonses.com; t=1785630864; v=1; bh=SZIUK4FloC6P0fcdm9sVnFvewSgANq/3Sj/AMv8EJb0=; h=From:To:Cc:Bcc:Subject:Date:Message-ID:MIME-Version:Content-Type:X-SES-RECEIPT;
+Received: by mail-vs1-f70.google.com with SMTP id ada2fe7eead31-738d9935e23so579718137.2
+        for <dema@granitedepotindy.com>; Sat, 01 Aug 2026 17:34:24 -0700 (PDT)
+ARC-Seal: i=3; a=rsa-sha256; t=1785630864; cv=pass;
+        d=google.com; s=arc-20260327;
+        b=BSgyLEn3Z4oWYdOU2EQRo19NFleDl81pjZ0GrdbvfWYEoEGvy/RWbMVlWrdqIaKryD
+         DFOsKOdp4JHkBvou02tKZNDsVd1rhrtifLuXNPY3p34UQGDsCR73cbEC5o8tQbEEKrMQ
+         iY/4TAcGBCjNc2GEnQ5vaTvTtzpWXOCoYQWQZtqqlsnMmCC9O2nHgkBVVjcb/nVXoUHH
+         EbLiYFHPiIRKseD4VLSgCQgLctn7QHwZ/U6xrr8b+E99z/o0uDe/WXfGGwWDJAUlmqWA
+         xJxFep42tmVYk/kI2YmnKRA226DV8j/82Ne7O/5tW4l1mUQXxgtBFw68Ic9eZPSi0x/S
+         bcRQ==
+ARC-Message-Signature: i=3; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=iI4gtMr5z7hZ+4j2onP9/NRFCV8zxs8/UEBAsX9Gbow=;
+        fh=KAQxCXGQP0A9xeUTzPsC3gR/dqREw8ZgUt48SBUrdjk=;
+        b=VOyc82mfpw5jwL6u28cOYXuNY8/qcokmEgYnDBxyU9aebnz563eTL3+kWIhTgQS3IN
+         fB1Sv7yVadubx6BgxoV+FfjY2ELsFy98+jmRoj9G9OY2inpopnxxjLqlERIydynE5Z/s
+         WHwUmbbT2sJDZRI1EFwhxjqLOxR7j7gI9szKVKRyFbbQNm842e5YSGuI+kI+vM3N4kL2
+         9sUbgCrheFyAbYf1Ra6Nco20QiWoWJtDebVLMG6Vvdlw0vWC5LTU4R7RKxQ/+GBpCQl/
+         2SPQ6vmlmvOtZUcuoqfuPQGaKJC87Djn1oplWIbaiQtTUy5nRIyQUZmnQyAz6GuQUvS1
+         Sn/w==;
+        dara=google.com
+ARC-Authentication-Results: i=3; mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=pT2htsYs;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of majukita777@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=majukita777@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20251104; t=1785630864; x=1786235664;
+        h=content-type:to:subject:message-id:date:from:in-reply-to:references
+         :mime-version:dkim-signature:x-gm-gg:x-gm-message-state:from:to:cc
+         :subject:date:message-id:reply-to:content-type;
+        bh=iI4gtMr5z7hZ+4j2onP9/NRFCV8zxs8/UEBAsX9Gbow=;
+        b=PoTOq+KIzZZ/LV4yeH+x33hH+i79Sli2Mx0/8QH4/boKJ/A3AYvSzoNWJWC16CYXRn
+         s52EcojeQHgyh2Jf8ZlcJGgGp8jdbpx3IF6Y+Nzpwk3sXTxgQe+HTG688BfefBX/ViBO
+         m0qQi5UJcHSzNod0+ygI1drDmkJNYhUS/BIHZ86H3jr/7qbrxUTIeGC5bsvS9gYTEh6t
+         U4wMgoZgkpQkSY6mk5YNFk1hk6nOFnqzMdaYwHr+IgObsaEBrN28QOCx++vjjWJe0Ntq
+         TAob883PV+ZZO27hXC9EtGL+No9zHn1UM0iGcwGlkKPqjAghfO/zwiig7yCEXwi3lRs7
+         igVw==
+X-Gm-Message-State: AOJu0YynGehQMxI9NW3VP9aJDL+7ZkHhHvEOYKdIm82UNRUhg8Cj5YJY
+	r/yMW3IdAaiilDuG9+3CHN/HIAaZbtxD9Sxd4/IWuTXjs4hr007C6Afpyq+Ymb/LgOCgpHaI34u
+	NLI6gLYF8I+D9fLQga1d2HNaqeS5/ZAW0BPg3W6f6MVS0mR68/QpiRwLLMOrm7cCJAJaRX/mgn/
+	LyBHWw/L92cwPNwzrpPsBLJCxKrItd47Trza4AacNrGHokI1J7fqsaT339guD2dBcdUes1xbRib
+	7vfczZRFw==
+X-Gm-Gg: AR+sD12GIG/RLupGx0g5lhTfYqvrdwdeYi19k5Yg5oKavxSv186qeyf5DLvyZALPlFs
+	a23rH14vpYn1oom4//bk4m03eoPMF0hzKaGmtITQy0sHsRh4qRGhyG3NuJOfREBfsk0zElCgKXP
+	JXs4zwVgCXg9pU5pxjI06KKuzbhrREYAUPaqe+Nn0eOPhECOLG4p35fE4GqLHyP9x7TcvrJSAsb
+	EVM6ZXpSVpR2rX9wMn5e6EoJHlteaEHXz4+7B8Ux3cJemeq/hnF7k45cMKxzx3bjcIyzkhpEZOD
+	Qs1lMlanJcI7cT/VXbE7a+g/EXT7dRq1m7KfPJjuFu1eQrojDxN1/Pa1
+X-Received: by 2002:a05:6102:50a8:b0:739:71ef:d772 with SMTP id ada2fe7eead31-75b22064adfmr4094369137.4.1785630863905;
+        Sat, 01 Aug 2026 17:34:23 -0700 (PDT)
+X-Received: by 2002:a05:6102:50a8:b0:739:71ef:d772 with SMTP id ada2fe7eead31-75b22064adfmr4094346137.4.1785630862858;
+        Sat, 01 Aug 2026 17:34:22 -0700 (PDT)
+ARC-Seal: i=2; a=rsa-sha256; t=1785630862; cv=pass;
+        d=google.com; s=arc-20260327;
+        b=bOxOyKtT111/55fnuOaJNFg9mJupM9Lg2DhlGSufQUG3QpgcNKiXAKC6VgPiDU5g9e
+         SisDq11HPEWzf/aBEa4/FRSTVIwmsdvbdYDTwmXt2ObhIDUkf8/utKP1AQmn5PLhnqfM
+         comOsf4Ngt2qcB6twG965AmV4UJfaMBgh5IlbzYnJ/1mObm/TvS+zlONgYakQME86JJP
+         TihTeUHS0ukAZKu8rwPUYrxwluFv8FLvgPeUzvIFNqzBISlF0cZeB8aJAkk6WL3QNtMZ
+         jlNW9HWKrT50GFp+sc86oJpu5QaEvKW9IKyXYPS7fvoZQrfuG3nzlaDbGc4uOpbFJ9/J
+         pT1w==
+ARC-Message-Signature: i=2; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=iI4gtMr5z7hZ+4j2onP9/NRFCV8zxs8/UEBAsX9Gbow=;
+        fh=KAQxCXGQP0A9xeUTzPsC3gR/dqREw8ZgUt48SBUrdjk=;
+        b=Tc4iYAykbooPad1ahOU8BVPAekkUyRDw0QAcptKFpEdJY+bhgRLNVlUgyc/2BeuqMH
+         dv7CfaLittX7JNutZxklcnBTeJBtBS+G+wD4OQv7hlU2+6ZDwl0XRda/i7hAv9Zdg1rv
+         9tzQixhHZQmSAqnb/yGIxARBFl4L9pBc3Nlv4/2wqc7n0zJZMPOhcCilvLarlRZ9PJBw
+         OdidtHZ0xscwVLrBjxCECj5k70TwGn9wDErJzvcT4+PCdP4FpUmxcnBdK8wXMDrELEGK
+         /rdZD9qwCTiLyYp21iGT+Mw1ohKm3Ta0/KCK08kEKaHYzqRyW4QjgsECSKfdufhatMLG
+         Smsw==;
+        dara=google.com
+ARC-Authentication-Results: i=2; mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=pT2htsYs;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of majukita777@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=majukita777@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+Return-Path: <majukita777@gmail.com>
+Received: from mail-sor-f41.google.com (mail-sor-f41.google.com. [209.85.220.41])
+        by mx.google.com with SMTPS id a1e0cc1a2514c-977e61d108esor628301241.2.2026.08.01.17.34.22
+        for <dema@granitedepotindy.com>
+        (Google Transport Security);
+        Sat, 01 Aug 2026 17:34:22 -0700 (PDT)
+Received-SPF: pass (google.com: domain of majukita777@gmail.com designates 209.85.220.41 as permitted sender) client-ip=209.85.220.41;
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20251104 header.b=pT2htsYs;
+       arc=pass (i=1);
+       spf=pass (google.com: domain of majukita777@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=majukita777@gmail.com;
+       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com;
+       dara=neutral header.i=@granitedepotindy.com
+ARC-Seal: i=1; a=rsa-sha256; t=1785630862; cv=none;
+        d=google.com; s=arc-20260327;
+        b=fOhdSkSnqENjDuzF2EcWCrDHLSUFJUu1SRIRSssec6zVYGl6VWg5IN3w6L4LIlSo/P
+         +mTTjRUr3HVho1e+b7DqB7y6frBS7NVbfIZ7jf93N7w47Yq+9jrg0hx8dVtBOKll0m33
+         czWltAdPL1wn8lgM08TCZi2od/fWEx3ubFWxuVR57h57XBp0eOPsTx0ihApBePTHXzro
+         /nKqnp4yw2754gINycP0DsoxwM+QA0QX4pEnUIZndGuEroVMvTAUI2e0csQzRpsIdEjs
+         sq+Ws54OzfBKD+Zs+gpT6+BZ2Tr8EBkONOSpHf1jFgal+dlgJYsM1Ads1pousxRhb/Ev
+         IA2Q==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20260327;
+        h=to:subject:message-id:date:from:in-reply-to:references:mime-version
+         :dkim-signature;
+        bh=iI4gtMr5z7hZ+4j2onP9/NRFCV8zxs8/UEBAsX9Gbow=;
+        fh=KAQxCXGQP0A9xeUTzPsC3gR/dqREw8ZgUt48SBUrdjk=;
+        b=AChtXXTrsXbfIeGMmZHcqNviPILlOLTEGy+HK1TWSmi/61BF+rp6EhSnPWRORiBXNW
+         S2g9SJaqkkDtF4u6DuhqljJXF9MFYTmzaJgN1Fg2mhoW4P7gL2ygpqMyMq43YhwtGypb
+         6xGzmW3NuK6AoISn31FfSxIIhG8L06NmaarPsPH+LbFaPinDDbi4brmeKOxnDFXMHJcU
+         kX58m+LR989XVBgzmqIWlGossFT1bN92KGfMSSGFuawFlR7lUBtgr8i5yVZgG08rkXAH
+         o9+xo6LHsQLvjCuifEhrD2ItxyYoTcHVBTjlsM6mdtUh3qgxCPctgmHZesfwWbXn7YYG
+         b6NA==;
+        darn=granitedepotindy.com
+ARC-Authentication-Results: i=1; mx.google.com; arc=none
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20251104; t=1785630862; x=1786235662; darn=granitedepotindy.com;
+        h=content-type:to:subject:message-id:date:from:in-reply-to:references
+         :mime-version:from:to:cc:subject:date:message-id:reply-to
+         :content-type;
+        bh=iI4gtMr5z7hZ+4j2onP9/NRFCV8zxs8/UEBAsX9Gbow=;
+        b=pT2htsYsPCCHFdbgBzXCqvwMj3b1d1qNNYWv9VXOOtqrBtrDRq2d54rn5oihxBQdJV
+         /xKKrM3QfycViNDOI9zEZE1HKHcpIELFk72ZHXeeWZjE8POS77hrKl4LDPbK0ZXZd0SI
+         46vLdcbxay7Qq5MGMb5ULYazeFeTjeLfwLeNph3Gt5t7myZNAgM1H5Qd6k4TiN7veCsb
+         K68i2ymkh0VZO/dt+lDzXOsyFmqHTPHszl+vqCPS66Y9dlz+Nk8+KB/vDLvrKJiZT8Om
+         kLeubxDSQHLkmKR1J8JDC2Pbsu4Sn7ZvDrZVA3zXC+c4BB/2nyJ9ZnNB5XYzFW83XLM3
+         F6XA==
+X-Received: by 2002:a05:6102:2908:b0:631:4cd8:b6aa with SMTP id
+ ada2fe7eead31-75b2448670emr4114034137.13.1785630862263; Sat, 01 Aug 2026
+ 17:34:22 -0700 (PDT)
+MIME-Version: 1.0
+References: <1784042227232.0aed6868-7a6b-4952-9f66-808618408252@bf08x.hubspotemail.net>
+ <CAM1zztRrOFiykMeUH=QAN0ejZSedPQ30fcjHeQtB_+QEVOu7_Q@mail.gmail.com>
+ <CAM1zztRj8SEXgM0TcZ-KeiuEaV-q10CO=QEXAxsN-29e945z-A@mail.gmail.com>
+ <CAKMM_GMmmCQ5tR7kF2wBfFZ+WQxXnAcDnMuL1WbPn0DcMt4PUQ@mail.gmail.com> <CAKMM_GP8urwOtnDe_1xJt+djZuzFqwgVpMW22FmgPTc6V+M=hw@mail.gmail.com>
+In-Reply-To: <CAKMM_GP8urwOtnDe_1xJt+djZuzFqwgVpMW22FmgPTc6V+M=hw@mail.gmail.com>
+From: Dima Zaika <majukita777@gmail.com>
+Date: Sat, 1 Aug 2026 20:34:12 -0400
+X-Gm-Features: AUfX_mx8KVDYXoaSa9QfM5asLngmiA7cJp7phll3fKvzJB3zLQHlESXS3QGjGvQ
+Message-ID: <CAKMM_GOOt48u6c-LG6eF6PD_mtpXGgjPB1wok2fhxG-3R2Gp8g@mail.gmail.com>
+Subject: Fwd: How Much Money Should You Be Making?
+To: Dema Granite Depot <dema@granitedepotindy.com>
+Content-Type: multipart/alternative; boundary="0000000000003ec8b1065805953f"
+
+--0000000000003ec8b1065805953f
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+[image: logo-1]
+<https://d2LBsK04.na1.hubspotlinks.com/Ctc/ZW+113/d2LBsK04/VVrGHd3R7NHJW311=
+7Md4WBjwMW2_PQhc5RtkG8N197WXj3m2nnW6N1vHY6lZ3pyW9j1r3s90MYsBV3pc017cKxQCN2S=
+T2wqXQ6fzW7gPrb34n1G9wW2n8nbv8RFl7BW88TGXv7rbWWtW7F4xYr9m0rr8W9hZM6d54KrmkN=
+8ShLb9kydYPVBK6x85M_yccW7XbgLv2yLhmWW855zvG5qWVHzW4kzHv519jFq2N3Px514yP09cW=
+2mdszM67Sk0NVc59v64bjP0zW5NXngv6hf13NW4m7Yvn9f1BGkW1JxCPL4C4N_GW29l9Kw5znXW=
+tW8k9Lyy54FJ0yW3t_P7D29Cqrcf21J1nx04>
+
+Do you ever find yourself asking the question - how much money should I be
+making to be profitable?
+
+If the answer is yes - join us in two weeks for a webinar on the topic!
+
+If the answer is no - maybe it's a question you should be asking, join us
+in two weeks too!
+[image: April Webinar (2)-1]
+<https://d2LBsK04.na1.hubspotlinks.com/Ctc/ZW+113/d2LBsK04/VVrGHd3R7NHJW311=
+7Md4WBjwMW2_PQhc5RtkG8N197WWq5kBVzW50kH_H6lZ3nyW1x3J0j1P5l3GW6W00mD8fW1vFW7=
+86LVM78HCstN4nP2sCchNkbW6ZJd9y2zp9sfVx0fc9203NvjW27GFzz8zN4F9W4HkTQz4CDLmxV=
+-TbNw8f7M03W1nsq0f5C-m7MW5bYCMQ3SY9RWW34sMFD3rCD_FN8rvqs0j3QlWVtrPrm1zgwWvW=
+2dJJfh7p6R3fW6XFNG66CsFjxVPnsXM3T1nQYTTlx-9fFkhsW3nPj5m3ZTjqYW5_18lP2xxJxZW=
+1LKWRv65kB2yW4RsJyQ6cjmjYVrkpsB3Z2TDHW8R4bWG6sW74yW2vTBPV37wkd9W2wP70D9fzdc=
+MW4GT1Sq3J9TXzW1K_lzm4NQGz2W1DW9xJ7MxjHBN6y9gVtS5p5zN1cF0H2mNgjJW10wsjs1TGn=
+bydbDDnR04>
+*Sign Up Now!*
+<https://d2LBsK04.na1.hubspotlinks.com/Ctc/ZW+113/d2LBsK04/VVrGHd3R7NHJW311=
+7Md4WBjwMW2_PQhc5RtkG8N197WWq5kBVzW50kH_H6lZ3m-W1fd_957xsGvTVQsq8B8gQHLGW7c=
+KTfK7SKQW0W5cBv6l3tNMqmW39NTxm85nYvQW3nB7GD93xJR1W1LLw2X9gPDl5ML_nFyqyjwSVT=
+YgZj7dNbPJW97yM7D5Gh6slW8bkkTR5Tf5T0W3VM3PB75tx6hW11S0DN6-xWJ5W2YgH7G5QPYy8=
+W4gY33Y1zXwCrW8rHRJg2P7gbtW5j9g3b2VZGJ9W8PlQh37gDk6WW117Q1z3TrbT3W5YM63x6gJ=
+-nYN4Nq-cfmL_rhW1xp75-3TNm61W4lpNK02G7P4sW40tvRm4kT8TnW2yjCsy4x3TRXVXhhXT5t=
+XGt6V1dNM71NG8wFW9bk4tg3n0L0bW3NJWpy7sWCg2W71tBQQ6vhYB6W1MCwGK3wJTnxW4TG9mG=
+1PVw9wf95svx004>
+
+ActionFlow LLC, actionflow.net, Saint Louis, Missouri
+
+Manage preferences
+<https://hs-23238938.s.hubspotemail.net/hs/preferences-center/en/page?data=
+=3DW2nXS-N30h-GvW4kpRk53XNXKtW2zHLF12RjFV3W30zBnW2vJZzVW4hxGpr41DSh5W4hyzS8=
+3d9PKNW2F-_NW3XP1ZQW4pFhvc2RjF0kW3Q-_582KCCwhW1ZsZdb2nWyXxW4t6WNJ2xKfWzW4fh=
+zl51_ctw9W3XWfkz4twGQhW2FJ9Rp2TsL17W49M8tZ3SZ5SfW1W_Qz11V96J8W38vrsn3F8NygW=
+2-JQVB24Sj97W3VQt701_v052W4mDKkk2RDfl2W4pgQRy2qPd77W3VKvHs4mGRQkW2HRx5q4t5b=
+l-W30LNzF4rhQnnW1Y-gGQ3z49jzW2TrsFm34wdqpW2PMxn62sP0VWW4kNrVN43NcvLW4chn4j3=
+Vxp6MW4rzRcR2vRFnZW4kN1cv34D626W1Nt-7-1Lm8H2W2HQcCW1LlkQGW3DLpn51QcBmGW2zWQ=
+Rp1SglrmW4tt8NC1N7jc8W4hm68830rrK7W4pkHfk41Xf_bW25nSHv3VzB2kW3ZM3_g4mJ3TXW3=
+yZ-L83dqD1MW2B2KHL1NcQd3W3ZNQS543Bz0vW4ktc5H3N_dwKW3j9kY949wffhW2KPGdK1--BN=
+JW1NsNxZ32CsZbW2FSXmf2w1vcTW2RvcmJ2RLVCZW43zlkm3BYYmCW3bwrW62HQB1mW3G-yw02t=
+4Fc1W41qz-P3H6S8fW1L6_nH43Pm1BW3NXYck25nQSNW47CRWR3C8yhkW3XDGnp4tz_ktW3gpGv=
+t1_6SFVW4mkpJW3GVcFDf3QQs4S04&utm_source=3Dhs_email&utm_medium=3Demail&utm_=
+content=3D428348471&_hsenc=3Dp2ANqtz-_Eq7m-dlVMnHR1E71r9WoqjPzjtspxaB04hWal=
+Nh6bBMDAKpoxqDmBMn8d_TQ2tvh0uVo81d3Cq_XsooRCUmCEoSeMoQ&_hsmi=3D428348471>
+
+--0000000000003ec8b1065805953f
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<div dir=3D"ltr"><br><div class=3D"gmail_quote gmail_quote_container"><div =
+dir=3D"ltr"><div dir=3D"ltr"><div class=3D"gmail_quote"><div dir=3D"ltr"><d=
+iv class=3D"gmail_quote"><div dir=3D"ltr"><div class=3D"gmail_quote"><div d=
+ir=3D"ltr"><div class=3D"gmail_quote"><div><div id=3D"m_570403105264273194m=
+_-6760562943360754314m_2936456336489765539m_-546303298407394880m_-478576250=
+6278531517m_5993497033078152868hs_body" bgcolor=3D"#ffffff" style=3D"margin=
+:0!important;padding:0!important;font-family:Arial,sans-serif;font-size:15p=
+x;color:#23496d;word-break:break-word"><div lang=3D"en" style=3D"background=
+-color:#ffffff" bgcolor=3D"#ffffff"><table role=3D"presentation" cellpaddin=
+g=3D"0" cellspacing=3D"0" style=3D"margin:0;padding:0;width:100%!important;=
+min-width:320px!important;height:100%!important" width=3D"100%" height=3D"1=
+00%"><tbody><tr><td valign=3D"top" style=3D"font-family:Arial,sans-serif;fo=
+nt-size:15px;color:#23496d;word-break:break-word;padding:20px 0"><div id=3D=
+"m_570403105264273194m_-6760562943360754314m_2936456336489765539m_-54630329=
+8407394880m_-4785762506278531517m_5993497033078152868hs_cos_wrapper_main" s=
+tyle=3D"color:inherit;font-size:inherit;line-height:inherit"><div id=3D"m_5=
+70403105264273194m_-6760562943360754314m_2936456336489765539m_-546303298407=
+394880m_-4785762506278531517m_5993497033078152868section-0" style=3D"paddin=
+g-left:10px;padding-right:10px"><div style=3D"min-width:280px;max-width:600=
+px;margin:0 auto;background-color:#ffffff;padding-bottom:15px;padding-top:4=
+0px" bgcolor=3D"#ffffff"><div id=3D"m_570403105264273194m_-6760562943360754=
+314m_2936456336489765539m_-546303298407394880m_-4785762506278531517m_599349=
+7033078152868column-0-0"><div id=3D"m_570403105264273194m_-6760562943360754=
+314m_2936456336489765539m_-546303298407394880m_-4785762506278531517m_599349=
+7033078152868hs_cos_wrapper_module_17072274783861" style=3D"color:inherit;f=
+ont-size:inherit;line-height:inherit"><table role=3D"presentation" width=3D=
+"100%" cellpadding=3D"0" cellspacing=3D"0">
+  <tbody>
+    <tr>
+      <td align=3D"center" valign=3D"top" style=3D"font-family:Arial,sans-s=
+erif;color:#23496d;word-break:break-word;text-align:center;padding:10px 20p=
+x;font-size:0px">
+        <a href=3D"https://d2LBsK04.na1.hubspotlinks.com/Ctc/ZW+113/d2LBsK0=
+4/VVrGHd3R7NHJW3117Md4WBjwMW2_PQhc5RtkG8N197WXj3m2nnW6N1vHY6lZ3pyW9j1r3s90M=
+YsBV3pc017cKxQCN2ST2wqXQ6fzW7gPrb34n1G9wW2n8nbv8RFl7BW88TGXv7rbWWtW7F4xYr9m=
+0rr8W9hZM6d54KrmkN8ShLb9kydYPVBK6x85M_yccW7XbgLv2yLhmWW855zvG5qWVHzW4kzHv51=
+9jFq2N3Px514yP09cW2mdszM67Sk0NVc59v64bjP0zW5NXngv6hf13NW4m7Yvn9f1BGkW1JxCPL=
+4C4N_GW29l9Kw5znXWtW8k9Lyy54FJ0yW3t_P7D29Cqrcf21J1nx04" style=3D"color:#00a=
+4bd" target=3D"_blank">
+        <img alt=3D"logo-1" src=3D"https://hs-23238938.f.hubspotemail.net/h=
+ub/23238938/hubfs/logo-1.jpg?width=3D440&amp;upscale=3Dtrue&amp;name=3Dlogo=
+-1.jpg" style=3D"outline:none;text-decoration:none;border:none;max-width:10=
+0%;font-size:16px" width=3D"220" align=3D"middle">
+        </a>
+      </td>
+    </tr>
+  </tbody>
+</table></div>
+  <table role=3D"presentation" cellpadding=3D"0" cellspacing=3D"0" width=3D=
+"100%"><tbody><tr><td style=3D"font-family:Arial,sans-serif;font-size:15px;=
+color:#23496d;word-break:break-word;padding:10px 20px"><div id=3D"m_5704031=
+05264273194m_-6760562943360754314m_2936456336489765539m_-546303298407394880=
+m_-4785762506278531517m_5993497033078152868hs_cos_wrapper_module_1772030615=
+5527" style=3D"color:inherit;font-size:inherit;line-height:inherit"><div id=
+=3D"m_570403105264273194m_-6760562943360754314m_2936456336489765539m_-54630=
+3298407394880m_-4785762506278531517m_5993497033078152868hs_cos_wrapper_modu=
+le_17720306155527_" style=3D"color:inherit;font-size:inherit;line-height:in=
+herit"><p style=3D"line-height:175%;text-align:center;font-weight:bold" ali=
+gn=3D"center"><span style=3D"font-size:18px">Do you ever find yourself aski=
+ng the question - how much money should I be making to be profitable?</span=
+></p>
+<p style=3D"line-height:175%;text-align:center" align=3D"center"><span styl=
+e=3D"color:#242424">If the answer is yes - join us in two weeks for a webin=
+ar on the topic!</span></p>
+<p style=3D"line-height:175%;text-align:center" align=3D"center"><span styl=
+e=3D"color:#000000">If the answer is no - maybe it&#39;s a question you sho=
+uld be asking, join us in two weeks too!</span></p></div></div></td></tr></=
+tbody></table>
+<div id=3D"m_570403105264273194m_-6760562943360754314m_2936456336489765539m=
+_-546303298407394880m_-4785762506278531517m_5993497033078152868hs_cos_wrapp=
+er_module_17762718388211" style=3D"color:inherit;font-size:inherit;line-hei=
+ght:inherit"><table role=3D"presentation" width=3D"100%" cellpadding=3D"0" =
+cellspacing=3D"0">
+  <tbody>
+    <tr>
+      <td align=3D"center" valign=3D"top" style=3D"font-family:Arial,sans-s=
+erif;color:#23496d;word-break:break-word;text-align:center;padding:10px 20p=
+x;font-size:0px">
+        <a href=3D"https://d2LBsK04.na1.hubspotlinks.com/Ctc/ZW+113/d2LBsK0=
+4/VVrGHd3R7NHJW3117Md4WBjwMW2_PQhc5RtkG8N197WWq5kBVzW50kH_H6lZ3nyW1x3J0j1P5=
+l3GW6W00mD8fW1vFW786LVM78HCstN4nP2sCchNkbW6ZJd9y2zp9sfVx0fc9203NvjW27GFzz8z=
+N4F9W4HkTQz4CDLmxV-TbNw8f7M03W1nsq0f5C-m7MW5bYCMQ3SY9RWW34sMFD3rCD_FN8rvqs0=
+j3QlWVtrPrm1zgwWvW2dJJfh7p6R3fW6XFNG66CsFjxVPnsXM3T1nQYTTlx-9fFkhsW3nPj5m3Z=
+TjqYW5_18lP2xxJxZW1LKWRv65kB2yW4RsJyQ6cjmjYVrkpsB3Z2TDHW8R4bWG6sW74yW2vTBPV=
+37wkd9W2wP70D9fzdcMW4GT1Sq3J9TXzW1K_lzm4NQGz2W1DW9xJ7MxjHBN6y9gVtS5p5zN1cF0=
+H2mNgjJW10wsjs1TGnbydbDDnR04" style=3D"color:#00a4bd" target=3D"_blank">
+        <img alt=3D"April Webinar (2)-1" src=3D"https://hs-23238938.f.hubsp=
+otemail.net/hub/23238938/hubfs/April%20Webinar%20(2)-1.png?width=3D960&amp;=
+upscale=3Dtrue&amp;name=3DApril%20Webinar%20(2)-1.png" style=3D"outline:non=
+e;text-decoration:none;border:none;max-width:100%;font-size:16px" width=3D"=
+480" align=3D"middle">
+        </a>
+      </td>
+    </tr>
+  </tbody>
+</table></div>
+  <table role=3D"presentation" cellpadding=3D"0" cellspacing=3D"0" width=3D=
+"100%"><tbody><tr><td style=3D"font-family:Arial,sans-serif;font-size:15px;=
+color:#23496d;word-break:break-word;padding:10px 20px"><div id=3D"m_5704031=
+05264273194m_-6760562943360754314m_2936456336489765539m_-546303298407394880=
+m_-4785762506278531517m_5993497033078152868hs_cos_wrapper_module_1772030686=
+3788" style=3D"color:inherit;font-size:inherit;line-height:inherit"><table =
+align=3D"center" border=3D"0" cellpadding=3D"0" cellspacing=3D"0" role=3D"p=
+resentation" style=3D"border-collapse:separate!important">
+    <tbody><tr>
+      <td align=3D"center" valign=3D"middle" bgcolor=3D"#073E64" style=3D"f=
+ont-family:Arial,sans-serif;font-size:15px;color:#23496d;word-break:break-w=
+ord;border-radius:25px;background-color:#073e64">
+        <a href=3D"https://d2LBsK04.na1.hubspotlinks.com/Ctc/ZW+113/d2LBsK0=
+4/VVrGHd3R7NHJW3117Md4WBjwMW2_PQhc5RtkG8N197WWq5kBVzW50kH_H6lZ3m-W1fd_957xs=
+GvTVQsq8B8gQHLGW7cKTfK7SKQW0W5cBv6l3tNMqmW39NTxm85nYvQW3nB7GD93xJR1W1LLw2X9=
+gPDl5ML_nFyqyjwSVTYgZj7dNbPJW97yM7D5Gh6slW8bkkTR5Tf5T0W3VM3PB75tx6hW11S0DN6=
+-xWJ5W2YgH7G5QPYy8W4gY33Y1zXwCrW8rHRJg2P7gbtW5j9g3b2VZGJ9W8PlQh37gDk6WW117Q=
+1z3TrbT3W5YM63x6gJ-nYN4Nq-cfmL_rhW1xp75-3TNm61W4lpNK02G7P4sW40tvRm4kT8TnW2y=
+jCsy4x3TRXVXhhXT5tXGt6V1dNM71NG8wFW9bk4tg3n0L0bW3NJWpy7sWCg2W71tBQQ6vhYB6W1=
+MCwGK3wJTnxW4TG9mG1PVw9wf95svx004" style=3D"color:#00a4bd;font-size:16px;fo=
+nt-family:Arial,sans-serif;Margin:0;text-transform:none;text-decoration:non=
+e;padding:12px 18px;display:block" target=3D"_blank">
+          <strong style=3D"color:#ffffff;font-weight:bold;text-decoration:n=
+one;font-style:normal">Sign Up Now!</strong>
+        </a>
+      </td>
+    </tr>
+  </tbody></table></div></td></tr></tbody></table>
+  <table role=3D"presentation" cellpadding=3D"0" cellspacing=3D"0" width=3D=
+"100%"><tbody><tr><td style=3D"font-family:Arial,sans-serif;font-size:15px;=
+color:#23496d;word-break:break-word;padding:10px 20px"><div id=3D"m_5704031=
+05264273194m_-6760562943360754314m_2936456336489765539m_-546303298407394880=
+m_-4785762506278531517m_5993497033078152868hs_cos_wrapper_module_1713274103=
+9433" style=3D"color:inherit;font-size:inherit;line-height:inherit"><table =
+role=3D"presentation" width=3D"100%" cellpadding=3D"0" cellspacing=3D"0" st=
+yle=3D"font-family:Arial,sans-serif;font-size:12px;line-height:135%;color:#=
+23496d;margin-bottom:0;padding:0">
+  <tbody>
+    <tr>
+      <td align=3D"center" valign=3D"top" style=3D"font-family:Arial,sans-s=
+erif;font-size:15px;color:#23496d;word-break:break-word;text-align:center;m=
+argin-bottom:0;line-height:135%;padding:10px 20px">
+        <p style=3D"font-family:arial,helvetica,sans-serif;font-size:12px;f=
+ont-weight:normal;text-decoration:none;font-style:normal;color:#23496d">
+          ActionFlow LLC, <a href=3D"http://actionflow.net" target=3D"_blan=
+k">actionflow.net</a>, Saint Louis, Missouri
+        </p>
+        <p>
+          <a href=3D"https://hs-23238938.s.hubspotemail.net/hs/preferences-=
+center/en/page?data=3DW2nXS-N30h-GvW4kpRk53XNXKtW2zHLF12RjFV3W30zBnW2vJZzVW=
+4hxGpr41DSh5W4hyzS83d9PKNW2F-_NW3XP1ZQW4pFhvc2RjF0kW3Q-_582KCCwhW1ZsZdb2nWy=
+XxW4t6WNJ2xKfWzW4fhzl51_ctw9W3XWfkz4twGQhW2FJ9Rp2TsL17W49M8tZ3SZ5SfW1W_Qz11=
+V96J8W38vrsn3F8NygW2-JQVB24Sj97W3VQt701_v052W4mDKkk2RDfl2W4pgQRy2qPd77W3VKv=
+Hs4mGRQkW2HRx5q4t5bl-W30LNzF4rhQnnW1Y-gGQ3z49jzW2TrsFm34wdqpW2PMxn62sP0VWW4=
+kNrVN43NcvLW4chn4j3Vxp6MW4rzRcR2vRFnZW4kN1cv34D626W1Nt-7-1Lm8H2W2HQcCW1LlkQ=
+GW3DLpn51QcBmGW2zWQRp1SglrmW4tt8NC1N7jc8W4hm68830rrK7W4pkHfk41Xf_bW25nSHv3V=
+zB2kW3ZM3_g4mJ3TXW3yZ-L83dqD1MW2B2KHL1NcQd3W3ZNQS543Bz0vW4ktc5H3N_dwKW3j9kY=
+949wffhW2KPGdK1--BNJW1NsNxZ32CsZbW2FSXmf2w1vcTW2RvcmJ2RLVCZW43zlkm3BYYmCW3b=
+wrW62HQB1mW3G-yw02t4Fc1W41qz-P3H6S8fW1L6_nH43Pm1BW3NXYck25nQSNW47CRWR3C8yhk=
+W3XDGnp4tz_ktW3gpGvt1_6SFVW4mkpJW3GVcFDf3QQs4S04&amp;utm_source=3Dhs_email&=
+amp;utm_medium=3Demail&amp;utm_content=3D428348471&amp;_hsenc=3Dp2ANqtz-_Eq=
+7m-dlVMnHR1E71r9WoqjPzjtspxaB04hWalNh6bBMDAKpoxqDmBMn8d_TQ2tvh0uVo81d3Cq_Xs=
+ooRCUmCEoSeMoQ&amp;_hsmi=3D428348471" style=3D"font-family:helvetica;font-s=
+ize:12px;color:#00a4bd;font-weight:normal;text-decoration:underline;font-st=
+yle:normal" target=3D"_blank">Manage preferences</a>
+        </p>
+      </td>
+    </tr>
+  </tbody>
+</table></div></td></tr></tbody></table>
+</div>
+
+
+   =20
+    </div>
+  =20
+  </div></div>
+          </td>
+        </tr>
+      </tbody></table>
+    </div>
+ =20
+<img src=3D"https://d2LBsK04.na1.hubspotlinks.com/Cto/ZW+113/d2LBsK04/VVrGH=
+d3R7NHJW3117Md4WBjwMW2_PQhc5RtkG8W197WHq8fYzjv310K1" alt=3D"" width=3D"1" h=
+eight=3D"1" border=3D"0" style=3D"display:none!important;min-height:1px!imp=
+ortant;width:1px!important;border-width:0!important;margin-top:0!important;=
+margin-bottom:0!important;margin-right:0!important;margin-left:0!important;=
+padding-top:0!important;padding-bottom:0!important;padding-right:0!importan=
+t;padding-left:0!important"></div></div></div></div>
+</div></div>
+</div></div>
+</div></div>
+</div>
+</div></div>
+
+--0000000000003ec8b1065805953f--

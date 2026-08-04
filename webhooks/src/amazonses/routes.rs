@@ -81,9 +81,12 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
         bucket,
         key,
     };
-    match parsed.in_reply_to.clone() {
-        Some(message_id) => process_reply_email(pool, client, &message_id, email_info).await,
-        None => process_first_email(pool, client, email_info).await,
+    // Either header is enough to attempt threading; `process_reply_email`
+    // falls back to treating it as a new thread when nothing matches.
+    if parsed.in_reply_to.is_some() || !parsed.references.is_empty() {
+        process_reply_email(pool, client, email_info).await
+    } else {
+        process_first_email(pool, client, email_info).await
     }
 }
 
@@ -206,6 +209,83 @@ mod local_tests {
         const MESSAGE_ID: &str =
             "CAG6QthbVR6eOBoEFup=bnuuBw=_JQWfP1rLzAjwDUGCpNV_wyg@mail.gmail.com";
         assert_eq!(result[1].message_id, Some(MESSAGE_ID.to_string()));
+    }
+
+    /// The whole point of `email_participants`: an inbound message must land
+    /// with a `from` row, every `To:` and every `Cc:` — not just one receiver.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn received_writes_all_participants(pool: MySqlPool) {
+        const CLIENT_EMAIL: &str = "colin.delahunty@granite-manager.com";
+        insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
+
+        let mock_client = MockClient::new("src/tests/data/multi_recipient.eml");
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT type, email FROM email_participants ORDER BY type, position, email",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        let of = |wanted: &str| -> Vec<String> {
+            rows.iter()
+                .filter(|(t, _)| t == wanted)
+                .map(|(_, e)| e.clone())
+                .collect()
+        };
+
+        assert_eq!(of("from"), vec!["customer@example.com".to_string()]);
+        assert_eq!(
+            of("to"),
+            vec![
+                CLIENT_EMAIL.to_string(),
+                "shared@granite-manager.com".to_string()
+            ]
+        );
+        assert_eq!(
+            of("cc"),
+            vec![
+                "manager@granite-manager.com".to_string(),
+                "spouse@example.com".to_string()
+            ]
+        );
+        assert_eq!(
+            of("bcc"),
+            vec![
+                "silent@granite-manager.com".to_string(),
+                "quiet@example.com".to_string()
+            ]
+        );
+    }
+
+    /// The resolved receiver's company must be stamped on the row, so tenancy
+    /// no longer depends on address matching at query time.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn received_stamps_company_id(pool: MySqlPool) {
+        const CLIENT_EMAIL: &str = "colin.delahunty@granite-manager.com";
+        insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
+
+        let expected: Option<i32> = sqlx::query_scalar("SELECT company_id FROM users LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let mock_client = MockClient::new("src/tests/data/multi_recipient.eml");
+        let data: S3Event = ses_received_json();
+        assert_eq!(
+            process_ses_received_event(&pool, mock_client, &data).await,
+            OK_RESPONSE
+        );
+
+        let company_id: Option<i32> =
+            sqlx::query_scalar("SELECT company_id FROM emails ORDER BY id DESC LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(company_id, expected);
     }
 
     #[sqlx::test(migrations = "../migrations")]

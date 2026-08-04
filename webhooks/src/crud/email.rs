@@ -1,9 +1,10 @@
 use crate::{
-    amazonses::parse_email::{ParsedEmail, UploadedAttachment},
+    amazonses::parse_email::{ParsedEmail, ParsedRecipient, UploadedAttachment, normalize_address},
     crud::users::ReceivingEmail,
 };
 use lambda_http::tracing;
 use sqlx::{MySqlPool, mysql::MySqlQueryResult};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 pub async fn get_full_message_id(
@@ -101,6 +102,12 @@ pub struct SendEmail {
     sender_email: String,
     pub receiver_email: Option<String>,
     message_id: String,
+    /// Owning company, resolved from the receiver user. `None` when the
+    /// receiver could not be attributed — such rows stay legacy-visible.
+    pub company_id: Option<i32>,
+    to_recipients: Vec<ParsedRecipient>,
+    cc_recipients: Vec<ParsedRecipient>,
+    bcc_recipients: Vec<ParsedRecipient>,
 }
 
 impl SendEmail {
@@ -125,7 +132,17 @@ impl SendEmail {
             sender_email: email.sender_email.clone(),
             receiver_email,
             message_id: email.message_id.clone(),
+            company_id: None,
+            to_recipients: email.to_recipients.clone(),
+            cc_recipients: email.cc_recipients.clone(),
+            bcc_recipients: email.bcc_recipients.clone(),
         }
+    }
+
+    #[must_use]
+    pub const fn with_company_id(mut self, company_id: Option<i32>) -> Self {
+        self.company_id = company_id;
+        self
     }
 
     pub fn thread_id(&self) -> &str {
@@ -158,7 +175,10 @@ pub fn resolve_inbound_customer_name(
         }
     }
 
-    let Some(sender) = sender_email.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(sender) = sender_email
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return None;
     };
 
@@ -261,6 +281,113 @@ mod tests {
     }
 }
 
+/// Resolve many addresses to CRM users in one round trip, so the query count
+/// does not grow with the recipient count.
+async fn resolve_user_ids(
+    pool: &MySqlPool,
+    addresses: &[String],
+) -> Result<HashMap<String, i32>, sqlx::Error> {
+    if addresses.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT LOWER(TRIM(email)) AS email, id FROM users WHERE is_deleted = 0 \
+         AND LOWER(TRIM(email)) IN (",
+    );
+    let mut separated = builder.separated(", ");
+    for address in addresses {
+        separated.push_bind(address);
+    }
+    separated.push_unseparated(")");
+
+    let rows: Vec<(String, i32)> = builder.build_query_as().fetch_all(pool).await?;
+    Ok(rows.into_iter().collect())
+}
+
+async fn resolve_customer_ids(
+    pool: &MySqlPool,
+    addresses: &[String],
+    company_id: Option<i32>,
+) -> Result<HashMap<String, i32>, sqlx::Error> {
+    if addresses.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(ce.email, '<', -1), '>', 1))) AS email, \
+         c.id FROM customers c JOIN customers_emails ce ON ce.customer_id = c.id \
+         WHERE c.deleted_at IS NULL AND \
+         LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(ce.email, '<', -1), '>', 1))) IN (",
+    );
+    let mut separated = builder.separated(", ");
+    for address in addresses {
+        separated.push_bind(address);
+    }
+    separated.push_unseparated(")");
+    if let Some(company_id) = company_id {
+        builder.push(" AND c.company_id = ");
+        builder.push_bind(company_id);
+    }
+
+    let rows: Vec<(String, i32)> = builder.build_query_as().fetch_all(pool).await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Store every participant of an inbound message.
+///
+/// The sender is written as `from`, plus every `To:`, `Cc:` and `Bcc:` address.
+/// Before this table existed only the first `To:` survived, which is why
+/// reply-all was impossible.
+pub async fn insert_email_participants(
+    pool: &MySqlPool,
+    email_id: u64,
+    send: &SendEmail,
+) -> Result<(), sqlx::Error> {
+    let sender = ParsedRecipient {
+        address: normalize_address(&send.sender_email),
+        display_name: None,
+    };
+    let from_recipients = if sender.address.is_empty() {
+        Vec::new()
+    } else {
+        vec![sender]
+    };
+
+    let groups: [(&str, &Vec<ParsedRecipient>); 4] = [
+        ("from", &from_recipients),
+        ("to", &send.to_recipients),
+        ("cc", &send.cc_recipients),
+        ("bcc", &send.bcc_recipients),
+    ];
+
+    let all_addresses: Vec<String> = groups
+        .iter()
+        .flat_map(|(_, list)| list.iter().map(|r| r.address.clone()))
+        .collect();
+    let user_ids = resolve_user_ids(pool, &all_addresses).await?;
+    let customer_ids = resolve_customer_ids(pool, &all_addresses, send.company_id).await?;
+
+    for (participant_type, recipients) in groups {
+        for (index, recipient) in recipients.iter().enumerate() {
+            let position = i32::try_from(index).unwrap_or(0);
+            sqlx::query(
+                "INSERT INTO email_participants \
+                 (email_id, type, email, display_name, user_id, customer_id, position) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(email_id)
+            .bind(participant_type)
+            .bind(&recipient.address)
+            .bind(recipient.display_name.as_deref())
+            .bind(user_ids.get(&recipient.address))
+            .bind(customer_ids.get(&recipient.address))
+            .bind(position)
+            .execute(pool)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 pub async fn create_email_with_attachments(
     pool: &MySqlPool,
     send: &SendEmail,
@@ -269,8 +396,8 @@ pub async fn create_email_with_attachments(
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     let result = sqlx::query!(
         r#"
-        INSERT INTO emails (subject, body, thread_id, receiver_user_id, sender_email, receiver_email, message_id, bucket)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO emails (subject, body, thread_id, receiver_user_id, sender_email, receiver_email, message_id, bucket, company_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
         send.subject,
         send.body,
@@ -279,12 +406,19 @@ pub async fn create_email_with_attachments(
         send.sender_email,
         send.receiver_email,
         send.message_id,
-        location
+        location,
+        send.company_id
     )
     .execute(pool)
     .await?;
 
     let email_id = result.last_insert_id();
+
+    // Recipient rows are best-effort: a failure here must not lose the message
+    // itself, which is already committed above.
+    if let Err(error) = insert_email_participants(pool, email_id, send).await {
+        tracing::warn!(?error, email_id, "Failed to store email participants");
+    }
 
     if let Some(html_body) = send.html_body.as_deref().filter(|value| !value.is_empty()) {
         if let Err(error) = sqlx::query("UPDATE emails SET html_body = ? WHERE id = ?")

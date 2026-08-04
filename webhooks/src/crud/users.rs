@@ -188,6 +188,32 @@ pub async fn get_id_by_email(pool: &MySqlPool, email: &str) -> Result<Option<i32
         .await
 }
 
+/// Company that owns a user. Inbound mail derives `emails.company_id` from the
+/// resolved receiver, which is the only party we can attribute with certainty.
+pub async fn get_company_id_by_user_id(
+    pool: &MySqlPool,
+    user_id: i32,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar!(r#"SELECT company_id FROM users WHERE id = ?"#, user_id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Case-insensitive user lookup used when resolving recipient addresses.
+/// `get_id_by_email` compares exactly; header addresses arrive in any case.
+pub async fn get_id_by_email_normalized(
+    pool: &MySqlPool,
+    email: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"SELECT id FROM users WHERE LOWER(TRIM(email)) = ? AND is_deleted = 0 LIMIT 1"#,
+        email
+    )
+    .fetch_optional(pool)
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReceivingEmail {
     To(i32),
     Forward(i32),
