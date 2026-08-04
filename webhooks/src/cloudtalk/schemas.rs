@@ -50,7 +50,8 @@ impl<'de> Deserialize<'de> for CleanText {
     where
         D: Deserializer<'de>,
     {
-        let raw_s = String::deserialize(deserializer)?;
+        // CloudTalk sends null for a caption-less MMS; that is an empty body, not a bad payload.
+        let raw_s = Option::<String>::deserialize(deserializer)?.unwrap_or_default();
 
         // Remove the "[text]" prefix if it exists
         let cleaned = raw_s.replacen("[text]", "", 1);
@@ -228,15 +229,15 @@ pub struct ContactSearchEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::cloudtalk::{INBOUND_MMS_NULL_TEXT, INBOUND_SMS};
     use serde_json;
 
-    const MESSAGE_1: &[u8] = b"{\"id\":null,\"sender\":\"+16468956758[sender]\",\"recipient\":\"+13173161456[recipient]\",\"text\":\"[text]\xd0\x9d\xd0\xb5 \xd0\xbf\xd0\xb8\xd1\x88\xd0\xb8 \xd1\x81\xd1\x8e\xd0\xb4\xd0\xb0\",\"agent\":\"540273\"}";
     const MESSAGE_2: &[u8] =
         b"{\"id\":null,\"from\":\"[sender]\",\"to\":\"[recipient]\",\"body\":\"[text]\"}";
 
     #[test]
     fn test_cloudtalk_payload_parsing() {
-        let sms: CloudtalkSMS = serde_json::from_slice(MESSAGE_1).expect("Failed to parse JSON");
+        let sms: CloudtalkSMS = serde_json::from_slice(INBOUND_SMS).expect("Failed to parse JSON");
 
         assert_eq!(sms.sender(), 6468956758);
         assert_eq!(sms.recipient(), 3173161456);
@@ -259,6 +260,16 @@ mod tests {
         assert!(!sms.text.0.contains("[text]"));
 
         assert_eq!(sms.agent, Some("540273".to_string()));
+    }
+
+    #[test]
+    fn test_null_text_parses_as_empty_string() {
+        let sms: CloudtalkSMS =
+            serde_json::from_slice(INBOUND_MMS_NULL_TEXT).expect("null text must parse");
+
+        assert_eq!(sms.text.0, "");
+        assert_eq!(sms.id, Some(51753924));
+        assert_eq!(sms.sender(), 6468956758);
     }
 
     #[test]
