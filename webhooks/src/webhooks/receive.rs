@@ -32,6 +32,10 @@ pub async fn facebook_contact_form(
 #[utoipa::path(
     post,
     path = "/v1/webhooks/new-lead-form/{company_id}",
+    description = "Create a marketing lead from Make, Zapier, or the website.\n\n\
+**`referral_source`** is optional. When provided, prefer `website` or `facebook` so statistics group correctly.\n\n\
+**`form_name`** is optional. When provided, use the specific form id, for example `cabinet_quote`, \
+`facebook_form`, `facebook_cabinet_quote_form`, or `quick_quote`.",
     params(("company_id" = i32, Path, description = "Company ID")),
     request_body = NewLeadForm,
     responses((status = CREATED, body = str), (status = INTERNAL_SERVER_ERROR, body = str))
@@ -152,6 +156,65 @@ mod local_tests {
         let response = app.post("/v1/webhooks/new-lead-form/1").json(&lead).await;
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_new_lead_form_persists_form_name(pool: MySqlPool) {
+        let data = json!({
+            "name": "Form Lead",
+            "phone": "+13179995973",
+            "referral_source": "website",
+            "form_name": "cabinet_quote"
+        });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let bot = MockTelegram::new();
+
+        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
+            .await
+            .unwrap();
+        assigned_user_position(&pool, 1, 2, admin_id).await.unwrap();
+
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        let row = sqlx::query!(
+            r#"SELECT referral_source, form_name FROM customers WHERE phone = '317-999-5973' LIMIT 1"#
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.referral_source.as_deref(), Some("website"));
+        assert_eq!(row.form_name.as_deref(), Some("cabinet_quote"));
+
+        let sent = bot.sent.lock().unwrap();
+        assert!(
+            sent.iter()
+                .any(|message| message.1.contains("Form Name: cabinet_quote"))
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_new_lead_form_allows_missing_referral_source_and_form_name(pool: MySqlPool) {
+        let data = json!({ "name": "No Source Lead", "phone": "+13179995973" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let bot = MockTelegram::new();
+
+        let admin_id = insert_user(&pool, "admin@example.com", Some(456))
+            .await
+            .unwrap();
+        assigned_user_position(&pool, 1, 2, admin_id).await.unwrap();
+
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        let row = sqlx::query!(
+            r#"SELECT referral_source, form_name FROM customers WHERE phone = '317-999-5973' LIMIT 1"#
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.referral_source, None);
+        assert_eq!(row.form_name, None);
     }
 
     #[sqlx::test(migrations = "../migrations")]

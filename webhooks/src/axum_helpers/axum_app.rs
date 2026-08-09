@@ -25,7 +25,18 @@ async fn health_check() -> impl IntoResponse {
 }
 
 #[derive(OpenApi)]
-#[openapi(paths(new_lead_form), components(schemas(NewLeadForm)))]
+#[openapi(
+    info(
+        title = "Granite Manager Webhooks API",
+        description = "Lead intake for Make, Zapier, and website forms.\n\n\
+For `/v1/webhooks/new-lead-form/{company_id}`:\n\
+- `referral_source` is optional; when set, prefer `website` or `facebook` for statistics.\n\
+- `form_name` is optional; when set, use the specific form id (e.g. `cabinet_quote`, \
+`facebook_form`, `facebook_cabinet_quote_form`, `quick_quote`)."
+    ),
+    paths(new_lead_form),
+    components(schemas(NewLeadForm))
+)]
 struct ApiDoc;
 
 async fn openapi_spec() -> impl IntoResponse {

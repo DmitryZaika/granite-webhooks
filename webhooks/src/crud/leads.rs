@@ -210,8 +210,8 @@ pub async fn create_lead_from_new_lead_form(
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     let result = query!(
         r#"INSERT INTO customers
-               (name, phone, address, remove_and_dispose, details, city, postal_code, compaign_name, adset_name, ad_name, remodal_type, project_size, contact_time, when_start, improve_offer, sink, kitchen_stove, backsplash, your_message, attached_file, company_id, referral_source, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+               (name, phone, address, remove_and_dispose, details, city, postal_code, compaign_name, adset_name, ad_name, remodal_type, project_size, contact_time, when_start, improve_offer, sink, kitchen_stove, backsplash, your_message, attached_file, company_id, referral_source, form_name, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         data.name,
         data.phone,
         data.address,
@@ -234,6 +234,7 @@ pub async fn create_lead_from_new_lead_form(
         data.attached_file,
         company_id,
         data.referral_source,
+        data.form_name,
         "leads"
     )
     .execute(pool)
@@ -251,7 +252,7 @@ pub async fn update_lead_from_new_lead_form(
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     let result = query!(
         r#"UPDATE customers
-               SET phone = ?, address = ?, remove_and_dispose = ?, details = ?, city = ?, postal_code = ?, compaign_name = ?, adset_name = ?, ad_name = ?, remodal_type = ?, project_size = ?, contact_time = ?, when_start = ?, improve_offer = ?, sink = ?, kitchen_stove = ?, backsplash = ?, your_message = ?, attached_file = ?, company_id = ?, referral_source = ?, source = ?
+               SET phone = ?, address = ?, remove_and_dispose = ?, details = ?, city = ?, postal_code = ?, compaign_name = ?, adset_name = ?, ad_name = ?, remodal_type = ?, project_size = ?, contact_time = ?, when_start = ?, improve_offer = ?, sink = ?, kitchen_stove = ?, backsplash = ?, your_message = ?, attached_file = ?, company_id = ?, referral_source = ?, form_name = ?, source = ?
                WHERE id = ?"#,
         data.phone,
         data.address,
@@ -274,6 +275,7 @@ pub async fn update_lead_from_new_lead_form(
         data.attached_file,
         company_id,
         data.referral_source,
+        data.form_name,
         "leads",
         id,
     )

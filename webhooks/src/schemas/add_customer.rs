@@ -252,6 +252,15 @@ impl fmt::Display for FaceBookContactForm {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[schema(
+    example = json!({
+        "name": "Jane Doe",
+        "email": "jane@example.com",
+        "phone": "+13175551212",
+        "referral_source": "website",
+        "form_name": "cabinet_quote"
+    })
+)]
 pub struct NewLeadForm {
     pub name: String,
 
@@ -302,7 +311,17 @@ pub struct NewLeadForm {
     #[serde(rename = "file")]
     pub attached_file: Option<String>,
 
+    /// Optional marketing channel for statistics. Prefer `website` or `facebook`
+    /// when provided. Put the specific form identifier in `form_name` instead.
+    #[serde(default)]
+    #[schema(example = "website")]
     pub referral_source: Option<String>,
+
+    /// Optional specific form that produced the lead. Prefer snake_case.
+    /// Examples: `cabinet_quote`, `facebook_form`, `quick_quote`.
+    #[serde(default)]
+    #[schema(example = "cabinet_quote")]
+    pub form_name: Option<String>,
 }
 
 impl LeadPayload for NewLeadForm {
@@ -394,6 +413,12 @@ impl fmt::Display for NewLeadForm {
         }
         if let Some(attached_file) = &self.attached_file {
             writeln!(message, "File: {attached_file}").unwrap();
+        }
+        if let Some(referral_source) = &self.referral_source {
+            writeln!(message, "Referral Source: {referral_source}").unwrap();
+        }
+        if let Some(form_name) = &self.form_name {
+            writeln!(message, "Form Name: {form_name}").unwrap();
         }
 
         write!(f, "{message}")
@@ -669,5 +694,26 @@ mod tests {
             form.campaign_name.as_deref(),
             Some("Legacy NewLeadForm Campaign")
         );
+    }
+
+    #[test]
+    fn test_new_lead_form_deserializes_form_name() {
+        let data = json!({
+            "name": "Test",
+            "referral_source": "website",
+            "form_name": "cabinet_quote"
+        });
+        let form: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(form.referral_source.as_deref(), Some("website"));
+        assert_eq!(form.form_name.as_deref(), Some("cabinet_quote"));
+        assert!(form.to_string().contains("Form Name: cabinet_quote"));
+    }
+
+    #[test]
+    fn test_new_lead_form_referral_source_and_form_name_optional() {
+        let data = json!({ "name": "Test", "phone": "+13175551212" });
+        let form: NewLeadForm = serde_json::from_value(data).unwrap();
+        assert_eq!(form.referral_source, None);
+        assert_eq!(form.form_name, None);
     }
 }
