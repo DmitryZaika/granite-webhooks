@@ -19,7 +19,7 @@ use lambda_http::tracing;
 use sqlx::MySqlPool;
 
 const REGISTER_SUBJECT: &str = "Granite Manager";
-const REGISTER_MESSAGE: &str = "Please register for Telegram to receive notifications about leads";
+const REGISTER_MESSAGE: &str = "Connect Telegram in the CRM to receive lead notifications: https://granite-manager.com/link-telegram-both";
 
 async fn handle_repeat_lead<T, V: LeadPayload>(
     existing: &ExistingCustomer,

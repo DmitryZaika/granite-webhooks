@@ -312,18 +312,15 @@ async fn handle_assign_lead<T: Telegram>(
             .await
             .map_or_else(|e| e, |_| (StatusCode::OK, "Invalid code"));
     }
-    let bot_link = "https://t.me/granitemanager_bot?start";
+    let connect_telegram_link = "https://granite-manager.com/link-telegram-both";
     let message = format!(
         r"
     You were assigned a lead. Click here:
     {lead_link}
 
-    Please link to telegram bot:
-    {bot_link}
-
-    Paste this command into the bot: \start {}
-    ",
-        tg_info.email
+    To get lead alerts in Telegram, connect Telegram in the CRM:
+    {connect_telegram_link}
+    "
     );
     let message_result = send_message(&[&tg_info.email], "Lead assigned", &message).await;
     if message_result.is_err() {
