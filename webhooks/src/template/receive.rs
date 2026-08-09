@@ -92,11 +92,15 @@ mod tests {
         pool: &MySqlPool,
         name: &str,
         address: Option<&str>,
+        hours_of_operation: Option<&str>,
+        domain: Option<&str>,
     ) -> Result<i32, sqlx::Error> {
         let rec = sqlx::query!(
-            r#"INSERT INTO company (name, address) VALUES (?, ?)"#,
+            r#"INSERT INTO company (name, address, hours_of_operation, domain) VALUES (?, ?, ?, ?)"#,
             name,
-            address
+            address,
+            hours_of_operation,
+            domain
         )
         .execute(pool)
         .await?;
@@ -157,9 +161,15 @@ mod tests {
 
     #[sqlx::test(migrations = "../migrations")]
     async fn test_fetch_template_all_data_present(pool: MySqlPool) {
-        let company_id = insert_test_company(&pool, "Enterprise Corp", Some("123 Main St"))
-            .await
-            .unwrap();
+        let company_id = insert_test_company(
+            &pool,
+            "Enterprise Corp",
+            Some("123 Main St"),
+            Some("Mon-Fri 9-5"),
+            Some("granitedepot.com"),
+        )
+        .await
+        .unwrap();
         let user_id = insert_test_user(
             &pool,
             company_id,
@@ -202,11 +212,13 @@ mod tests {
         let company = result.company.unwrap();
         assert_eq!(company.name, Some("Enterprise Corp".to_string()));
         assert_eq!(company.address, Some("123 Main St".to_string()));
+        assert_eq!(company.hours_of_operation, Some("Mon-Fri 9-5".to_string()));
+        assert_eq!(company.domain, Some("granitedepot.com".to_string()));
     }
 
     #[sqlx::test(migrations = "../migrations")]
     async fn test_fetch_template_minimal_user_only(pool: MySqlPool) {
-        let company_id = insert_test_company(&pool, "Enterprise Corp", None)
+        let company_id = insert_test_company(&pool, "Enterprise Corp", None, None, None)
             .await
             .unwrap();
         let user_id = insert_test_user(&pool, company_id, Some("Bob"), "alice@test.com", None)
@@ -224,7 +236,9 @@ mod tests {
 
     #[sqlx::test(migrations = "../migrations")]
     async fn test_fetch_customer_fallback_to_customer_id(pool: MySqlPool) {
-        let company_id = insert_test_company(&pool, "Company A", None).await.unwrap();
+        let company_id = insert_test_company(&pool, "Company A", None, None, None)
+            .await
+            .unwrap();
         let user_id = insert_test_user(&pool, company_id, Some("Charlie"), "alice@test.com", None)
             .await
             .unwrap();
@@ -252,7 +266,9 @@ mod tests {
 
     #[sqlx::test(migrations = "../migrations")]
     async fn test_customer_and_deal_soft_deletes_ignored(pool: MySqlPool) {
-        let company_id = insert_test_company(&pool, "Company B", None).await.unwrap();
+        let company_id = insert_test_company(&pool, "Company B", None, None, None)
+            .await
+            .unwrap();
         let user_id = insert_test_user(&pool, company_id, Some("David"), "alice@test.com", None)
             .await
             .unwrap();
@@ -316,10 +332,14 @@ mod tests {
             customer: Some(InfoVariableData {
                 name: Some("Acme Client".to_string()),
                 address: Some("456 Market St".to_string()),
+                hours_of_operation: None,
+                domain: None,
             }),
             company: Some(InfoVariableData {
                 name: Some("Granite Depot".to_string()),
                 address: Some("123 Main St".to_string()),
+                hours_of_operation: Some("Mon-Fri 9-5".to_string()),
+                domain: Some("granitedepot.com".to_string()),
             }),
         }
     }
@@ -603,6 +623,102 @@ mod tests {
     }
 
     #[test]
+    fn test_replace_company_hours_of_operation() {
+        let template = "<p>Hours: {{company.hours_of_operation}}</p>";
+        let data = make_full_data();
+        let result = replace_template_variables(template, &data);
+        assert_eq!(result, "<p>Hours: Mon-Fri 9-5</p>");
+    }
+
+    #[test]
+    fn test_replace_company_hours_of_operation_missing() {
+        // When company has hours_of_operation: None, the placeholder stays
+        let mut data = make_full_data();
+        data.company = Some(InfoVariableData {
+            name: Some("Test Co".to_string()),
+            address: None,
+            hours_of_operation: None,
+            domain: None,
+        });
+        let template = "<p>Hours: {{company.hours_of_operation}}</p>";
+        let result = replace_template_variables(template, &data);
+        assert_eq!(result, "<p>Hours: {{company.hours_of_operation}}</p>");
+    }
+
+    #[test]
+    fn test_replace_company_hours_of_operation_empty() {
+        // Empty string is filtered out by the variable map builder
+        let mut data = make_full_data();
+        data.company = Some(InfoVariableData {
+            name: Some("Test Co".to_string()),
+            address: None,
+            hours_of_operation: Some("".to_string()),
+            domain: None,
+        });
+        let template = "<p>Hours: {{company.hours_of_operation}}</p>";
+        let result = replace_template_variables(template, &data);
+        assert_eq!(result, "<p>Hours: {{company.hours_of_operation}}</p>");
+    }
+
+    #[test]
+    fn test_replace_company_hours_alongside_other_fields() {
+        let template =
+            "<p>{{company.name}} | {{company.hours_of_operation}} | {{company.address}}</p>";
+        let data = make_full_data();
+        let result = replace_template_variables(template, &data);
+        assert_eq!(result, "<p>Granite Depot | Mon-Fri 9-5 | 123 Main St</p>");
+    }
+
+    #[test]
+    fn test_replace_company_domain() {
+        let template = "<p>{{company.domain}}</p>";
+        let data = make_full_data();
+        let result = replace_template_variables(template, &data);
+        assert_eq!(result, "<p>granitedepot.com</p>");
+    }
+
+    #[test]
+    fn test_replace_company_domain_missing() {
+        // When company has domain: None, the placeholder stays
+        let mut data = make_full_data();
+        data.company = Some(InfoVariableData {
+            name: Some("Test Co".to_string()),
+            address: None,
+            hours_of_operation: None,
+            domain: None,
+        });
+        let template = "<p>Domain: {{company.domain}}</p>";
+        let result = replace_template_variables(template, &data);
+        assert_eq!(result, "<p>Domain: {{company.domain}}</p>");
+    }
+
+    #[test]
+    fn test_replace_company_domain_empty() {
+        // Empty string is filtered out by the variable map builder
+        let mut data = make_full_data();
+        data.company = Some(InfoVariableData {
+            name: Some("Test Co".to_string()),
+            address: None,
+            hours_of_operation: None,
+            domain: Some("".to_string()),
+        });
+        let template = "<p>Domain: {{company.domain}}</p>";
+        let result = replace_template_variables(template, &data);
+        assert_eq!(result, "<p>Domain: {{company.domain}}</p>");
+    }
+
+    #[test]
+    fn test_replace_company_domain_with_all_fields() {
+        let template = "<p>{{company.name}} | {{company.domain}} | {{company.hours_of_operation}} | {{company.address}}</p>";
+        let data = make_full_data();
+        let result = replace_template_variables(template, &data);
+        assert_eq!(
+            result,
+            "<p>Granite Depot | granitedepot.com | Mon-Fri 9-5 | 123 Main St</p>"
+        );
+    }
+
+    #[test]
     fn test_first_name_extracts_only_first_word() {
         // "Alice Johnson" → first_name should be "Alice"
         let template = "{{user.first_name}}";
@@ -617,6 +733,8 @@ mod tests {
         data.customer = Some(InfoVariableData {
             name: Some("Acme Client Corp".to_string()),
             address: None,
+            hours_of_operation: None,
+            domain: None,
         });
         let template = "{{customer.first_name}}";
         let result = replace_template_variables(template, &data);
@@ -640,6 +758,8 @@ mod tests {
         data.company = Some(InfoVariableData {
             name: Some("Granite Depot & Sons".to_string()),
             address: None,
+            hours_of_operation: None,
+            domain: None,
         });
         let template = "<p>{{company.name}}</p>";
         let result = replace_template_variables(template, &data);

@@ -13,6 +13,8 @@ pub struct UserVariableData {
 pub struct InfoVariableData {
     pub name: Option<String>,
     pub address: Option<String>,
+    pub hours_of_operation: Option<String>,
+    pub domain: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -81,6 +83,8 @@ async fn fetch_customer_data(
             return Ok(Some(InfoVariableData {
                 name: r.name,
                 address: r.address,
+                hours_of_operation: None,
+                domain: None,
             }));
         }
     }
@@ -103,6 +107,8 @@ async fn fetch_customer_data(
             return Ok(Some(InfoVariableData {
                 name: r.name,
                 address: r.address,
+                hours_of_operation: None,
+                domain: None,
             }));
         }
     }
@@ -121,7 +127,7 @@ async fn fetch_company_data(
 
     let row = sqlx::query!(
         r#"
-        SELECT name, address
+        SELECT name, address, hours_of_operation, domain
         FROM company
         WHERE id = ?
         LIMIT 1
@@ -134,5 +140,7 @@ async fn fetch_company_data(
     Ok(row.map(|r| InfoVariableData {
         name: Some(r.name),
         address: r.address,
+        hours_of_operation: r.hours_of_operation,
+        domain: r.domain,
     }))
 }

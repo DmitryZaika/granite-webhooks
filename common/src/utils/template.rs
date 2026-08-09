@@ -32,6 +32,11 @@ fn build_variable_map(data: &TemplateVariableData) -> HashMap<&'static str, Stri
         ("customer.address", customer.and_then(|c| c.address.clone())),
         ("company.name", company.and_then(|c| c.name.clone())),
         ("company.address", company.and_then(|c| c.address.clone())),
+        (
+            "company.hours_of_operation",
+            company.and_then(|c| c.hours_of_operation.clone()),
+        ),
+        ("company.domain", company.and_then(|c| c.domain.clone())),
         ("current_date", Some(format_current_date())),
     ]
     .into_iter()
