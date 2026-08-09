@@ -6,6 +6,7 @@ use crate::middleware::request_logger::print_request_body;
 use crate::schemas::add_customer::NewLeadForm;
 use crate::telegram::cleanup::delete_lead_telegram_messages;
 use crate::telegram::crm_notify::crm_notify_handler;
+use crate::telegram::notifications_notify::notifications_notify_handler;
 use crate::telegram::receive::webhook_handler;
 use crate::template::receive::{get_complete_template, get_template_variables};
 use crate::webhooks::receive::{
@@ -64,6 +65,10 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
             delete(delete_lead_telegram_messages),
         )
         .route("/telegram/crm-notify", post(crm_notify_handler))
+        .route(
+            "/telegram/notifications-notify",
+            post(notifications_notify_handler),
+        )
         .route("/ses/read-receipt", post(read_receipt_handler))
         .route("/ses/receive-email", post(receive_handler))
         .route("/cloudtalk/sms/{company_id}", post(sms_received))

@@ -3,6 +3,7 @@ use crate::crud::leads::{
     Deal, ExistingCustomer, create_deal_from_lead, find_existing_customer,
     get_default_list_id_from_company_id, get_existing_deal, update_deal_list_id,
 };
+use common::crud::scheduled_emails::reschedule_templates_for_deal_list;
 use crate::crud::users::get_user_tg_info;
 use crate::libs::constants::{
     CREATED_RESPONSE, ERR_DB, internal_error,
@@ -55,6 +56,25 @@ where
             "Failed to move repeated lead to Not Contacted Yet"
         );
         return internal_error(ERR_DB);
+    }
+    if let Some(user_id) = deal.user_id {
+        if let Err(e) = reschedule_templates_for_deal_list(
+            pool,
+            default_list_id,
+            company_id,
+            deal.id,
+            existing.id,
+            user_id,
+        )
+        .await
+        {
+            tracing::error!(
+                ?e,
+                deal_id = deal.id,
+                list_id = default_list_id,
+                "Failed to reschedule list drip emails for repeated lead"
+            );
+        }
     }
     let customer_id = u64::try_from(existing.id).unwrap();
     let user_info = match get_user_tg_info(pool, deal.user_id.unwrap()).await {

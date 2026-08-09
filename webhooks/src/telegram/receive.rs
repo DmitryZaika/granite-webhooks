@@ -15,8 +15,7 @@ use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email
 use axum::extract::State;
 use axum::http::StatusCode;
 use common::amazon::email::send_message;
-use common::crud::email_template::get_template_from_list_id;
-use common::crud::scheduled_emails::insert_scheduled_email;
+use common::crud::scheduled_emails::schedule_templates_for_deal_list;
 use lambda_http::tracing;
 use reqwest::Client;
 use sqlx::MySqlPool;
@@ -283,22 +282,16 @@ async fn handle_assign_lead<T: Telegram>(
         }
     };
     update_manager_lead_messages(pool, bot, position.company_id, lead_id, &full_content).await;
-    // If the group requires a scheduled email, add it
-    let email_template = get_template_from_list_id(pool, list_id, position.company_id)
-        .await
-        .unwrap();
-    if let Some(template) = email_template {
-        insert_scheduled_email(
-            pool,
-            template,
-            result.last_insert_id(),
-            lead_id,
-            position.user_id,
-            position.company_id,
-        )
-        .await
-        .unwrap();
-    }
+    schedule_templates_for_deal_list(
+        pool,
+        list_id,
+        position.company_id,
+        result.last_insert_id(),
+        lead_id,
+        position.user_id,
+    )
+    .await
+    .unwrap();
     let client = Client::new();
     // For right now we log but ignore errors
     sync_customer_to_cloud_talk(pool, &client, lead_id).await;
@@ -1033,7 +1026,7 @@ mod local_tests {
         create_deal_list(&pool, "Second List", group_id, 1)
             .await
             .unwrap();
-        create_deal_list(&pool, "First List", group_id, 0)
+        let first_list_id = create_deal_list(&pool, "First List", group_id, 0)
             .await
             .unwrap();
         let template = CreateEmailTemplate {
@@ -1042,6 +1035,7 @@ mod local_tests {
             template_body: "Test Body".to_string(),
             company_id: company_id as i32,
             lead_group_id: Some(group_id as i32),
+            lead_list_id: Some(i32::try_from(first_list_id).expect("list id fits i32")),
             hour_delay: Some(2),
             show_template: false,
         };

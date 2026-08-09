@@ -2,7 +2,7 @@ use chrono::{Duration, Utc};
 use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
 
-use crate::crud::email_template::EmailTemplate;
+use crate::crud::email_template::{get_templates_for_list_id, EmailTemplate};
 
 pub struct ScheduledEmail {
     pub id: i32,
@@ -22,16 +22,18 @@ pub async fn insert_scheduled_email(
     customer_id: i32,
     user_id: i32,
     company_id: i32,
+    list_id: Option<i32>,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     let hour_delay: i64 = template.hour_delay.unwrap_or(0).into();
     let send_at = Utc::now() + Duration::hours(hour_delay);
     sqlx::query!(
         r#"
-        INSERT INTO scheduled_emails (template_id, deal_id, customer_id, user_id, company_id, send_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO scheduled_emails (template_id, deal_id, list_id, customer_id, user_id, company_id, send_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         "#,
         template.id,
         deal_id,
+        list_id,
         customer_id,
         user_id,
         company_id,
@@ -39,6 +41,79 @@ pub async fn insert_scheduled_email(
     )
     .execute(pool)
     .await
+}
+
+pub async fn cancel_pending_scheduled_emails_for_deal(
+    pool: &MySqlPool,
+    deal_id: u64,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    sqlx::query!(
+        r#"
+        UPDATE scheduled_emails
+        SET status = 'cancelled',
+            error_message = 'Deal moved lists'
+        WHERE deal_id = ?
+          AND status = 'pending'
+        "#,
+        deal_id
+    )
+    .execute(pool)
+    .await
+}
+
+pub async fn cancel_pending_emails_left_list(
+    pool: &MySqlPool,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    sqlx::query!(
+        r#"
+        UPDATE scheduled_emails se
+        INNER JOIN deals d ON d.id = se.deal_id
+        SET se.status = 'cancelled',
+            se.error_message = 'Deal left list'
+        WHERE se.status = 'pending'
+          AND se.list_id IS NOT NULL
+          AND (d.deleted_at IS NOT NULL OR d.list_id <> se.list_id)
+        "#
+    )
+    .execute(pool)
+    .await
+}
+
+pub async fn schedule_templates_for_deal_list(
+    pool: &MySqlPool,
+    list_id: i32,
+    company_id: i32,
+    deal_id: u64,
+    customer_id: i32,
+    user_id: i32,
+) -> Result<(), sqlx::Error> {
+    let templates = get_templates_for_list_id(pool, list_id, company_id).await?;
+    for template in templates {
+        insert_scheduled_email(
+            pool,
+            template,
+            deal_id,
+            customer_id,
+            user_id,
+            company_id,
+            Some(list_id),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+pub async fn reschedule_templates_for_deal_list(
+    pool: &MySqlPool,
+    list_id: i32,
+    company_id: i32,
+    deal_id: u64,
+    customer_id: i32,
+    user_id: i32,
+) -> Result<(), sqlx::Error> {
+    cancel_pending_scheduled_emails_for_deal(pool, deal_id).await?;
+    schedule_templates_for_deal_list(pool, list_id, company_id, deal_id, customer_id, user_id)
+        .await
 }
 
 pub async fn get_ready_scheduled_emails(
@@ -52,7 +127,19 @@ pub async fn get_ready_scheduled_emails(
         JOIN customers ON scheduled_emails.customer_id = customers.id
         LEFT JOIN customers_emails ON customers.email_id = customers_emails.id
         JOIN email_templates ON scheduled_emails.template_id = email_templates.id
-        WHERE send_at <= UTC_TIMESTAMP() AND sent_at IS NULL AND status = 'pending'
+        WHERE send_at <= UTC_TIMESTAMP()
+          AND sent_at IS NULL
+          AND status = 'pending'
+          AND (
+            scheduled_emails.list_id IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM deals d
+              WHERE d.id = scheduled_emails.deal_id
+                AND d.deleted_at IS NULL
+                AND d.list_id = scheduled_emails.list_id
+            )
+          )
         "#
     )
     .fetch_all(pool)
@@ -178,7 +265,7 @@ mod tests {
         let template_id = insert_test_template(&pool, "test_immediate_tpl", "Hello", Some(0)).await;
         let template = make_template(template_id, Some(0));
 
-        insert_scheduled_email(&pool, template, 90001, customer_id, user_id, 1)
+        insert_scheduled_email(&pool, template, 90001, customer_id, user_id, 1, None)
             .await
             .expect("insert should succeed");
 
@@ -206,7 +293,7 @@ mod tests {
         let template_id = insert_test_template(&pool, "test_none_tpl", "Body", None).await;
         let template = make_template(template_id, None);
 
-        insert_scheduled_email(&pool, template, 90002, customer_id, user_id, 1)
+        insert_scheduled_email(&pool, template, 90002, customer_id, user_id, 1, None)
             .await
             .expect("insert should succeed");
 
@@ -233,7 +320,7 @@ mod tests {
             insert_test_template(&pool, "test_future_tpl", "Future body", Some(48)).await;
         let template = make_template(template_id, Some(48));
 
-        insert_scheduled_email(&pool, template, 90003, customer_id, user_id, 1)
+        insert_scheduled_email(&pool, template, 90003, customer_id, user_id, 1, None)
             .await
             .expect("insert should succeed");
 
@@ -256,7 +343,7 @@ mod tests {
         let template_id = insert_test_template(&pool, "test_mark_tpl", "Mark me", Some(0)).await;
         let template = make_template(template_id, Some(0));
 
-        insert_scheduled_email(&pool, template, 90004, customer_id, user_id, 1)
+        insert_scheduled_email(&pool, template, 90004, customer_id, user_id, 1, None)
             .await
             .expect("insert should succeed");
 
@@ -313,13 +400,13 @@ mod tests {
         let tpl_mark = make_template(tpl_mark_id, Some(0));
 
         // Insert all three.
-        insert_scheduled_email(&pool, tpl_imm, 90010, cust200, user_id, 1)
+        insert_scheduled_email(&pool, tpl_imm, 90010, cust200, user_id, 1, None)
             .await
             .unwrap();
-        insert_scheduled_email(&pool, tpl_fut, 90011, cust201, user_id, 1)
+        insert_scheduled_email(&pool, tpl_fut, 90011, cust201, user_id, 1, None)
             .await
             .unwrap();
-        insert_scheduled_email(&pool, tpl_mark, 90012, cust202, user_id, 1)
+        insert_scheduled_email(&pool, tpl_mark, 90012, cust202, user_id, 1, None)
             .await
             .unwrap();
 
@@ -373,7 +460,7 @@ mod tests {
         let template_id = insert_test_template(&pool, "test_join_tpl", "Join body", Some(0)).await;
         let template = make_template(template_id, Some(0));
 
-        insert_scheduled_email(&pool, template, 90020, customer_id, user_id, 1)
+        insert_scheduled_email(&pool, template, 90020, customer_id, user_id, 1, None)
             .await
             .unwrap();
 
@@ -399,7 +486,7 @@ mod tests {
         let template = make_template(template_id, Some(-1));
 
         // send_at = now - 1 hour, which is in the past.
-        insert_scheduled_email(&pool, template, 90030, customer_id, user_id, 1)
+        insert_scheduled_email(&pool, template, 90030, customer_id, user_id, 1, None)
             .await
             .unwrap();
 
@@ -431,7 +518,7 @@ mod tests {
         let template_id = insert_test_template(&pool, "test_double_tpl", "Double", Some(0)).await;
         let template = make_template(template_id, Some(0));
 
-        insert_scheduled_email(&pool, template, 90040, customer_id, user_id, 1)
+        insert_scheduled_email(&pool, template, 90040, customer_id, user_id, 1, None)
             .await
             .unwrap();
 
@@ -480,6 +567,7 @@ mod tests {
             cust501,
             user_id,
             1,
+            None,
         )
         .await
         .unwrap();
@@ -490,6 +578,7 @@ mod tests {
             cust502,
             user_id,
             1,
+            None,
         )
         .await
         .unwrap();
@@ -500,6 +589,7 @@ mod tests {
             cust503,
             user_id,
             1,
+            None,
         )
         .await
         .unwrap();
@@ -536,6 +626,7 @@ mod tests {
             cust601,
             user_id,
             1,
+            None,
         )
         .await
         .unwrap();
@@ -546,6 +637,7 @@ mod tests {
             cust602,
             user_id,
             1,
+            None,
         )
         .await
         .unwrap();
@@ -566,7 +658,7 @@ mod tests {
         let template_id = insert_test_template(&pool, "test_failed_tpl", "Fail me", Some(0)).await;
         let template = make_template(template_id, Some(0));
 
-        insert_scheduled_email(&pool, template, 90070, customer_id, user_id, 1)
+        insert_scheduled_email(&pool, template, 90070, customer_id, user_id, 1, None)
             .await
             .unwrap();
 

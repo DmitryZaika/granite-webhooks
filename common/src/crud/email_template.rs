@@ -6,27 +6,36 @@ pub struct EmailTemplate {
     pub hour_delay: Option<i32>,
 }
 
-pub async fn get_template_from_list_id(
+pub async fn get_templates_for_list_id(
     pool: &MySqlPool,
     list_id: i32,
     company_id: i32,
-) -> Result<Option<EmailTemplate>, sqlx::Error> {
+) -> Result<Vec<EmailTemplate>, sqlx::Error> {
     sqlx::query_as!(
         EmailTemplate,
         r#"
         SELECT email_templates.id, email_templates.hour_delay
         FROM email_templates
-        JOIN groups_list ON email_templates.lead_group_id = groups_list.id
-        JOIN deals_list ON deals_list.group_id = groups_list.id
-        WHERE deals_list.id = ?
+        WHERE email_templates.lead_list_id = ?
           AND email_templates.company_id = ?
-        LIMIT 1
+          AND email_templates.user_id IS NULL
+          AND email_templates.deleted_at IS NULL
+        ORDER BY email_templates.hour_delay ASC, email_templates.id ASC
         "#,
         list_id,
         company_id,
     )
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
+}
+
+pub async fn get_template_from_list_id(
+    pool: &MySqlPool,
+    list_id: i32,
+    company_id: i32,
+) -> Result<Option<EmailTemplate>, sqlx::Error> {
+    let templates = get_templates_for_list_id(pool, list_id, company_id).await?;
+    Ok(templates.into_iter().next())
 }
 
 pub struct CreateEmailTemplate {
@@ -35,6 +44,7 @@ pub struct CreateEmailTemplate {
     pub template_body: String,
     pub company_id: i32,
     pub lead_group_id: Option<i32>,
+    pub lead_list_id: Option<i32>,
     pub hour_delay: Option<i32>,
     pub show_template: bool, // Maps to tinyint(1)
 }
@@ -51,16 +61,18 @@ pub async fn insert_email_template(
             template_body,
             company_id,
             lead_group_id,
+            lead_list_id,
             hour_delay,
             show_template
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         "#,
         template.template_name,
         template.template_subject,
         template.template_body,
         template.company_id,
         template.lead_group_id,
+        template.lead_list_id,
         template.hour_delay,
         template.show_template
     )

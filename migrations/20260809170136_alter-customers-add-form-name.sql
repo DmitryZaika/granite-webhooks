@@ -1,1 +1,2 @@
+-- Add migration script here
 ALTER TABLE customers ADD COLUMN form_name VARCHAR(255) DEFAULT NULL;

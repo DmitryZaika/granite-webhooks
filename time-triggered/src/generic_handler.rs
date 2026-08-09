@@ -3,9 +3,10 @@ use common::amazon::email::send_message;
 use common::crud::notifications::{
     get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
 };
-use common::crud::scheduled_emails::mark_scheduled_email_as_sent;
+use common::crud::scheduled_emails::{
+    cancel_pending_emails_left_list, get_ready_scheduled_emails, mark_scheduled_email_as_sent,
+};
 use common::crud::template::fetch_template_variable_data;
-use common::crud::{scheduled_emails::get_ready_scheduled_emails};
 use common::utils::template::replace_template_variables;
 use lambda_runtime::{tracing, Error, LambdaEvent};
 use reqwest::Client;
@@ -56,26 +57,23 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
     Ok(sent_count)
 }
 
-async fn process_estimate_appointment_reminders() -> Result<usize, Error> {
+async fn post_app_process_route(path: &str, label: &str) -> Result<usize, Error> {
     let app_url = match std::env::var("APP_URL") {
         Ok(value) => value,
         Err(error) => {
-            tracing::warn!(?error, "APP_URL is not set; skipping estimate reminders");
+            tracing::warn!(?error, "APP_URL is not set; skipping {label}");
             return Ok(0);
         }
     };
     let lambda_key = match std::env::var("LAMBDA_KEY") {
         Ok(value) => value,
         Err(error) => {
-            tracing::warn!(?error, "LAMBDA_KEY is not set; skipping estimate reminders");
+            tracing::warn!(?error, "LAMBDA_KEY is not set; skipping {label}");
             return Ok(0);
         }
     };
 
-    let url = format!(
-        "{}/api/estimate-reminders/process",
-        app_url.trim_end_matches('/')
-    );
+    let url = format!("{}/{}", app_url.trim_end_matches('/'), path.trim_start_matches('/'));
     let client = Client::new();
     let response = client
         .post(url)
@@ -87,7 +85,7 @@ async fn process_estimate_appointment_reminders() -> Result<usize, Error> {
     if !response.status().is_success() {
         tracing::warn!(
             status = response.status().as_u16(),
-            "Failed to process estimate appointment reminders"
+            "Failed to process {label}"
         );
         return Ok(0);
     }
@@ -103,6 +101,18 @@ async fn process_estimate_appointment_reminders() -> Result<usize, Error> {
     Ok(usize::try_from(processed).unwrap_or(0))
 }
 
+async fn process_estimate_appointment_reminders() -> Result<usize, Error> {
+    post_app_process_route("api/estimate-reminders/process", "estimate reminders").await
+}
+
+async fn process_maintenance_due_reminders() -> Result<usize, Error> {
+    post_app_process_route(
+        "api/maintenance-reminders/process",
+        "maintenance due reminders",
+    )
+    .await
+}
+
 /// There are some code example in the following URLs:
 /// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
 /// - https://github.com/aws-samples/serverless-rust-demo/
@@ -113,6 +123,7 @@ pub(crate) async fn function_handler(
     // This will now print the full JSON structure to your CloudWatch logs
     tracing::info!("Received event: {:?}", event.payload);
 
+    cancel_pending_emails_left_list(pool).await?;
     let ready_emails = get_ready_scheduled_emails(pool).await?;
     for email in &ready_emails {
         let data = fetch_template_variable_data(
@@ -140,11 +151,13 @@ pub(crate) async fn function_handler(
     }
     let reminder_count = send_due_activity_deadline_reminders(pool).await?;
     let estimate_reminder_count = process_estimate_appointment_reminders().await?;
+    let maintenance_reminder_count = process_maintenance_due_reminders().await?;
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, and {} estimate appointment reminders",
+        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, and {} maintenance due reminders",
         ready_emails.len(),
         reminder_count,
-        estimate_reminder_count
+        estimate_reminder_count,
+        maintenance_reminder_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);
