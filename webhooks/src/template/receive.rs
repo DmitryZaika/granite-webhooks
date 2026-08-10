@@ -553,6 +553,60 @@ mod tests {
     }
 
     #[test]
+    fn test_replace_capitalized_customer_first_name_for_automated_emails() {
+        // Automated drip templates sometimes store {{Customer.first_name}}.
+        // Customers must receive the resolved name, not the raw placeholder.
+        let template = "<p>Hi {{Customer.first_name}}, thanks for contacting {{Company.name}}.</p>";
+        let data = make_full_data();
+        let result = replace_template_variables(template, &data);
+
+        assert_eq!(
+            result,
+            "<p>Hi Acme, thanks for contacting Granite Depot.</p>"
+        );
+        assert!(!result.contains("{{Customer.first_name}}"));
+        assert!(!result.contains("{{Company.name}}"));
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_scheduled_email_style_fetch_and_replace_customer_name(pool: MySqlPool) {
+        let company_id = insert_test_company(&pool, "Auto Email Co", None, None, None)
+            .await
+            .unwrap();
+        let user_id = insert_test_user(
+            &pool,
+            company_id,
+            Some("Rep Person"),
+            "rep-auto@test.com",
+            None,
+        )
+        .await
+        .unwrap();
+        let customer_id =
+            insert_test_customer(&pool, Some(company_id), "Jordan Smith", None)
+                .await
+                .unwrap();
+
+        let data = fetch_template_variable_data(
+            &pool,
+            user_id,
+            None,
+            Some(customer_id),
+            company_id,
+        )
+        .await
+        .unwrap();
+
+        let rendered = replace_template_variables(
+            "Hi {{Customer.first_name}}, this is {{user.first_name}}.",
+            &data,
+        );
+
+        assert_eq!(rendered, "Hi Jordan, this is Rep.");
+        assert!(!rendered.contains("{{"));
+    }
+
+    #[test]
     fn test_replace_all_data_missing() {
         // User has a name, but customer and company are None → their variables stay
         let data = make_minimal_data();
