@@ -32,7 +32,6 @@ CREATE TABLE quote_options (
   product_type VARCHAR(64) NOT NULL DEFAULT 'Granite',
   color_name VARCHAR(255) NOT NULL DEFAULT '',
   edge_profile VARCHAR(64) NOT NULL DEFAULT 'flat',
-  thickness VARCHAR(16) NOT NULL DEFAULT '3CM',
   pricing_mode VARCHAR(16) NOT NULL DEFAULT 'PER_SQFT',
   sqft_price DECIMAL(12,2) NOT NULL DEFAULT 0,
   slab_price DECIMAL(12,2) NOT NULL DEFAULT 0,
