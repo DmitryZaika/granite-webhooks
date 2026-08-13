@@ -1,7 +1,9 @@
 use crate::axum_helpers::guards::{CloudTalkWebhookUser, NotificationsTelegramBot};
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::cloudtalk::schemas::CloudtalkSMS;
-use crate::crud::cloudtalk::{insert_inbound_sms, insert_outbound_sms};
+use crate::crud::cloudtalk::{
+    cancel_flow_enrollments_on_reply, insert_inbound_sms, insert_outbound_sms,
+};
 use crate::crud::users::get_user_id_by_cloudtalk_agent;
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
@@ -53,6 +55,16 @@ pub async fn sms_received(
 
     match insert_inbound_sms(&pool, &form, company_id).await {
         Ok(_) => {
+            if let Err(error) =
+                cancel_flow_enrollments_on_reply(&pool, company_id, form.sender()).await
+            {
+                tracing::error!(
+                    ?error,
+                    company_id,
+                    "Failed to cancel sms flow enrollments on reply"
+                );
+            }
+
             if let Some(agent) = form.agent.as_deref() {
                 if let Ok(Some(user_id)) =
                     get_user_id_by_cloudtalk_agent(&pool, company_id, agent).await

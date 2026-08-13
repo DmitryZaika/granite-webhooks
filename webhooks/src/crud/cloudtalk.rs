@@ -285,6 +285,26 @@ pub async fn find_local_cloudtalk_id_by_phone(
     query.fetch_optional(pool).await
 }
 
+/// Customer replied: kill every pending follow-up for this phone in the company,
+/// regardless of which rep or flow scheduled it.
+pub async fn cancel_flow_enrollments_on_reply(
+    pool: &MySqlPool,
+    company_id: i32,
+    phone_digits: u64,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query!(
+        r#"UPDATE sms_flow_enrollments
+           SET status = 'stopped_by_reply', updated_at = UTC_TIMESTAMP()
+           WHERE company_id = ? AND customer_phone_digits = ?
+             AND status IN ('active', 'paused')"#,
+        company_id,
+        phone_digits
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use super::insert_outbound_sms;
@@ -314,15 +334,24 @@ mod tests {
         .unwrap();
 
         let before = sqlx::query!("SELECT COUNT(*) AS c FROM cloudtalk_sms_attachments")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(before.c, 1);
 
         sqlx::query!("DELETE FROM cloudtalk_sms WHERE id = ?", parent as i32)
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let after = sqlx::query!("SELECT COUNT(*) AS c FROM cloudtalk_sms_attachments")
-            .fetch_one(&pool).await.unwrap();
-        assert_eq!(after.c, 0, "attachments must cascade-delete with the parent sms row");
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            after.c, 0,
+            "attachments must cascade-delete with the parent sms row"
+        );
     }
 
     // Builds an outbound-echo fixture like the real webhook body, without the "[text]"
