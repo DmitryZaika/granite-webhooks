@@ -73,7 +73,11 @@ async fn post_app_process_route(path: &str, label: &str) -> Result<usize, Error>
         }
     };
 
-    let url = format!("{}/{}", app_url.trim_end_matches('/'), path.trim_start_matches('/'));
+    let url = format!(
+        "{}/{}",
+        app_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
     let client = Client::new();
     let response = client
         .post(url)
@@ -111,6 +115,10 @@ async fn process_maintenance_due_reminders() -> Result<usize, Error> {
         "maintenance due reminders",
     )
     .await
+}
+
+async fn process_sms_followups() -> Result<usize, Error> {
+    post_app_process_route("api/sms-followups/process", "sms follow-ups").await
 }
 
 /// There are some code example in the following URLs:
@@ -152,12 +160,14 @@ pub(crate) async fn function_handler(
     let reminder_count = send_due_activity_deadline_reminders(pool).await?;
     let estimate_reminder_count = process_estimate_appointment_reminders().await?;
     let maintenance_reminder_count = process_maintenance_due_reminders().await?;
+    let sms_followup_count = process_sms_followups().await?;
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, and {} maintenance due reminders",
+        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, and {} sms follow-ups",
         ready_emails.len(),
         reminder_count,
         estimate_reminder_count,
-        maintenance_reminder_count
+        maintenance_reminder_count,
+        sms_followup_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);
