@@ -811,8 +811,7 @@ mod local_tests {
 
     #[test]
     fn test_html_body_keeps_content_for_forwarded_html_with_no_blockquote() {
-        let email_bytes =
-            read_file_as_bytes("src/tests/data/gmail_reply_full_quote.eml").unwrap();
+        let email_bytes = read_file_as_bytes("src/tests/data/gmail_reply_full_quote.eml").unwrap();
         let (parsed_email, _) = parse_email(&email_bytes).unwrap();
         let html_body = parsed_email
             .html_body

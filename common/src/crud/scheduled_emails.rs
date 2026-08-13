@@ -2,7 +2,7 @@ use chrono::{Duration, Utc};
 use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
 
-use crate::crud::email_template::{get_templates_for_list_id, EmailTemplate};
+use crate::crud::email_template::{EmailTemplate, get_templates_for_list_id};
 
 pub struct ScheduledEmail {
     pub id: i32,
@@ -112,8 +112,7 @@ pub async fn reschedule_templates_for_deal_list(
     user_id: i32,
 ) -> Result<(), sqlx::Error> {
     cancel_pending_scheduled_emails_for_deal(pool, deal_id).await?;
-    schedule_templates_for_deal_list(pool, list_id, company_id, deal_id, customer_id, user_id)
-        .await
+    schedule_templates_for_deal_list(pool, list_id, company_id, deal_id, customer_id, user_id).await
 }
 
 pub async fn get_ready_scheduled_emails(

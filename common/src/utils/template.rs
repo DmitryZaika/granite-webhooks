@@ -154,8 +154,7 @@ mod tests {
             customer: None,
             company: None,
         };
-        let result =
-            replace_template_variables("Hi {{customer.first_name}}", &data);
+        let result = replace_template_variables("Hi {{customer.first_name}}", &data);
 
         assert_eq!(result, "Hi {{customer.first_name}}");
     }
@@ -169,8 +168,7 @@ mod tests {
             hours_of_operation: None,
             domain: None,
         });
-        let result =
-            replace_template_variables("Hi {{customer.first_name}}", &data);
+        let result = replace_template_variables("Hi {{customer.first_name}}", &data);
 
         assert_eq!(result, "Hi {{customer.first_name}}");
     }

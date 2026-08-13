@@ -582,20 +582,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let customer_id =
-            insert_test_customer(&pool, Some(company_id), "Jordan Smith", None)
+        let customer_id = insert_test_customer(&pool, Some(company_id), "Jordan Smith", None)
+            .await
+            .unwrap();
+
+        let data =
+            fetch_template_variable_data(&pool, user_id, None, Some(customer_id), company_id)
                 .await
                 .unwrap();
-
-        let data = fetch_template_variable_data(
-            &pool,
-            user_id,
-            None,
-            Some(customer_id),
-            company_id,
-        )
-        .await
-        .unwrap();
 
         let rendered = replace_template_variables(
             "Hi {{Customer.first_name}}, this is {{user.first_name}}.",

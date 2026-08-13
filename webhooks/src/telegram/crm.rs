@@ -45,7 +45,11 @@ where
     let user = match get_user_notifications_tg_info(pool, payload.user_id).await {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(?error, user_id = payload.user_id, "Failed to load user telegram info");
+            tracing::error!(
+                ?error,
+                user_id = payload.user_id,
+                "Failed to load user telegram info"
+            );
             return Err(internal_error(ERR_SEND_TELEGRAM));
         }
     };
@@ -141,11 +145,7 @@ where
         .chars()
         .filter(|character| character.is_ascii_digit())
         .collect();
-    let text = format_sms_notification(
-        &payload.sender_phone,
-        &payload.message,
-        &phone_digits,
-    );
+    let text = format_sms_notification(&payload.sender_phone, &payload.message, &phone_digits);
     send_plain_crm_message(bot, telegram_id, &text).await
 }
 
@@ -177,7 +177,10 @@ async fn send_plain_crm_message<T>(
 where
     T: Telegram + Send + Sync,
 {
-    match bot.send_message(ChatId(telegram_id), text.to_string()).await {
+    match bot
+        .send_message(ChatId(telegram_id), text.to_string())
+        .await
+    {
         Ok(_) => Ok(()),
         Err(error) => {
             tracing::error!(

@@ -14,10 +14,12 @@ async fn set_customer_email(
         return Ok(());
     }
 
-    let existing_email_id =
-        sqlx::query_scalar!(r#"SELECT email_id FROM customers WHERE id = ?"#, customer_id)
-            .fetch_one(pool)
-            .await?;
+    let existing_email_id = sqlx::query_scalar!(
+        r#"SELECT email_id FROM customers WHERE id = ?"#,
+        customer_id
+    )
+    .fetch_one(pool)
+    .await?;
 
     if let Some(email_id) = existing_email_id {
         query!(
