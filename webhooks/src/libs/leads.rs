@@ -3,11 +3,8 @@ use crate::crud::leads::{
     Deal, ExistingCustomer, create_deal_from_lead, find_existing_customer,
     get_default_list_id_from_company_id, get_existing_deal, update_deal_list_id,
 };
-use common::crud::scheduled_emails::reschedule_templates_for_deal_list;
 use crate::crud::users::get_user_tg_info;
-use crate::libs::constants::{
-    CREATED_RESPONSE, ERR_DB, internal_error,
-};
+use crate::libs::constants::{CREATED_RESPONSE, ERR_DB, internal_error};
 use crate::libs::types::BasicResponse;
 use crate::schemas::add_customer::LeadPayload;
 use crate::telegram::send::{
@@ -16,6 +13,7 @@ use crate::telegram::send::{
 };
 use crate::telegram::utils::lead_url;
 use common::amazon::email::send_message;
+use common::crud::scheduled_emails::reschedule_templates_for_deal_list;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 

@@ -2,6 +2,7 @@ use crate::axum_helpers::guards::{CloudTalkWebhookUser, NotificationsTelegramBot
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::cloudtalk::schemas::CloudtalkSMS;
 use crate::crud::cloudtalk::{insert_inbound_sms, insert_outbound_sms};
+use crate::crud::deals::maybe_move_deal_on_inbound_sms;
 use crate::crud::users::get_user_id_by_cloudtalk_agent;
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
@@ -53,27 +54,27 @@ pub async fn sms_received(
 
     match insert_inbound_sms(&pool, &form, company_id).await {
         Ok(_) => {
-            if let Some(agent) = form.agent.as_deref() {
-                if let Ok(Some(user_id)) =
+            maybe_move_deal_on_inbound_sms(&pool, company_id, form.sender()).await;
+            if let Some(agent) = form.agent.as_deref()
+                && let Ok(Some(user_id)) =
                     get_user_id_by_cloudtalk_agent(&pool, company_id, agent).await
+            {
+                let sender_phone = form.sender().to_string();
+                let payload = InboundSmsTelegramNotify {
+                    receiver_user_id: user_id,
+                    sender_phone,
+                    message: form.text.0.clone(),
+                };
+                let bot = NotificationsTelegramBot::default();
+                if let Err(error) =
+                    send_inbound_sms_telegram_notification(&pool, &bot, &payload).await
                 {
-                    let sender_phone = form.sender().to_string();
-                    let payload = InboundSmsTelegramNotify {
-                        receiver_user_id: user_id,
-                        sender_phone,
-                        message: form.text.0.clone(),
-                    };
-                    let bot = NotificationsTelegramBot::default();
-                    if let Err(error) =
-                        send_inbound_sms_telegram_notification(&pool, &bot, &payload).await
-                    {
-                        tracing::error!(
-                            ?error,
-                            user_id = user_id,
-                            company_id = company_id,
-                            "Failed to send inbound sms telegram notification"
-                        );
-                    }
+                    tracing::error!(
+                        ?error,
+                        user_id = user_id,
+                        company_id = company_id,
+                        "Failed to send inbound sms telegram notification"
+                    );
                 }
             }
             OK_RESPONSE
@@ -117,7 +118,7 @@ mod tests {
     use super::parse_cloudtalk_sms;
     use crate::axum_helpers::guards::CORRECT_ID;
     use crate::tests::cloudtalk::{INBOUND_MMS_NULL_TEXT, INBOUND_SMS};
-    use crate::tests::utils::new_test_app;
+    use crate::tests::utils::{insert_group_list, new_test_app};
     use axum::body::Bytes;
     use axum::http::StatusCode;
     use lambda_http::tracing;
@@ -422,5 +423,62 @@ mod tests {
 
         let smss = get_sms_received(&pool).await;
         assert_eq!(smss.len(), 0, "unparseable payload must not insert a row");
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn inbound_sms_moves_deal_from_first_list(pool: MySqlPool) {
+        let company = sqlx::query!(r#"INSERT INTO company (name) VALUES ('Sms Move Co')"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let company_id = i32::try_from(company.last_insert_id()).unwrap();
+        let group_id = insert_group_list(&pool, company_id).await.unwrap();
+        let first = sqlx::query!(
+            r#"INSERT INTO deals_list (name, group_id, position) VALUES ('Not Contacted Yet', ?, 0)"#,
+            group_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let first_list_id = i32::try_from(first.last_insert_id()).unwrap();
+        let second = sqlx::query!(
+            r#"INSERT INTO deals_list (name, group_id, position) VALUES ('Contacted', ?, 1)"#,
+            group_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let second_list_id = i32::try_from(second.last_insert_id()).unwrap();
+        let customer = sqlx::query!(
+            r#"INSERT INTO customers (name, company_id, phone, source) VALUES ('Lead', ?, '6468956758', 'leads')"#,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let customer_id = i32::try_from(customer.last_insert_id()).unwrap();
+        let deal = sqlx::query!(
+            r#"INSERT INTO deals (customer_id, status, list_id, position) VALUES (?, 'Not Contacted Yet', ?, 0)"#,
+            customer_id,
+            first_list_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let deal_id = deal.last_insert_id();
+
+        let app = new_test_app(pool.clone());
+        let response = app
+            .post(&format!("/cloudtalk/sms/{company_id}"))
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&sms_json())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let list_id = sqlx::query_scalar!(r#"SELECT list_id FROM deals WHERE id = ?"#, deal_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(list_id, second_list_id);
     }
 }

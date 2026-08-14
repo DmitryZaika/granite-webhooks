@@ -1,10 +1,11 @@
 use crate::schemas::{EventBridgeEvent, OutgoingMessage};
-use common::amazon::email::send_message;
+use common::amazon::email::{assigned_sender_from, send_message_from};
 use common::crud::notifications::{
     get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
 };
 use common::crud::scheduled_emails::{
-    cancel_pending_emails_left_list, get_ready_scheduled_emails, mark_scheduled_email_as_sent,
+    cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
+    get_ready_scheduled_emails, mark_scheduled_email_as_sent,
 };
 use common::crud::template::fetch_template_variable_data;
 use common::utils::template::replace_template_variables;
@@ -124,6 +125,7 @@ pub(crate) async fn function_handler(
     tracing::info!("Received event: {:?}", event.payload);
 
     cancel_pending_emails_left_list(pool).await?;
+    cancel_pending_emails_for_non_leads(pool).await?;
     let ready_emails = get_ready_scheduled_emails(pool).await?;
     for email in &ready_emails {
         let data = fetch_template_variable_data(
@@ -146,7 +148,12 @@ pub(crate) async fn function_handler(
                 continue;
             }
         };
-        send_message(&[&cleaned_email], &email.template_subject, &result).await?;
+        let from = assigned_sender_from(
+            data.company.as_ref().and_then(|company| company.domain.as_deref()),
+            data.user.email.as_deref(),
+            data.user.email_name.as_deref(),
+        );
+        send_message_from(&[&cleaned_email], &email.template_subject, &result, &from).await?;
         mark_scheduled_email_as_sent(pool, email.id).await?;
     }
     let reminder_count = send_due_activity_deadline_reminders(pool).await?;

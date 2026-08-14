@@ -314,15 +314,24 @@ mod tests {
         .unwrap();
 
         let before = sqlx::query!("SELECT COUNT(*) AS c FROM cloudtalk_sms_attachments")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(before.c, 1);
 
         sqlx::query!("DELETE FROM cloudtalk_sms WHERE id = ?", parent as i32)
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let after = sqlx::query!("SELECT COUNT(*) AS c FROM cloudtalk_sms_attachments")
-            .fetch_one(&pool).await.unwrap();
-        assert_eq!(after.c, 0, "attachments must cascade-delete with the parent sms row");
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            after.c, 0,
+            "attachments must cascade-delete with the parent sms row"
+        );
     }
 
     // Builds an outbound-echo fixture like the real webhook body, without the "[text]"

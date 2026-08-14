@@ -2,7 +2,45 @@ use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_sesv2::types::{Body, Content, Destination, EmailContent, Message};
 use aws_sdk_sesv2::{Client, Error, config::Region};
 
+pub const DEFAULT_NOREPLY_EMAIL_ADDRESS: &str = "noreply@granite-manager.com";
+pub const DEFAULT_SEND_EMAIL_ADDRESS: &str = "sales@granite-manager.com";
+
+pub fn from_email(company_domain: Option<&str>, user_email: &str) -> String {
+    let Some(domain) = company_domain.filter(|value| !value.is_empty()) else {
+        return DEFAULT_SEND_EMAIL_ADDRESS.to_string();
+    };
+    if user_email.contains(domain) {
+        return user_email.to_string();
+    }
+    DEFAULT_SEND_EMAIL_ADDRESS.to_string()
+}
+
+pub fn format_sender_from(email_name: Option<&str>, email_address: &str) -> String {
+    match email_name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("\"{name}\" <{email_address}>"),
+        None => email_address.to_string(),
+    }
+}
+
+pub fn assigned_sender_from(
+    company_domain: Option<&str>,
+    user_email: Option<&str>,
+    email_name: Option<&str>,
+) -> String {
+    let address = from_email(company_domain, user_email.unwrap_or(""));
+    format_sender_from(email_name, &address)
+}
+
 pub async fn send_message(to: &[&str], subject: &str, message: &str) -> Result<(), Error> {
+    send_message_from(to, subject, message, DEFAULT_NOREPLY_EMAIL_ADDRESS).await
+}
+
+pub async fn send_message_from(
+    to: &[&str],
+    subject: &str,
+    message: &str,
+    from: &str,
+) -> Result<(), Error> {
     let region_provider = RegionProviderChain::first_try(Region::new("us-east-2"));
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let client = Client::new(&shared_config);
@@ -30,11 +68,77 @@ pub async fn send_message(to: &[&str], subject: &str, message: &str) -> Result<(
 
     client
         .send_email()
-        .from_email_address("noreply@granite-manager.com")
+        .from_email_address(from)
         .destination(dest)
         .content(email_content)
         .send()
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_email_uses_default_when_domain_is_missing() {
+        assert_eq!(
+            from_email(None, "rep@custom.com"),
+            DEFAULT_SEND_EMAIL_ADDRESS
+        );
+        assert_eq!(
+            from_email(Some(""), "rep@custom.com"),
+            DEFAULT_SEND_EMAIL_ADDRESS
+        );
+    }
+
+    #[test]
+    fn from_email_uses_user_email_when_it_matches_company_domain() {
+        assert_eq!(from_email(Some("acme.com"), "rep@acme.com"), "rep@acme.com");
+    }
+
+    #[test]
+    fn from_email_falls_back_when_user_email_is_outside_company_domain() {
+        assert_eq!(
+            from_email(Some("acme.com"), "rep@gmail.com"),
+            DEFAULT_SEND_EMAIL_ADDRESS
+        );
+    }
+
+    #[test]
+    fn format_sender_from_includes_display_name() {
+        assert_eq!(
+            format_sender_from(Some("Alex"), "alex@acme.com"),
+            "\"Alex\" <alex@acme.com>"
+        );
+    }
+
+    #[test]
+    fn format_sender_from_returns_bare_address_without_name() {
+        assert_eq!(
+            format_sender_from(None, "alex@acme.com"),
+            "alex@acme.com"
+        );
+        assert_eq!(
+            format_sender_from(Some("  "), "alex@acme.com"),
+            "alex@acme.com"
+        );
+    }
+
+    #[test]
+    fn assigned_sender_from_uses_employee_address_and_name() {
+        assert_eq!(
+            assigned_sender_from(Some("acme.com"), Some("rep@acme.com"), Some("Alex Rep")),
+            "\"Alex Rep\" <rep@acme.com>"
+        );
+    }
+
+    #[test]
+    fn assigned_sender_from_falls_back_to_sales_address() {
+        assert_eq!(
+            assigned_sender_from(Some("acme.com"), Some("rep@gmail.com"), Some("Alex Rep")),
+            "\"Alex Rep\" <sales@granite-manager.com>"
+        );
+    }
 }
