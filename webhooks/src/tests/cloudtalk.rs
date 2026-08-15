@@ -93,17 +93,23 @@ mod flow_enrollment_tests {
         );
     }
 
-    // Same shape as INBOUND_SMS but carries a cloudtalk_id, so redelivering it collides
-    // with the (company_id, cloudtalk_id) unique key and INSERT IGNORE inserts zero rows.
-    const INBOUND_SMS_WITH_ID: &[u8] = b"{\"id\":2200000200,\"sender\":\"+16468956758[sender]\",\"recipient\":\"+13173161456[recipient]\",\"text\":\"[text]hello\",\"agent\":\"540273\"}";
+    // Same shape as INBOUND_SMS but carries a cloudtalk_id, parameterized by id so both the
+    // redelivery-dedupe test and the distinct-ids test can build a payload for a specific id.
+    fn inbound_sms_with_id_json(id: i64) -> serde_json::Value {
+        let body = format!(
+            "{{\"id\":{id},\"sender\":\"+16468956758[sender]\",\"recipient\":\"+13173161456[recipient]\",\"text\":\"[text]hello\",\"agent\":\"540273\"}}"
+        );
+        serde_json::from_str(&body).expect("parse fixture")
+    }
+
+    const INBOUND_SMS_WITH_ID: i64 = 2200000200;
 
     #[sqlx::test(migrations = "../migrations")]
     async fn redelivered_inbound_sms_does_not_cancel_enrollment_started_after_original(
         pool: MySqlPool,
     ) {
         let app = new_test_app(pool.clone());
-        let body: serde_json::Value =
-            serde_json::from_slice(INBOUND_SMS_WITH_ID).expect("parse fixture");
+        let body = inbound_sms_with_id_json(INBOUND_SMS_WITH_ID);
 
         // Original delivery: no enrollment exists yet, so there is nothing to cancel; this
         // just establishes the row the redelivery below will collide with.
@@ -134,6 +140,47 @@ mod flow_enrollment_tests {
             status_of(&pool, 42, 6468956758, "stopped_by_reply").await,
             0,
             "no new reply occurred on the redelivery; nothing should be stopped"
+        );
+    }
+
+    // Inverse of the redelivery test above: two inbound messages with two DIFFERENT non-null
+    // cloudtalk ids are genuinely separate replies, not a redelivery, so the second one must
+    // still cancel a flow enrollment started between them.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn second_inbound_sms_with_distinct_id_cancels_enrollment_started_between(
+        pool: MySqlPool,
+    ) {
+        let app = new_test_app(pool.clone());
+
+        // First genuinely new reply.
+        let first = app
+            .post("/cloudtalk/sms/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&inbound_sms_with_id_json(2200000200))
+            .await;
+        assert_eq!(first.status_code(), StatusCode::OK);
+
+        // A rep starts a new flow after the first reply was processed.
+        insert_enrollment(&pool, 42, 6468956758, "active").await;
+
+        // A second, genuinely new reply arrives with a different non-null cloudtalk id (not
+        // a redelivery of the first), and must still cancel the enrollment started above.
+        let second = app
+            .post("/cloudtalk/sms/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&inbound_sms_with_id_json(2200000201))
+            .await;
+        assert_eq!(second.status_code(), StatusCode::OK);
+
+        assert_eq!(
+            status_of(&pool, 42, 6468956758, "stopped_by_reply").await,
+            1,
+            "a new reply with a distinct cloudtalk id must still cancel the enrollment"
+        );
+        assert_eq!(
+            status_of(&pool, 42, 6468956758, "active").await,
+            0,
+            "the enrollment must no longer be active after the second distinct reply"
         );
     }
 }
