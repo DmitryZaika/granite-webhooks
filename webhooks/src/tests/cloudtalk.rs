@@ -92,4 +92,48 @@ mod flow_enrollment_tests {
             "the matching enrollment must be stopped by the inbound reply"
         );
     }
+
+    // Same shape as INBOUND_SMS but carries a cloudtalk_id, so redelivering it collides
+    // with the (company_id, cloudtalk_id) unique key and INSERT IGNORE inserts zero rows.
+    const INBOUND_SMS_WITH_ID: &[u8] = b"{\"id\":2200000200,\"sender\":\"+16468956758[sender]\",\"recipient\":\"+13173161456[recipient]\",\"text\":\"[text]hello\",\"agent\":\"540273\"}";
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn redelivered_inbound_sms_does_not_cancel_enrollment_started_after_original(
+        pool: MySqlPool,
+    ) {
+        let app = new_test_app(pool.clone());
+        let body: serde_json::Value =
+            serde_json::from_slice(INBOUND_SMS_WITH_ID).expect("parse fixture");
+
+        // Original delivery: no enrollment exists yet, so there is nothing to cancel; this
+        // just establishes the row the redelivery below will collide with.
+        let first = app
+            .post("/cloudtalk/sms/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&body)
+            .await;
+        assert_eq!(first.status_code(), StatusCode::OK);
+
+        // A rep starts a new flow after the original reply was processed.
+        insert_enrollment(&pool, 42, 6468956758, "active").await;
+
+        // CloudTalk redelivers the same webhook (e.g. it missed the original 200 response).
+        let second = app
+            .post("/cloudtalk/sms/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&body)
+            .await;
+        assert_eq!(second.status_code(), StatusCode::OK);
+
+        assert_eq!(
+            status_of(&pool, 42, 6468956758, "active").await,
+            1,
+            "redelivery of an already-stored webhook must not cancel a newer enrollment"
+        );
+        assert_eq!(
+            status_of(&pool, 42, 6468956758, "stopped_by_reply").await,
+            0,
+            "no new reply occurred on the redelivery; nothing should be stopped"
+        );
+    }
 }

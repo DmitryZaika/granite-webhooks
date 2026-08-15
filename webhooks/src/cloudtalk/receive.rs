@@ -54,14 +54,27 @@ pub async fn sms_received(
     };
 
     match insert_inbound_sms(&pool, &form, company_id).await {
-        Ok(_) => {
-            if let Err(error) =
-                cancel_flow_enrollments_on_reply(&pool, company_id, form.sender()).await
-            {
-                tracing::error!(
-                    ?error,
+        Ok(result) => {
+            let rows_affected = result.rows_affected();
+            if rows_affected > 0 {
+                if let Err(error) =
+                    cancel_flow_enrollments_on_reply(&pool, company_id, form.sender()).await
+                {
+                    tracing::error!(
+                        ?error,
+                        company_id,
+                        "Failed to cancel sms flow enrollments on reply"
+                    );
+                }
+            } else {
+                // INSERT IGNORE hit the (company_id, cloudtalk_id) unique key: this is a
+                // redelivery of an already-processed webhook, not a new reply. Cancelling
+                // enrollments here would silently kill flows started after the original
+                // delivery. Never log message text or the full phone number.
+                tracing::info!(
                     company_id,
-                    "Failed to cancel sms flow enrollments on reply"
+                    rows_affected,
+                    "Skipped sms flow enrollment cancel: deduped inbound sms delivery"
                 );
             }
 
