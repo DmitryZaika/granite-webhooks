@@ -285,8 +285,7 @@ pub async fn find_local_cloudtalk_id_by_phone(
     query.fetch_optional(pool).await
 }
 
-/// Customer replied: kill every pending follow-up for this phone in the company,
-/// regardless of which rep or flow scheduled it.
+/// Stops every pending follow-up for this phone in the company, regardless of rep or flow.
 pub async fn cancel_flow_enrollments_on_reply(
     pool: &MySqlPool,
     company_id: i32,

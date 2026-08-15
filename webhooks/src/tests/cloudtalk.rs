@@ -15,8 +15,6 @@ mod flow_enrollment_tests {
     use axum::http::StatusCode;
     use sqlx::MySqlPool;
 
-    // Seeds one sms_flow_enrollments row with the given company/phone/status, using
-    // flow_id 1 and user_id 1 (no FK enforced on this table) and anchor_at = now.
     async fn insert_enrollment(pool: &MySqlPool, company_id: i32, phone_digits: u64, status: &str) {
         sqlx::query!(
             r#"
@@ -51,14 +49,11 @@ mod flow_enrollment_tests {
 
     #[sqlx::test(migrations = "../migrations")]
     async fn cancel_flow_enrollments_on_reply_stops_active_and_paused(pool: MySqlPool) {
-        // Matching company/phone: active + paused must both stop.
         insert_enrollment(&pool, 1, 5551234567, "active").await;
         insert_enrollment(&pool, 1, 5551234567, "paused").await;
-        // Same company/phone but already terminal: must not be touched or counted.
         insert_enrollment(&pool, 1, 5551234567, "completed").await;
-        // Same company, different phone: must not be touched.
+        // Other phone / other company must survive.
         insert_enrollment(&pool, 1, 5559999999, "active").await;
-        // Different company, same phone: must not be touched.
         insert_enrollment(&pool, 2, 5551234567, "active").await;
 
         let affected = cancel_flow_enrollments_on_reply(&pool, 1, 5551234567)
@@ -74,7 +69,7 @@ mod flow_enrollment_tests {
 
     #[sqlx::test(migrations = "../migrations")]
     async fn inbound_sms_webhook_cancels_matching_enrollments(pool: MySqlPool) {
-        // INBOUND_SMS's sender is +16468956758 -> last-10-digit 6468956758.
+        // INBOUND_SMS sender +16468956758 -> last-10 digits 6468956758.
         insert_enrollment(&pool, 42, 6468956758, "active").await;
 
         let app = new_test_app(pool.clone());
@@ -93,8 +88,6 @@ mod flow_enrollment_tests {
         );
     }
 
-    // Same shape as INBOUND_SMS but carries a cloudtalk_id, parameterized by id so both the
-    // redelivery-dedupe test and the distinct-ids test can build a payload for a specific id.
     fn inbound_sms_with_id_json(id: i64) -> serde_json::Value {
         let body = format!(
             "{{\"id\":{id},\"sender\":\"+16468956758[sender]\",\"recipient\":\"+13173161456[recipient]\",\"text\":\"[text]hello\",\"agent\":\"540273\"}}"
@@ -111,8 +104,6 @@ mod flow_enrollment_tests {
         let app = new_test_app(pool.clone());
         let body = inbound_sms_with_id_json(INBOUND_SMS_WITH_ID);
 
-        // Original delivery: no enrollment exists yet, so there is nothing to cancel; this
-        // just establishes the row the redelivery below will collide with.
         let first = app
             .post("/cloudtalk/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
@@ -120,10 +111,10 @@ mod flow_enrollment_tests {
             .await;
         assert_eq!(first.status_code(), StatusCode::OK);
 
-        // A rep starts a new flow after the original reply was processed.
+        // Flow starts after the original reply was processed.
         insert_enrollment(&pool, 42, 6468956758, "active").await;
 
-        // CloudTalk redelivers the same webhook (e.g. it missed the original 200 response).
+        // Same payload again: a redelivery.
         let second = app
             .post("/cloudtalk/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
@@ -143,16 +134,12 @@ mod flow_enrollment_tests {
         );
     }
 
-    // Inverse of the redelivery test above: two inbound messages with two DIFFERENT non-null
-    // cloudtalk ids are genuinely separate replies, not a redelivery, so the second one must
-    // still cancel a flow enrollment started between them.
     #[sqlx::test(migrations = "../migrations")]
     async fn second_inbound_sms_with_distinct_id_cancels_enrollment_started_between(
         pool: MySqlPool,
     ) {
         let app = new_test_app(pool.clone());
 
-        // First genuinely new reply.
         let first = app
             .post("/cloudtalk/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
@@ -160,11 +147,10 @@ mod flow_enrollment_tests {
             .await;
         assert_eq!(first.status_code(), StatusCode::OK);
 
-        // A rep starts a new flow after the first reply was processed.
+        // Flow starts after the first reply was processed.
         insert_enrollment(&pool, 42, 6468956758, "active").await;
 
-        // A second, genuinely new reply arrives with a different non-null cloudtalk id (not
-        // a redelivery of the first), and must still cancel the enrollment started above.
+        // Different cloudtalk id: a genuine second reply, not a redelivery.
         let second = app
             .post("/cloudtalk/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())

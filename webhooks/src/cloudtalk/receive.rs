@@ -91,11 +91,8 @@ pub async fn sms_received(
                     }
                 }
             } else {
-                // INSERT IGNORE hit the (company_id, cloudtalk_id) unique key: this is a
-                // redelivery of an already-processed webhook, not a new reply. Cancelling
-                // enrollments or re-notifying the rep here would be a duplicate action on
-                // an already-handled delivery. Never log message text or the full phone
-                // number.
+                // 0 rows: INSERT IGNORE deduped a redelivered webhook — don't cancel or
+                // notify again. Never log message text or phone numbers here.
                 tracing::info!(
                     company_id,
                     rows_affected,
