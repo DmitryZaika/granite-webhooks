@@ -79,6 +79,37 @@ pub async fn cancel_pending_emails_left_list(
     .await
 }
 
+pub async fn cancel_pending_emails_for_non_leads(
+    pool: &MySqlPool,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    sqlx::query!(
+        r#"
+        UPDATE scheduled_emails se
+        INNER JOIN customers c ON c.id = se.customer_id
+        SET se.status = 'cancelled',
+            se.error_message = 'Customer is not a lead'
+        WHERE se.status = 'pending'
+          AND LOWER(TRIM(IFNULL(c.source, ''))) <> 'leads'
+        "#
+    )
+    .execute(pool)
+    .await
+}
+
+async fn is_lead_customer(pool: &MySqlPool, customer_id: i32) -> Result<bool, sqlx::Error> {
+    let source = sqlx::query_scalar!(
+        r#"SELECT source FROM customers WHERE id = ? AND deleted_at IS NULL"#,
+        customer_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(source
+        .flatten()
+        .map(|value| value.trim().eq_ignore_ascii_case("leads"))
+        .unwrap_or(false))
+}
+
 pub async fn schedule_templates_for_deal_list(
     pool: &MySqlPool,
     list_id: i32,
@@ -87,6 +118,9 @@ pub async fn schedule_templates_for_deal_list(
     customer_id: i32,
     user_id: i32,
 ) -> Result<(), sqlx::Error> {
+    if !is_lead_customer(pool, customer_id).await? {
+        return Ok(());
+    }
     let templates = get_templates_for_list_id(pool, list_id, company_id).await?;
     for template in templates {
         insert_scheduled_email(
@@ -121,7 +155,7 @@ pub async fn get_ready_scheduled_emails(
     sqlx::query_as!(
         ScheduledEmail,
         r#"
-        SELECT scheduled_emails.id, template_body, template_subject, scheduled_emails.customer_id, customers_emails.email, scheduled_emails.user_id, scheduled_emails.deal_id, scheduled_emails.company_id
+        SELECT scheduled_emails.id, template_body, template_subject, scheduled_emails.customer_id, customers_emails.email, COALESCE(customers.sales_rep, scheduled_emails.user_id) AS "user_id!", scheduled_emails.deal_id, scheduled_emails.company_id
         FROM scheduled_emails
         JOIN customers ON scheduled_emails.customer_id = customers.id
         LEFT JOIN customers_emails ON customers.email_id = customers_emails.id
@@ -129,6 +163,7 @@ pub async fn get_ready_scheduled_emails(
         WHERE send_at <= UTC_TIMESTAMP()
           AND sent_at IS NULL
           AND status = 'pending'
+          AND LOWER(TRIM(IFNULL(customers.source, ''))) = 'leads'
           AND (
             scheduled_emails.list_id IS NULL
             OR EXISTS (
@@ -204,7 +239,7 @@ mod tests {
         company_id: i32,
     ) -> i32 {
         let result = sqlx::query!(
-            "INSERT INTO customers (name, company_id) VALUES (?, ?)",
+            "INSERT INTO customers (name, company_id, source) VALUES (?, ?, 'leads')",
             name,
             company_id
         )

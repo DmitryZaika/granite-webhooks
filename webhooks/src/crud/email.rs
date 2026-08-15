@@ -156,6 +156,10 @@ impl SendEmail {
     pub fn subject(&self) -> Option<&str> {
         self.subject.as_deref()
     }
+
+    pub fn sender_email(&self) -> &str {
+        &self.sender_email
+    }
 }
 
 pub struct InboundEmailNotifyContext {

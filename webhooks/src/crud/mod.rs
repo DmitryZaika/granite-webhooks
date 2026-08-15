@@ -1,5 +1,6 @@
 pub mod cloudtalk;
 pub mod company;
+pub mod deals;
 pub mod email;
 pub mod leads;
 pub mod telegram_messages;

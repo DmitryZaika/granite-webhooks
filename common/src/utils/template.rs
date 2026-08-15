@@ -1,4 +1,4 @@
-use crate::crud::template::TemplateVariableData;
+use crate::crud::template::{InfoVariableData, TemplateVariableData};
 use chrono::Local;
 use std::collections::HashMap;
 
@@ -16,6 +16,45 @@ fn format_current_date() -> String {
         .to_string()
 }
 
+fn inventory_subdomain_slug(raw: &str) -> Option<String> {
+    let slug = raw
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    if slug.is_empty() {
+        None
+    } else {
+        Some(slug)
+    }
+}
+
+fn company_subdomain_slug(company: Option<&InfoVariableData>) -> Option<String> {
+    let company = company?;
+    let raw = company
+        .subdomain
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .or(company.domain.as_ref().filter(|value| !value.trim().is_empty()))?;
+    inventory_subdomain_slug(raw)
+}
+
+fn company_id_value(company: Option<&InfoVariableData>) -> Option<String> {
+    company.and_then(|c| c.id).map(|id| id.to_string())
+}
+
+fn customer_inventory_link(company: Option<&InfoVariableData>) -> Option<String> {
+    let slug = company_subdomain_slug(company)?;
+    let id = company_id_value(company)?;
+    Some(format!(
+        "https://{slug}.granite-manager.com/customer/{id}/stones"
+    ))
+}
+
 fn build_variable_map(data: &TemplateVariableData) -> HashMap<&'static str, String> {
     let customer = data.customer.as_ref();
     let company = data.company.as_ref();
@@ -30,8 +69,14 @@ fn build_variable_map(data: &TemplateVariableData) -> HashMap<&'static str, Stri
         ("customer.name", customer.and_then(|c| c.name.clone())),
         ("customer.first_name", customer_name),
         ("customer.address", customer.and_then(|c| c.address.clone())),
+        (
+            "customer.inventory_link",
+            customer_inventory_link(company),
+        ),
         ("company.name", company.and_then(|c| c.name.clone())),
         ("company.address", company.and_then(|c| c.address.clone())),
+        ("company.subdomain", company_subdomain_slug(company)),
+        ("company.id", company_id_value(company)),
         (
             "company.hours_of_operation",
             company.and_then(|c| c.hours_of_operation.clone()),
@@ -95,35 +140,39 @@ mod tests {
             user: UserVariableData {
                 name: Some("Alice Johnson".to_string()),
                 email: Some("alice@test.com".to_string()),
+                email_name: Some("Alice Johnson".to_string()),
                 phone_number: Some("555-1234".to_string()),
             },
             customer: Some(InfoVariableData {
                 name: Some("Jordan Smith".to_string()),
                 address: Some("456 Market St".to_string()),
-                hours_of_operation: None,
-                domain: None,
+                ..Default::default()
             }),
             company: Some(InfoVariableData {
+                id: Some(1),
                 name: Some("Granite Depot".to_string()),
                 address: Some("123 Main St".to_string()),
                 hours_of_operation: Some("Monday - Friday 9 to 6, Saturday 10 to 3".to_string()),
                 domain: Some("example.granite-manager.com".to_string()),
+                subdomain: Some("example".to_string()),
             }),
         }
     }
 
     #[test]
     fn replaces_customer_first_name_in_thank_you_template() {
-        let template = r#"<p><span style="color: rgb(0, 0, 0); background-color: transparent;">Hi {{customer.first_name}},</span></p><p><span style="color: rgb(0, 0, 0); background-color: transparent;">Thank you for your request! My name is {{user.first_name}}, and I'm the sales representative who will be helping you with your kitchen project.</span></p><p><br></p><p><span style="color: rgb(0, 0, 0); background-color: transparent;">I’ll be in touch with you shortly to learn more about your project and help you with the next steps.</span></p><p><span style="color: rgb(0, 0, 0); background-color: transparent;">In the meantime, you can browse our live stone inventory here:</span></p><p><u style="color: rgb(17, 85, 204); background-color: transparent;"><a href="https://{{company.domain}}/customer/stones" rel="noopener noreferrer" target="_blank">https://{{company.domain}}/customer/stones</a></u></p><p><span style="color: rgb(0, 0, 0); background-color: transparent;">We offer a wide selection of natural and man-made stone options for a variety of kitchen styles and projects.</span></p><p><br></p><p><span style="color: rgb(0, 0, 0); background-color: transparent;">I look forward to working with you!</span></p>"#;
+        let template = r#"<p><span style="color: rgb(0, 0, 0); background-color: transparent;">Hi {{customer.first_name}},</span></p><p><span style="color: rgb(0, 0, 0); background-color: transparent;">Thank you for your request! My name is {{user.first_name}}, and I'm the sales representative who will be helping you with your kitchen project.</span></p><p><br></p><p><span style="color: rgb(0, 0, 0); background-color: transparent;">I’ll be in touch with you shortly to learn more about your project and help you with the next steps.</span></p><p><span style="color: rgb(0, 0, 0); background-color: transparent;">In the meantime, you can browse our live stone inventory here:</span></p><p><u style="color: rgb(17, 85, 204); background-color: transparent;"><a href="{{customer.inventory_link}}" rel="noopener noreferrer" target="_blank">{{customer.inventory_link}}</a></u></p><p><span style="color: rgb(0, 0, 0); background-color: transparent;">We offer a wide selection of natural and man-made stone options for a variety of kitchen styles and projects.</span></p><p><br></p><p><span style="color: rgb(0, 0, 0); background-color: transparent;">I look forward to working with you!</span></p>"#;
 
         let result = replace_template_variables(template, &make_full_data());
 
         assert!(result.contains("Hi Jordan,"));
         assert!(result.contains("My name is Alice,"));
-        assert!(result.contains("https://example.granite-manager.com/customer/stones"));
+        assert!(result.contains(
+            "https://example.granite-manager.com/customer/1/stones"
+        ));
         assert!(!result.contains("{{customer.first_name}}"));
         assert!(!result.contains("{{user.first_name}}"));
-        assert!(!result.contains("{{company.domain}}"));
+        assert!(!result.contains("{{customer.inventory_link}}"));
     }
 
     #[test]
@@ -149,6 +198,7 @@ mod tests {
             user: UserVariableData {
                 name: Some("Alice Johnson".to_string()),
                 email: Some("alice@test.com".to_string()),
+                email_name: None,
                 phone_number: None,
             },
             customer: None,
@@ -165,8 +215,7 @@ mod tests {
         data.customer = Some(InfoVariableData {
             name: Some("".to_string()),
             address: Some("456 Market St".to_string()),
-            hours_of_operation: None,
-            domain: None,
+            ..Default::default()
         });
         let result = replace_template_variables("Hi {{customer.first_name}}", &data);
 
@@ -182,12 +231,60 @@ mod tests {
 
     #[test]
     fn replaces_all_lead_drip_variables_used_in_default_templates() {
-        let template = "Hi {{customer.first_name}} from {{company.name}} at {{company.address}} open {{company.hours_of_operation}}. Rep {{user.first_name}} ({{user.name}}) inventory https://{{company.domain}}/customer/stones";
+        let template = "Hi {{customer.first_name}} from {{company.name}} at {{company.address}} open {{company.hours_of_operation}}. Rep {{user.first_name}} ({{user.name}}) inventory {{customer.inventory_link}}";
         let result = replace_template_variables(template, &make_full_data());
 
         assert_eq!(
             result,
-            "Hi Jordan from Granite Depot at 123 Main St open Monday - Friday 9 to 6, Saturday 10 to 3. Rep Alice (Alice Johnson) inventory https://example.granite-manager.com/customer/stones"
+            "Hi Jordan from Granite Depot at 123 Main St open Monday - Friday 9 to 6, Saturday 10 to 3. Rep Alice (Alice Johnson) inventory https://example.granite-manager.com/customer/1/stones"
+        );
+    }
+
+    #[test]
+    fn replaces_company_subdomain_and_id_in_inventory_url() {
+        let result = replace_template_variables(
+            "https://{{company.subdomain}}.granite-manager.com/customer/{{company.id}}/stones",
+            &make_full_data(),
+        );
+        assert_eq!(
+            result,
+            "https://example.granite-manager.com/customer/1/stones"
+        );
+    }
+
+    #[test]
+    fn replaces_customer_inventory_link_from_company_subdomain_and_id() {
+        let result = replace_template_variables(
+            "{{customer.inventory_link}}",
+            &make_full_data(),
+        );
+        assert_eq!(
+            result,
+            "https://example.granite-manager.com/customer/1/stones"
+        );
+    }
+
+    #[test]
+    fn leaves_customer_inventory_link_when_company_id_is_missing() {
+        let mut data = make_full_data();
+        if let Some(company) = data.company.as_mut() {
+            company.id = None;
+        }
+        let result = replace_template_variables("{{customer.inventory_link}}", &data);
+        assert_eq!(result, "{{customer.inventory_link}}");
+    }
+
+    #[test]
+    fn leaves_company_subdomain_and_id_when_company_is_missing() {
+        let mut data = make_full_data();
+        data.company = None;
+        let result = replace_template_variables(
+            "https://{{company.subdomain}}.granite-manager.com/customer/{{company.id}}/stones",
+            &data,
+        );
+        assert_eq!(
+            result,
+            "https://{{company.subdomain}}.granite-manager.com/customer/{{company.id}}/stones"
         );
     }
 

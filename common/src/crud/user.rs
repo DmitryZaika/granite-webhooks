@@ -3,6 +3,7 @@ use sqlx::MySqlPool;
 pub struct UserData {
     pub name: Option<String>,
     pub email: Option<String>,
+    pub email_name: Option<String>,
     pub phone_number: Option<String>,
     pub company_id: Option<i32>,
 }
@@ -11,7 +12,7 @@ pub async fn get_user_template(pool: &MySqlPool, user_id: i32) -> Result<UserDat
     sqlx::query_as!(
         UserData,
         r#"
-        SELECT name, email, phone_number, company_id
+        SELECT name, email, email_name, phone_number, company_id
         FROM users
         WHERE id = ?
         LIMIT 1
