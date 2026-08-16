@@ -68,6 +68,99 @@ fn get_last_n_chars(s: &str, n: usize) -> &str {
     }
 }
 
+/// Last 10 digit characters as a number. `None` when there are fewer than 10 digits
+/// so a CAST of 0 cannot false-match an enrollment phone.
+pub fn phone_last10(raw: &str) -> Option<u64> {
+    let cleaned: String = raw.chars().filter(char::is_ascii_digit).collect();
+    if cleaned.len() < 10 {
+        return None;
+    }
+    get_last_n_chars(&cleaned, 10).parse().ok()
+}
+
+fn json_phone_raw(value: &serde_json::Value) -> Option<String> {
+    if let Some(s) = value.as_str() {
+        return Some(s.to_string());
+    }
+    value.as_u64().map(|n| n.to_string())
+}
+
+fn first_phone_in_object(obj: &serde_json::Map<String, serde_json::Value>) -> Option<u64> {
+    const PHONE_KEYS: [&str; 6] = [
+        "external_number",
+        "public_external",
+        "caller",
+        "calling",
+        "from",
+        "number",
+    ];
+    for key in PHONE_KEYS {
+        if let Some(raw) = obj.get(key).and_then(json_phone_raw)
+            && let Some(digits) = phone_last10(&raw)
+        {
+            return Some(digits);
+        }
+    }
+    None
+}
+
+fn nested_object<'a>(
+    value: &'a serde_json::Value,
+    key: &str,
+) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+    value.get(key).and_then(serde_json::Value::as_object)
+}
+
+fn collect_call_type_strings(value: &serde_json::Value) -> Vec<String> {
+    const TYPE_KEYS: [&str; 3] = ["type", "direction", "call_type"];
+    let mut types = Vec::new();
+    let mut push_from = |obj: &serde_json::Map<String, serde_json::Value>| {
+        for key in TYPE_KEYS {
+            if let Some(raw) = obj.get(key).and_then(json_phone_raw) {
+                types.push(raw);
+            }
+        }
+    };
+    if let Some(obj) = value.as_object() {
+        push_from(obj);
+    }
+    for nested in ["properties", "Cdr", "cdr", "call"] {
+        if let Some(obj) = nested_object(value, nested) {
+            push_from(obj);
+        }
+    }
+    types
+}
+
+fn call_payload_is_outgoing_or_internal(value: &serde_json::Value) -> bool {
+    collect_call_type_strings(value).iter().any(|raw| {
+        let lower = raw.to_ascii_lowercase();
+        lower.contains("out") || lower == "internal"
+    })
+}
+
+/// Customer phone last-10 from a CloudTalk call webhook, or `None` when the
+/// payload is outgoing/internal or has no usable number. Missing type is treated
+/// as inbound so an incoming-only workflow still cancels.
+pub fn inbound_customer_phone_from_call_payload(value: &serde_json::Value) -> Option<u64> {
+    if call_payload_is_outgoing_or_internal(value) {
+        return None;
+    }
+    if let Some(obj) = value.as_object()
+        && let Some(digits) = first_phone_in_object(obj)
+    {
+        return Some(digits);
+    }
+    for nested in ["properties", "Cdr", "cdr", "call"] {
+        if let Some(obj) = nested_object(value, nested)
+            && let Some(digits) = first_phone_in_object(obj)
+        {
+            return Some(digits);
+        }
+    }
+    None
+}
+
 #[derive(Deserialize)]
 pub struct CloudTalkCountry {
     pub id: Option<serde_json::Value>, // Dynamic type: can be String or Number
@@ -278,5 +371,57 @@ mod tests {
         let json = r#""5551234567""#;
         let phone: CleanedPhone = serde_json::from_str(json).unwrap();
         assert_eq!(phone.0, 5551234567);
+    }
+
+    #[test]
+    fn phone_last10_requires_ten_digits() {
+        assert_eq!(phone_last10("+1 (555) 123-4567"), Some(5_551_234_567));
+        assert_eq!(phone_last10("5551234567"), Some(5_551_234_567));
+        assert_eq!(phone_last10("555-1234"), None);
+        assert_eq!(phone_last10(""), None);
+    }
+
+    #[test]
+    fn inbound_call_payload_reads_common_phone_keys() {
+        let top: serde_json::Value =
+            serde_json::from_str(r#"{"external_number":"+15551234567","type":"incoming"}"#)
+                .unwrap();
+        assert_eq!(
+            inbound_customer_phone_from_call_payload(&top),
+            Some(5_551_234_567)
+        );
+
+        let nested: serde_json::Value = serde_json::from_str(
+            r#"{"properties":{"external_number":"5551234567"},"Cdr":{"type":"incoming"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            inbound_customer_phone_from_call_payload(&nested),
+            Some(5_551_234_567)
+        );
+
+        let cdr: serde_json::Value =
+            serde_json::from_str(r#"{"Cdr":{"public_external":"+15551234567","type":"incoming"}}"#)
+                .unwrap();
+        assert_eq!(
+            inbound_customer_phone_from_call_payload(&cdr),
+            Some(5_551_234_567)
+        );
+    }
+
+    #[test]
+    fn outbound_call_payload_does_not_yield_a_phone() {
+        let outgoing: serde_json::Value = serde_json::from_str(
+            r#"{"external_number":"+15551234567","type":"outgoing"}"#,
+        )
+        .unwrap();
+        assert_eq!(inbound_customer_phone_from_call_payload(&outgoing), None);
+
+        let missing_type: serde_json::Value =
+            serde_json::from_str(r#"{"external_number":"+15551234567"}"#).unwrap();
+        assert_eq!(
+            inbound_customer_phone_from_call_payload(&missing_type),
+            Some(5_551_234_567)
+        );
     }
 }

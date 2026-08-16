@@ -6,7 +6,7 @@ use crate::amazon::bucket::S3Bucket;
 use crate::amazonses::parse_email::{Attachment, ParsedEmail};
 use crate::amazonses::upload::upload_attachments;
 use crate::axum_helpers::guards::NotificationsTelegramBot;
-use crate::crud::deals::maybe_move_deal_on_inbound_email;
+use crate::crud::deals::{maybe_cancel_flow_on_inbound_email, maybe_move_deal_on_inbound_email};
 use crate::crud::email::{
     PriorEmail, SendEmail, create_email_with_attachments, get_inbound_email_notify_context,
     get_prior_email, resolve_inbound_customer_name,
@@ -145,6 +145,7 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
         return internal_error("Failed to insert email into the database");
     }
     maybe_move_deal_on_inbound_email(pool, &send_email).await;
+    maybe_cancel_flow_on_inbound_email(pool, &send_email).await;
     maybe_send_inbound_email_telegram(pool, &send_email).await;
     OK_RESPONSE
 }
@@ -195,6 +196,7 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
         return internal_error("Failed to insert email into the database");
     }
     maybe_move_deal_on_inbound_email(pool, &send_email).await;
+    maybe_cancel_flow_on_inbound_email(pool, &send_email).await;
     maybe_send_inbound_email_telegram(pool, &send_email).await;
     OK_RESPONSE
 }

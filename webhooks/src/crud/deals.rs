@@ -5,6 +5,7 @@ use lambda_http::tracing;
 use sqlx::MySqlPool;
 
 use crate::amazonses::parse_email::normalize_address;
+use crate::crud::cloudtalk::cancel_flow_enrollments_for_customer;
 use crate::crud::email::{SendEmail, get_inbound_email_notify_context};
 use crate::crud::leads::get_existing_deal;
 
@@ -307,6 +308,33 @@ pub async fn maybe_move_deal_on_inbound_email(pool: &MySqlPool, send: &SendEmail
             ?error,
             thread_id = send.thread_id(),
             "Failed to move deal to contacted on inbound email"
+        );
+    }
+}
+
+pub async fn cancel_flow_on_inbound_email(
+    pool: &MySqlPool,
+    send: &SendEmail,
+) -> Result<u64, sqlx::Error> {
+    let Some(company_id) = send.company_id else {
+        return Ok(0);
+    };
+    let email = normalize_address(send.sender_email());
+    if email.is_empty() {
+        return Ok(0);
+    }
+    let Some(customer_id) = find_customer_id_by_email(pool, company_id, &email).await? else {
+        return Ok(0);
+    };
+    cancel_flow_enrollments_for_customer(pool, company_id, customer_id).await
+}
+
+pub async fn maybe_cancel_flow_on_inbound_email(pool: &MySqlPool, send: &SendEmail) {
+    if let Err(error) = cancel_flow_on_inbound_email(pool, send).await {
+        tracing::error!(
+            ?error,
+            thread_id = send.thread_id(),
+            "Failed to cancel sms flow on inbound email"
         );
     }
 }
@@ -710,5 +738,73 @@ mod tests {
             deal_list_id(&pool, board.deal_id).await,
             board.second_list_id
         );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn inbound_email_cancels_sms_flow_for_customer(pool: MySqlPool) {
+        let board = setup_board(&pool, Some("3173161456")).await;
+        sqlx::query!(
+            r#"
+            INSERT INTO sms_flow_enrollments
+                (flow_id, company_id, customer_phone_digits, customer_id, user_id, status, anchor_at)
+            VALUES (1, ?, 5550000000, ?, 1, 'active', UTC_TIMESTAMP())
+            "#,
+            board.company_id,
+            board.customer_id,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let parsed = parsed_email(&board.customer_email, "rep@example.com");
+        let send = SendEmail::new(&parsed, None, Some(ReceivingEmail::To(board.user_id)))
+            .with_company_id(Some(board.company_id));
+
+        let affected = cancel_flow_on_inbound_email(&pool, &send).await.unwrap();
+        assert_eq!(affected, 1);
+
+        let row: (String,) = sqlx::query_as(
+            "SELECT status FROM sms_flow_enrollments WHERE company_id = ? AND customer_id = ? LIMIT 1",
+        )
+        .bind(board.company_id)
+        .bind(board.customer_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "stopped_by_reply");
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn inbound_email_from_unknown_sender_does_not_cancel_flow(pool: MySqlPool) {
+        let board = setup_board(&pool, Some("3173161456")).await;
+        sqlx::query!(
+            r#"
+            INSERT INTO sms_flow_enrollments
+                (flow_id, company_id, customer_phone_digits, customer_id, user_id, status, anchor_at)
+            VALUES (1, ?, 5550000000, ?, 1, 'active', UTC_TIMESTAMP())
+            "#,
+            board.company_id,
+            board.customer_id,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let parsed = parsed_email("stranger@example.com", "rep@example.com");
+        let send = SendEmail::new(&parsed, None, Some(ReceivingEmail::To(board.user_id)))
+            .with_company_id(Some(board.company_id));
+
+        let affected = cancel_flow_on_inbound_email(&pool, &send).await.unwrap();
+        assert_eq!(affected, 0);
+
+        let row: (String,) = sqlx::query_as(
+            "SELECT status FROM sms_flow_enrollments WHERE company_id = ? AND customer_id = ? LIMIT 1",
+        )
+        .bind(board.company_id)
+        .bind(board.customer_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "active");
     }
 }

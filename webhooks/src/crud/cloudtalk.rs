@@ -1,4 +1,4 @@
-use crate::cloudtalk::schemas::CloudtalkSMS;
+use crate::cloudtalk::schemas::{CloudtalkSMS, phone_last10};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
@@ -302,6 +302,46 @@ pub async fn cancel_flow_enrollments_on_reply(
     .execute(pool)
     .await?;
     Ok(result.rows_affected())
+}
+
+/// Stops every pending follow-up for this customer: matching `customer_id`, or
+/// last-10 of `customers.phone` / `phone_2` (skips empty / short numbers so a
+/// CAST of 0 cannot false-match).
+pub async fn cancel_flow_enrollments_for_customer(
+    pool: &MySqlPool,
+    company_id: i32,
+    customer_id: i32,
+) -> Result<u64, sqlx::Error> {
+    let phones = sqlx::query!(
+        r#"SELECT phone, phone_2
+           FROM customers
+           WHERE id = ? AND company_id = ? AND deleted_at IS NULL"#,
+        customer_id,
+        company_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    let mut affected = sqlx::query!(
+        r#"UPDATE sms_flow_enrollments
+           SET status = 'stopped_by_reply', updated_at = UTC_TIMESTAMP()
+           WHERE company_id = ? AND customer_id = ?
+             AND status IN ('active', 'paused')"#,
+        company_id,
+        customer_id
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    if let Some(row) = phones {
+        for raw in [row.phone, row.phone_2] {
+            if let Some(digits) = raw.as_deref().and_then(phone_last10) {
+                affected += cancel_flow_enrollments_on_reply(pool, company_id, digits).await?;
+            }
+        }
+    }
+    Ok(affected)
 }
 
 #[cfg(test)]

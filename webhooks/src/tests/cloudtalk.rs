@@ -10,20 +10,33 @@ pub const INBOUND_MMS_NULL_TEXT: &[u8] = b"{\"id\":51753924,\"sender\":\"+164689
 mod flow_enrollment_tests {
     use super::INBOUND_SMS;
     use crate::axum_helpers::guards::CORRECT_ID;
-    use crate::crud::cloudtalk::cancel_flow_enrollments_on_reply;
+    use crate::crud::cloudtalk::{
+        cancel_flow_enrollments_for_customer, cancel_flow_enrollments_on_reply,
+    };
     use crate::tests::utils::new_test_app;
     use axum::http::StatusCode;
     use sqlx::MySqlPool;
 
     async fn insert_enrollment(pool: &MySqlPool, company_id: i32, phone_digits: u64, status: &str) {
+        insert_enrollment_with_customer(pool, company_id, phone_digits, None, status).await;
+    }
+
+    async fn insert_enrollment_with_customer(
+        pool: &MySqlPool,
+        company_id: i32,
+        phone_digits: u64,
+        customer_id: Option<i32>,
+        status: &str,
+    ) {
         sqlx::query!(
             r#"
             INSERT INTO sms_flow_enrollments
-                (flow_id, company_id, customer_phone_digits, user_id, status, anchor_at)
-            VALUES (1, ?, ?, 1, ?, UTC_TIMESTAMP())
+                (flow_id, company_id, customer_phone_digits, customer_id, user_id, status, anchor_at)
+            VALUES (1, ?, ?, ?, 1, ?, UTC_TIMESTAMP())
             "#,
             company_id,
             phone_digits,
+            customer_id,
             status,
         )
         .execute(pool)
@@ -65,6 +78,91 @@ mod flow_enrollment_tests {
         assert_eq!(status_of(&pool, 1, 5551234567, "completed").await, 1);
         assert_eq!(status_of(&pool, 1, 5559999999, "active").await, 1);
         assert_eq!(status_of(&pool, 2, 5551234567, "active").await, 1);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn cancel_flow_enrollments_for_customer_stops_by_id_and_phone(pool: MySqlPool) {
+        let company = sqlx::query!(r#"INSERT INTO company (name) VALUES ('Call Co')"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let company_id = i32::try_from(company.last_insert_id()).unwrap();
+        let customer = sqlx::query!(
+            r#"INSERT INTO customers (name, company_id, phone, phone_2, source)
+               VALUES ('Pat', ?, '555-123-4567', '', 'leads')"#,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let customer_id = i32::try_from(customer.last_insert_id()).unwrap();
+
+        insert_enrollment_with_customer(&pool, company_id, 5550000000, Some(customer_id), "active")
+            .await;
+        insert_enrollment_with_customer(&pool, company_id, 5_551_234_567, None, "paused").await;
+        insert_enrollment_with_customer(&pool, company_id, 5_559_999_999, None, "active").await;
+        insert_enrollment_with_customer(&pool, company_id + 1, 5_551_234_567, None, "active").await;
+
+        let affected = cancel_flow_enrollments_for_customer(&pool, company_id, customer_id)
+            .await
+            .unwrap();
+        assert_eq!(affected, 2);
+
+        assert_eq!(
+            status_of(&pool, company_id, 5550000000, "stopped_by_reply").await,
+            1
+        );
+        assert_eq!(
+            status_of(&pool, company_id, 5_551_234_567, "stopped_by_reply").await,
+            1
+        );
+        assert_eq!(status_of(&pool, company_id, 5_559_999_999, "active").await, 1);
+        assert_eq!(
+            status_of(&pool, company_id + 1, 5_551_234_567, "active").await,
+            1
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn inbound_call_webhook_cancels_matching_enrollments(pool: MySqlPool) {
+        insert_enrollment(&pool, 42, 5_551_234_567, "active").await;
+        insert_enrollment(&pool, 42, 5_551_234_567, "paused").await;
+        insert_enrollment(&pool, 42, 5_559_999_999, "active").await;
+
+        let app = new_test_app(pool.clone());
+        let body = serde_json::json!({
+            "external_number": "+15551234567",
+            "type": "incoming"
+        });
+        let response = app
+            .post("/cloudtalk/call/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&body)
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        assert_eq!(
+            status_of(&pool, 42, 5_551_234_567, "stopped_by_reply").await,
+            2
+        );
+        assert_eq!(status_of(&pool, 42, 5_559_999_999, "active").await, 1);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn outbound_call_webhook_does_not_cancel_enrollments(pool: MySqlPool) {
+        insert_enrollment(&pool, 42, 5_551_234_567, "active").await;
+
+        let app = new_test_app(pool.clone());
+        let body = serde_json::json!({
+            "Cdr": { "public_external": "+15551234567", "type": "outgoing" }
+        });
+        let response = app
+            .post("/cloudtalk/call/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&body)
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        assert_eq!(status_of(&pool, 42, 5_551_234_567, "active").await, 1);
     }
 
     #[sqlx::test(migrations = "../migrations")]

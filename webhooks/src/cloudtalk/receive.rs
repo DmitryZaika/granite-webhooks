@@ -1,10 +1,11 @@
 use crate::axum_helpers::guards::{CloudTalkWebhookUser, NotificationsTelegramBot};
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
-use crate::cloudtalk::schemas::CloudtalkSMS;
+use crate::cloudtalk::schemas::{CloudtalkSMS, inbound_customer_phone_from_call_payload};
 use crate::crud::cloudtalk::{
-    cancel_flow_enrollments_on_reply, insert_inbound_sms, insert_outbound_sms,
+    cancel_flow_enrollments_for_customer, cancel_flow_enrollments_on_reply, insert_inbound_sms,
+    insert_outbound_sms,
 };
-use crate::crud::deals::maybe_move_deal_on_inbound_sms;
+use crate::crud::deals::{find_customer_id_by_phone_last10, maybe_move_deal_on_inbound_sms};
 use crate::crud::users::get_user_id_by_cloudtalk_agent;
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
@@ -109,6 +110,68 @@ pub async fn sms_received(
             internal_error(ERR_DB)
         }
     }
+}
+
+pub async fn call_received(
+    _: CloudTalkWebhookUser,
+    State(pool): State<MySqlPool>,
+    Path(company_id): Path<i32>,
+    body: Bytes,
+) -> BasicResponse {
+    let payload: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(
+                route = "call",
+                category = ?error.classify(),
+                line = error.line(),
+                column = error.column(),
+                "Error parsing cloudtalk call payload"
+            );
+            return BAD_REQUEST;
+        }
+    };
+
+    let Some(phone_digits) = inbound_customer_phone_from_call_payload(&payload) else {
+        tracing::info!(
+            company_id,
+            "Skipped sms flow cancel on call webhook: outgoing, internal, or no customer phone"
+        );
+        return OK_RESPONSE;
+    };
+
+    if let Err(error) = cancel_flow_enrollments_on_reply(&pool, company_id, phone_digits).await {
+        tracing::error!(
+            ?error,
+            company_id,
+            "Failed to cancel sms flow enrollments on inbound call"
+        );
+    }
+
+    let last10 = phone_digits.to_string();
+    match find_customer_id_by_phone_last10(&pool, company_id, &last10).await {
+        Ok(Some(customer_id)) => {
+            if let Err(error) =
+                cancel_flow_enrollments_for_customer(&pool, company_id, customer_id).await
+            {
+                tracing::error!(
+                    ?error,
+                    company_id,
+                    "Failed to cancel sms flow enrollments for customer on inbound call"
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                company_id,
+                "Failed to resolve customer for inbound call sms flow cancel"
+            );
+        }
+    }
+
+    OK_RESPONSE
 }
 
 pub async fn sms_sent(
