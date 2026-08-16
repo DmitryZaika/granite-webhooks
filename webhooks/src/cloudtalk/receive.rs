@@ -1,7 +1,9 @@
 use crate::axum_helpers::guards::{CloudTalkWebhookUser, NotificationsTelegramBot};
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::cloudtalk::schemas::CloudtalkSMS;
-use crate::crud::cloudtalk::{insert_inbound_sms, insert_outbound_sms};
+use crate::crud::cloudtalk::{
+    cancel_flow_enrollments_on_reply, insert_inbound_sms, insert_outbound_sms,
+};
 use crate::crud::deals::maybe_move_deal_on_inbound_sms;
 use crate::crud::users::get_user_id_by_cloudtalk_agent;
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
@@ -53,29 +55,52 @@ pub async fn sms_received(
     };
 
     match insert_inbound_sms(&pool, &form, company_id).await {
-        Ok(_) => {
-            maybe_move_deal_on_inbound_sms(&pool, company_id, form.sender()).await;
-            if let Some(agent) = form.agent.as_deref()
-                && let Ok(Some(user_id)) =
-                    get_user_id_by_cloudtalk_agent(&pool, company_id, agent).await
-            {
-                let sender_phone = form.sender().to_string();
-                let payload = InboundSmsTelegramNotify {
-                    receiver_user_id: user_id,
-                    sender_phone,
-                    message: form.text.0.clone(),
-                };
-                let bot = NotificationsTelegramBot::default();
+        Ok(result) => {
+            let rows_affected = result.rows_affected();
+            if rows_affected > 0 {
                 if let Err(error) =
-                    send_inbound_sms_telegram_notification(&pool, &bot, &payload).await
+                    cancel_flow_enrollments_on_reply(&pool, company_id, form.sender()).await
                 {
                     tracing::error!(
                         ?error,
-                        user_id = user_id,
-                        company_id = company_id,
-                        "Failed to send inbound sms telegram notification"
+                        company_id,
+                        "Failed to cancel sms flow enrollments on reply"
                     );
                 }
+
+                maybe_move_deal_on_inbound_sms(&pool, company_id, form.sender()).await;
+
+                if let Some(agent) = form.agent.as_deref() {
+                    if let Ok(Some(user_id)) =
+                        get_user_id_by_cloudtalk_agent(&pool, company_id, agent).await
+                    {
+                        let sender_phone = form.sender().to_string();
+                        let payload = InboundSmsTelegramNotify {
+                            receiver_user_id: user_id,
+                            sender_phone,
+                            message: form.text.0.clone(),
+                        };
+                        let bot = NotificationsTelegramBot::default();
+                        if let Err(error) =
+                            send_inbound_sms_telegram_notification(&pool, &bot, &payload).await
+                        {
+                            tracing::error!(
+                                ?error,
+                                user_id = user_id,
+                                company_id = company_id,
+                                "Failed to send inbound sms telegram notification"
+                            );
+                        }
+                    }
+                }
+            } else {
+                // 0 rows: INSERT IGNORE deduped a redelivered webhook — don't cancel,
+                // move deals or notify again. Never log message text or phone numbers here.
+                tracing::info!(
+                    company_id,
+                    rows_affected,
+                    "Skipped sms flow enrollment cancel, deal move and telegram notify: deduped inbound sms delivery"
+                );
             }
             OK_RESPONSE
         }

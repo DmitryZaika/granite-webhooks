@@ -27,9 +27,7 @@ pub fn deal_project_url(deal_id: i32) -> String {
 }
 
 pub fn deal_email_chat_url(deal_id: i32, thread_id: &str) -> String {
-    format!(
-        "https://granite-manager.com/employee/deals/edit/{deal_id}/project/chat/{thread_id}"
-    )
+    format!("https://granite-manager.com/employee/deals/edit/{deal_id}/project/chat/{thread_id}")
 }
 
 pub fn emails_chat_url(thread_id: &str) -> String {

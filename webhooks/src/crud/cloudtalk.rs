@@ -285,6 +285,25 @@ pub async fn find_local_cloudtalk_id_by_phone(
     query.fetch_optional(pool).await
 }
 
+/// Stops every pending follow-up for this phone in the company, regardless of rep or flow.
+pub async fn cancel_flow_enrollments_on_reply(
+    pool: &MySqlPool,
+    company_id: i32,
+    phone_digits: u64,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query!(
+        r#"UPDATE sms_flow_enrollments
+           SET status = 'stopped_by_reply', updated_at = UTC_TIMESTAMP()
+           WHERE company_id = ? AND customer_phone_digits = ?
+             AND status IN ('active', 'paused')"#,
+        company_id,
+        phone_digits
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use super::insert_outbound_sms;

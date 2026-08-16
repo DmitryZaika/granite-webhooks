@@ -204,8 +204,7 @@ mod tests {
             customer: None,
             company: None,
         };
-        let result =
-            replace_template_variables("Hi {{customer.first_name}}", &data);
+        let result = replace_template_variables("Hi {{customer.first_name}}", &data);
 
         assert_eq!(result, "Hi {{customer.first_name}}");
     }
@@ -218,8 +217,7 @@ mod tests {
             address: Some("456 Market St".to_string()),
             ..Default::default()
         });
-        let result =
-            replace_template_variables("Hi {{customer.first_name}}", &data);
+        let result = replace_template_variables("Hi {{customer.first_name}}", &data);
 
         assert_eq!(result, "Hi {{customer.first_name}}");
     }
