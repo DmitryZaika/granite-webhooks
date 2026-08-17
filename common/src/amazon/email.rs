@@ -5,6 +5,15 @@ use aws_sdk_sesv2::{Client, Error, config::Region};
 pub const DEFAULT_NOREPLY_EMAIL_ADDRESS: &str = "noreply@granite-manager.com";
 pub const DEFAULT_SEND_EMAIL_ADDRESS: &str = "sales@granite-manager.com";
 
+pub fn extract_email_address(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let inner = match (trimmed.rfind('<'), trimmed.rfind('>')) {
+        (Some(open), Some(close)) if close > open => &trimmed[open + 1..close],
+        _ => trimmed,
+    };
+    inner.trim().to_lowercase()
+}
+
 pub fn from_email(company_domain: Option<&str>, user_email: &str) -> String {
     let Some(domain) = company_domain.filter(|value| !value.is_empty()) else {
         return DEFAULT_SEND_EMAIL_ADDRESS.to_string();
@@ -32,7 +41,9 @@ pub fn assigned_sender_from(
 }
 
 pub async fn send_message(to: &[&str], subject: &str, message: &str) -> Result<(), Error> {
-    send_message_from(to, subject, message, DEFAULT_NOREPLY_EMAIL_ADDRESS).await
+    send_message_from(to, subject, message, DEFAULT_NOREPLY_EMAIL_ADDRESS)
+        .await
+        .map(|_| ())
 }
 
 pub async fn send_message_from(
@@ -40,7 +51,7 @@ pub async fn send_message_from(
     subject: &str,
     message: &str,
     from: &str,
-) -> Result<(), Error> {
+) -> Result<String, Error> {
     let region_provider = RegionProviderChain::first_try(Region::new("us-east-2"));
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let client = Client::new(&shared_config);
@@ -66,7 +77,7 @@ pub async fn send_message_from(
 
     let email_content = EmailContent::builder().simple(msg).build();
 
-    client
+    let output = client
         .send_email()
         .from_email_address(from)
         .destination(dest)
@@ -74,12 +85,24 @@ pub async fn send_message_from(
         .send()
         .await?;
 
-    Ok(())
+    Ok(output.message_id().unwrap_or("").to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_email_address_unwraps_display_name() {
+        assert_eq!(
+            extract_email_address("\"Dema Granite Depot\" <dema@granitedepotindy.com>"),
+            "dema@granitedepotindy.com"
+        );
+        assert_eq!(
+            extract_email_address("brian@hughesproducts.com"),
+            "brian@hughesproducts.com"
+        );
+    }
 
     #[test]
     fn from_email_uses_default_when_domain_is_missing() {

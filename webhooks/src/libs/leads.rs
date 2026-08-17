@@ -1,4 +1,5 @@
 use crate::axum_helpers::guards::Telegram;
+use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::crud::leads::{
     Deal, ExistingCustomer, create_deal_from_lead, find_existing_customer,
     get_default_list_id_from_company_id, get_existing_deal, update_deal_list_id,
@@ -15,6 +16,7 @@ use crate::telegram::utils::lead_url;
 use common::amazon::email::send_message;
 use common::crud::scheduled_emails::reschedule_templates_for_deal_list;
 use lambda_http::tracing;
+use reqwest::Client;
 use sqlx::MySqlPool;
 
 const REGISTER_SUBJECT: &str = "Granite Manager";
@@ -241,6 +243,11 @@ where
             company_id = company_id,
             "Error sending message to Telegram"
         );
+    }
+    let customer_id = i32::try_from(result.last_insert_id()).unwrap_or(0);
+    if customer_id > 0 {
+        let client = Client::new();
+        let _ = sync_customer_to_cloud_talk(pool, &client, customer_id).await;
     }
     CREATED_RESPONSE
 }

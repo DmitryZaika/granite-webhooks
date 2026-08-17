@@ -3,9 +3,13 @@ use common::amazon::email::{assigned_sender_from, send_message_from};
 use common::crud::notifications::{
     get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
 };
+use common::crud::outbound_email::{
+    OutboundScheduledEmail, record_outbound_scheduled_email,
+};
 use common::crud::scheduled_emails::{
     cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
     get_ready_scheduled_emails, mark_scheduled_email_as_sent,
+    mark_scheduled_email_failed_with_reason, ScheduledEmail,
 };
 use common::crud::template::fetch_template_variable_data;
 use common::utils::template::replace_template_variables;
@@ -122,6 +126,82 @@ async fn process_sms_followups() -> Result<usize, Error> {
     post_app_process_route("api/sms-followups/process", "sms follow-ups").await
 }
 
+pub fn scheduled_email_recipient(email: Option<&str>) -> Option<&str> {
+    email.map(str::trim).filter(|value| !value.is_empty())
+}
+
+async fn send_and_record_scheduled_email(
+    pool: &MySqlPool,
+    email: &ScheduledEmail,
+) -> Result<(), Error> {
+    let Some(cleaned_email) = scheduled_email_recipient(email.email.as_deref()) else {
+        mark_scheduled_email_failed_with_reason(
+            pool,
+            email.id,
+            "Customer has no email address",
+        )
+        .await?;
+        tracing::warn!(
+            customer_id = email.customer_id,
+            scheduled_email_id = email.id,
+            "Skipping automated email, no email address"
+        );
+        return Ok(());
+    };
+    let data = fetch_template_variable_data(
+        pool,
+        email.user_id,
+        Some(email.deal_id),
+        Some(email.customer_id),
+        email.company_id,
+    )
+    .await
+    .map_err(|error| Error::from(error.to_string()))?;
+    let html_body = replace_template_variables(&email.template_body, &data);
+    let from = assigned_sender_from(
+        data.company
+            .as_ref()
+            .and_then(|company| company.domain.as_deref()),
+        data.user.email.as_deref(),
+        data.user.email_name.as_deref(),
+    );
+    let message_id =
+        send_message_from(&[cleaned_email], &email.template_subject, &html_body, &from)
+            .await
+            .map_err(|error| Error::from(error.to_string()))?;
+    if let Err(error) = record_outbound_scheduled_email(
+        pool,
+        &OutboundScheduledEmail {
+            scheduled_email_id: email.id,
+            user_id: email.user_id,
+            customer_id: email.customer_id,
+            company_id: email.company_id,
+            deal_id: email.deal_id,
+            subject: email.template_subject.clone(),
+            html_body,
+            sender_from: from,
+            recipient_email: cleaned_email.to_string(),
+            message_id,
+        },
+    )
+    .await
+    {
+        tracing::error!(
+            ?error,
+            scheduled_email_id = email.id,
+            "Failed to save automated email to the conversation"
+        );
+    }
+    if let Err(error) = mark_scheduled_email_as_sent(pool, email.id).await {
+        tracing::error!(
+            ?error,
+            scheduled_email_id = email.id,
+            "Failed to mark automated email as sent after SES send"
+        );
+    }
+    Ok(())
+}
+
 /// There are some code example in the following URLs:
 /// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
 /// - https://github.com/aws-samples/serverless-rust-demo/
@@ -136,33 +216,24 @@ pub(crate) async fn function_handler(
     cancel_pending_emails_for_non_leads(pool).await?;
     let ready_emails = get_ready_scheduled_emails(pool).await?;
     for email in &ready_emails {
-        let data = fetch_template_variable_data(
-            pool,
-            email.user_id,
-            Some(email.deal_id),
-            Some(email.customer_id),
-            email.company_id,
-        )
-        .await
-        .unwrap();
-        let result = replace_template_variables(&email.template_body, &data);
-        let cleaned_email = match &email.email {
-            Some(email) => email,
-            None => {
-                tracing::warn!(
-                    "Skipping customer_id: {}, no email address",
-                    email.customer_id
+        if let Err(error) = send_and_record_scheduled_email(pool, email).await {
+            tracing::error!(
+                ?error,
+                scheduled_email_id = email.id,
+                customer_id = email.customer_id,
+                "Failed to send automated email"
+            );
+            if let Err(mark_error) =
+                mark_scheduled_email_failed_with_reason(pool, email.id, &error.to_string())
+                    .await
+            {
+                tracing::error!(
+                    ?mark_error,
+                    scheduled_email_id = email.id,
+                    "Failed to mark automated email as failed"
                 );
-                continue;
             }
-        };
-        let from = assigned_sender_from(
-            data.company.as_ref().and_then(|company| company.domain.as_deref()),
-            data.user.email.as_deref(),
-            data.user.email_name.as_deref(),
-        );
-        send_message_from(&[&cleaned_email], &email.template_subject, &result, &from).await?;
-        mark_scheduled_email_as_sent(pool, email.id).await?;
+        }
     }
     let reminder_count = send_due_activity_deadline_reminders(pool).await?;
     let estimate_reminder_count = process_estimate_appointment_reminders().await?;
@@ -186,6 +257,16 @@ pub(crate) async fn function_handler(
 mod tests {
     use super::*;
     use lambda_runtime::{Context, LambdaEvent};
+
+    #[test]
+    fn scheduled_email_recipient_requires_a_non_empty_address() {
+        assert_eq!(scheduled_email_recipient(None), None);
+        assert_eq!(scheduled_email_recipient(Some("   ")), None);
+        assert_eq!(
+            scheduled_email_recipient(Some(" beattyheather@yahoo.com ")),
+            Some("beattyheather@yahoo.com")
+        );
+    }
 
     #[sqlx::test(migrations = "../migrations")]
     async fn test_generic_handler(pool: MySqlPool) {

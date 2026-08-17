@@ -186,14 +186,65 @@ pub async fn assign_lead(
     .await;
 }
 
+pub struct CreatedDeal {
+    pub id: u64,
+    pub created: bool,
+}
+
+impl CreatedDeal {
+    pub fn last_insert_id(&self) -> u64 {
+        self.id
+    }
+}
+
 pub async fn create_deal(
     pool: &MySqlPool,
     customer_id: i32,
     list_id: i32,
     next_pos: i32,
     sales_rep: i32,
-) -> Result<MySqlQueryResult, sqlx::Error> {
-    return query!(
+) -> Result<CreatedDeal, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query_scalar!(
+        r#"SELECT id FROM customers WHERE id = ? FOR UPDATE"#,
+        customer_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let existing_id = sqlx::query_scalar!(
+        r#"SELECT id FROM deals
+           WHERE customer_id = ?
+             AND deleted_at IS NULL
+             AND is_won IS NULL
+           ORDER BY id ASC
+           LIMIT 1"#,
+        customer_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if let Some(existing_id) = existing_id {
+        query!(
+            r#"UPDATE deals
+               SET user_id = ?
+               WHERE id = ?
+                 AND deleted_at IS NULL
+                 AND (user_id IS NULL OR user_id <> ?)"#,
+            sales_rep,
+            existing_id,
+            sales_rep,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Ok(CreatedDeal {
+            id: existing_id,
+            created: false,
+        });
+    }
+
+    let result = query!(
         r#"INSERT INTO deals (customer_id, status, list_id, position, user_id) VALUES (?,?,?,?,?)"#,
         customer_id,
         "New Customer",
@@ -201,8 +252,13 @@ pub async fn create_deal(
         next_pos,
         sales_rep,
     )
-    .execute(pool)
-    .await;
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(CreatedDeal {
+        id: result.last_insert_id(),
+        created: true,
+    })
 }
 
 pub async fn create_lead_from_new_lead_form(
@@ -369,17 +425,15 @@ pub async fn create_deal_from_lead(
     user_id: i64,
     default_list_id: i32,
     position: i32,
-) -> Result<MySqlQueryResult, sqlx::Error> {
-    return query!(
-        r#"INSERT INTO deals (customer_id, status, list_id, user_id, position) VALUES (?,?,?,?,?)"#,
+) -> Result<CreatedDeal, sqlx::Error> {
+    create_deal(
+        pool,
         lead_id,
-        "New Customer",
         default_list_id,
-        user_id,
         position,
+        i32::try_from(user_id).unwrap_or(0),
     )
-    .execute(pool)
-    .await;
+    .await
 }
 
 pub async fn update_deal_list_id(
@@ -517,5 +571,149 @@ mod tests {
 
         // Should pick the one with position 1
         assert_eq!(id as u64, pos1_id);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn create_deal_reuses_existing_open_deal(pool: MySqlPool) {
+        let company_id = insert_company(&pool).await.unwrap();
+        let group_id = insert_group_list(&pool, company_id).await.unwrap();
+        let list_id = i32::try_from(insert_deals_list(&pool, group_id).await.unwrap()).unwrap();
+        let sales_id = insert_user(&pool, "tania@example.com", None).await.unwrap();
+        let customer = sqlx::query!(
+            r#"INSERT INTO customers (name, company_id, source) VALUES ('Cassie', ?, 'leads')"#,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let customer_id = i32::try_from(customer.last_insert_id()).unwrap();
+
+        let first = create_deal(&pool, customer_id, list_id, 0, sales_id)
+            .await
+            .unwrap();
+        assert!(first.created);
+        let second = create_deal(&pool, customer_id, list_id, 0, sales_id)
+            .await
+            .unwrap();
+        assert!(!second.created);
+        assert_eq!(first.id, second.id);
+
+        let deal_count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) FROM deals WHERE customer_id = ? AND deleted_at IS NULL"#,
+            customer_id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(deal_count, 1);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn create_deal_concurrent_retries_insert_once(pool: MySqlPool) {
+        let company_id = insert_company(&pool).await.unwrap();
+        let group_id = insert_group_list(&pool, company_id).await.unwrap();
+        let list_id = i32::try_from(insert_deals_list(&pool, group_id).await.unwrap()).unwrap();
+        let sales_id = insert_user(&pool, "tania-race@example.com", None)
+            .await
+            .unwrap();
+        let customer = sqlx::query!(
+            r#"INSERT INTO customers (name, company_id, source) VALUES ('Cassie Race', ?, 'leads')"#,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let customer_id = i32::try_from(customer.last_insert_id()).unwrap();
+
+        let (first, second) = tokio::join!(
+            create_deal(&pool, customer_id, list_id, 0, sales_id),
+            create_deal(&pool, customer_id, list_id, 0, sales_id),
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(u8::from(first.created) + u8::from(second.created), 1);
+
+        let deal_count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) FROM deals WHERE customer_id = ? AND deleted_at IS NULL"#,
+            customer_id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(deal_count, 1);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn create_deal_from_lead_reuses_existing_open_deal(pool: MySqlPool) {
+        let company_id = insert_company(&pool).await.unwrap();
+        let group_id = insert_group_list(&pool, company_id).await.unwrap();
+        let list_id = i32::try_from(insert_deals_list(&pool, group_id).await.unwrap()).unwrap();
+        let sales_id = insert_user(&pool, "tania-repeat@example.com", None)
+            .await
+            .unwrap();
+        let customer = sqlx::query!(
+            r#"INSERT INTO customers (name, company_id, source, sales_rep) VALUES ('Repeat', ?, 'leads', ?)"#,
+            company_id,
+            sales_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let customer_id = i32::try_from(customer.last_insert_id()).unwrap();
+
+        let first = create_deal_from_lead(&pool, customer_id, sales_id.into(), list_id, 0)
+            .await
+            .unwrap();
+        let second = create_deal_from_lead(&pool, customer_id, sales_id.into(), list_id, 0)
+            .await
+            .unwrap();
+        assert!(first.created);
+        assert!(!second.created);
+        assert_eq!(first.id, second.id);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn create_deal_allows_new_deal_when_existing_is_won_or_deleted(pool: MySqlPool) {
+        let company_id = insert_company(&pool).await.unwrap();
+        let group_id = insert_group_list(&pool, company_id).await.unwrap();
+        let list_id = i32::try_from(insert_deals_list(&pool, group_id).await.unwrap()).unwrap();
+        let sales_id = insert_user(&pool, "tania-closed@example.com", None)
+            .await
+            .unwrap();
+        let customer = sqlx::query!(
+            r#"INSERT INTO customers (name, company_id, source) VALUES ('Closed', ?, 'leads')"#,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let customer_id = i32::try_from(customer.last_insert_id()).unwrap();
+
+        let won = create_deal(&pool, customer_id, list_id, 0, sales_id)
+            .await
+            .unwrap();
+        sqlx::query!(r#"UPDATE deals SET is_won = 1 WHERE id = ?"#, won.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let after_won = create_deal(&pool, customer_id, list_id, 0, sales_id)
+            .await
+            .unwrap();
+        assert!(after_won.created);
+        assert_ne!(won.id, after_won.id);
+
+        sqlx::query!(
+            r#"UPDATE deals SET deleted_at = NOW() WHERE id = ?"#,
+            after_won.id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let after_deleted = create_deal(&pool, customer_id, list_id, 0, sales_id)
+            .await
+            .unwrap();
+        assert!(after_deleted.created);
+        assert_ne!(after_won.id, after_deleted.id);
     }
 }

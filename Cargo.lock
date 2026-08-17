@@ -918,9 +918,9 @@ dependencies = [
  "aws-sdk-sesv2",
  "chrono",
  "serde",
- "serde_json",
  "sqlx",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

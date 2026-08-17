@@ -24,6 +24,23 @@ pub async fn insert_scheduled_email(
     company_id: i32,
     list_id: Option<i32>,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
+    let existing = sqlx::query_scalar!(
+        r#"
+        SELECT id FROM scheduled_emails
+        WHERE template_id = ?
+          AND customer_id = ?
+          AND status IN ('pending', 'sent')
+        LIMIT 1
+        "#,
+        template.id,
+        customer_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    if existing.is_some() {
+        return Ok(sqlx::query("SELECT 1").execute(pool).await?);
+    }
+
     let hour_delay: i64 = template.hour_delay.unwrap_or(0).into();
     let send_at = Utc::now() + Duration::hours(hour_delay);
     sqlx::query!(
@@ -200,14 +217,24 @@ pub async fn mark_scheduled_email_as_failed(
     pool: &MySqlPool,
     id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
-    sqlx::query!(
+    mark_scheduled_email_failed_with_reason(pool, id, "failed").await
+}
+
+pub async fn mark_scheduled_email_failed_with_reason(
+    pool: &MySqlPool,
+    id: i32,
+    error_message: &str,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    sqlx::query(
         r#"
         UPDATE scheduled_emails
-        SET status = 'failed'
+        SET status = 'failed',
+            error_message = ?
         WHERE id = ?
         "#,
-        id
     )
+    .bind(error_message)
+    .bind(id)
     .execute(pool)
     .await
 }
@@ -733,5 +760,45 @@ mod tests {
         let result = mark_scheduled_email_as_failed(&pool, -1).await;
         assert!(result.is_ok(), "marking a non-existent id should not error");
         assert_eq!(result.unwrap().rows_affected(), 0);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_does_not_schedule_same_template_twice_for_customer(pool: MySqlPool) {
+        let user_id = insert_test_user(&pool, "test_dup_tpl@example.com", "Dup Tpl").await;
+        let customer_id = insert_test_customer(&pool, "custdup@test.com", "Cust Dup", 1).await;
+        let template_id = insert_test_template(&pool, "test_dup_tpl", "Hello again", Some(0)).await;
+
+        insert_scheduled_email(
+            &pool,
+            make_template(template_id, Some(0)),
+            90080,
+            customer_id,
+            user_id,
+            1,
+            None,
+        )
+        .await
+        .unwrap();
+        insert_scheduled_email(
+            &pool,
+            make_template(template_id, Some(0)),
+            90081,
+            customer_id,
+            user_id,
+            1,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) FROM scheduled_emails WHERE customer_id = ? AND template_id = ?"#,
+            customer_id,
+            template_id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
     }
 }
