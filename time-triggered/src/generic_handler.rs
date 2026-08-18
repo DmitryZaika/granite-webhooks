@@ -266,6 +266,32 @@ mod tests {
             scheduled_email_recipient(Some(" beattyheather@yahoo.com ")),
             Some("beattyheather@yahoo.com")
         );
+        assert_eq!(
+            scheduled_email_recipient(Some("dema.gdindy@gmail.com")),
+            Some("dema.gdindy@gmail.com")
+        );
+    }
+
+    #[test]
+    fn send_and_record_saves_history_before_marking_sent() {
+        let source = include_str!("generic_handler.rs");
+        let fn_start = source
+            .find("async fn send_and_record_scheduled_email")
+            .expect("send function");
+        let fn_end = source
+            .find("pub(crate) async fn function_handler")
+            .expect("handler");
+        let body = &source[fn_start..fn_end];
+        let record_at = body
+            .find("record_outbound_scheduled_email")
+            .expect("record call");
+        let sent_at = body
+            .find("mark_scheduled_email_as_sent")
+            .expect("mark sent call");
+        assert!(
+            record_at < sent_at,
+            "History row must be written before the drip is marked sent"
+        );
     }
 
     #[sqlx::test(migrations = "../migrations")]

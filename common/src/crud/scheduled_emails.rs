@@ -243,6 +243,7 @@ pub async fn mark_scheduled_email_failed_with_reason(
 mod tests {
     use super::*;
     use sqlx::MySqlPool;
+    use sqlx::Row;
     use std::time::Duration;
 
     /// Helper: insert a user and return its id.
@@ -800,5 +801,198 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn thank_you_for_lead_on_not_contacted_yet_is_ready_and_recorded(
+        pool: MySqlPool,
+    ) {
+        use crate::crud::outbound_email::{
+            OutboundScheduledEmail, record_outbound_scheduled_email,
+        };
+
+        let user_id =
+            insert_test_user(&pool, "dema@granitedepotindy.com", "Dema").await;
+        let customer_id = insert_test_customer(
+            &pool,
+            "dema.gdindy@gmail.com",
+            "Dema Test",
+            1,
+        )
+        .await;
+
+        let group_id = sqlx::query("INSERT INTO groups_list (name, company_id) VALUES (?, 1)")
+            .bind("Leads")
+            .execute(&pool)
+            .await
+            .unwrap()
+            .last_insert_id() as i32;
+        let list_id = sqlx::query(
+            "INSERT INTO deals_list (name, group_id, position) VALUES (?, ?, 0)",
+        )
+        .bind("Not Contacted Yet")
+        .bind(group_id)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id() as i32;
+        let deal_id = sqlx::query(
+            "INSERT INTO deals (customer_id, status, list_id, position, user_id) VALUES (?, 'Not Contacted Yet', ?, 0, ?)",
+        )
+        .bind(customer_id)
+        .bind(list_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+
+        sqlx::query(
+            "INSERT INTO email_templates (template_name, template_subject, template_body, company_id, lead_list_id, hour_delay, show_template) VALUES (?, ?, ?, 1, ?, 0, 1)",
+        )
+        .bind("Thank You for Your Request")
+        .bind("Thank You for Your Request")
+        .bind("<p>Hi Dema</p>")
+        .bind(list_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        schedule_templates_for_deal_list(
+            &pool,
+            list_id,
+            1,
+            deal_id,
+            customer_id,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let ready = get_ready_scheduled_emails(&pool).await.unwrap();
+        assert_eq!(ready.len(), 1, "hour_delay=0 Thank You should be ready to send");
+        assert_eq!(ready[0].email.as_deref(), Some("dema.gdindy@gmail.com"));
+        assert_eq!(ready[0].template_subject, "Thank You for Your Request");
+
+        let email_id = record_outbound_scheduled_email(
+            &pool,
+            &OutboundScheduledEmail {
+                scheduled_email_id: ready[0].id,
+                user_id,
+                customer_id,
+                company_id: 1,
+                deal_id: i32::try_from(deal_id).unwrap(),
+                subject: ready[0].template_subject.clone(),
+                html_body: ready[0].template_body.clone(),
+                sender_from: "\"Dema Granite Depot\" <dema@granitedepotindy.com>".to_string(),
+                recipient_email: ready[0].email.clone().unwrap(),
+                message_id: "0100018f-thank-you-history@email.amazonses.com".to_string(),
+            },
+        )
+        .await
+        .expect("recording the Thank You should succeed");
+
+        mark_scheduled_email_as_sent(&pool, ready[0].id)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            r#"
+            SELECT sender_user_id, subject, receiver_email, deal_id, thread_id, deleted_at
+            FROM emails
+            WHERE id = ?
+            "#,
+        )
+        .bind(email_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(row.get::<Option<i32>, _>("sender_user_id"), Some(user_id));
+        assert_eq!(
+            row.get::<Option<String>, _>("subject").as_deref(),
+            Some("Thank You for Your Request")
+        );
+        assert_eq!(
+            row.get::<Option<String>, _>("receiver_email").as_deref(),
+            Some("dema.gdindy@gmail.com")
+        );
+        assert_eq!(row.get::<Option<u64>, _>("deal_id"), Some(deal_id));
+        assert!(row.get::<Option<chrono::NaiveDateTime>, _>("deleted_at").is_none());
+        assert!(
+            row.get::<Option<String>, _>("thread_id")
+                .as_ref()
+                .is_some_and(|id| id.len() == 36)
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn does_not_schedule_thank_you_when_customer_is_not_a_lead(pool: MySqlPool) {
+        let user_id = insert_test_user(&pool, "rep@example.com", "Rep").await;
+        let customer_id = sqlx::query!(
+            "INSERT INTO customers (name, company_id, source) VALUES (?, 1, 'walk-in')",
+            "Walk In"
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id() as i32;
+
+        let group_id = sqlx::query("INSERT INTO groups_list (name, company_id) VALUES (?, 1)")
+            .bind("Leads")
+            .execute(&pool)
+            .await
+            .unwrap()
+            .last_insert_id() as i32;
+        let list_id = sqlx::query(
+            "INSERT INTO deals_list (name, group_id, position) VALUES (?, ?, 0)",
+        )
+        .bind("Not Contacted Yet")
+        .bind(group_id)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id() as i32;
+        let deal_id = sqlx::query(
+            "INSERT INTO deals (customer_id, status, list_id, position, user_id) VALUES (?, 'Not Contacted Yet', ?, 0, ?)",
+        )
+        .bind(customer_id)
+        .bind(list_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+
+        sqlx::query(
+            "INSERT INTO email_templates (template_name, template_subject, template_body, company_id, lead_list_id, hour_delay, show_template) VALUES (?, ?, ?, 1, ?, 0, 1)",
+        )
+        .bind("Thank You for Your Request")
+        .bind("Thank You for Your Request")
+        .bind("<p>Hi</p>")
+        .bind(list_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        schedule_templates_for_deal_list(
+            &pool,
+            list_id,
+            1,
+            deal_id,
+            customer_id,
+            user_id,
+        )
+        .await
+        .unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scheduled_emails WHERE customer_id = ?")
+            .bind(customer_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }
