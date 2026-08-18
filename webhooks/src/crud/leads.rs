@@ -14,32 +14,27 @@ async fn set_customer_email(
         return Ok(());
     }
 
-    let existing_email_id = sqlx::query_scalar!(
-        r#"SELECT email_id FROM customers WHERE id = ?"#,
-        customer_id
-    )
-    .fetch_one(pool)
-    .await?;
-
-    if let Some(email_id) = existing_email_id {
-        query!(
-            r#"UPDATE customers_emails SET email = ? WHERE id = ?"#,
-            email,
-            email_id
-        )
-        .execute(pool)
-        .await?;
-        return Ok(());
-    }
-
-    let inserted = query!(
-        r#"INSERT INTO customers_emails (customer_id, email) VALUES (?, ?)"#,
+    let existing = sqlx::query!(
+        r#"SELECT id FROM customers_emails WHERE customer_id = ? AND LOWER(email) = LOWER(?) LIMIT 1"#,
         customer_id,
         email
     )
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
-    let email_id = i32::try_from(inserted.last_insert_id()).unwrap_or(0);
+
+    let email_id = if let Some(row) = existing {
+        row.id
+    } else {
+        let inserted = query!(
+            r#"INSERT INTO customers_emails (customer_id, email) VALUES (?, ?)"#,
+            customer_id,
+            email
+        )
+        .execute(pool)
+        .await?;
+        i32::try_from(inserted.last_insert_id()).unwrap_or(0)
+    };
+
     query!(
         r#"UPDATE customers SET email_id = ? WHERE id = ?"#,
         email_id,
@@ -715,5 +710,58 @@ mod tests {
             .unwrap();
         assert!(after_deleted.created);
         assert_ne!(after_won.id, after_deleted.id);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn set_customer_email_adds_without_replacing(pool: MySqlPool) {
+        let company_id = insert_company(&pool).await.unwrap();
+        let first = FaceBookContactForm {
+            name: "Jeremy Gerber".to_string(),
+            phone: Some("3175550100".to_string()),
+            remove_and_dispose: None,
+            email: Some("Jeremy.gerber@gmail.com".to_string()),
+            city: None,
+            postal_code: None,
+            details: None,
+            campaign_name: None,
+            adset_name: None,
+            ad_name: None,
+        };
+        let created = create_lead_from_facebook(&pool, &first, company_id)
+            .await
+            .unwrap();
+        let customer_id = i32::try_from(created.last_insert_id()).unwrap();
+
+        let second = FaceBookContactForm {
+            email: Some("jeremy.gerber@icloud.com".to_string()),
+            ..first
+        };
+        update_lead_from_facebook(&pool, &second, company_id, customer_id)
+            .await
+            .unwrap();
+
+        let emails = sqlx::query!(
+            r#"SELECT email FROM customers_emails WHERE customer_id = ? ORDER BY id"#,
+            customer_id
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            emails
+                .iter()
+                .map(|row| row.email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Jeremy.gerber@gmail.com", "jeremy.gerber@icloud.com"]
+        );
+
+        let primary = sqlx::query_scalar!(
+            r#"SELECT ce.email FROM customers c JOIN customers_emails ce ON ce.id = c.email_id WHERE c.id = ?"#,
+            customer_id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(primary, "jeremy.gerber@icloud.com");
     }
 }
