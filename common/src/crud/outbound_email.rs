@@ -40,7 +40,7 @@ pub async fn record_outbound_scheduled_email(
     let receiver_email = extract_email_address(&email.recipient_email);
     let message_id = normalize_outbound_message_id(&email.message_id);
 
-    let result = sqlx::query(
+    let mut result = sqlx::query(
         r#"
         INSERT INTO emails (
             sender_user_id, subject, body, html_body, message_id,
@@ -60,7 +60,34 @@ pub async fn record_outbound_scheduled_email(
     .bind(email.deal_id)
     .bind(email.company_id)
     .execute(pool)
-    .await?;
+    .await;
+
+    if let Err(error) = &result {
+        if is_unknown_html_body_column(error) {
+            result = sqlx::query(
+                r#"
+                INSERT INTO emails (
+                    sender_user_id, subject, body, message_id,
+                    sender_email, receiver_email, thread_id, deal_id, company_id, sent_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                "#,
+            )
+            .bind(email.user_id)
+            .bind(&email.subject)
+            .bind(&email.html_body)
+            .bind(&message_id)
+            .bind(&sender_email)
+            .bind(&receiver_email)
+            .bind(&thread_id)
+            .bind(email.deal_id)
+            .bind(email.company_id)
+            .execute(pool)
+            .await;
+        }
+    }
+
+    let result = result?;
 
     let email_id = result.last_insert_id();
     insert_outbound_participants(
@@ -79,6 +106,17 @@ pub async fn record_outbound_scheduled_email(
         .await?;
 
     Ok(email_id)
+}
+
+fn is_unknown_html_body_column(error: &sqlx::Error) -> bool {
+    match error {
+        sqlx::Error::Database(db_error) => {
+            let message = db_error.message().to_lowercase();
+            message.contains("html_body")
+                && (message.contains("unknown column") || message.contains("1054"))
+        }
+        _ => false,
+    }
 }
 
 async fn insert_outbound_participants(
