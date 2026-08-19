@@ -342,7 +342,10 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         LazyLock::new(|| Regex::new(r"<(https?://[^\s>]+)>").unwrap());
     let clean_body = URL_BRACKET_RE.replace_all(&body, "$1");
     let in_reply_to_raw = message.in_reply_to();
-    let in_reply_to = parse_header_value(in_reply_to_raw);
+    // Same stripping as `References:` — Yahoo/iPhone and some parsers emit
+    // `In-Reply-To` as a list or with angle brackets. `HeaderValue::Text` only
+    // would drop the header and treat a real reply as a new thread.
+    let in_reply_to = collect_references(in_reply_to_raw).into_iter().next();
     let mut final_body = if in_reply_to.is_some() {
         extract_reply_body(&clean_body)
     } else {
@@ -436,6 +439,32 @@ mod local_tests {
                 .to_string(),
         );
         assert_eq!(parsed_email.in_reply_to, correct);
+    }
+
+    #[test]
+    fn yahoo_iphone_reply_keeps_ses_in_reply_to() {
+        let email_bytes =
+            read_file_as_bytes("src/tests/data/yahoo_iphone_thank_you_reply.eml").unwrap();
+        let (parsed_email, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(
+            parsed_email.subject,
+            Some("Re: Thank You for Your Request".to_string())
+        );
+        assert_eq!(parsed_email.sender_email, "dicemoon@sbcglobal.net");
+        assert_eq!(parsed_email.receiver_email, "dema@granitedepotindy.com");
+        assert_eq!(
+            parsed_email.in_reply_to.as_deref(),
+            Some(
+                "010f01a01a13f5b0-4f13d0d2-4e15-41f9-abfe-2b297e4c650d-000000@us-east-2.amazonses.com"
+            )
+        );
+        assert_eq!(
+            parsed_email.references,
+            vec![
+                "010f01a01a13f5b0-4f13d0d2-4e15-41f9-abfe-2b297e4c650d-000000@us-east-2.amazonses.com"
+                    .to_string()
+            ]
+        );
     }
 
     #[test]

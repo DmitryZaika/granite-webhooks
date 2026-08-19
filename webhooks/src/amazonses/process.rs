@@ -9,7 +9,8 @@ use crate::axum_helpers::guards::NotificationsTelegramBot;
 use crate::crud::deals::{maybe_cancel_flow_on_inbound_email, maybe_move_deal_on_inbound_email};
 use crate::crud::email::{
     PriorEmail, SendEmail, create_email_with_attachments, get_inbound_email_notify_context,
-    get_prior_email, resolve_inbound_customer_name,
+    get_prior_email, get_prior_email_by_message_id_prefix, get_prior_email_by_reply_context,
+    resolve_inbound_customer_name,
 };
 use crate::crud::users::{
     ReceivingEmail, get_company_id_by_user_id, get_id_by_email, get_id_by_email_with_forward,
@@ -49,25 +50,46 @@ async fn resolve_company_id(pool: &MySqlPool, user_id: Option<i32>) -> Option<i3
     }
 }
 
+fn message_id_lookup_candidates(raw: &str) -> Vec<String> {
+    let cleaned = raw.trim().trim_matches(['<', '>']).trim();
+    if cleaned.is_empty() {
+        return Vec::new();
+    }
+    let mut candidates = vec![cleaned.to_string()];
+    if let Some(idx) = cleaned.find('@') {
+        let local = cleaned[..idx].trim();
+        if !local.is_empty() && local != cleaned {
+            candidates.push(local.to_string());
+        }
+    }
+    candidates
+}
+
 pub async fn get_prior_email_backwards_compatible(
     pool: &MySqlPool,
     message_id: &str,
 ) -> Result<Option<PriorEmail>, sqlx::Error> {
-    if let Some(prior) = get_prior_email(pool, message_id).await? {
-        return Ok(Some(prior));
+    let candidates = message_id_lookup_candidates(message_id);
+    for candidate in &candidates {
+        if let Some(prior) = get_prior_email(pool, candidate).await? {
+            return Ok(Some(prior));
+        }
     }
-    let clean = match message_id.find('@') {
-        Some(idx) => &message_id[..idx],
-        None => message_id,
-    };
-    get_prior_email(pool, clean).await
+    for candidate in &candidates {
+        if let Some(prior) = get_prior_email_by_message_id_prefix(pool, candidate).await? {
+            return Ok(Some(prior));
+        }
+    }
+    Ok(None)
 }
 
 /// Find the thread an inbound message belongs to.
 ///
 /// `In-Reply-To` is tried first, then each `References` entry from nearest
 /// ancestor backwards, since some clients drop `In-Reply-To` on a forwarded
-/// message but keep the chain.
+/// message but keep the chain. If those Message-IDs were never stored (or
+/// were stored as a UUID by History backfill), fall back to the recent
+/// outbound with the same subject and the same two addresses.
 pub async fn find_prior_email(
     pool: &MySqlPool,
     parsed: &ParsedEmail,
@@ -82,7 +104,13 @@ pub async fn find_prior_email(
             return Ok(Some(prior));
         }
     }
-    Ok(None)
+    get_prior_email_by_reply_context(
+        pool,
+        &parsed.sender_email,
+        &parsed.receiver_email,
+        parsed.subject.as_deref(),
+    )
+    .await
 }
 
 pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(

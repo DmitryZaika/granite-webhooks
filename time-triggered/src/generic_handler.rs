@@ -126,6 +126,14 @@ async fn process_sms_followups() -> Result<usize, Error> {
     post_app_process_route("api/sms-followups/process", "sms follow-ups").await
 }
 
+async fn process_checklist_surveys() -> Result<usize, Error> {
+    post_app_process_route(
+        "api/survey-notifications/process",
+        "checklist survey notifications",
+    )
+    .await
+}
+
 pub fn scheduled_email_recipient(email: Option<&str>) -> Option<&str> {
     email.map(str::trim).filter(|value| !value.is_empty())
 }
@@ -239,13 +247,15 @@ pub(crate) async fn function_handler(
     let estimate_reminder_count = process_estimate_appointment_reminders().await?;
     let maintenance_reminder_count = process_maintenance_due_reminders().await?;
     let sms_followup_count = process_sms_followups().await?;
+    let checklist_survey_count = process_checklist_surveys().await?;
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, and {} sms follow-ups",
+        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, and {} checklist surveys",
         ready_emails.len(),
         reminder_count,
         estimate_reminder_count,
         maintenance_reminder_count,
-        sms_followup_count
+        sms_followup_count,
+        checklist_survey_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);
@@ -292,6 +302,23 @@ mod tests {
             record_at < sent_at,
             "History row must be written before the drip is marked sent"
         );
+    }
+
+    #[test]
+    fn function_handler_processes_checklist_surveys_after_sms_followups() {
+        let source = include_str!("generic_handler.rs");
+        assert!(source.contains("api/survey-notifications/process"));
+        let sms_at = source
+            .find("process_sms_followups")
+            .expect("sms follow-ups call");
+        let survey_at = source
+            .find("process_checklist_surveys")
+            .expect("checklist survey call");
+        assert!(
+            sms_at < survey_at,
+            "Checklist surveys should run on the same scheduled tick as SMS follow-ups"
+        );
+        assert!(source.contains("checklist surveys"));
     }
 
     #[sqlx::test(migrations = "../migrations")]
