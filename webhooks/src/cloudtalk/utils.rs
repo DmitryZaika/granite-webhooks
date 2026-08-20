@@ -5,7 +5,7 @@ use crate::cloudtalk::schemas::{CloudTalkCountry, ContactSearchHit};
 use crate::crud::cloudtalk::CustomerWithMapping;
 use crate::crud::cloudtalk::{find_local_cloudtalk_id_by_phone, update_cloudtalk_phone};
 use crate::google::maps::get_first_address_autocomplete;
-use crate::libs::constants::OK_RESPONSE;
+use crate::libs::constants::{OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use lambda_http::tracing;
 use reqwest::Client;
@@ -202,55 +202,77 @@ pub async fn upsert_contact(
     payload: &ContactPayload,
     company_id: u64,
 ) -> BasicResponse {
+    match sync_contact(pool, client, customer, payload, company_id).await {
+        Ok(()) => OK_RESPONSE,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                customer_id = customer.id,
+                "Failed to upsert CloudTalk contact"
+            );
+            internal_error("Failed to upsert CloudTalk contact")
+        }
+    }
+}
+
+/// Creates or updates the customer's `CloudTalk` contact and keeps the local
+/// `cloudtalk_contacts` mapping in sync. Returns the underlying error so the
+/// caller can log it once and translate it into an HTTP response.
+async fn sync_contact(
+    pool: &MySqlPool,
+    client: &Client,
+    customer: &CustomerWithMapping,
+    payload: &ContactPayload,
+    company_id: u64,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let phone_array: Vec<String> = payload
         .contact_number
         .iter()
-        .map(|n| n.public_number.clone())
+        .map(|number| number.public_number.clone())
         .collect();
-
     let phone1 = phone_array.first().cloned();
     let phone2 = phone_array.get(1).cloned();
 
-    if let Some(cloudtalk_id) = customer.cloudtalk_id
-        && let Some(_cloudtalk_contact_id) = customer.cloudtalk_contact_id
+    // Existing mapping: update the CloudTalk contact in place and refresh the
+    // phone numbers cached on that same local row (keyed by its primary key).
+    if let (Some(cloudtalk_id), Some(contact_row_id)) =
+        (customer.cloudtalk_id, customer.cloudtalk_contact_id)
     {
-        update_cloudtalk_contact(pool, client, company_id, cloudtalk_id, payload)
-            .await
-            .unwrap();
-
-        update_cloudtalk_phone(pool, phone1, phone2, cloudtalk_id)
-            .await
-            .unwrap();
-
-        return OK_RESPONSE;
+        update_cloudtalk_contact(pool, client, company_id, cloudtalk_id, payload).await?;
+        update_cloudtalk_phone(pool, phone1, phone2, contact_row_id).await?;
+        return Ok(());
     }
 
-    let mut existing_id = find_local_cloudtalk_id_by_phone(pool, company_id, &phone_array)
-        .await
-        .unwrap();
-
-    if existing_id.is_none() {
-        existing_id = find_cloudtalk_contact_by_phone(pool, client, company_id, &phone_array)
-            .await
-            .unwrap();
-    }
-
-    if let Some(id) = existing_id {
-        update_cloudtalk_contact(pool, client, company_id, id.into(), payload)
-            .await
-            .unwrap();
-    }
-
-    let cloudtalk_id: u64 = match existing_id {
-        Some(id) => id.try_into().unwrap(),
-        None => create_cloudtalk_contact(pool, client, company_id, payload)
-            .await
-            .unwrap(),
+    // No mapping yet: reuse a CloudTalk contact that already matches by phone
+    // (checked locally first, then via the CloudTalk API), otherwise create one.
+    let existing_id = match find_local_cloudtalk_id_by_phone(pool, company_id, &phone_array).await?
+    {
+        Some(id) => Some(id),
+        None => find_cloudtalk_contact_by_phone(pool, client, company_id, &phone_array).await?,
     };
 
+    let cloudtalk_id: u64 = match existing_id {
+        Some(id) => {
+            update_cloudtalk_contact(pool, client, company_id, id, payload).await?;
+            u64::try_from(id)?
+        }
+        None => create_cloudtalk_contact(pool, client, company_id, payload).await?,
+    };
+
+    // Persist (or refresh) the local mapping. `ON DUPLICATE KEY UPDATE` keeps the
+    // write idempotent under concurrent syncs — `uniq_customer` guards customer_id.
     sqlx::query!(
-        "INSERT INTO cloudtalk_contacts (customer_id, company_id, cloudtalk_id, phone_e164_1, phone_e164_2)
-         VALUES (?, ?, ?, ?, ?)",
+        r#"
+        INSERT INTO cloudtalk_contacts
+            (customer_id, company_id, cloudtalk_id, phone_e164_1, phone_e164_2, last_error)
+        VALUES (?, ?, ?, ?, ?, NULL)
+        ON DUPLICATE KEY UPDATE
+            company_id = VALUES(company_id),
+            cloudtalk_id = VALUES(cloudtalk_id),
+            phone_e164_1 = VALUES(phone_e164_1),
+            phone_e164_2 = VALUES(phone_e164_2),
+            last_error = NULL
+        "#,
         customer.id,
         customer.company_id,
         cloudtalk_id,
@@ -258,9 +280,9 @@ pub async fn upsert_contact(
         phone2
     )
     .execute(pool)
-    .await.unwrap();
+    .await?;
 
-    OK_RESPONSE
+    Ok(())
 }
 
 pub fn find_contact_id(json: &serde_json::Value) -> Option<u64> {
