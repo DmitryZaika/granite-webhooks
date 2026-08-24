@@ -40,17 +40,6 @@ pub async fn sms_received(
     Path(company_id): Path<i32>,
     body: Bytes,
 ) -> BasicResponse {
-    // TEMP MMS capture (inbound spike): remove after the real payload is captured.
-    // `Bytes` (not `String`) so a non-UTF-8 body still reaches the parse-failure path below,
-    // rather than being rejected earlier by axum's `String` extractor.
-    let digits = std::env::var("MMS_CAPTURE_DIGITS").unwrap_or_default();
-    if !digits.is_empty() {
-        let body_lossy = String::from_utf8_lossy(&body);
-        if body_lossy.contains(digits.as_str()) {
-            tracing::info!("MMS_CAPTURE company_id={company_id} body={body_lossy}");
-        }
-    }
-
     let Some(form) = parse_cloudtalk_sms(&body, "received") else {
         return BAD_REQUEST;
     };
@@ -205,7 +194,7 @@ pub async fn sync_cloudtalk(
 mod tests {
     use super::parse_cloudtalk_sms;
     use crate::axum_helpers::guards::CORRECT_ID;
-    use crate::tests::cloudtalk::{INBOUND_MMS_NULL_TEXT, INBOUND_SMS};
+    use crate::tests::cloudtalk::{INBOUND_NULL_TEXT, INBOUND_SMS};
     use crate::tests::utils::{insert_group_list, new_test_app};
     use axum::body::Bytes;
     use axum::http::StatusCode;
@@ -301,7 +290,7 @@ mod tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_sms_received_null_text_is_stored(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
-        let body: serde_json::Value = serde_json::from_slice(INBOUND_MMS_NULL_TEXT).expect("parse");
+        let body: serde_json::Value = serde_json::from_slice(INBOUND_NULL_TEXT).expect("parse");
 
         let response = app
             .post("/cloudtalk/sms/42")
@@ -311,7 +300,7 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let smss = get_sms_received(&pool).await;
-        assert_eq!(smss.len(), 1, "photo-only MMS must not be dropped");
+        assert_eq!(smss.len(), 1, "null-text inbound sms must not be dropped");
         assert_eq!(smss[0].text, String::new());
         assert_eq!(smss[0].sender, Some(6468956758));
     }

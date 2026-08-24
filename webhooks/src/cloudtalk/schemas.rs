@@ -50,7 +50,7 @@ impl<'de> Deserialize<'de> for CleanText {
     where
         D: Deserializer<'de>,
     {
-        // CloudTalk sends null for a caption-less MMS; that is an empty body, not a bad payload.
+        // CloudTalk may send null text for an empty body; treat as empty.
         let raw_s = Option::<String>::deserialize(deserializer)?.unwrap_or_default();
 
         // Remove the "[text]" prefix if it exists
@@ -322,7 +322,7 @@ pub struct ContactSearchEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::cloudtalk::{INBOUND_MMS_NULL_TEXT, INBOUND_SMS};
+    use crate::tests::cloudtalk::{INBOUND_NULL_TEXT, INBOUND_SMS};
     use serde_json;
 
     const MESSAGE_2: &[u8] =
@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn test_null_text_parses_as_empty_string() {
         let sms: CloudtalkSMS =
-            serde_json::from_slice(INBOUND_MMS_NULL_TEXT).expect("null text must parse");
+            serde_json::from_slice(INBOUND_NULL_TEXT).expect("null text must parse");
 
         assert_eq!(sms.text.0, "");
         assert_eq!(sms.id, Some(51753924));

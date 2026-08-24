@@ -31,7 +31,6 @@ base64 = "0.22"
 regex = "1"
 urlencoding = "2.1.3"
 tower-http = { version = "0.6", features = ["cors"] }
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 
 [dev-dependencies]
 axum-test = "19"
