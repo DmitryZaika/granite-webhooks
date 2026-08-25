@@ -17,6 +17,7 @@ use lambda_runtime::{tracing, Error, LambdaEvent};
 use reqwest::Client;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize, Error> {
     let reminders = get_due_activity_deadline_reminders(pool).await?;
@@ -36,14 +37,30 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
         let Some(telegram_id) = reminder.notifications_telegram_id else {
             continue;
         };
-        let text = common::telegram::crm::format_activity_notification(
+        let message = common::telegram::crm::format_activity_notification(
             "activity_deadline_reminder",
             reminder.customer_name.as_deref(),
             None,
             &reminder.message,
             i32::try_from(reminder.deal_id).unwrap_or(i32::MAX),
         );
-        match bot.send_message(ChatId(telegram_id), text).await {
+        let Ok(button_url) = message.button_url.parse::<reqwest::Url>() else {
+            tracing::error!(
+                notification_id = reminder.id,
+                url = %message.button_url,
+                "Invalid activity reminder telegram button url"
+            );
+            continue;
+        };
+        let keyboard = InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
+            message.button_label.to_string(),
+            button_url,
+        )]]);
+        match bot
+            .send_message(ChatId(telegram_id), message.text)
+            .reply_markup(keyboard)
+            .await
+        {
             Ok(_) => {
                 mark_deadline_reminder_telegram_sent(pool, reminder.id).await?;
                 sent_count += 1;

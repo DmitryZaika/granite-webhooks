@@ -10,6 +10,7 @@ use crate::libs::types::BasicResponse;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 pub struct CrmTelegramNotify {
     pub user_id: i32,
@@ -63,14 +64,21 @@ where
         return Ok(());
     };
 
-    let text = format_activity_notification(
+    let message = format_activity_notification(
         &payload.notification_type,
         payload.customer_name.as_deref(),
         payload.actor_name.as_deref(),
         &payload.message,
         payload.deal_id,
     );
-    send_plain_crm_message(bot, telegram_id, &text).await
+    send_crm_message_with_button(
+        bot,
+        telegram_id,
+        &message.text,
+        message.button_label,
+        &message.button_url,
+    )
+    .await
 }
 
 pub async fn send_inbound_email_telegram_notification<T>(
@@ -102,13 +110,20 @@ where
         return Ok(());
     };
 
-    let text = format_email_notification(
+    let message = format_email_notification(
         payload.customer_name.as_deref(),
         payload.subject.as_deref(),
         payload.deal_id,
         &payload.thread_id,
     );
-    send_plain_crm_message(bot, telegram_id, &text).await
+    send_crm_message_with_button(
+        bot,
+        telegram_id,
+        &message.text,
+        message.button_label,
+        &message.button_url,
+    )
+    .await
 }
 
 pub async fn send_inbound_sms_telegram_notification<T>(
@@ -145,8 +160,15 @@ where
         .chars()
         .filter(|character| character.is_ascii_digit())
         .collect();
-    let text = format_sms_notification(&payload.sender_phone, &payload.message, &phone_digits);
-    send_plain_crm_message(bot, telegram_id, &text).await
+    let message = format_sms_notification(&payload.sender_phone, &payload.message, &phone_digits);
+    send_crm_message_with_button(
+        bot,
+        telegram_id,
+        &message.text,
+        message.button_label,
+        &message.button_url,
+    )
+    .await
 }
 
 pub async fn send_deadline_reminder_telegram<T>(
@@ -159,26 +181,47 @@ pub async fn send_deadline_reminder_telegram<T>(
 where
     T: Telegram + Send + Sync,
 {
-    let text = format_activity_notification(
+    let notification = format_activity_notification(
         "activity_deadline_reminder",
         customer_name,
         None,
         message,
         deal_id,
     );
-    send_plain_crm_message(bot, telegram_id, &text).await
+    send_crm_message_with_button(
+        bot,
+        telegram_id,
+        &notification.text,
+        notification.button_label,
+        &notification.button_url,
+    )
+    .await
 }
 
-async fn send_plain_crm_message<T>(
+fn open_url_keyboard(label: &str, url: &str) -> Result<InlineKeyboardMarkup, BasicResponse> {
+    let parsed = url.parse::<reqwest::Url>().map_err(|error| {
+        tracing::error!(?error, url, "Invalid CRM telegram button url");
+        internal_error(ERR_SEND_TELEGRAM)
+    })?;
+    Ok(InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
+        label.to_string(),
+        parsed,
+    )]]))
+}
+
+async fn send_crm_message_with_button<T>(
     bot: &T,
     telegram_id: i64,
     text: &str,
+    button_label: &str,
+    button_url: &str,
 ) -> Result<(), BasicResponse>
 where
     T: Telegram + Send + Sync,
 {
+    let keyboard = open_url_keyboard(button_label, button_url)?;
     match bot
-        .send_message(ChatId(telegram_id), text.to_string())
+        .send_repliable_message(ChatId(telegram_id), text.to_string(), keyboard)
         .await
     {
         Ok(_) => Ok(()),
