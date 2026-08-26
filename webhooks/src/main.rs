@@ -14,6 +14,7 @@ pub mod amazon;
 pub mod amazonses;
 pub mod axum_helpers;
 pub mod cloudtalk;
+pub mod ringcentral;
 pub mod crud;
 pub mod google;
 pub mod libs;

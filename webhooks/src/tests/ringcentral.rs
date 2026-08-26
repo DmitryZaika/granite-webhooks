@@ -1,16 +1,16 @@
-//! Shared `CloudTalk` webhook payloads. Phones are fixture numbers, never real ones.
+//! Shared `RingCentral` webhook payloads. Phones are fixture numbers, never real ones.
 
 /// Inbound SMS carrying text, with the `[sender]`/`[text]` suffixes an older mapping produced.
 pub const INBOUND_SMS: &[u8] = b"{\"id\":null,\"sender\":\"+16468956758[sender]\",\"recipient\":\"+13173161456[recipient]\",\"text\":\"[text]\xd0\x9d\xd0\xb5 \xd0\xbf\xd0\xb8\xd1\x88\xd0\xb8 \xd1\x81\xd1\x8e\xd0\xb4\xd0\xb0\",\"agent\":\"540273\"}";
 
-/// Shape captured in production: CloudTalk may send text as JSON null for an empty body.
+/// Shape captured in production: RingCentral may send text as JSON null for an empty body.
 pub const INBOUND_NULL_TEXT: &[u8] = b"{\"id\":51753924,\"sender\":\"+16468956758\",\"recipient\":\"+13173161456\",\"text\":null,\"agent\":null,\"media\":null,\"attachments\":null,\"media_urls\":null}";
 
 #[cfg(test)]
 mod flow_enrollment_tests {
     use super::INBOUND_SMS;
     use crate::axum_helpers::guards::CORRECT_ID;
-    use crate::crud::cloudtalk::{
+    use crate::crud::ringcentral::{
         cancel_flow_enrollments_for_customer, cancel_flow_enrollments_on_reply,
     };
     use crate::tests::utils::new_test_app;
@@ -135,7 +135,7 @@ mod flow_enrollment_tests {
             "type": "incoming"
         });
         let response = app
-            .post("/cloudtalk/call/42")
+            .post("/ringcentral/call/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&body)
             .await;
@@ -157,7 +157,7 @@ mod flow_enrollment_tests {
             "Cdr": { "public_external": "+15551234567", "type": "outgoing", "talking_time": "10", "id": "1" }
         });
         let response = app
-            .post("/cloudtalk/call/42")
+            .post("/ringcentral/call/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&body)
             .await;
@@ -167,7 +167,6 @@ mod flow_enrollment_tests {
 
     #[sqlx::test(migrations = "../migrations")]
     async fn outbound_call_over_60s_does_not_cancel_immediately(pool: MySqlPool) {
-        // Cancellation happens after background transcription in the app — webhook only enqueues.
         insert_enrollment(&pool, 42, 5_551_234_567, "active").await;
 
         let app = new_test_app(pool.clone());
@@ -181,7 +180,7 @@ mod flow_enrollment_tests {
             }
         });
         let response = app
-            .post("/cloudtalk/call/42")
+            .post("/ringcentral/call/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&body)
             .await;
@@ -197,7 +196,7 @@ mod flow_enrollment_tests {
         let app = new_test_app(pool.clone());
         let body: serde_json::Value = serde_json::from_slice(INBOUND_SMS).expect("parse fixture");
         let response = app
-            .post("/cloudtalk/sms/42")
+            .post("/ringcentral/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&body)
             .await;
@@ -227,7 +226,7 @@ mod flow_enrollment_tests {
         let body = inbound_sms_with_id_json(INBOUND_SMS_WITH_ID);
 
         let first = app
-            .post("/cloudtalk/sms/42")
+            .post("/ringcentral/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&body)
             .await;
@@ -238,7 +237,7 @@ mod flow_enrollment_tests {
 
         // Same payload again: a redelivery.
         let second = app
-            .post("/cloudtalk/sms/42")
+            .post("/ringcentral/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&body)
             .await;
@@ -263,7 +262,7 @@ mod flow_enrollment_tests {
         let app = new_test_app(pool.clone());
 
         let first = app
-            .post("/cloudtalk/sms/42")
+            .post("/ringcentral/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&inbound_sms_with_id_json(2200000200))
             .await;
@@ -272,9 +271,9 @@ mod flow_enrollment_tests {
         // Flow starts after the first reply was processed.
         insert_enrollment(&pool, 42, 6468956758, "active").await;
 
-        // Different cloudtalk id: a genuine second reply, not a redelivery.
+        // Different ringcentral id: a genuine second reply, not a redelivery.
         let second = app
-            .post("/cloudtalk/sms/42")
+            .post("/ringcentral/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&inbound_sms_with_id_json(2200000201))
             .await;
@@ -283,7 +282,7 @@ mod flow_enrollment_tests {
         assert_eq!(
             status_of(&pool, 42, 6468956758, "stopped_by_reply").await,
             1,
-            "a new reply with a distinct cloudtalk id must still cancel the enrollment"
+            "a new reply with a distinct ringcentral id must still cancel the enrollment"
         );
         assert_eq!(
             status_of(&pool, 42, 6468956758, "active").await,

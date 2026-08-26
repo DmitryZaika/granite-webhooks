@@ -1,4 +1,5 @@
 pub mod cloudtalk;
+pub mod ringcentral;
 pub mod company;
 pub mod deals;
 pub mod email;

@@ -1,6 +1,7 @@
 pub const TELEGRAM_SENT_MARKER: &str = "__telegram_sent__";
 
 const EMAIL_ICON: &str = "✉️";
+const EMAIL_SUBJECT_ICON: &str = "💬";
 const ACTIVITY_ICON: &str = "📋";
 const SMS_ICON: &str = "💬";
 
@@ -79,7 +80,7 @@ pub fn format_email_notification(
         None => emails_chat_url(thread_id),
     };
     CrmTelegramMessage {
-        text: format!("{EMAIL_ICON} New email\n\n👤 {customer}\n✉️ {subject_line}"),
+        text: format!("{EMAIL_ICON} New email\n\n👤 {customer}\n{EMAIL_SUBJECT_ICON} {subject_line}"),
         button_label: "📬 Open Email",
         button_url,
     }
@@ -119,7 +120,7 @@ mod tests {
         let msg = format_email_notification(Some("Jane"), Some("Quote"), Some(12), "thread-1");
         assert!(msg.text.starts_with("✉️ New email"));
         assert!(msg.text.contains("👤 Jane"));
-        assert!(msg.text.contains("✉️ Quote"));
+        assert!(msg.text.contains("💬 Quote"));
         assert!(!msg.text.contains("https://"));
         assert_eq!(msg.button_label, "📬 Open Email");
         assert_eq!(msg.button_url, deal_email_chat_url(12, "thread-1"));

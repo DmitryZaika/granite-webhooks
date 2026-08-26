@@ -427,3 +427,33 @@ where
         }
     }
 }
+
+/// Same shared webhook bearer as CloudTalk (`CORRECT_ID`), for RingCentral routes.
+pub struct RingCentralWebhookUser;
+
+impl<S> FromRequestParts<S> for RingCentralWebhookUser
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // RingCentral subscription handshake: Validation-Token must be accepted
+        // before auth so the webhook URL can be verified.
+        if parts.headers.get("Validation-Token").is_some() {
+            return Ok(Self);
+        }
+        let bearer_uuid = parts
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_uuid_from_bearer);
+        match bearer_uuid {
+            Some(uuid) if uuid == CORRECT_ID => Ok(Self),
+            _ => {
+                tracing::error!("RingCentral SMS webhook: missing or invalid bearer token");
+                Err((StatusCode::FORBIDDEN, "Forbidden"))
+            }
+        }
+    }
+}

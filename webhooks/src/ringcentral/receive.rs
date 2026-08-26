@@ -1,26 +1,38 @@
-use crate::axum_helpers::guards::{CloudTalkWebhookUser, NotificationsTelegramBot};
-use crate::cloudtalk::api::sync_customer_to_cloud_talk;
-use crate::cloudtalk::schemas::{
-    CloudtalkSMS, inbound_customer_phone_from_call_payload, outbound_call_followup_check,
-};
-use crate::crud::cloudtalk::{
+use crate::axum_helpers::guards::{NotificationsTelegramBot, RingCentralWebhookUser};
+use crate::crud::deals::{find_customer_id_by_phone_last10, maybe_move_deal_on_inbound_sms};
+use crate::crud::ringcentral::{
     cancel_flow_enrollments_for_customer, cancel_flow_enrollments_on_reply, insert_inbound_sms,
     insert_outbound_sms,
 };
-use crate::crud::deals::{find_customer_id_by_phone_last10, maybe_move_deal_on_inbound_sms};
-use crate::crud::users::get_user_id_by_cloudtalk_agent;
+use crate::crud::users::get_user_id_by_ringcentral_agent;
 use crate::libs::app_request::{SmsFollowupCallCheckBody, spawn_sms_followup_call_check};
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
+use crate::ringcentral::api::sync_customer_to_ring_central;
+use crate::ringcentral::schemas::{
+    RingcentralSMS, inbound_customer_phone_from_call_payload, outbound_call_followup_check,
+};
 use crate::telegram::crm::{InboundSmsTelegramNotify, send_inbound_sms_telegram_notification};
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use lambda_http::tracing;
 use reqwest::Client;
 use sqlx::MySqlPool;
 
-fn parse_cloudtalk_sms(body: &Bytes, route: &'static str) -> Option<CloudtalkSMS> {
-    match serde_json::from_slice::<CloudtalkSMS>(body) {
+fn validation_token_response(headers: &HeaderMap) -> Option<Response> {
+    let token = headers.get("Validation-Token")?;
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::OK;
+    response
+        .headers_mut()
+        .insert("Validation-Token", token.clone());
+    Some(response)
+}
+
+fn parse_ringcentral_sms(body: &Bytes, route: &'static str) -> Option<RingcentralSMS> {
+    match serde_json::from_slice::<RingcentralSMS>(body) {
         Ok(form) => Some(form),
         Err(error) => {
             // Structured position/category only: never the serde Display message, which for some
@@ -30,7 +42,7 @@ fn parse_cloudtalk_sms(body: &Bytes, route: &'static str) -> Option<CloudtalkSMS
                 category = ?error.classify(),
                 line = error.line(),
                 column = error.column(),
-                "Error parsing cloudtalk sms payload"
+                "Error parsing ringcentral sms payload"
             );
             None
         }
@@ -38,12 +50,24 @@ fn parse_cloudtalk_sms(body: &Bytes, route: &'static str) -> Option<CloudtalkSMS
 }
 
 pub async fn sms_received(
-    _: CloudTalkWebhookUser,
+    headers: HeaderMap,
+    _: RingCentralWebhookUser,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     body: Bytes,
+) -> Response {
+    if let Some(response) = validation_token_response(&headers) {
+        return response;
+    }
+    sms_received_inner(pool, company_id, body).await.into_response()
+}
+
+async fn sms_received_inner(
+    pool: MySqlPool,
+    company_id: i32,
+    body: Bytes,
 ) -> BasicResponse {
-    let Some(form) = parse_cloudtalk_sms(&body, "received") else {
+    let Some(form) = parse_ringcentral_sms(&body, "received") else {
         return BAD_REQUEST;
     };
 
@@ -65,7 +89,7 @@ pub async fn sms_received(
 
                 if let Some(agent) = form.agent.as_deref() {
                     if let Ok(Some(user_id)) =
-                        get_user_id_by_cloudtalk_agent(&pool, company_id, agent).await
+                        get_user_id_by_ringcentral_agent(&pool, company_id, agent).await
                     {
                         let sender_phone = form.sender().to_string();
                         let payload = InboundSmsTelegramNotify {
@@ -105,9 +129,21 @@ pub async fn sms_received(
 }
 
 pub async fn call_received(
-    _: CloudTalkWebhookUser,
+    headers: HeaderMap,
+    _: RingCentralWebhookUser,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
+    body: Bytes,
+) -> Response {
+    if let Some(response) = validation_token_response(&headers) {
+        return response;
+    }
+    call_received_inner(pool, company_id, body).await.into_response()
+}
+
+async fn call_received_inner(
+    pool: MySqlPool,
+    company_id: i32,
     body: Bytes,
 ) -> BasicResponse {
     let payload: serde_json::Value = match serde_json::from_slice(&body) {
@@ -118,7 +154,7 @@ pub async fn call_received(
                 category = ?error.classify(),
                 line = error.line(),
                 column = error.column(),
-                "Error parsing cloudtalk call payload"
+                "Error parsing ringcentral call payload"
             );
             return BAD_REQUEST;
         }
@@ -185,12 +221,24 @@ pub async fn call_received(
 }
 
 pub async fn sms_sent(
-    _: CloudTalkWebhookUser,
+    headers: HeaderMap,
+    _: RingCentralWebhookUser,
     State(pool): State<MySqlPool>,
     Path(company_id): Path<i32>,
     body: Bytes,
+) -> Response {
+    if let Some(response) = validation_token_response(&headers) {
+        return response;
+    }
+    sms_sent_inner(pool, company_id, body).await.into_response()
+}
+
+async fn sms_sent_inner(
+    pool: MySqlPool,
+    company_id: i32,
+    body: Bytes,
 ) -> BasicResponse {
-    let Some(form) = parse_cloudtalk_sms(&body, "sent") else {
+    let Some(form) = parse_ringcentral_sms(&body, "sent") else {
         return BAD_REQUEST;
     };
 
@@ -202,20 +250,20 @@ pub async fn sms_sent(
         }
     }
 }
-pub async fn sync_cloudtalk(
+pub async fn sync_ringcentral(
     _: crate::axum_helpers::guards::RemixBackend,
     State(pool): State<MySqlPool>,
     Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {
     let client = Client::new();
-    sync_customer_to_cloud_talk(&pool, &client, customer_id).await
+    sync_customer_to_ring_central(&pool, &client, customer_id).await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_cloudtalk_sms;
+    use super::parse_ringcentral_sms;
     use crate::axum_helpers::guards::CORRECT_ID;
-    use crate::tests::cloudtalk::{INBOUND_NULL_TEXT, INBOUND_SMS};
+    use crate::tests::ringcentral::{INBOUND_NULL_TEXT, INBOUND_SMS};
     use crate::tests::utils::{insert_group_list, new_test_app};
     use axum::body::Bytes;
     use axum::http::StatusCode;
@@ -238,7 +286,7 @@ mod tests {
     async fn get_sms_received(pool: &MySqlPool) -> Vec<CloudtalkReceivedSMS> {
         sqlx::query_as!(
             CloudtalkReceivedSMS,
-            "SELECT sender, recipient, text, agent, company_id FROM cloudtalk_sms"
+            "SELECT sender, recipient, text, agent, company_id FROM ringcentral_sms"
         )
         .fetch_all(pool)
         .await
@@ -250,7 +298,7 @@ mod tests {
         let app = new_test_app(pool.clone());
 
         let response = app
-            .post("/cloudtalk/sms/42")
+            .post("/ringcentral/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&sms_json())
             .await;
@@ -272,25 +320,25 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../migrations")]
-    async fn test_echo_dedupe_via_cloudtalk_id(pool: MySqlPool) {
+    async fn test_echo_dedupe_via_ringcentral_id(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
         let first = app
-            .post("/cloudtalk/sms/42")
+            .post("/ringcentral/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&sms_with_id_json())
             .await;
         assert_eq!(first.status_code(), StatusCode::OK);
 
         let second = app
-            .post("/cloudtalk/sms/42")
+            .post("/ringcentral/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&sms_with_id_json())
             .await;
         assert_eq!(second.status_code(), StatusCode::OK);
 
         let smss = get_sms_received(&pool).await;
-        assert_eq!(smss.len(), 1, "duplicate cloudtalk_id should be ignored");
+        assert_eq!(smss.len(), 1, "duplicate ringcentral_id should be ignored");
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -298,7 +346,7 @@ mod tests {
         let app = new_test_app(pool.clone());
 
         let response = app
-            .post("/cloudtalk/sms/42")
+            .post("/ringcentral/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .text("{not json")
             .await;
@@ -314,7 +362,7 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(INBOUND_NULL_TEXT).expect("parse");
 
         let response = app
-            .post("/cloudtalk/sms/42")
+            .post("/ringcentral/sms/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&body)
             .await;
@@ -329,7 +377,7 @@ mod tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_sms_rejected_without_bearer_token(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
-        let response = app.post("/cloudtalk/sms/42").json(&sms_json()).await;
+        let response = app.post("/ringcentral/sms/42").json(&sms_json()).await;
         assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
         let smss = get_sms_received(&pool).await;
         assert_eq!(
@@ -344,15 +392,15 @@ mod tests {
         let app = new_test_app(pool.clone());
 
         let response = app
-            .post("/cloudtalk/sms/sent/42")
+            .post("/ringcentral/sms/sent/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&sms_with_id_json())
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let row = sqlx::query!(
-            "SELECT COUNT(*) AS cnt FROM cloudtalk_sms \
-             WHERE direction = 'outbound' AND status = 'sent' AND cloudtalk_id = 2200000000"
+            "SELECT COUNT(*) AS cnt FROM ringcentral_sms \
+             WHERE direction = 'outbound' AND status = 'sent' AND ringcentral_id = 2200000000"
         )
         .fetch_one(&pool)
         .await
@@ -366,8 +414,8 @@ mod tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_sms_sent_merges_crm_outbound_row(pool: MySqlPool) {
         sqlx::query!(
-            "INSERT INTO cloudtalk_sms \
-                (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status) \
+            "INSERT INTO ringcentral_sms \
+                (ringcentral_id, sender, recipient, text, agent, company_id, direction, status) \
              VALUES (NULL, NULL, 3173161456, 'hello', '540273', 42, 'outbound', 'pending')"
         )
         .execute(&pool)
@@ -376,7 +424,7 @@ mod tests {
 
         let app = new_test_app(pool.clone());
         let response = app
-            .post("/cloudtalk/sms/sent/42")
+            .post("/ringcentral/sms/sent/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&sms_with_id_json())
             .await;
@@ -390,12 +438,12 @@ mod tests {
         );
 
         let merged = sqlx::query!(
-            "SELECT cloudtalk_id FROM cloudtalk_sms WHERE company_id = 42 AND direction = 'outbound'"
+            "SELECT ringcentral_id FROM ringcentral_sms WHERE company_id = 42 AND direction = 'outbound'"
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(merged.cloudtalk_id, Some(2200000000));
+        assert_eq!(merged.ringcentral_id, Some(2200000000));
     }
 
     // Fallback echo: CRM stored 'cap' but the sent body (caption + links) differs.
@@ -405,8 +453,8 @@ mod tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_sms_sent_merges_crm_row_with_differing_text(pool: MySqlPool) {
         let parent = sqlx::query!(
-            "INSERT INTO cloudtalk_sms \
-                (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status) \
+            "INSERT INTO ringcentral_sms \
+                (ringcentral_id, sender, recipient, text, agent, company_id, direction, status) \
              VALUES (NULL, NULL, 3173161456, 'cap', '540273', 42, 'outbound', 'sent')"
         )
         .execute(&pool)
@@ -415,10 +463,10 @@ mod tests {
         .last_insert_id();
 
         // Tier 2 is gated on an attachment existing (it exists solely for image-send fallbacks);
-        // seed one the same way the cascade-delete test in crud/cloudtalk.rs does.
+        // seed one the same way the cascade-delete test in crud/ringcentral.rs does.
         sqlx::query!(
-            "INSERT INTO cloudtalk_sms_attachments \
-                (cloudtalk_sms_id, content_type, filename, s3_key, s3_url, width, height, position) \
+            "INSERT INTO ringcentral_sms_attachments \
+                (ringcentral_sms_id, content_type, filename, s3_key, s3_url, width, height, position) \
              VALUES (?, 'image/jpeg', 'a.jpg', '42/u/a.jpg', 's3://gd-sms-attachments/42/u/a.jpg', 800, 600, 0)",
             i32::try_from(parent).expect("test id fits i32"),
         )
@@ -429,7 +477,7 @@ mod tests {
         let app = new_test_app(pool.clone());
         let body: serde_json::Value = serde_json::from_slice(MESSAGE_FALLBACK_ECHO).expect("parse");
         let response = app
-            .post("/cloudtalk/sms/sent/42")
+            .post("/ringcentral/sms/sent/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&body)
             .await;
@@ -442,12 +490,12 @@ mod tests {
             "differing-text echo must merge via tier 2, not duplicate"
         );
         let merged = sqlx::query!(
-            "SELECT cloudtalk_id FROM cloudtalk_sms WHERE company_id = 42 AND direction = 'outbound'"
+            "SELECT ringcentral_id FROM ringcentral_sms WHERE company_id = 42 AND direction = 'outbound'"
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(merged.cloudtalk_id, Some(2200000099));
+        assert_eq!(merged.ringcentral_id, Some(2200000099));
     }
 
     const MESSAGE_SENT_NULL_TEXT: &[u8] = b"{\"id\":2200000123,\"sender\":\"+16468956758\",\"recipient\":\"+13173161456\",\"text\":null,\"agent\":\"540273\",\"media\":null,\"attachments\":null,\"media_urls\":null}";
@@ -455,8 +503,8 @@ mod tests {
     #[sqlx::test(migrations = "../migrations")]
     async fn test_sms_sent_null_text_merges_crm_row(pool: MySqlPool) {
         sqlx::query!(
-            "INSERT INTO cloudtalk_sms \
-                (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status) \
+            "INSERT INTO ringcentral_sms \
+                (ringcentral_id, sender, recipient, text, agent, company_id, direction, status) \
              VALUES (NULL, NULL, 3173161456, '', '540273', 42, 'outbound', 'pending')"
         )
         .execute(&pool)
@@ -467,7 +515,7 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_slice(MESSAGE_SENT_NULL_TEXT).expect("parse");
         let response = app
-            .post("/cloudtalk/sms/sent/42")
+            .post("/ringcentral/sms/sent/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&body)
             .await;
@@ -481,12 +529,12 @@ mod tests {
         );
 
         let merged = sqlx::query!(
-            "SELECT cloudtalk_id FROM cloudtalk_sms WHERE company_id = 42 AND direction = 'outbound'"
+            "SELECT ringcentral_id FROM ringcentral_sms WHERE company_id = 42 AND direction = 'outbound'"
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(merged.cloudtalk_id, Some(2200000123));
+        assert_eq!(merged.ringcentral_id, Some(2200000123));
     }
 
     // A null recipient is genuinely unstorable, so it must still be rejected, but through the
@@ -499,9 +547,9 @@ mod tests {
     fn test_parse_failure_is_logged_with_position_only() {
         let body = Bytes::from_static(MESSAGE_SENT_NULL_RECIPIENT);
 
-        assert!(parse_cloudtalk_sms(&body, "sent").is_none());
+        assert!(parse_ringcentral_sms(&body, "sent").is_none());
 
-        assert!(logs_contain("Error parsing cloudtalk sms payload"));
+        assert!(logs_contain("Error parsing ringcentral sms payload"));
         assert!(logs_contain("route=\"sent\""));
         assert!(!logs_contain("6468956758"), "payload must never be logged");
     }
@@ -513,7 +561,7 @@ mod tests {
             serde_json::from_slice(MESSAGE_SENT_NULL_RECIPIENT).expect("parse");
 
         let response = app
-            .post("/cloudtalk/sms/sent/42")
+            .post("/ringcentral/sms/sent/42")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&body)
             .await;
@@ -567,7 +615,7 @@ mod tests {
 
         let app = new_test_app(pool.clone());
         let response = app
-            .post(&format!("/cloudtalk/sms/{company_id}"))
+            .post(&format!("/ringcentral/sms/{company_id}"))
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&sms_json())
             .await;

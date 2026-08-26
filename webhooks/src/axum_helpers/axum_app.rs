@@ -1,5 +1,12 @@
 use crate::amazonses::routes::{read_receipt_handler, receive_handler};
-use crate::cloudtalk::receive::{call_received, sms_received, sms_sent, sync_cloudtalk};
+use crate::cloudtalk::receive::{
+    call_received as cloudtalk_call_received, sms_received as cloudtalk_sms_received,
+    sms_sent as cloudtalk_sms_sent, sync_cloudtalk,
+};
+use crate::ringcentral::receive::{
+    call_received as ringcentral_call_received, sms_received as ringcentral_sms_received,
+    sms_sent as ringcentral_sms_sent, sync_ringcentral,
+};
 use crate::google::receive::address_information;
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
@@ -71,12 +78,22 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         )
         .route("/ses/read-receipt", post(read_receipt_handler))
         .route("/ses/receive-email", post(receive_handler))
-        .route("/cloudtalk/sms/{company_id}", post(sms_received))
-        .route("/cloudtalk/sms/sent/{company_id}", post(sms_sent))
-        .route("/cloudtalk/call/{company_id}", post(call_received))
+        .route("/cloudtalk/sms/{company_id}", post(cloudtalk_sms_received))
+        .route("/cloudtalk/sms/sent/{company_id}", post(cloudtalk_sms_sent))
+        .route("/cloudtalk/call/{company_id}", post(cloudtalk_call_received))
         .route(
             "/cloudtalk/sync/{company_id}/{customer_id}",
             post(sync_cloudtalk),
+        )
+        .route("/ringcentral/sms/{company_id}", post(ringcentral_sms_received))
+        .route(
+            "/ringcentral/sms/sent/{company_id}",
+            post(ringcentral_sms_sent),
+        )
+        .route("/ringcentral/call/{company_id}", post(ringcentral_call_received))
+        .route(
+            "/ringcentral/sync/{company_id}/{customer_id}",
+            post(sync_ringcentral),
         )
         .route(
             "/template/variables/{company_id}/{user_id}",

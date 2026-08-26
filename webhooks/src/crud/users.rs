@@ -167,6 +167,27 @@ pub async fn get_user_id_by_cloudtalk_agent(
     .await
 }
 
+pub async fn get_user_id_by_ringcentral_agent(
+    pool: &MySqlPool,
+    company_id: i32,
+    extension_id: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar::<_, i32>(
+        r#"
+        SELECT id
+        FROM users
+        WHERE company_id = ?
+          AND ringcentral_extension_id = ?
+          AND is_deleted = 0
+        LIMIT 1
+        "#,
+    )
+    .bind(company_id)
+    .bind(extension_id)
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn email_exists(pool: &MySqlPool, email: &str) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar!(
         r#"
