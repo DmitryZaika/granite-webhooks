@@ -1,9 +1,22 @@
--- RingCentral parallel schema (CloudTalk parity)
+-- RingCentral schema (CloudTalk parity) plus the OAuth connect columns.
+--
+-- Companies connect through the shared Granite Manager app (QuickBooks pattern):
+-- encrypted per-company tokens live in ringcentral_access_token /
+-- ringcentral_refresh_token. The ringcentral_client_id / _client_secret / _jwt
+-- columns stay as the pre-Connect fallback that app/utils/ringcentral.server.ts
+-- still reads when a company has no OAuth connection.
 ALTER TABLE company
   ADD COLUMN ringcentral_client_id VARCHAR(255) NULL,
   ADD COLUMN ringcentral_client_secret VARCHAR(255) NULL,
   ADD COLUMN ringcentral_jwt TEXT NULL,
-  ADD COLUMN ringcentral_server_url VARCHAR(255) NULL;
+  ADD COLUMN ringcentral_server_url VARCHAR(255) NULL,
+  ADD COLUMN ringcentral_access_token BLOB NULL,
+  ADD COLUMN ringcentral_refresh_token BLOB NULL,
+  ADD COLUMN ringcentral_access_expires BIGINT NULL,
+  ADD COLUMN ringcentral_refresh_expires BIGINT NULL,
+  ADD COLUMN ringcentral_account_id VARCHAR(64) NULL,
+  ADD COLUMN ringcentral_connected_at DATETIME NULL,
+  ADD COLUMN ringcentral_connected_by INT NULL;
 
 ALTER TABLE users
   ADD COLUMN ringcentral_extension_id VARCHAR(64) NULL,
