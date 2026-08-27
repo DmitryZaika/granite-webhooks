@@ -70,3 +70,42 @@ pub fn build_rc_contact_payload(
         notes,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_to_e164, phone_digits_only, split_name};
+
+    #[test]
+    fn phone_digits_only_strips_formatting() {
+        assert_eq!(phone_digits_only("+1 (555) 123-4567"), "15551234567");
+    }
+
+    #[test]
+    fn normalize_to_e164_accepts_us_numbers() {
+        assert_eq!(
+            normalize_to_e164(Some("5551234567")),
+            Some("+15551234567".to_string())
+        );
+        assert_eq!(
+            normalize_to_e164(Some("15551234567")),
+            Some("+15551234567".to_string())
+        );
+        assert_eq!(
+            normalize_to_e164(Some("+15551234567")),
+            Some("+15551234567".to_string())
+        );
+        assert_eq!(normalize_to_e164(Some("123")), None);
+        assert_eq!(normalize_to_e164(Some("")), None);
+        assert_eq!(normalize_to_e164(None), None);
+    }
+
+    #[test]
+    fn split_name_keeps_a_usable_first_name() {
+        assert_eq!(
+            split_name(Some("Pat Stone")),
+            ("Pat".to_string(), "Stone".to_string())
+        );
+        assert_eq!(split_name(Some("  ")), ("Customer".to_string(), String::new()));
+        assert_eq!(split_name(None), ("Customer".to_string(), String::new()));
+    }
+}

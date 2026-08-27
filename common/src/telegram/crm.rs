@@ -1,9 +1,15 @@
 pub const TELEGRAM_SENT_MARKER: &str = "__telegram_sent__";
 
-const EMAIL_ICON: &str = "✉️";
-const EMAIL_SUBJECT_ICON: &str = "💬";
 const ACTIVITY_ICON: &str = "📋";
 const SMS_ICON: &str = "💬";
+const PERSON_ICON: &str = "👤";
+const EMAIL_ICON: &str = "✉️";
+const EMAIL_TEXT_ICON: &str = "💬";
+const TELEGRAM_LINE_CHARS: usize = 36;
+const EMAIL_NAME_MAX_LINES: usize = 1;
+const EMAIL_SUBJECT_MAX_LINES: usize = 2;
+const EMAIL_BODY_MAX_LINES: usize = 4;
+const EMAIL_BODY_MAX_WORDS: usize = 20;
 
 pub fn notification_type_title(notification_type: &str) -> &'static str {
     match notification_type {
@@ -67,20 +73,95 @@ pub fn format_activity_notification(
     }
 }
 
+fn collapse_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_to_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let budget = max_chars.saturating_sub(3);
+    let mut truncated = String::new();
+    for word in value.split_whitespace() {
+        let candidate = if truncated.is_empty() {
+            word.to_string()
+        } else {
+            format!("{truncated} {word}")
+        };
+        if candidate.chars().count() > budget {
+            break;
+        }
+        truncated = candidate;
+    }
+    if truncated.is_empty() {
+        truncated = value.chars().take(budget).collect();
+    }
+    truncated.push_str("...");
+    truncated
+}
+
+fn preview_lines(value: &str, max_lines: usize) -> String {
+    truncate_to_chars(&collapse_whitespace(value), TELEGRAM_LINE_CHARS * max_lines)
+}
+
+fn email_body_preview(body: Option<&str>) -> Option<String> {
+    let Some(raw) = body else {
+        return None;
+    };
+    let collapsed = collapse_whitespace(raw);
+    if collapsed.is_empty() {
+        return None;
+    }
+    let words: Vec<&str> = collapsed.split_whitespace().collect();
+    let (limited, word_truncated) = if words.len() > EMAIL_BODY_MAX_WORDS {
+        (words[..EMAIL_BODY_MAX_WORDS].join(" "), true)
+    } else {
+        (collapsed, false)
+    };
+    let line_budget = TELEGRAM_LINE_CHARS * EMAIL_BODY_MAX_LINES;
+    if limited.chars().count() <= line_budget {
+        if word_truncated {
+            return Some(format!("{limited}..."));
+        }
+        return Some(limited);
+    }
+    Some(truncate_to_chars(&limited, line_budget))
+}
+
 pub fn format_email_notification(
     customer_name: Option<&str>,
     subject: Option<&str>,
+    body: Option<&str>,
     deal_id: Option<u64>,
     thread_id: &str,
 ) -> CrmTelegramMessage {
-    let customer = customer_name.unwrap_or("Customer");
-    let subject_line = subject.unwrap_or("New email");
+    let customer = preview_lines(
+        customer_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Customer"),
+        EMAIL_NAME_MAX_LINES,
+    );
+    let subject_line = preview_lines(
+        subject
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("New email"),
+        EMAIL_SUBJECT_MAX_LINES,
+    );
     let button_url = match deal_id.and_then(|value| i32::try_from(value).ok()) {
         Some(deal_id) => deal_email_chat_url(deal_id, thread_id),
         None => emails_chat_url(thread_id),
     };
+    let text = match email_body_preview(body) {
+        Some(preview) => {
+            format!("{PERSON_ICON} {customer}\n{EMAIL_ICON} {subject_line}\n{EMAIL_TEXT_ICON} {preview}")
+        }
+        None => format!("{PERSON_ICON} {customer}\n{EMAIL_ICON} {subject_line}"),
+    };
     CrmTelegramMessage {
-        text: format!("{EMAIL_ICON} New email\n\n👤 {customer}\n{EMAIL_SUBJECT_ICON} {subject_line}"),
+        text,
         button_label: "📬 Open Email",
         button_url,
     }
@@ -116,14 +197,67 @@ mod tests {
     }
 
     #[test]
-    fn email_notification_hides_raw_url_behind_button() {
-        let msg = format_email_notification(Some("Jane"), Some("Quote"), Some(12), "thread-1");
-        assert!(msg.text.starts_with("✉️ New email"));
-        assert!(msg.text.contains("👤 Jane"));
-        assert!(msg.text.contains("💬 Quote"));
+    fn email_notification_puts_customer_subject_then_body_preview() {
+        let msg = format_email_notification(
+            Some("Jane"),
+            Some("Granite Depot - Your countertop quote"),
+            Some("Dear customer!\n\nHere is a quote for your counters."),
+            Some(12),
+            "thread-1",
+        );
+        assert_eq!(
+            msg.text,
+            "👤 Jane\n✉️ Granite Depot - Your countertop quote\n💬 Dear customer! Here is a quote for your counters."
+        );
         assert!(!msg.text.contains("https://"));
         assert_eq!(msg.button_label, "📬 Open Email");
         assert_eq!(msg.button_url, deal_email_chat_url(12, "thread-1"));
+    }
+
+    #[test]
+    fn email_notification_truncates_long_body_preview() {
+        let long_body = "word ".repeat(80);
+        let msg = format_email_notification(
+            Some("Jane"),
+            Some("Quote"),
+            Some(&long_body),
+            None,
+            "thread-2",
+        );
+        assert!(msg.text.starts_with("👤 Jane\n✉️ Quote\n💬 "));
+        let preview = msg
+            .text
+            .strip_prefix("👤 Jane\n✉️ Quote\n💬 ")
+            .expect("prefix");
+        let words: Vec<&str> = preview
+            .trim_end_matches('.')
+            .split_whitespace()
+            .collect();
+        assert!(preview.ends_with("..."));
+        assert_eq!(words.len(), EMAIL_BODY_MAX_WORDS);
+        assert!(preview.chars().count() <= TELEGRAM_LINE_CHARS * EMAIL_BODY_MAX_LINES);
+    }
+
+    #[test]
+    fn email_notification_keeps_name_and_subject_to_line_limits() {
+        let long_name = "Alexandra Catherine Montgomery-Williams";
+        let long_subject =
+            "Granite Depot of Indianapolis - Your kitchen countertop quote and fabrication timeline";
+        let msg = format_email_notification(
+            Some(long_name),
+            Some(long_subject),
+            Some("Dear customer! Here is a quote."),
+            None,
+            "thread-3",
+        );
+        let lines: Vec<&str> = msg.text.lines().collect();
+        assert_eq!(lines.len(), 3);
+        let name = lines[0].strip_prefix("👤 ").expect("name icon");
+        let subject = lines[1].strip_prefix("✉️ ").expect("subject icon");
+        assert!(name.chars().count() <= TELEGRAM_LINE_CHARS);
+        assert!(subject.chars().count() <= TELEGRAM_LINE_CHARS * EMAIL_SUBJECT_MAX_LINES);
+        assert!(name.ends_with("..."));
+        assert!(subject.ends_with("..."));
     }
 
     #[test]

@@ -270,6 +270,10 @@ impl SendEmail {
         self.subject.as_deref()
     }
 
+    pub fn body(&self) -> &str {
+        &self.body
+    }
+
     pub fn sender_email(&self) -> &str {
         &self.sender_email
     }

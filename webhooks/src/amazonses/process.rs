@@ -258,6 +258,7 @@ async fn maybe_send_inbound_email_telegram(pool: &MySqlPool, send: &SendEmail) {
         receiver_user_id,
         thread_id: send.thread_id().to_string(),
         subject: send.subject().map(str::to_string),
+        body: Some(send.body().to_string()),
         deal_id,
         customer_name,
     };

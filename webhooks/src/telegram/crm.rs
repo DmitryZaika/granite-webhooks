@@ -25,6 +25,7 @@ pub struct InboundEmailTelegramNotify {
     pub receiver_user_id: i32,
     pub thread_id: String,
     pub subject: Option<String>,
+    pub body: Option<String>,
     pub deal_id: Option<u64>,
     pub customer_name: Option<String>,
 }
@@ -113,6 +114,7 @@ where
     let message = format_email_notification(
         payload.customer_name.as_deref(),
         payload.subject.as_deref(),
+        payload.body.as_deref(),
         payload.deal_id,
         &payload.thread_id,
     );

@@ -9,11 +9,11 @@ CHAT_ID = os.environ.get("TELEGRAM_TEST_CHAT_ID", "462986068")
 
 MESSAGES = [
     {
-        "text": "✉️ New email\n\n👤 Jane Doe\n💬 Template approval needed",
+        "text": "👤 Jane Doe\n✉️ Template approval needed\n💬 Please review the template before we proceed with fabrication.",
         "button": ("📬 Open Email", "https://granite-manager.com/employee/deals/edit/101/project/chat/test-thread-1"),
     },
     {
-        "text": "✉️ New email\n\n👤 Gregg Yancy\n💬 Re: Granite Depot quote",
+        "text": "👤 Gregg Yancy\n✉️ Granite Depot - Your countertop quote\n💬 Dear customer! Here is a quote for your counters. Please review the attached details and let us know if you...",
         "button": ("📬 Open Email", "https://granite-manager.com/employee/emails/chat/test-thread-2"),
     },
     {
