@@ -6,7 +6,7 @@ use lambda_http::tracing;
 use std::env::var;
 use teloxide::prelude::*;
 use teloxide::types::InlineKeyboardMarkup;
-use teloxide::types::{Message, Recipient};
+use teloxide::types::{Message, ParseMode, Recipient};
 use uuid::{Uuid, uuid};
 
 use crate::axum_helpers::utils::get_remix_key;
@@ -30,6 +30,7 @@ pub trait Telegram: Send + Sync {
         chat: C,
         text: T,
         repliable: InlineKeyboardMarkup,
+        parse_mode: Option<ParseMode>,
     ) -> impl Future<Output = Result<Message, teloxide::RequestError>> + Send
     where
         C: Into<Recipient> + Send,
@@ -91,13 +92,20 @@ impl Telegram for TelegramBot {
         chat: C,
         text: T,
         repliable: InlineKeyboardMarkup,
+        parse_mode: Option<ParseMode>,
     ) -> impl Future<Output = Result<Message, teloxide::RequestError>> + Send
     where
         C: Into<Recipient> + Send,
         T: Into<String> + Send,
     {
         let bot = self.bot.clone();
-        async move { bot.send_message(chat, text).reply_markup(repliable).await }
+        async move {
+            let mut request = bot.send_message(chat, text).reply_markup(repliable);
+            if let Some(mode) = parse_mode {
+                request = request.parse_mode(mode);
+            }
+            request.await
+        }
     }
 
     fn edit_message_text<T>(
@@ -203,13 +211,20 @@ impl Telegram for NotificationsTelegramBot {
         chat: C,
         text: T,
         repliable: InlineKeyboardMarkup,
+        parse_mode: Option<ParseMode>,
     ) -> impl Future<Output = Result<Message, teloxide::RequestError>> + Send
     where
         C: Into<Recipient> + Send,
         T: Into<String> + Send,
     {
         let bot = self.bot.clone();
-        async move { bot.send_message(chat, text).reply_markup(repliable).await }
+        async move {
+            let mut request = bot.send_message(chat, text).reply_markup(repliable);
+            if let Some(mode) = parse_mode {
+                request = request.parse_mode(mode);
+            }
+            request.await
+        }
     }
 
     fn edit_message_text<T>(

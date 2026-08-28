@@ -10,7 +10,7 @@ use crate::libs::types::BasicResponse;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
 pub struct CrmTelegramNotify {
     pub user_id: i32,
@@ -78,6 +78,7 @@ where
         &message.text,
         message.button_label,
         &message.button_url,
+        None,
     )
     .await
 }
@@ -124,6 +125,7 @@ where
         &message.text,
         message.button_label,
         &message.button_url,
+        Some(ParseMode::Html),
     )
     .await
 }
@@ -169,6 +171,7 @@ where
         &message.text,
         message.button_label,
         &message.button_url,
+        None,
     )
     .await
 }
@@ -196,6 +199,7 @@ where
         &notification.text,
         notification.button_label,
         &notification.button_url,
+        None,
     )
     .await
 }
@@ -217,13 +221,19 @@ async fn send_crm_message_with_button<T>(
     text: &str,
     button_label: &str,
     button_url: &str,
+    parse_mode: Option<ParseMode>,
 ) -> Result<(), BasicResponse>
 where
     T: Telegram + Send + Sync,
 {
     let keyboard = open_url_keyboard(button_label, button_url)?;
     match bot
-        .send_repliable_message(ChatId(telegram_id), text.to_string(), keyboard)
+        .send_repliable_message(
+            ChatId(telegram_id),
+            text.to_string(),
+            keyboard,
+            parse_mode,
+        )
         .await
     {
         Ok(_) => Ok(()),

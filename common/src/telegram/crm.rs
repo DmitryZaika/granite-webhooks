@@ -8,7 +8,7 @@ const EMAIL_TEXT_ICON: &str = "💬";
 const TELEGRAM_LINE_CHARS: usize = 36;
 const EMAIL_NAME_MAX_LINES: usize = 1;
 const EMAIL_SUBJECT_MAX_LINES: usize = 2;
-const EMAIL_BODY_MAX_LINES: usize = 4;
+const EMAIL_BODY_MAX_LINES: usize = 3;
 const EMAIL_BODY_MAX_WORDS: usize = 20;
 
 pub fn notification_type_title(notification_type: &str) -> &'static str {
@@ -77,6 +77,13 @@ fn collapse_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn escape_telegram_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 fn truncate_to_chars(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_string();
@@ -136,29 +143,34 @@ pub fn format_email_notification(
     deal_id: Option<u64>,
     thread_id: &str,
 ) -> CrmTelegramMessage {
-    let customer = preview_lines(
+    let customer = escape_telegram_html(&preview_lines(
         customer_name
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("Customer"),
         EMAIL_NAME_MAX_LINES,
-    );
-    let subject_line = preview_lines(
+    ));
+    let subject_line = escape_telegram_html(&preview_lines(
         subject
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("New email"),
         EMAIL_SUBJECT_MAX_LINES,
-    );
+    ));
     let button_url = match deal_id.and_then(|value| i32::try_from(value).ok()) {
         Some(deal_id) => deal_email_chat_url(deal_id, thread_id),
         None => emails_chat_url(thread_id),
     };
     let text = match email_body_preview(body) {
         Some(preview) => {
-            format!("{PERSON_ICON} {customer}\n{EMAIL_ICON} {subject_line}\n{EMAIL_TEXT_ICON} {preview}")
+            let preview = escape_telegram_html(&preview);
+            format!(
+                "{PERSON_ICON} <i><b>{customer}</b></i>\n{EMAIL_ICON} <b>{subject_line}</b>\n{EMAIL_TEXT_ICON} <i>{preview}</i>"
+            )
         }
-        None => format!("{PERSON_ICON} {customer}\n{EMAIL_ICON} {subject_line}"),
+        None => {
+            format!("{PERSON_ICON} <i><b>{customer}</b></i>\n{EMAIL_ICON} <b>{subject_line}</b>")
+        }
     };
     CrmTelegramMessage {
         text,
@@ -207,7 +219,7 @@ mod tests {
         );
         assert_eq!(
             msg.text,
-            "👤 Jane\n✉️ Granite Depot - Your countertop quote\n💬 Dear customer! Here is a quote for your counters."
+            "👤 <i><b>Jane</b></i>\n✉️ <b>Granite Depot - Your countertop quote</b>\n💬 <i>Dear customer! Here is a quote for your counters.</i>"
         );
         assert!(!msg.text.contains("https://"));
         assert_eq!(msg.button_label, "📬 Open Email");
@@ -224,10 +236,12 @@ mod tests {
             None,
             "thread-2",
         );
-        assert!(msg.text.starts_with("👤 Jane\n✉️ Quote\n💬 "));
+        let prefix = "👤 <i><b>Jane</b></i>\n✉️ <b>Quote</b>\n💬 <i>";
+        assert!(msg.text.starts_with(prefix));
         let preview = msg
             .text
-            .strip_prefix("👤 Jane\n✉️ Quote\n💬 ")
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix("</i>"))
             .expect("prefix");
         let words: Vec<&str> = preview
             .trim_end_matches('.')
@@ -252,8 +266,14 @@ mod tests {
         );
         let lines: Vec<&str> = msg.text.lines().collect();
         assert_eq!(lines.len(), 3);
-        let name = lines[0].strip_prefix("👤 ").expect("name icon");
-        let subject = lines[1].strip_prefix("✉️ ").expect("subject icon");
+        let name = lines[0]
+            .strip_prefix("👤 <i><b>")
+            .and_then(|line| line.strip_suffix("</b></i>"))
+            .expect("name");
+        let subject = lines[1]
+            .strip_prefix("✉️ <b>")
+            .and_then(|line| line.strip_suffix("</b>"))
+            .expect("subject");
         assert!(name.chars().count() <= TELEGRAM_LINE_CHARS);
         assert!(subject.chars().count() <= TELEGRAM_LINE_CHARS * EMAIL_SUBJECT_MAX_LINES);
         assert!(name.ends_with("..."));
