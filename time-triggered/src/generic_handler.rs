@@ -19,19 +19,44 @@ use sqlx::MySqlPool;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
+fn activity_reminder_needs_telegram(
+    telegram_activity_notifications: bool,
+    notifications_telegram_id: Option<i64>,
+) -> bool {
+    telegram_activity_notifications && notifications_telegram_id.is_some()
+}
+
 async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize, Error> {
     let reminders = get_due_activity_deadline_reminders(pool).await?;
-    if reminders.is_empty() {
+    let sendable = reminders.iter().any(|reminder| {
+        activity_reminder_needs_telegram(
+            reminder.telegram_activity_notifications,
+            reminder.notifications_telegram_id,
+        )
+    });
+    if !sendable {
         return Ok(0);
     }
-    let token = std::env::var("TELOXIDE_NOTIFICATIONS_TOKEN")
+    let token = match std::env::var("TELOXIDE_NOTIFICATIONS_TOKEN")
         .or_else(|_| std::env::var("TELEGRAM_NOTIFICATIONS_BOT_TOKEN"))
-        .map_err(|error| Error::from(error.to_string()))?;
+    {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(
+                ?error,
+                "Telegram notifications token is not set; skipping activity deadline reminders"
+            );
+            return Ok(0);
+        }
+    };
     let bot = teloxide::Bot::new(token);
     let mut sent_count = 0usize;
 
     for reminder in reminders {
-        if !reminder.telegram_activity_notifications {
+        if !activity_reminder_needs_telegram(
+            reminder.telegram_activity_notifications,
+            reminder.notifications_telegram_id,
+        ) {
             continue;
         }
         let Some(telegram_id) = reminder.notifications_telegram_id else {
@@ -260,7 +285,16 @@ pub(crate) async fn function_handler(
             }
         }
     }
-    let reminder_count = send_due_activity_deadline_reminders(pool).await?;
+    let reminder_count = match send_due_activity_deadline_reminders(pool).await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                "Failed to send activity deadline reminders; continuing scheduled work"
+            );
+            0
+        }
+    };
     let estimate_reminder_count = process_estimate_appointment_reminders().await?;
     let maintenance_reminder_count = process_maintenance_due_reminders().await?;
     let sms_followup_count = process_sms_followups().await?;
@@ -284,6 +318,38 @@ pub(crate) async fn function_handler(
 mod tests {
     use super::*;
     use lambda_runtime::{Context, LambdaEvent};
+
+    #[test]
+    fn activity_reminder_needs_telegram_only_when_enabled_and_linked() {
+        assert!(!activity_reminder_needs_telegram(false, None));
+        assert!(!activity_reminder_needs_telegram(true, None));
+        assert!(!activity_reminder_needs_telegram(false, Some(1)));
+        assert!(activity_reminder_needs_telegram(true, Some(1)));
+    }
+
+    #[test]
+    fn missing_telegram_token_does_not_fail_the_scheduled_tick() {
+        let source = include_str!("generic_handler.rs");
+        let fn_start = source
+            .find("async fn send_due_activity_deadline_reminders")
+            .expect("reminder function");
+        let fn_end = source
+            .find("async fn post_app_process_route")
+            .expect("next function");
+        let body = &source[fn_start..fn_end];
+        assert!(
+            body.contains("Telegram notifications token is not set; skipping activity deadline reminders"),
+            "Missing Telegram token must skip reminders instead of failing the tick"
+        );
+        assert!(
+            !body.contains("map_err(|error| Error::from(error.to_string()))"),
+            "Missing Telegram token must not convert into a handler error"
+        );
+        assert!(
+            source.contains("Failed to send activity deadline reminders; continuing scheduled work"),
+            "Reminder failures must not abort SMS follow-ups"
+        );
+    }
 
     #[test]
     fn scheduled_email_recipient_requires_a_non_empty_address() {

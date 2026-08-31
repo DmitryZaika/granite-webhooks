@@ -1,5 +1,7 @@
 use crate::axum_helpers::guards::{NotificationsTelegramBot, RingCentralWebhookUser};
-use crate::crud::deals::{find_customer_id_by_phone_last10, maybe_move_deal_on_inbound_sms};
+use crate::crud::deals::{
+    find_customer_id_by_phone_last10, maybe_move_deal_on_inbound_call, maybe_move_deal_on_inbound_sms,
+};
 use crate::crud::ringcentral::{
     cancel_flow_enrollments_for_customer, cancel_flow_enrollments_on_reply, insert_inbound_sms,
     insert_outbound_sms,
@@ -193,6 +195,8 @@ async fn call_received_inner(
             "Failed to cancel sms flow enrollments on inbound call"
         );
     }
+
+    maybe_move_deal_on_inbound_call(&pool, company_id, phone_digits).await;
 
     let last10 = phone_digits.to_string();
     match find_customer_id_by_phone_last10(&pool, company_id, &last10).await {
@@ -618,6 +622,66 @@ mod tests {
             .post(&format!("/ringcentral/sms/{company_id}"))
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&sms_json())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let list_id = sqlx::query_scalar!(r#"SELECT list_id FROM deals WHERE id = ?"#, deal_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(list_id, second_list_id);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn inbound_call_moves_deal_from_first_list(pool: MySqlPool) {
+        let company = sqlx::query!(r#"INSERT INTO company (name) VALUES ('Call Move Co')"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let company_id = i32::try_from(company.last_insert_id()).unwrap();
+        let group_id = insert_group_list(&pool, company_id).await.unwrap();
+        let first = sqlx::query!(
+            r#"INSERT INTO deals_list (name, group_id, position) VALUES ('Not Contacted Yet', ?, 0)"#,
+            group_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let first_list_id = i32::try_from(first.last_insert_id()).unwrap();
+        let second = sqlx::query!(
+            r#"INSERT INTO deals_list (name, group_id, position) VALUES ('Contacted', ?, 1)"#,
+            group_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let second_list_id = i32::try_from(second.last_insert_id()).unwrap();
+        let customer = sqlx::query!(
+            r#"INSERT INTO customers (name, company_id, phone, source) VALUES ('Lead', ?, '5551234567', 'leads')"#,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let customer_id = i32::try_from(customer.last_insert_id()).unwrap();
+        let deal = sqlx::query!(
+            r#"INSERT INTO deals (customer_id, status, list_id, position) VALUES (?, 'Not Contacted Yet', ?, 0)"#,
+            customer_id,
+            first_list_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let deal_id = deal.last_insert_id();
+
+        let app = new_test_app(pool.clone());
+        let response = app
+            .post(&format!("/ringcentral/call/{company_id}"))
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&serde_json::json!({
+                "external_number": "+15551234567",
+                "type": "incoming"
+            }))
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 

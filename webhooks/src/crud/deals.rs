@@ -365,6 +365,16 @@ pub async fn maybe_move_deal_on_inbound_sms(pool: &MySqlPool, company_id: i32, s
     }
 }
 
+pub async fn maybe_move_deal_on_inbound_call(pool: &MySqlPool, company_id: i32, caller: u64) {
+    if let Err(error) = move_deal_on_inbound_sms(pool, company_id, caller).await {
+        tracing::error!(
+            ?error,
+            company_id,
+            "Failed to move deal to contacted on inbound call"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
