@@ -3,6 +3,7 @@ use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
 
 use crate::crud::email_template::{EmailTemplate, get_templates_for_list_id};
+use crate::utils::email_send_window::clamp_automated_email_send_at;
 
 pub struct ScheduledEmail {
     pub id: i32,
@@ -42,7 +43,7 @@ pub async fn insert_scheduled_email(
     }
 
     let hour_delay: i64 = template.hour_delay.unwrap_or(0).into();
-    let send_at = Utc::now() + Duration::hours(hour_delay);
+    let send_at = clamp_automated_email_send_at(Utc::now() + Duration::hours(hour_delay));
     sqlx::query!(
         r#"
         INSERT INTO scheduled_emails (template_id, deal_id, list_id, customer_id, user_id, company_id, send_at)
@@ -127,6 +128,25 @@ async fn is_lead_customer(pool: &MySqlPool, customer_id: i32) -> Result<bool, sq
         .unwrap_or(false))
 }
 
+async fn customer_has_other_deals(
+    pool: &MySqlPool,
+    customer_id: i32,
+    exclude_deal_id: u64,
+) -> Result<bool, sqlx::Error> {
+    let other = sqlx::query_scalar!(
+        r#"SELECT id FROM deals
+           WHERE customer_id = ?
+             AND id <> ?
+             AND deleted_at IS NULL
+           LIMIT 1"#,
+        customer_id,
+        exclude_deal_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(other.is_some())
+}
+
 pub async fn schedule_templates_for_deal_list(
     pool: &MySqlPool,
     list_id: i32,
@@ -134,7 +154,11 @@ pub async fn schedule_templates_for_deal_list(
     deal_id: u64,
     customer_id: i32,
     user_id: i32,
+    new_deal: bool,
 ) -> Result<(), sqlx::Error> {
+    if new_deal && customer_has_other_deals(pool, customer_id, deal_id).await? {
+        return Ok(());
+    }
     if !is_lead_customer(pool, customer_id).await? {
         return Ok(());
     }
@@ -161,9 +185,19 @@ pub async fn reschedule_templates_for_deal_list(
     deal_id: u64,
     customer_id: i32,
     user_id: i32,
+    new_deal: bool,
 ) -> Result<(), sqlx::Error> {
     cancel_pending_scheduled_emails_for_deal(pool, deal_id).await?;
-    schedule_templates_for_deal_list(pool, list_id, company_id, deal_id, customer_id, user_id).await
+    schedule_templates_for_deal_list(
+        pool,
+        list_id,
+        company_id,
+        deal_id,
+        customer_id,
+        user_id,
+        new_deal,
+    )
+    .await
 }
 
 pub async fn get_ready_scheduled_emails(
@@ -319,6 +353,13 @@ mod tests {
         EmailTemplate { id, hour_delay }
     }
 
+    async fn make_all_scheduled_emails_due(pool: &MySqlPool) {
+        sqlx::query("UPDATE scheduled_emails SET send_at = UTC_TIMESTAMP() - INTERVAL 1 MINUTE")
+            .execute(pool)
+            .await
+            .expect("force scheduled emails due");
+    }
+
     /// Test that emails with hour_delay=0 appear in ready emails.
     #[sqlx::test(migrations = "../migrations")]
     async fn test_immediate_send_appears_in_ready(pool: MySqlPool) {
@@ -331,8 +372,8 @@ mod tests {
             .await
             .expect("insert should succeed");
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool)
             .await
@@ -359,8 +400,8 @@ mod tests {
             .await
             .expect("insert should succeed");
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool)
             .await
@@ -409,8 +450,8 @@ mod tests {
             .await
             .expect("insert should succeed");
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         // Should appear in ready.
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
@@ -472,8 +513,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         // At this point, 2 should be ready (imm + mark).
         let ready_before = get_ready_scheduled_emails(&pool).await.unwrap();
@@ -526,8 +567,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(ready.len(), 1);
@@ -551,6 +592,8 @@ mod tests {
         insert_scheduled_email(&pool, template, 90030, customer_id, user_id, 1, None)
             .await
             .unwrap();
+
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(
@@ -584,8 +627,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         let email_id = ready[0].id;
@@ -656,8 +699,8 @@ mod tests {
         .await
         .unwrap();
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(ready.len(), 3);
@@ -704,8 +747,8 @@ mod tests {
         .await
         .unwrap();
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(ready.len(), 1);
@@ -724,8 +767,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(ready.len(), 1);
@@ -865,11 +908,14 @@ mod tests {
             deal_id,
             customer_id,
             user_id,
+            false,
         )
         .await
         .unwrap();
 
         tokio::time::sleep(Duration::from_secs(1)).await;
+
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(ready.len(), 1, "hour_delay=0 Thank You should be ready to send");
@@ -984,6 +1030,7 @@ mod tests {
             deal_id,
             customer_id,
             user_id,
+            false,
         )
         .await
         .unwrap();

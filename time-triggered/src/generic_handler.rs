@@ -12,6 +12,7 @@ use common::crud::scheduled_emails::{
     mark_scheduled_email_failed_with_reason, ScheduledEmail,
 };
 use common::crud::template::fetch_template_variable_data;
+use common::utils::email_send_window::automated_email_send_window_is_open_now;
 use common::utils::template::replace_template_variables;
 use lambda_runtime::{tracing, Error, LambdaEvent};
 use reqwest::Client;
@@ -265,26 +266,31 @@ pub(crate) async fn function_handler(
     cancel_pending_emails_left_list(pool).await?;
     cancel_pending_emails_for_non_leads(pool).await?;
     let ready_emails = get_ready_scheduled_emails(pool).await?;
-    for email in &ready_emails {
-        if let Err(error) = send_and_record_scheduled_email(pool, email).await {
-            tracing::error!(
-                ?error,
-                scheduled_email_id = email.id,
-                customer_id = email.customer_id,
-                "Failed to send automated email"
-            );
-            if let Err(mark_error) =
-                mark_scheduled_email_failed_with_reason(pool, email.id, &error.to_string())
-                    .await
-            {
+    let processed_email_count = if automated_email_send_window_is_open_now() {
+        for email in &ready_emails {
+            if let Err(error) = send_and_record_scheduled_email(pool, email).await {
                 tracing::error!(
-                    ?mark_error,
+                    ?error,
                     scheduled_email_id = email.id,
-                    "Failed to mark automated email as failed"
+                    customer_id = email.customer_id,
+                    "Failed to send automated email"
                 );
+                if let Err(mark_error) =
+                    mark_scheduled_email_failed_with_reason(pool, email.id, &error.to_string())
+                        .await
+                {
+                    tracing::error!(
+                        ?mark_error,
+                        scheduled_email_id = email.id,
+                        "Failed to mark automated email as failed"
+                    );
+                }
             }
         }
-    }
+        ready_emails.len()
+    } else {
+        0
+    };
     let reminder_count = match send_due_activity_deadline_reminders(pool).await {
         Ok(count) => count,
         Err(error) => {
@@ -301,7 +307,7 @@ pub(crate) async fn function_handler(
     let checklist_survey_count = process_checklist_surveys().await?;
     let message = format!(
         "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, and {} checklist surveys",
-        ready_emails.len(),
+        processed_email_count,
         reminder_count,
         estimate_reminder_count,
         maintenance_reminder_count,

@@ -290,6 +290,7 @@ async fn handle_assign_lead<T: Telegram>(
             result.id,
             lead_id,
             position.user_id,
+            true,
         )
         .await
         .unwrap();
@@ -367,6 +368,7 @@ mod local_tests {
     use chrono::{DateTime, Duration, NaiveDateTime, Utc};
     use common::crud::email_template::CreateEmailTemplate;
     use common::crud::email_template::insert_email_template;
+    use common::utils::email_send_window::clamp_automated_email_send_at;
     use serde_json::json;
     use sqlx::MySqlPool;
     use teloxide::types::{CallbackQuery, InlineKeyboardButtonKind, MaybeInaccessibleMessage};
@@ -1144,7 +1146,8 @@ mod local_tests {
         assert_eq!(scheduled_email.user_id, sales_id as i32);
         assert_eq!(scheduled_email.company_id, company_id as i32);
 
-        let expected_send_at = Utc::now().naive_utc() + Duration::hours(2);
+        let expected_send_at =
+            clamp_automated_email_send_at(Utc::now() + Duration::hours(2)).naive_utc();
         let duration_diff = scheduled_email.send_at - expected_send_at;
         let seconds_diff = duration_diff.num_seconds().abs();
         assert!(

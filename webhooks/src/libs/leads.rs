@@ -29,6 +29,7 @@ async fn handle_repeat_lead<T, V: LeadPayload>(
     company_id: i32,
     form: &V,
     bot: &T,
+    new_deal: bool,
 ) -> BasicResponse
 where
     T: Telegram + Send + Sync + 'static + Clone,
@@ -65,6 +66,7 @@ where
             deal.id,
             existing.id,
             user_id,
+            new_deal,
         )
         .await
         {
@@ -272,14 +274,23 @@ where
     };
     match get_existing_deal(pool, existing.id).await {
         Ok(Some(deal)) => {
-            return handle_repeat_lead(&existing, deal, pool, company_id, form, bot).await;
+            return handle_repeat_lead(&existing, deal, pool, company_id, form, bot, false).await;
         }
         Ok(None) => {
             let deal =
                 create_new_deal_existing_customer(pool, &existing, company_id, form, bot).await;
             match deal {
                 Ok(Some(deal)) => {
-                    return handle_repeat_lead(&existing, deal, pool, company_id, form, bot).await;
+                    return handle_repeat_lead(
+                        &existing,
+                        deal,
+                        pool,
+                        company_id,
+                        form,
+                        bot,
+                        true,
+                    )
+                    .await;
                 }
                 Ok(None) => CREATED_RESPONSE,
                 Err(e) => {

@@ -150,6 +150,7 @@ async fn reschedule_drip_after_move(
             deal.id,
             deal.customer_id,
             user_id,
+            false,
         )
         .await
         {

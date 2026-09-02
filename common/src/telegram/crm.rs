@@ -7,7 +7,7 @@ const EMAIL_ICON: &str = "✉️";
 const EMAIL_TEXT_ICON: &str = "💬";
 const TELEGRAM_LINE_CHARS: usize = 36;
 const EMAIL_NAME_MAX_LINES: usize = 1;
-const EMAIL_SUBJECT_MAX_LINES: usize = 2;
+const EMAIL_SUBJECT_MAX_LINES: usize = 1;
 const EMAIL_BODY_MAX_LINES: usize = 3;
 const EMAIL_BODY_MAX_WORDS: usize = 20;
 
@@ -212,14 +212,14 @@ mod tests {
     fn email_notification_puts_customer_subject_then_body_preview() {
         let msg = format_email_notification(
             Some("Jane"),
-            Some("Granite Depot - Your countertop quote"),
+            Some("Your countertop quote"),
             Some("Dear customer!\n\nHere is a quote for your counters."),
             Some(12),
             "thread-1",
         );
         assert_eq!(
             msg.text,
-            "👤 <i><b>Jane</b></i>\n✉️ <b>Granite Depot - Your countertop quote</b>\n💬 <i>Dear customer! Here is a quote for your counters.</i>"
+            "👤 <i><b>Jane</b></i>\n✉️ <b>Your countertop quote</b>\n💬 <i>Dear customer! Here is a quote for your counters.</i>"
         );
         assert!(!msg.text.contains("https://"));
         assert_eq!(msg.button_label, "📬 Open Email");
