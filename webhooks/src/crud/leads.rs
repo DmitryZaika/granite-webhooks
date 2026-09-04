@@ -249,9 +249,17 @@ pub async fn create_deal(
     )
     .execute(&mut *tx)
     .await?;
+    let deal_id = result.last_insert_id();
+    query!(
+        r#"INSERT INTO deal_stage_history (deal_id, list_id) VALUES (?, ?)"#,
+        deal_id,
+        list_id,
+    )
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(CreatedDeal {
-        id: result.last_insert_id(),
+        id: deal_id,
         created: true,
     })
 }
@@ -587,6 +595,15 @@ mod tests {
             .await
             .unwrap();
         assert!(first.created);
+        let history_count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) FROM deal_stage_history WHERE deal_id = ? AND list_id = ? AND exited_at IS NULL"#,
+            first.id,
+            list_id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(history_count, 1);
         let second = create_deal(&pool, customer_id, list_id, 0, sales_id)
             .await
             .unwrap();

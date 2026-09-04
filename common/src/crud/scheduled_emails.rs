@@ -354,10 +354,17 @@ mod tests {
     }
 
     async fn make_all_scheduled_emails_due(pool: &MySqlPool) {
-        sqlx::query("UPDATE scheduled_emails SET send_at = UTC_TIMESTAMP() - INTERVAL 1 MINUTE")
-            .execute(pool)
-            .await
-            .expect("force scheduled emails due");
+        sqlx::query(
+            r#"
+            UPDATE scheduled_emails se
+            JOIN email_templates et ON et.id = se.template_id
+            SET se.send_at = UTC_TIMESTAMP() - INTERVAL 1 MINUTE
+            WHERE IFNULL(et.hour_delay, 0) <= 0
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("force scheduled emails due");
     }
 
     /// Test that emails with hour_delay=0 appear in ready emails.
