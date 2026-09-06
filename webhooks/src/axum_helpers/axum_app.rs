@@ -3,18 +3,19 @@ use crate::cloudtalk::receive::{
     call_received as cloudtalk_call_received, sms_received as cloudtalk_sms_received,
     sms_sent as cloudtalk_sms_sent, sync_cloudtalk,
 };
+use crate::google::receive::address_information;
+use crate::libs::constants::OK_RESPONSE;
+use crate::middleware::request_logger::print_request_body;
 use crate::ringcentral::receive::{
     call_received as ringcentral_call_received, sms_received as ringcentral_sms_received,
     sms_sent as ringcentral_sms_sent, sync_ringcentral,
 };
-use crate::google::receive::address_information;
-use crate::libs::constants::OK_RESPONSE;
-use crate::middleware::request_logger::print_request_body;
 use crate::schemas::add_customer::NewLeadForm;
 use crate::telegram::cleanup::delete_lead_telegram_messages;
 use crate::telegram::crm_notify::crm_notify_handler;
 use crate::telegram::notifications_notify::notifications_notify_handler;
 use crate::telegram::receive::webhook_handler;
+use crate::telnyx::receive::event_progress;
 use crate::template::receive::{get_complete_template, get_template_variables};
 use crate::webhooks::receive::{
     __path_new_lead_form, facebook_contact_form, new_lead_form, wordpress_contact_form,
@@ -80,21 +81,31 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         .route("/ses/receive-email", post(receive_handler))
         .route("/cloudtalk/sms/{company_id}", post(cloudtalk_sms_received))
         .route("/cloudtalk/sms/sent/{company_id}", post(cloudtalk_sms_sent))
-        .route("/cloudtalk/call/{company_id}", post(cloudtalk_call_received))
+        .route(
+            "/cloudtalk/call/{company_id}",
+            post(cloudtalk_call_received),
+        )
         .route(
             "/cloudtalk/sync/{company_id}/{customer_id}",
             post(sync_cloudtalk),
         )
-        .route("/ringcentral/sms/{company_id}", post(ringcentral_sms_received))
+        .route(
+            "/ringcentral/sms/{company_id}",
+            post(ringcentral_sms_received),
+        )
         .route(
             "/ringcentral/sms/sent/{company_id}",
             post(ringcentral_sms_sent),
         )
-        .route("/ringcentral/call/{company_id}", post(ringcentral_call_received))
+        .route(
+            "/ringcentral/call/{company_id}",
+            post(ringcentral_call_received),
+        )
         .route(
             "/ringcentral/sync/{company_id}/{customer_id}",
             post(sync_ringcentral),
         )
+        .route("/telnyx/event-progress", post(event_progress))
         .route(
             "/template/variables/{company_id}/{user_id}",
             get(get_template_variables),
