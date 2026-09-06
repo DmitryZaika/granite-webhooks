@@ -37,3 +37,6 @@ tower-http = { version = "0.6", features = ["cors"] }
 axum-test = "19"
 dotenvy = "0.15"
 tracing-test = "0.2.6"
+
+[patch.crates-io]
+proc-macro-error2 = { package = "proc-macro-error3", version = "3.1.1" }
