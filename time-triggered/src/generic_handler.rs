@@ -2,6 +2,7 @@ use crate::schemas::{EventBridgeEvent, OutgoingMessage};
 use common::amazon::email::{assigned_sender_from, send_message_from};
 use common::crud::notifications::{
     get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
+    unmark_deadline_reminder_telegram_sent,
 };
 use common::crud::outbound_email::{
     OutboundScheduledEmail, record_outbound_scheduled_email,
@@ -78,6 +79,10 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
             );
             continue;
         };
+        let marked = mark_deadline_reminder_telegram_sent(pool, reminder.id).await?;
+        if marked.rows_affected() < 1 {
+            continue;
+        }
         let keyboard = InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
             message.button_label.to_string(),
             button_url,
@@ -88,7 +93,6 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
             .await
         {
             Ok(_) => {
-                mark_deadline_reminder_telegram_sent(pool, reminder.id).await?;
                 sent_count += 1;
             }
             Err(error) => {
@@ -98,6 +102,7 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
                     user_id = reminder.user_id,
                     "Failed to send activity deadline reminder telegram notification"
                 );
+                unmark_deadline_reminder_telegram_sent(pool, reminder.id).await?;
             }
         }
     }

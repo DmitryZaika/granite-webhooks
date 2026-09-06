@@ -1,3 +1,4 @@
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -7,6 +8,12 @@ pub struct CloudtalkSMS {
     recipient: CleanedPhone,
     pub text: CleanText,
     pub agent: Option<String>,
+    #[serde(default)]
+    created_at: Option<FlexibleSmsTime>,
+    #[serde(default)]
+    sent_at: Option<FlexibleSmsTime>,
+    #[serde(default)]
+    date: Option<FlexibleSmsTime>,
 }
 
 impl CloudtalkSMS {
@@ -16,6 +23,80 @@ impl CloudtalkSMS {
     pub const fn recipient(&self) -> u64 {
         self.recipient.0
     }
+
+    pub fn occurred_at(&self) -> Option<DateTime<Utc>> {
+        self.created_at
+            .as_ref()
+            .and_then(FlexibleSmsTime::to_utc)
+            .or_else(|| self.sent_at.as_ref().and_then(FlexibleSmsTime::to_utc))
+            .or_else(|| self.date.as_ref().and_then(FlexibleSmsTime::to_utc))
+    }
+}
+
+#[derive(Serialize, Debug)]
+struct FlexibleSmsTime(DateTime<Utc>);
+
+impl FlexibleSmsTime {
+    const fn to_utc(&self) -> Option<DateTime<Utc>> {
+        Some(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for FlexibleSmsTime {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        parse_flexible_sms_time(&value)
+            .map(Self)
+            .ok_or_else(|| serde::de::Error::custom("unrecognized sms timestamp"))
+    }
+}
+
+fn parse_flexible_sms_time(value: &serde_json::Value) -> Option<DateTime<Utc>> {
+    match value {
+        serde_json::Value::Number(number) => {
+            let raw = number.as_f64()?;
+            parse_unix_seconds(raw)
+        }
+        serde_json::Value::String(raw) => parse_sms_time_string(raw),
+        _ => None,
+    }
+}
+
+fn parse_unix_seconds(raw: f64) -> Option<DateTime<Utc>> {
+    if !raw.is_finite() || raw <= 0.0 {
+        return None;
+    }
+    let seconds = if raw > 1_000_000_000_000.0 {
+        raw / 1000.0
+    } else {
+        raw
+    };
+    let secs = seconds.floor();
+    let nsecs = ((seconds - secs) * 1_000_000_000.0).round();
+    Utc.timestamp_opt(secs as i64, nsecs as u32).single()
+}
+
+fn parse_sms_time_string(raw: &str) -> Option<DateTime<Utc>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(trimmed) {
+        return Some(parsed.with_timezone(&Utc));
+    }
+    const NAIVE_FORMATS: [&str; 2] = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"];
+    for format in NAIVE_FORMATS {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, format) {
+            return Some(Utc.from_utc_datetime(&naive));
+        }
+    }
+    if let Ok(seconds) = trimmed.parse::<f64>() {
+        return parse_unix_seconds(seconds);
+    }
+    None
 }
 
 #[derive(Serialize, Debug)]
@@ -465,6 +546,22 @@ mod tests {
         assert_eq!(sms.text.0, "");
         assert_eq!(sms.id, Some(51753924));
         assert_eq!(sms.sender(), 6468956758);
+    }
+
+    #[test]
+    fn test_sms_payload_timestamp_is_read() {
+        let sms: CloudtalkSMS = serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "sender": "+16468956758",
+            "recipient": "+13173161456",
+            "text": "hi",
+            "created_at": "2026-09-04T16:04:00Z"
+        }))
+        .expect("timestamped payload must parse");
+        assert_eq!(
+            sms.occurred_at().map(|at| at.to_rfc3339()),
+            Some("2026-09-04T16:04:00+00:00".to_string())
+        );
     }
 
     #[test]

@@ -137,7 +137,14 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
             key = email_info.key,
             "No prior email found. Processed as first email"
         );
-        return process_first_email(pool, client, email_info).await;
+        let parsed = email_info.parsed.for_unknown_parent();
+        let restored = EmailInfo {
+            bucket: email_info.bucket,
+            key: email_info.key,
+            parsed: &parsed,
+            attachments: email_info.attachments,
+        };
+        return process_first_email(pool, client, restored).await;
     };
 
     let uploaded_attachments = match upload_attachments(client, email_info.attachments).await {

@@ -648,4 +648,24 @@ mod local_tests {
             Some("Re: Thank You for Your Request".to_string())
         );
     }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn yahoo_reply_without_parent_keeps_quoted_original(pool: MySqlPool) {
+        insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/yahoo_iphone_thank_you_reply.eml");
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        let body = result[0].body.as_deref().unwrap_or("");
+        assert!(body.contains("I liked the glacier white leather granite."));
+        assert!(
+            body.contains("Thank you for your request"),
+            "Expected the unmatched reply to keep the quoted original, got: {body}"
+        );
+    }
 }

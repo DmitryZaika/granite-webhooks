@@ -506,6 +506,8 @@ mod tests {
             subject: Some("Re: hello".to_string()),
             body: "reply".to_string(),
             html_body: None,
+            body_with_quote: None,
+            html_body_with_quote: None,
             sender_email: sender.to_string(),
             receiver_email: receiver.to_string(),
             to_recipients: vec![ParsedRecipient {
