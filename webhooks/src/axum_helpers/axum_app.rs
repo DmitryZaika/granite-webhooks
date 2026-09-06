@@ -1,7 +1,8 @@
 use crate::amazonses::routes::{read_receipt_handler, receive_handler};
 use crate::cloudtalk::receive::{
     call_received as cloudtalk_call_received, sms_received as cloudtalk_sms_received,
-    sms_sent as cloudtalk_sms_sent, sync_cloudtalk,
+    sms_received_unscoped as cloudtalk_sms_received_unscoped, sms_sent as cloudtalk_sms_sent,
+    sync_cloudtalk,
 };
 use crate::google::receive::address_information;
 use crate::libs::constants::OK_RESPONSE;
@@ -79,6 +80,7 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         )
         .route("/ses/read-receipt", post(read_receipt_handler))
         .route("/ses/receive-email", post(receive_handler))
+        .route("/cloudtalk/sms", post(cloudtalk_sms_received_unscoped))
         .route("/cloudtalk/sms/{company_id}", post(cloudtalk_sms_received))
         .route("/cloudtalk/sms/sent/{company_id}", post(cloudtalk_sms_sent))
         .route(

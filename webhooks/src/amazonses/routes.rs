@@ -7,7 +7,7 @@ use crate::amazonses::parse_email::parse_email;
 use crate::amazonses::process::{EmailInfo, process_reply_email};
 use crate::amazonses::schemas::{S3Event, SesEvent};
 use crate::crud::email::{create_email_read, get_full_message_id};
-use crate::libs::constants::{BAD_REQUEST, NOT_FOUND_RESPONSE, OK_RESPONSE, internal_error};
+use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 
 pub async fn read_receipt_handler(
@@ -20,7 +20,7 @@ pub async fn read_receipt_handler(
 
     let final_message_id = match get_full_message_id(&pool, &message_id).await {
         Ok(Some(message_id)) => message_id,
-        Ok(None) => return NOT_FOUND_RESPONSE,
+        Ok(None) => return OK_RESPONSE,
         Err(error) => {
             tracing::error!(
                 "Error fetching email read: {} from the db: {}",
@@ -176,6 +176,16 @@ mod local_tests {
         assert_eq!(result.message_id, message_id);
         assert_eq!(result.user_agent.unwrap(), expected_user_agent);
         assert_eq!(result.ip_address.unwrap(), expected_ip);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn open_event_unknown_message_is_ok(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+        let response = app
+            .post("/ses/read-receipt")
+            .json(&ses_open_event_json())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -342,8 +352,7 @@ mod local_tests {
         let data: S3Event = ses_received_json();
         let response = process_ses_received_event(&pool, mock_client, &data).await;
 
-        let correct_response = (StatusCode::NOT_FOUND, "receiver email not found");
-        assert_eq!(response, correct_response);
+        assert_eq!(response, OK_RESPONSE);
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 0);
@@ -466,8 +475,7 @@ mod local_tests {
         let data: S3Event = ses_received_json();
         let response = process_ses_received_event(&pool, mock_client, &data).await;
 
-        let correct_response = (StatusCode::NOT_FOUND, "receiver email not found");
-        assert_eq!(response, correct_response);
+        assert_eq!(response, OK_RESPONSE);
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);

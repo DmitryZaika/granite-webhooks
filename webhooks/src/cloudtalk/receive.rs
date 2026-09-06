@@ -2,6 +2,7 @@ use crate::axum_helpers::guards::{CloudTalkWebhookUser, NotificationsTelegramBot
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::cloudtalk::schemas::{
     CloudtalkSMS, inbound_customer_phone_from_call_payload, outbound_call_followup_check,
+    phone_last10,
 };
 use crate::crud::cloudtalk::{
     cancel_flow_enrollments_for_customer, cancel_flow_enrollments_on_reply, insert_inbound_sms,
@@ -10,7 +11,10 @@ use crate::crud::cloudtalk::{
 use crate::crud::deals::{
     find_customer_id_by_phone_last10, maybe_move_deal_on_inbound_call, maybe_move_deal_on_inbound_sms,
 };
-use crate::crud::users::get_user_id_by_cloudtalk_agent;
+use crate::crud::users::{
+    get_company_id_by_cloudtalk_agent, get_company_id_by_cloudtalk_phone,
+    get_user_id_by_cloudtalk_agent,
+};
 use crate::libs::app_request::{SmsFollowupCallCheckBody, spawn_sms_followup_call_check};
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
@@ -39,6 +43,47 @@ fn parse_cloudtalk_sms(body: &Bytes, route: &'static str) -> Option<CloudtalkSMS
     }
 }
 
+async fn resolve_unscoped_cloudtalk_company(
+    pool: &MySqlPool,
+    form: &CloudtalkSMS,
+) -> Result<Option<i32>, sqlx::Error> {
+    if let Some(agent) = form.agent.as_deref()
+        && let Some(company_id) = get_company_id_by_cloudtalk_agent(pool, agent).await?
+    {
+        return Ok(Some(company_id));
+    }
+    let last10 = format!("{:010}", form.recipient() % 10_000_000_000);
+    if phone_last10(&last10).is_some() {
+        return get_company_id_by_cloudtalk_phone(pool, &last10).await;
+    }
+    Ok(None)
+}
+
+pub async fn sms_received_unscoped(
+    _: CloudTalkWebhookUser,
+    State(pool): State<MySqlPool>,
+    body: Bytes,
+) -> BasicResponse {
+    let Some(form) = parse_cloudtalk_sms(&body, "received") else {
+        return BAD_REQUEST;
+    };
+    let company_id = match resolve_unscoped_cloudtalk_company(&pool, &form).await {
+        Ok(Some(company_id)) => company_id,
+        Ok(None) => {
+            tracing::error!("CloudTalk SMS webhook missing company and could not resolve one");
+            return OK_RESPONSE;
+        }
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                "Failed to resolve company for unscoped CloudTalk SMS"
+            );
+            return internal_error(ERR_DB);
+        }
+    };
+    process_inbound_sms(&pool, company_id, form).await
+}
+
 pub async fn sms_received(
     _: CloudTalkWebhookUser,
     State(pool): State<MySqlPool>,
@@ -48,8 +93,15 @@ pub async fn sms_received(
     let Some(form) = parse_cloudtalk_sms(&body, "received") else {
         return BAD_REQUEST;
     };
+    process_inbound_sms(&pool, company_id, form).await
+}
 
-    match insert_inbound_sms(&pool, &form, company_id).await {
+async fn process_inbound_sms(
+    pool: &MySqlPool,
+    company_id: i32,
+    form: CloudtalkSMS,
+) -> BasicResponse {
+    match insert_inbound_sms(pool, &form, company_id).await {
         Ok(result) => {
             let rows_affected = result.rows_affected();
             if rows_affected > 0 {
@@ -220,7 +272,7 @@ mod tests {
     use super::parse_cloudtalk_sms;
     use crate::axum_helpers::guards::CORRECT_ID;
     use crate::tests::cloudtalk::{INBOUND_NULL_TEXT, INBOUND_SMS};
-    use crate::tests::utils::{insert_group_list, new_test_app};
+    use crate::tests::utils::{insert_group_list, insert_user, new_test_app};
     use axum::body::Bytes;
     use axum::http::StatusCode;
     use lambda_http::tracing;
@@ -267,6 +319,44 @@ mod tests {
         assert_eq!(smss[0].text, "Не пиши сюда".to_string());
         assert_eq!(smss[0].agent, Some("540273".to_string()));
         assert_eq!(smss[0].company_id, Some(42));
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_unscoped_sms_resolves_company_from_agent(pool: MySqlPool) {
+        let user_id = insert_user(&pool, "agent@example.com", None)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE users SET cloudtalk_agent_id = ?, company_id = ? WHERE id = ?")
+            .bind("540273")
+            .bind(42)
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let app = new_test_app(pool.clone());
+        let response = app
+            .post("/cloudtalk/sms")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&sms_json())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let smss = get_sms_received(&pool).await;
+        assert_eq!(smss.len(), 1);
+        assert_eq!(smss[0].company_id, Some(42));
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_unscoped_sms_unknown_company_is_ok(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+        let response = app
+            .post("/cloudtalk/sms")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&sms_json())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        assert_eq!(get_sms_received(&pool).await.len(), 0);
     }
 
     const MESSAGE_WITH_ID: &[u8] = b"{\"id\":2200000000,\"sender\":\"+16468956758[sender]\",\"recipient\":\"+13173161456[recipient]\",\"text\":\"[text]hello\",\"agent\":\"540273\"}";

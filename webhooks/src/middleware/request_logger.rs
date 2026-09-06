@@ -105,6 +105,9 @@ async fn log_response_body(
 }
 
 async fn posthog_capture_request(status: StatusCode, uri: &Uri, body: &Bytes) {
+    if !PostHogEvent::should_report_http_exception(status) {
+        return;
+    }
     if let Ok(api_key) = std::env::var("POSTHOG_API_KEY") {
         let body_str = String::from_utf8_lossy(body);
         let event = PostHogEvent::new_http_exception(api_key, body_str, status, uri);

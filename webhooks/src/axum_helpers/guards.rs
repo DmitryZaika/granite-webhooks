@@ -327,6 +327,9 @@ fn parse_uuid_from_bearer(header: &str) -> Option<Uuid> {
 }
 
 async fn report_to_posthog(message: &str) {
+    if message == "Authorization header not found" {
+        return;
+    }
     let Ok(api_key) = std::env::var("POSTHOG_API_KEY") else {
         tracing::error!("POSTHOG_API_KEY not set");
         return;

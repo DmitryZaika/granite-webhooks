@@ -1,4 +1,3 @@
-use axum::http::StatusCode;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
@@ -172,17 +171,26 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
     let result =
         create_email_with_attachments(pool, &send_email, &s3_url, &uploaded_attachments).await;
     if let Err(error) = result {
-        tracing::error!(
-            "Error inserting email: {} into the db: {}",
-            email_info.parsed.message_id,
-            error
-        );
-        return internal_error("Failed to insert email into the database");
+        return email_insert_failure(&email_info.parsed.message_id, error);
     }
     maybe_move_deal_on_inbound_email(pool, &send_email).await;
     maybe_cancel_flow_on_inbound_email(pool, &send_email).await;
     maybe_send_inbound_email_telegram(pool, &send_email).await;
     OK_RESPONSE
+}
+
+fn is_duplicate_email_insert(error: &sqlx::Error) -> bool {
+    error.as_database_error().is_some_and(|db_error| {
+        db_error.code().as_deref() == Some("23000") || db_error.message().contains("Duplicate")
+    })
+}
+
+fn email_insert_failure(message_id: &str, error: sqlx::Error) -> BasicResponse {
+    tracing::error!("Error inserting email: {message_id} into the db: {error}");
+    if is_duplicate_email_insert(&error) {
+        return OK_RESPONSE;
+    }
+    internal_error("Failed to insert email into the database")
 }
 
 pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
@@ -215,7 +223,7 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
             to_email = email_info.parsed.receiver_email,
             "Reciever email not found"
         );
-        return (StatusCode::NOT_FOUND, "receiver email not found");
+        return OK_RESPONSE;
     };
     let company_id = resolve_company_id(pool, Some(receiver.inner())).await;
     let send_email =
@@ -223,12 +231,7 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
     let result =
         create_email_with_attachments(pool, &send_email, &s3_url, &uploaded_attachments).await;
     if let Err(error) = result {
-        tracing::error!(
-            "Error inserting email: {} into the db: {}",
-            email_info.parsed.message_id,
-            error
-        );
-        return internal_error("Failed to insert email into the database");
+        return email_insert_failure(&email_info.parsed.message_id, error);
     }
     maybe_move_deal_on_inbound_email(pool, &send_email).await;
     maybe_cancel_flow_on_inbound_email(pool, &send_email).await;
