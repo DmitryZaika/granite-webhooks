@@ -509,6 +509,7 @@ mod tests {
             body_with_quote: None,
             html_body_with_quote: None,
             sender_email: sender.to_string(),
+            sender_display_name: None,
             receiver_email: receiver.to_string(),
             to_recipients: vec![ParsedRecipient {
                 address: receiver.to_lowercase(),

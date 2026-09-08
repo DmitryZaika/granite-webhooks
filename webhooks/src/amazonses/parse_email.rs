@@ -70,6 +70,8 @@ pub struct ParsedEmail {
     pub body_with_quote: Option<String>,
     pub html_body_with_quote: Option<String>,
     pub sender_email: String,
+    /// `From:` display name (Gmail's sender column), when the header has one.
+    pub sender_display_name: Option<String>,
     /// First `To:` address. Retained verbatim so existing callers and the
     /// `emails.receiver_email` column keep their current meaning.
     pub receiver_email: String,
@@ -410,13 +412,19 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
     let attachments = message.attachments();
     let final_attachments: Vec<Attachment> = attachments.filter_map(parse_attachment).collect();
     let sender_emails = message.from().ok_or("Failed to parse sender email")?;
-    let sender_email = sender_emails
+    let sender = sender_emails
         .first()
-        .ok_or("Failed to parse sender email")?
+        .ok_or("Failed to parse sender email")?;
+    let sender_email = sender
         .address
         .as_ref()
         .ok_or("Failed to parse sender email")?
         .to_string();
+    let sender_display_name = sender
+        .name
+        .as_ref()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
     let receiver_emails = message.to().ok_or("Failed to parse receiver email")?;
     let receiver_email = receiver_emails
         .first()
@@ -442,6 +450,7 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         body_with_quote,
         html_body_with_quote,
         sender_email,
+        sender_display_name,
         receiver_email,
         to_recipients,
         cc_recipients,
@@ -960,6 +969,16 @@ Please confirm the slab.\r\n";
     fn receiver_email_still_holds_the_first_to_for_backward_compatibility() {
         let (parsed, _) = parse_email(&Bytes::from_static(MULTI_RECIPIENT_EML)).unwrap();
         assert_eq!(parsed.receiver_email, "rep@granite-manager.com");
+    }
+
+    #[test]
+    fn parses_from_display_name() {
+        let (parsed, _) = parse_email(&Bytes::from_static(MULTI_RECIPIENT_EML)).unwrap();
+        assert_eq!(parsed.sender_email, "customer@example.com");
+        assert_eq!(
+            parsed.sender_display_name.as_deref(),
+            Some("Customer Name")
+        );
     }
 
     #[test]

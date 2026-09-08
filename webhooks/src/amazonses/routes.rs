@@ -10,6 +10,14 @@ use crate::crud::email::{create_email_read, get_full_message_id};
 use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 
+fn is_missing_s3_object(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("nosuchkey")
+        || lower.contains("the specified key does not exist")
+        || lower.contains("nosuchbucket")
+        || lower.contains("the specified bucket does not exist")
+}
+
 pub async fn read_receipt_handler(
     State(pool): State<MySqlPool>,
     Json(info): Json<SesEvent>,
@@ -59,6 +67,9 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
                 key = key,
                 "Failed to read email content from S3"
             );
+            if is_missing_s3_object(&error) {
+                return OK_RESPONSE;
+            }
             return internal_error("Unable to read email content from S3");
         }
     };
@@ -104,6 +115,18 @@ mod local_tests {
     use crate::tests::utils::{MockClient, get_emails, insert_email, insert_user, new_test_app};
     use axum::http::StatusCode;
     use sqlx::MySqlPool;
+
+    #[test]
+    fn missing_s3_object_errors_are_detected() {
+        assert!(is_missing_s3_object(
+            "service error: NoSuchKey: The specified key does not exist."
+        ));
+        assert!(is_missing_s3_object(
+            "NoSuchBucket: The specified bucket does not exist"
+        ));
+        assert!(!is_missing_s3_object("AccessDenied"));
+        assert!(!is_missing_s3_object("timeout connecting to S3"));
+    }
 
     struct ReadDb {
         message_id: String,
