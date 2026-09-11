@@ -209,8 +209,9 @@ pub async fn insert_outbound_sms(
             return Ok(merged);
         }
 
-        // Tier 2 matches image-send fallback echoes only (see buildFallbackSmsBody); byte-exact
-        // LEFT/CONCAT (not LIKE) stops a caption's own '%'/'_' acting as a wildcard, gated on an attachment existing.
+        // Tier 2 matches attachment-link fallback echoes only (see buildAttachmentLinkSmsBody /
+        // Photo 1: images and File 1: non-images); byte-exact LEFT/CONCAT (not LIKE) stops a
+        // caption's own '%'/'_' acting as a wildcard, gated on an attachment existing.
         let merged_loose = sqlx::query!(
             r#"
             UPDATE cloudtalk_sms
@@ -225,11 +226,14 @@ pub async fn insert_outbound_sms(
                     WHERE a.cloudtalk_sms_id = cloudtalk_sms.id
                )
                AND (
-                   (text = '' AND ? LIKE 'Photo 1: %')
+                   (text = '' AND (? LIKE 'Photo 1: %' OR ? LIKE 'File 1: %'))
                    OR (
                        text <> ''
                        AND LEFT(?, CHAR_LENGTH(text) + 1) = CONCAT(text, '\n')
-                       AND ? LIKE CONCAT('%', 'Photo 1: ', '%')
+                       AND (
+                           ? LIKE CONCAT('%', 'Photo 1: ', '%')
+                           OR ? LIKE CONCAT('%', 'File 1: ', '%')
+                       )
                    )
                )
                AND created_date >= (NOW() - INTERVAL ? HOUR)
@@ -239,6 +243,8 @@ pub async fn insert_outbound_sms(
             cloudtalk_id,
             company_id,
             sms.recipient(),
+            sms.text.0,
+            sms.text.0,
             sms.text.0,
             sms.text.0,
             sms.text.0,
@@ -636,7 +642,7 @@ mod tests {
     }
 
     // (b) Image-only fallback: empty caption means the fallback body is the bare "Photo 1:
-    // <url>" line (buildFallbackSmsBody's empty-caption branch); with an attachment, must merge.
+    // <url>" line (buildAttachmentLinkSmsBody's empty-caption branch); with an attachment, must merge.
     #[sqlx::test(migrations = "../migrations")]
     async fn test_tier2_merges_image_only_fallback_echo(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "", "sent").await;
@@ -653,8 +659,8 @@ mod tests {
         );
     }
 
-    // (c) Caption fallback: body is "<caption>\nPhoto 1: <url>" (buildFallbackSmsBody's
-    // non-empty-caption branch); with an attachment present, must merge.
+    // (c) Caption fallback: body is "<caption>\nPhoto 1: <url>" (buildAttachmentLinkSmsBody's
+    // non-empty-caption image branch); with an attachment present, must merge.
     #[sqlx::test(migrations = "../migrations")]
     async fn test_tier2_merges_caption_fallback_echo(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "cap", "sent").await;
@@ -668,6 +674,47 @@ mod tests {
             outbound_row_count(&pool).await,
             1,
             "must merge, not duplicate"
+        );
+    }
+
+    // (c2) PDF/file caption fallback: body is "<caption>\nFile 1: <name>\n<url>".
+    // Same merge path as Photo — missing File 1: support duplicated outbound rows in the CRM.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_tier2_merges_file_caption_fallback_echo(pool: MySqlPool) {
+        let row_id = insert_pending_outbound(&pool, "cap", "sent").await;
+        insert_attachment_for(&pool, row_id).await;
+
+        let sms = echo_fixture(
+            2_200_000_110,
+            "cap\nFile 1: quote.pdf\nhttps://x/q.pdf",
+        );
+        insert_outbound_sms(&pool, &sms, 42).await.unwrap();
+
+        assert_eq!(cloudtalk_id_of(&pool, row_id).await, Some(2_200_000_110));
+        assert_eq!(
+            outbound_row_count(&pool).await,
+            1,
+            "File 1: echo must merge, not duplicate"
+        );
+    }
+
+    // (c3) File-only (empty caption): body starts with "File 1:".
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_tier2_merges_file_only_fallback_echo(pool: MySqlPool) {
+        let row_id = insert_pending_outbound(&pool, "", "sent").await;
+        insert_attachment_for(&pool, row_id).await;
+
+        let sms = echo_fixture(
+            2_200_000_111,
+            "File 1: quote.pdf\nhttps://x/q.pdf",
+        );
+        insert_outbound_sms(&pool, &sms, 42).await.unwrap();
+
+        assert_eq!(cloudtalk_id_of(&pool, row_id).await, Some(2_200_000_111));
+        assert_eq!(
+            outbound_row_count(&pool).await,
+            1,
+            "File-only echo must merge, not duplicate"
         );
     }
 
@@ -712,7 +759,7 @@ mod tests {
     }
 
     // (f) A text-only send (no attachment rows) must never tier-2 merge, even against an
-    // echo with the exact fallback shape; tier 2 exists solely for image-send fallbacks.
+    // echo with the exact fallback shape; tier 2 exists solely for attachment-link fallbacks.
     #[sqlx::test(migrations = "../migrations")]
     async fn test_tier2_never_merges_row_without_attachment(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "", "sent").await;

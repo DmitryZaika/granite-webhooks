@@ -453,6 +453,18 @@ pub async fn update_deal_list_id(
     .await
 }
 
+pub async fn reset_deal_activity_deadlines(
+    pool: &MySqlPool,
+    deal_id: u64,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    query!(
+        r#"UPDATE deal_activities SET deadline = CURDATE() WHERE deal_id = ? AND deleted_at IS NULL"#,
+        deal_id
+    )
+    .execute(pool)
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

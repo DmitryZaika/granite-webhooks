@@ -2,7 +2,8 @@ use crate::axum_helpers::guards::Telegram;
 use crate::cloudtalk::api::sync_customer_to_cloud_talk;
 use crate::crud::leads::{
     Deal, ExistingCustomer, create_deal_from_lead, find_existing_customer,
-    get_default_list_id_from_company_id, get_existing_deal, update_deal_list_id,
+    get_default_list_id_from_company_id, get_existing_deal, reset_deal_activity_deadlines,
+    update_deal_list_id,
 };
 use crate::crud::users::get_user_tg_info;
 use crate::libs::constants::{CREATED_RESPONSE, ERR_DB, internal_error};
@@ -55,6 +56,14 @@ where
             deal_id = deal.id,
             list_id = default_list_id,
             "Failed to move repeated lead to Not Contacted Yet"
+        );
+        return internal_error(ERR_DB);
+    }
+    if let Err(e) = reset_deal_activity_deadlines(pool, deal.id).await {
+        tracing::error!(
+            ?e,
+            deal_id = deal.id,
+            "Failed to reset activity due dates for repeated lead"
         );
         return internal_error(ERR_DB);
     }

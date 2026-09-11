@@ -1,4 +1,4 @@
-use crate::axum_helpers::guards::{NotificationsTelegramBot, RingCentralWebhookUser};
+use crate::axum_helpers::guards::RingCentralWebhookUser;
 use crate::crud::deals::{
     find_customer_id_by_phone_last10, maybe_move_deal_on_inbound_call, maybe_move_deal_on_inbound_sms,
 };
@@ -6,7 +6,6 @@ use crate::crud::ringcentral::{
     cancel_flow_enrollments_for_customer, cancel_flow_enrollments_on_reply, insert_inbound_sms,
     insert_outbound_sms,
 };
-use crate::crud::users::get_user_id_by_ringcentral_agent;
 use crate::libs::app_request::{SmsFollowupCallCheckBody, spawn_sms_followup_call_check};
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
@@ -14,7 +13,6 @@ use crate::ringcentral::api::sync_customer_to_ring_central;
 use crate::ringcentral::schemas::{
     RingcentralSMS, inbound_customer_phone_from_call_payload, outbound_call_followup_check,
 };
-use crate::telegram::crm::{InboundSmsTelegramNotify, send_inbound_sms_telegram_notification};
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -88,37 +86,13 @@ async fn sms_received_inner(
                 }
 
                 maybe_move_deal_on_inbound_sms(&pool, company_id, form.sender()).await;
-
-                if let Some(agent) = form.agent.as_deref() {
-                    if let Ok(Some(user_id)) =
-                        get_user_id_by_ringcentral_agent(&pool, company_id, agent).await
-                    {
-                        let sender_phone = form.sender().to_string();
-                        let payload = InboundSmsTelegramNotify {
-                            receiver_user_id: user_id,
-                            sender_phone,
-                            message: form.text.0.clone(),
-                        };
-                        let bot = NotificationsTelegramBot::default();
-                        if let Err(error) =
-                            send_inbound_sms_telegram_notification(&pool, &bot, &payload).await
-                        {
-                            tracing::error!(
-                                ?error,
-                                user_id = user_id,
-                                company_id = company_id,
-                                "Failed to send inbound sms telegram notification"
-                            );
-                        }
-                    }
-                }
             } else {
-                // 0 rows: INSERT IGNORE deduped a redelivered webhook — don't cancel,
-                // move deals or notify again. Never log message text or phone numbers here.
+                // 0 rows: INSERT IGNORE deduped a redelivered webhook — don't cancel
+                // or move deals again. Never log message text or phone numbers here.
                 tracing::info!(
                     company_id,
                     rows_affected,
-                    "Skipped sms flow enrollment cancel, deal move and telegram notify: deduped inbound sms delivery"
+                    "Skipped sms flow enrollment cancel and deal move: deduped inbound sms delivery"
                 );
             }
             OK_RESPONSE
@@ -466,8 +440,8 @@ mod tests {
         .unwrap()
         .last_insert_id();
 
-        // Tier 2 is gated on an attachment existing (it exists solely for image-send fallbacks);
-        // seed one the same way the cascade-delete test in crud/ringcentral.rs does.
+        // Tier 2 is gated on an attachment existing (it exists solely for attachment-link
+        // fallbacks); seed one the same way the cascade-delete test in crud/ringcentral.rs does.
         sqlx::query!(
             "INSERT INTO ringcentral_sms_attachments \
                 (ringcentral_sms_id, content_type, filename, s3_key, s3_url, width, height, position) \
