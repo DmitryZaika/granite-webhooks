@@ -51,7 +51,7 @@ async fn log_request_body(request: Request, uri: &Uri) -> Result<Request, BasicR
         .to_bytes();
 
     // Redact body for SMS routes — they contain customer phone numbers and message text (PII)
-    if uri.path().starts_with("/cloudtalk/sms/") {
+    if uri.path() == "/cloudtalk/sms" || uri.path().starts_with("/cloudtalk/sms/") {
         // Attempt to parse bytes as JSON to extract metadata
         if let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(&bytes) {
             // Map each key to its corresponding data type string

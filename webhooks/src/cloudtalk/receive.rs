@@ -41,6 +41,31 @@ fn parse_cloudtalk_sms(body: &Bytes, route: &'static str) -> Option<CloudtalkSMS
     }
 }
 
+/// CloudTalk usually posts one object; occasionally a rapid burst may arrive as a JSON array.
+/// Accept both so we never 400-drop a valid batch.
+fn parse_cloudtalk_sms_batch(body: &Bytes, route: &'static str) -> Option<Vec<CloudtalkSMS>> {
+    if let Ok(one) = serde_json::from_slice::<CloudtalkSMS>(body) {
+        return Some(vec![one]);
+    }
+    match serde_json::from_slice::<Vec<CloudtalkSMS>>(body) {
+        Ok(batch) if !batch.is_empty() => Some(batch),
+        Ok(_) => {
+            tracing::error!(route, "CloudTalk SMS batch was empty");
+            None
+        }
+        Err(error) => {
+            tracing::error!(
+                route,
+                category = ?error.classify(),
+                line = error.line(),
+                column = error.column(),
+                "Error parsing cloudtalk sms payload"
+            );
+            None
+        }
+    }
+}
+
 async fn resolve_unscoped_cloudtalk_company(
     pool: &MySqlPool,
     form: &CloudtalkSMS,
@@ -62,24 +87,36 @@ pub async fn sms_received_unscoped(
     State(pool): State<MySqlPool>,
     body: Bytes,
 ) -> BasicResponse {
-    let Some(form) = parse_cloudtalk_sms(&body, "received") else {
-        return BAD_REQUEST;
+    let Some(batch) = parse_cloudtalk_sms_batch(&body, "received_unscoped") else {
+        // 5xx so CloudTalk retries — a transient/odd payload must not be permanently dropped.
+        return internal_error("sms_parse_failed");
     };
-    let company_id = match resolve_unscoped_cloudtalk_company(&pool, &form).await {
-        Ok(Some(company_id)) => company_id,
-        Ok(None) => {
-            tracing::error!("CloudTalk SMS webhook missing company and could not resolve one");
-            return OK_RESPONSE;
+    for form in batch {
+        let company_id = match resolve_unscoped_cloudtalk_company(&pool, &form).await {
+            Ok(Some(company_id)) => company_id,
+            Ok(None) => {
+                tracing::error!(
+                    cloudtalk_id = ?form.id,
+                    "CloudTalk SMS webhook missing company and could not resolve one"
+                );
+                // Ask CloudTalk to retry; previously returned 200 and the SMS was lost forever.
+                return internal_error("sms_company_unresolved");
+            }
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    cloudtalk_id = ?form.id,
+                    "Failed to resolve company for unscoped CloudTalk SMS"
+                );
+                return internal_error(ERR_DB);
+            }
+        };
+        let response = process_inbound_sms(&pool, company_id, form).await;
+        if response.0 != axum::http::StatusCode::OK {
+            return response;
         }
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                "Failed to resolve company for unscoped CloudTalk SMS"
-            );
-            return internal_error(ERR_DB);
-        }
-    };
-    process_inbound_sms(&pool, company_id, form).await
+    }
+    OK_RESPONSE
 }
 
 pub async fn sms_received(
@@ -88,10 +125,16 @@ pub async fn sms_received(
     Path(company_id): Path<i32>,
     body: Bytes,
 ) -> BasicResponse {
-    let Some(form) = parse_cloudtalk_sms(&body, "received") else {
-        return BAD_REQUEST;
+    let Some(batch) = parse_cloudtalk_sms_batch(&body, "received") else {
+        return internal_error("sms_parse_failed");
     };
-    process_inbound_sms(&pool, company_id, form).await
+    for form in batch {
+        let response = process_inbound_sms(&pool, company_id, form).await;
+        if response.0 != axum::http::StatusCode::OK {
+            return response;
+        }
+    }
+    OK_RESPONSE
 }
 
 async fn process_inbound_sms(
@@ -102,6 +145,12 @@ async fn process_inbound_sms(
     match insert_inbound_sms(pool, &form, company_id).await {
         Ok(result) => {
             let rows_affected = result.rows_affected();
+            tracing::info!(
+                company_id,
+                cloudtalk_id = ?form.id,
+                rows_affected,
+                "CloudTalk inbound SMS webhook processed"
+            );
             if rows_affected > 0 {
                 if let Err(error) =
                     cancel_flow_enrollments_on_reply(&pool, company_id, form.sender()).await
@@ -119,6 +168,7 @@ async fn process_inbound_sms(
                 // or move deals again. Never log message text or phone numbers here.
                 tracing::info!(
                     company_id,
+                    cloudtalk_id = ?form.id,
                     rows_affected,
                     "Skipped sms flow enrollment cancel and deal move: deduped inbound sms delivery"
                 );
@@ -126,7 +176,12 @@ async fn process_inbound_sms(
             OK_RESPONSE
         }
         Err(error) => {
-            tracing::error!("Error inserting sms received into the database: {}", error);
+            tracing::error!(
+                ?error,
+                company_id,
+                cloudtalk_id = ?form.id,
+                "Error inserting sms received into the database"
+            );
             internal_error(ERR_DB)
         }
     }
@@ -322,15 +377,47 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../migrations")]
-    async fn test_unscoped_sms_unknown_company_is_ok(pool: MySqlPool) {
+    async fn test_unscoped_sms_unknown_company_returns_retryable_error(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
         let response = app
             .post("/cloudtalk/sms")
             .authorization_bearer(CORRECT_ID.to_string())
             .json(&sms_json())
             .await;
-        assert_eq!(response.status_code(), StatusCode::OK);
+        // Must not 200 — CloudTalk only retries on 5xx; a silent OK permanently drops the SMS.
+        assert_eq!(response.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(get_sms_received(&pool).await.len(), 0);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_inbound_sms_batch_array_inserts_all(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+        let batch = serde_json::json!([
+            {
+                "id": 2200000301_i64,
+                "sender": "+16468956758",
+                "recipient": "+13173161456",
+                "text": "first of batch",
+                "agent": "540273"
+            },
+            {
+                "id": 2200000302_i64,
+                "sender": "+16468956758",
+                "recipient": "+13173161456",
+                "text": "second of batch",
+                "agent": "540273"
+            }
+        ]);
+        let response = app
+            .post("/cloudtalk/sms/42")
+            .authorization_bearer(CORRECT_ID.to_string())
+            .json(&batch)
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        let smss = get_sms_received(&pool).await;
+        assert_eq!(smss.len(), 2);
+        assert!(smss.iter().any(|s| s.text == "first of batch"));
+        assert!(smss.iter().any(|s| s.text == "second of batch"));
     }
 
     const MESSAGE_WITH_ID: &[u8] = b"{\"id\":2200000000,\"sender\":\"+16468956758[sender]\",\"recipient\":\"+13173161456[recipient]\",\"text\":\"[text]hello\",\"agent\":\"540273\"}";

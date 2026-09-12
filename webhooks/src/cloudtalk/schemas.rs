@@ -4,15 +4,18 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CloudtalkSMS {
     pub id: Option<i64>,
+    #[serde(alias = "from")]
     sender: CleanedPhone,
+    #[serde(alias = "to")]
     recipient: CleanedPhone,
+    #[serde(alias = "message", alias = "body")]
     pub text: CleanText,
     pub agent: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_sms_time")]
     created_at: Option<FlexibleSmsTime>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_sms_time")]
     sent_at: Option<FlexibleSmsTime>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_sms_time")]
     date: Option<FlexibleSmsTime>,
 }
 
@@ -47,11 +50,34 @@ impl<'de> Deserialize<'de> for FlexibleSmsTime {
     where
         D: Deserializer<'de>,
     {
+        // Never fail the whole SMS webhook on a weird timestamp — that returns 400 and
+        // CloudTalk will not retry, permanently dropping the message (seen in prod).
         let value = serde_json::Value::deserialize(deserializer)?;
-        parse_flexible_sms_time(&value)
-            .map(Self)
-            .ok_or_else(|| serde::de::Error::custom("unrecognized sms timestamp"))
+        match parse_flexible_sms_time(&value) {
+            Some(dt) => Ok(Self(dt)),
+            None => Err(serde::de::Error::custom("unrecognized sms timestamp")),
+        }
     }
+}
+
+/// Lenient Option: invalid / empty timestamps become None instead of failing the payload.
+fn deserialize_optional_sms_time<'de, D>(deserializer: D) -> Result<Option<FlexibleSmsTime>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Some(s) = value.as_str()
+        && s.trim().is_empty()
+    {
+        return Ok(None);
+    }
+    Ok(parse_flexible_sms_time(&value).map(FlexibleSmsTime))
 }
 
 fn parse_flexible_sms_time(value: &serde_json::Value) -> Option<DateTime<Utc>> {
@@ -107,17 +133,25 @@ impl<'de> Deserialize<'de> for CleanedPhone {
     where
         D: Deserializer<'de>,
     {
-        // 1. Get the raw string from the JSON
-        let raw_s = String::deserialize(deserializer)?;
+        // CloudTalk sometimes sends phones as JSON numbers; accepting only strings
+        // used to 400 the webhook and drop the SMS permanently.
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let raw_s = match value {
+            serde_json::Value::String(s) => s,
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::Null => {
+                return Err(serde::de::Error::custom("phone must not be null"));
+            }
+            other => {
+                return Err(serde::de::Error::custom(format!(
+                    "phone must be string or number, got {other}"
+                )));
+            }
+        };
 
-        // 2. Clean the string: keep only digits
         let cleaned: String = raw_s.chars().filter(char::is_ascii_digit).collect();
-
         let stripped = get_last_n_chars(&cleaned, 10);
-
-        // 3. Parse to i64 (and handle errors if the string is empty/invalid)
         let num = stripped.parse::<u64>().map_err(serde::de::Error::custom)?;
-
         Ok(Self(num))
     }
 }
@@ -536,6 +570,47 @@ mod tests {
         assert!(!sms.text.0.contains("[text]"));
 
         assert_eq!(sms.agent, Some("540273".to_string()));
+    }
+
+    #[test]
+    fn test_from_to_body_aliases_parse() {
+        let sms: CloudtalkSMS = serde_json::from_value(serde_json::json!({
+            "id": 99,
+            "from": "+16468956758",
+            "to": "+13173161456",
+            "body": "hello from aliases",
+        }))
+        .expect("from/to/body aliases must parse");
+        assert_eq!(sms.sender(), 6468956758);
+        assert_eq!(sms.recipient(), 3173161456);
+        assert_eq!(sms.text.0, "hello from aliases");
+    }
+
+    #[test]
+    fn test_numeric_phones_parse() {
+        let sms: CloudtalkSMS = serde_json::from_value(serde_json::json!({
+            "id": 100,
+            "sender": 16468956758_u64,
+            "recipient": 13173161456_u64,
+            "text": "numeric phones",
+        }))
+        .expect("numeric phones must parse");
+        assert_eq!(sms.sender(), 6468956758);
+        assert_eq!(sms.recipient(), 3173161456);
+    }
+
+    #[test]
+    fn test_invalid_timestamp_does_not_drop_sms() {
+        let sms: CloudtalkSMS = serde_json::from_value(serde_json::json!({
+            "id": 101,
+            "sender": "+16468956758",
+            "recipient": "+13173161456",
+            "text": "still stored",
+            "created_at": "not-a-real-timestamp",
+        }))
+        .expect("invalid created_at must not fail the whole SMS");
+        assert_eq!(sms.text.0, "still stored");
+        assert!(sms.occurred_at().is_none());
     }
 
     #[test]
