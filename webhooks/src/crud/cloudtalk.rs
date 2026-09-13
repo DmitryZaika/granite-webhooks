@@ -429,7 +429,7 @@ pub async fn find_local_cloudtalk_id_by_phone(
          LIMIT 1"
     );
 
-    let mut query = sqlx::query_scalar::<_, i32>(&sql);
+    let mut query = sqlx::query_scalar::<_, i32>(sqlx::AssertSqlSafe(sql));
 
     // Bind parameters sequentially for UNION parts
     query = query.bind(company_id);
