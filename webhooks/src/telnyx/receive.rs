@@ -109,6 +109,8 @@ async fn handle_conversation_ended(
         },
     };
 
+    let transcript_for_follow_up = transcript.clone();
+
     match crate::crud::telnyx::upsert_conversation(
         pool,
         event,
@@ -118,7 +120,19 @@ async fn handle_conversation_ended(
     )
     .await
     {
-        Ok(_) => OK_RESPONSE,
+        Ok(_) => {
+            if let Err(error) = crate::crud::telnyx::record_inbound_follow_up(
+                pool,
+                event,
+                transcript_for_follow_up.as_deref(),
+            )
+            .await
+            {
+                tracing::error!(?error, "Error recording Telnyx follow-up or note");
+                return internal_error(ERR_DB);
+            }
+            OK_RESPONSE
+        }
         Err(error) => {
             tracing::error!(?error, "Error upserting Telnyx conversation");
             internal_error(ERR_DB)
