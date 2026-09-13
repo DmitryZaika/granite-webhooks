@@ -146,6 +146,44 @@ pub async fn get_user_notifications_tg_info(
     .await
 }
 
+pub async fn get_company_id_by_cloudtalk_agent(
+    pool: &MySqlPool,
+    agent_id: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar::<_, i32>(
+        r#"
+        SELECT company_id
+        FROM users
+        WHERE is_deleted = 0
+          AND company_id IS NOT NULL
+          AND cloudtalk_agent_id = ?
+        LIMIT 1
+        "#,
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_company_id_by_cloudtalk_phone(
+    pool: &MySqlPool,
+    phone_last10: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar::<_, i32>(
+        r#"
+        SELECT company_id
+        FROM users
+        WHERE is_deleted = 0
+          AND company_id IS NOT NULL
+          AND RIGHT(REGEXP_REPLACE(COALESCE(cloudtalk_phone_number, ''), '[^0-9]', ''), 10) = ?
+        LIMIT 1
+        "#,
+    )
+    .bind(phone_last10)
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn get_user_id_by_cloudtalk_agent(
     pool: &MySqlPool,
     company_id: i32,

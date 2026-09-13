@@ -371,6 +371,102 @@ mod local_tests {
     }
 
     #[sqlx::test(migrations = "../migrations")]
+    async fn duplicate_lead_resets_activity_due_dates(pool: MySqlPool) {
+        let company_id = 1;
+        let data = json!({ "name": "Test", "phone": "+13179995973" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let bot = MockTelegram::new();
+
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
+
+        let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        let customers = get_customers(&pool).await.unwrap();
+        assert_eq!(customers.len(), 1);
+
+        let deal_id = create_deal(&pool, customers[0].id, 2, 0, sales_id)
+            .await
+            .unwrap()
+            .last_insert_id();
+
+        let open_future = sqlx::query!(
+            r#"INSERT INTO deal_activities (deal_id, company_id, name, deadline, priority)
+               VALUES (?, ?, 'Call him', '2026-12-01 00:00:00', 'medium')"#,
+            deal_id,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+        let open_past = sqlx::query!(
+            r#"INSERT INTO deal_activities (deal_id, company_id, name, deadline, priority)
+               VALUES (?, ?, 'Follow up', '2026-01-15 00:00:00', 'high')"#,
+            deal_id,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+        let completed = sqlx::query!(
+            r#"INSERT INTO deal_activities (deal_id, company_id, name, deadline, priority, is_completed)
+               VALUES (?, ?, 'Left voicemail', '2026-11-01 09:30:00', 'low', 1)"#,
+            deal_id,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+        let deleted = sqlx::query!(
+            r#"INSERT INTO deal_activities (deal_id, company_id, name, deadline, priority, deleted_at)
+               VALUES (?, ?, 'Old task', '2026-10-01 00:00:00', 'medium', NOW())"#,
+            deal_id,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        let today = sqlx::query_scalar!("SELECT CURDATE()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let reset_deadlines = sqlx::query_scalar!(
+            r#"SELECT DATE(deadline) FROM deal_activities WHERE id IN (?, ?, ?) ORDER BY id"#,
+            open_future,
+            open_past,
+            completed
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            reset_deadlines,
+            vec![Some(today), Some(today), Some(today)]
+        );
+
+        let deleted_deadline = sqlx::query_scalar!(
+            r#"SELECT DATE(deadline) FROM deal_activities WHERE id = ?"#,
+            deleted
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            deleted_deadline,
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap())
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
     async fn duplicate_lead_moves_existing_deal_without_copying(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });

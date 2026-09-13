@@ -60,11 +60,18 @@ pub struct ParsedRecipient {
     pub display_name: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct ParsedEmail {
     pub subject: Option<String>,
     pub body: String,
     pub html_body: Option<String>,
+    /// Full text before quote-stripping. Set when `In-Reply-To` is present so
+    /// a reply with no CRM parent can still show the quoted original.
+    pub body_with_quote: Option<String>,
+    pub html_body_with_quote: Option<String>,
     pub sender_email: String,
+    /// `From:` display name (Gmail's sender column), when the header has one.
+    pub sender_display_name: Option<String>,
     /// First `To:` address. Retained verbatim so existing callers and the
     /// `emails.receiver_email` column keep their current meaning.
     pub receiver_email: String,
@@ -81,6 +88,20 @@ pub struct ParsedEmail {
     /// `In-Reply-To` does not match anything we issued.
     pub references: Vec<String>,
     pub message_id: String,
+}
+
+impl ParsedEmail {
+    /// Keep the quoted original when this reply does not attach to a CRM thread.
+    pub fn for_unknown_parent(&self) -> Self {
+        let mut restored = self.clone();
+        if let Some(body) = &self.body_with_quote {
+            restored.body = body.clone();
+        }
+        if let Some(html_body) = &self.html_body_with_quote {
+            restored.html_body = Some(html_body.clone());
+        }
+        restored
+    }
 }
 
 /// The single normalization used for every stored or compared address:
@@ -346,6 +367,7 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
     // `In-Reply-To` as a list or with angle brackets. `HeaderValue::Text` only
     // would drop the header and treat a real reply as a new thread.
     let in_reply_to = collect_references(in_reply_to_raw).into_iter().next();
+    let full_body = strip_outlook_cid_markers(&clean_body);
     let mut final_body = if in_reply_to.is_some() {
         extract_reply_body(&clean_body)
     } else {
@@ -359,7 +381,16 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         }
     }
     let final_body = strip_outlook_cid_markers(&final_body);
+    let body_with_quote = if in_reply_to.is_some() && full_body != final_body {
+        Some(full_body)
+    } else {
+        None
+    };
 
+    let full_html_body = message
+        .body_html(0)
+        .map(|html| strip_cid_image_tags(html.as_ref()))
+        .filter(|html| !HTML_TAG_RE.replace_all(html, "").trim().is_empty());
     let html_body = message
         .body_html(0)
         .map(|html| {
@@ -371,17 +402,29 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
             strip_cid_image_tags(&cleaned)
         })
         .filter(|html| !HTML_TAG_RE.replace_all(html, "").trim().is_empty());
+    let html_body_with_quote = match (&html_body, &full_html_body) {
+        (_, Some(full)) if in_reply_to.is_some() && html_body.as_ref() != Some(full) => {
+            Some(full.clone())
+        }
+        _ => None,
+    };
 
     let attachments = message.attachments();
     let final_attachments: Vec<Attachment> = attachments.filter_map(parse_attachment).collect();
     let sender_emails = message.from().ok_or("Failed to parse sender email")?;
-    let sender_email = sender_emails
+    let sender = sender_emails
         .first()
-        .ok_or("Failed to parse sender email")?
+        .ok_or("Failed to parse sender email")?;
+    let sender_email = sender
         .address
         .as_ref()
         .ok_or("Failed to parse sender email")?
         .to_string();
+    let sender_display_name = sender
+        .name
+        .as_ref()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
     let receiver_emails = message.to().ok_or("Failed to parse receiver email")?;
     let receiver_email = receiver_emails
         .first()
@@ -404,7 +447,10 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         subject: subject.map(std::string::ToString::to_string),
         body: final_body,
         html_body,
+        body_with_quote,
+        html_body_with_quote,
         sender_email,
+        sender_display_name,
         receiver_email,
         to_recipients,
         cc_recipients,
@@ -465,6 +511,17 @@ mod local_tests {
                     .to_string()
             ]
         );
+        assert_eq!(
+            parsed_email.body,
+            "I liked the glacier white leather granite."
+        );
+        let body_with_quote = parsed_email
+            .body_with_quote
+            .as_deref()
+            .expect("Yahoo reply should keep the quoted original");
+        assert!(body_with_quote.contains("I liked the glacier white leather granite."));
+        assert!(body_with_quote.contains("Thank you for your request"));
+        assert_eq!(parsed_email.for_unknown_parent().body, body_with_quote);
     }
 
     #[test]
@@ -912,6 +969,16 @@ Please confirm the slab.\r\n";
     fn receiver_email_still_holds_the_first_to_for_backward_compatibility() {
         let (parsed, _) = parse_email(&Bytes::from_static(MULTI_RECIPIENT_EML)).unwrap();
         assert_eq!(parsed.receiver_email, "rep@granite-manager.com");
+    }
+
+    #[test]
+    fn parses_from_display_name() {
+        let (parsed, _) = parse_email(&Bytes::from_static(MULTI_RECIPIENT_EML)).unwrap();
+        assert_eq!(parsed.sender_email, "customer@example.com");
+        assert_eq!(
+            parsed.sender_display_name.as_deref(),
+            Some("Customer Name")
+        );
     }
 
     #[test]
