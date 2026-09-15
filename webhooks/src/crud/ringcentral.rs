@@ -9,11 +9,27 @@ pub async fn insert_inbound_sms(
     sms: &RingcentralSMS,
     company_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
+    let created_date = chrono::Utc::now();
+    let sender_str = sms.sender().to_string();
+    let recipient_str = sms.recipient().to_string();
+    let derived = crate::libs::sms_derived::compute_sms_derived_fields(
+        pool,
+        "ringcentral",
+        company_id,
+        Some(sender_str.as_str()),
+        &recipient_str,
+        &sms.text.0,
+        "inbound",
+        sms.agent.as_deref(),
+        &created_date,
+    )
+    .await?;
     sqlx::query(
         r#"
         INSERT IGNORE INTO ringcentral_sms
-            (ringcentral_id, sender, recipient, text, agent, company_id, direction, status)
-        VALUES (?, ?, ?, ?, ?, ?, 'inbound', 'received')
+            (ringcentral_id, sender, recipient, text, agent, company_id, direction, status, created_date,
+             sender10, recipient10, phone_digits, is_echo, echo_of_sms_id)
+        VALUES (?, ?, ?, ?, ?, ?, 'inbound', 'received', ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(sms.id)
@@ -22,6 +38,11 @@ pub async fn insert_inbound_sms(
     .bind(&sms.text.0)
     .bind(&sms.agent)
     .bind(company_id)
+    .bind(derived.sender10.as_deref())
+    .bind(&derived.recipient10)
+    .bind(&derived.phone_digits)
+    .bind(derived.is_echo as i8)
+    .bind(derived.echo_of_sms_id)
     .execute(pool)
     .await
 }
@@ -106,11 +127,27 @@ pub async fn insert_outbound_sms(
         }
     }
 
-    sqlx::query(
+    let created_date = chrono::Utc::now();
+    let sender_str = sms.sender().to_string();
+    let recipient_str = sms.recipient().to_string();
+    let derived = crate::libs::sms_derived::compute_sms_derived_fields(
+        pool,
+        "ringcentral",
+        company_id,
+        Some(sender_str.as_str()),
+        &recipient_str,
+        &sms.text.0,
+        "outbound",
+        sms.agent.as_deref(),
+        &created_date,
+    )
+    .await?;
+    let result = sqlx::query(
         r#"
         INSERT IGNORE INTO ringcentral_sms
-            (ringcentral_id, sender, recipient, text, agent, company_id, direction, status)
-        VALUES (?, ?, ?, ?, ?, ?, 'outbound', 'sent')
+            (ringcentral_id, sender, recipient, text, agent, company_id, direction, status, created_date,
+             sender10, recipient10, phone_digits, is_echo, echo_of_sms_id)
+        VALUES (?, ?, ?, ?, ?, ?, 'outbound', 'sent', ?, ?, ?, ?, ?, 0, NULL)
         "#,
     )
     .bind(sms.id)
@@ -119,8 +156,30 @@ pub async fn insert_outbound_sms(
     .bind(&sms.text.0)
     .bind(&sms.agent)
     .bind(company_id)
+    .bind(created_date)
+    .bind(derived.sender10.as_deref())
+    .bind(&derived.recipient10)
+    .bind(&derived.phone_digits)
     .execute(pool)
-    .await
+    .await?;
+    // Reverse echo check: an inbound row that arrived first may echo this
+    // outbound (out-of-order webhook delivery).
+    if result.rows_affected() > 0 {
+        let outbound_id = result.last_insert_id() as i64;
+        crate::libs::sms_derived::mark_inbound_echoes_of_outbound(
+            pool,
+            "ringcentral",
+            company_id,
+            outbound_id,
+            &sms.text.0,
+            derived.sender10.as_deref(),
+            &derived.recipient10,
+            &derived.phone_digits,
+            &created_date,
+        )
+        .await?;
+    }
+    Ok(result)
 }
 
 #[derive(Debug, sqlx::FromRow)]
