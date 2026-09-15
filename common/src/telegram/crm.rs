@@ -9,7 +9,6 @@ const TELEGRAM_LINE_CHARS: usize = 36;
 const EMAIL_NAME_MAX_LINES: usize = 1;
 const EMAIL_SUBJECT_MAX_LINES: usize = 1;
 const EMAIL_BODY_MAX_LINES: usize = 3;
-const EMAIL_BODY_MAX_WORDS: usize = 20;
 
 pub fn notification_type_title(notification_type: &str) -> &'static str {
     match notification_type {
@@ -112,28 +111,67 @@ fn preview_lines(value: &str, max_lines: usize) -> String {
     truncate_to_chars(&collapse_whitespace(value), TELEGRAM_LINE_CHARS * max_lines)
 }
 
+fn wrap_preview_lines(value: &str, max_lines: usize) -> String {
+    let collapsed = collapse_whitespace(value);
+    if collapsed.is_empty() || max_lines == 0 {
+        return String::new();
+    }
+    let words: Vec<&str> = collapsed.split_whitespace().collect();
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut leftover = false;
+    let mut index = 0;
+    while index < words.len() {
+        if lines.len() == max_lines {
+            leftover = true;
+            break;
+        }
+        let word = words[index];
+        let candidate = if current.is_empty() {
+            word.to_string()
+        } else {
+            format!("{current} {word}")
+        };
+        if candidate.chars().count() <= TELEGRAM_LINE_CHARS {
+            current = candidate;
+            index += 1;
+            continue;
+        }
+        if !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+            continue;
+        }
+        leftover = word.chars().count() > TELEGRAM_LINE_CHARS;
+        lines.push(word.chars().take(TELEGRAM_LINE_CHARS).collect());
+        index += 1;
+    }
+    if !current.is_empty() && lines.len() < max_lines {
+        lines.push(current);
+    } else if !current.is_empty() {
+        leftover = true;
+    }
+    if leftover {
+        if let Some(last) = lines.last_mut() {
+            if last.chars().count() + 3 <= TELEGRAM_LINE_CHARS {
+                last.push_str("...");
+            } else {
+                let budget = TELEGRAM_LINE_CHARS.saturating_sub(3);
+                *last = last.chars().take(budget).collect::<String>() + "...";
+            }
+        }
+    }
+    lines.join("\n")
+}
+
 fn email_body_preview(body: Option<&str>) -> Option<String> {
     let Some(raw) = body else {
         return None;
     };
-    let collapsed = collapse_whitespace(raw);
-    if collapsed.is_empty() {
+    let preview = wrap_preview_lines(raw, EMAIL_BODY_MAX_LINES);
+    if preview.is_empty() {
         return None;
     }
-    let words: Vec<&str> = collapsed.split_whitespace().collect();
-    let (limited, word_truncated) = if words.len() > EMAIL_BODY_MAX_WORDS {
-        (words[..EMAIL_BODY_MAX_WORDS].join(" "), true)
-    } else {
-        (collapsed, false)
-    };
-    let line_budget = TELEGRAM_LINE_CHARS * EMAIL_BODY_MAX_LINES;
-    if limited.chars().count() <= line_budget {
-        if word_truncated {
-            return Some(format!("{limited}..."));
-        }
-        return Some(limited);
-    }
-    Some(truncate_to_chars(&limited, line_budget))
+    Some(preview)
 }
 
 pub fn format_email_notification(
@@ -219,7 +257,7 @@ mod tests {
         );
         assert_eq!(
             msg.text,
-            "👤 <i><b>Jane</b></i>\n✉️ <b>Your countertop quote</b>\n💬 <i>Dear customer! Here is a quote for your counters.</i>"
+            "👤 <i><b>Jane</b></i>\n✉️ <b>Your countertop quote</b>\n💬 <i>Dear customer! Here is a quote for\nyour counters.</i>"
         );
         assert!(!msg.text.contains("https://"));
         assert_eq!(msg.button_label, "📬 Open Email");
@@ -227,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn email_notification_truncates_long_body_preview() {
+    fn email_notification_wraps_body_to_three_lines() {
         let long_body = "word ".repeat(80);
         let msg = format_email_notification(
             Some("Jane"),
@@ -243,13 +281,12 @@ mod tests {
             .strip_prefix(prefix)
             .and_then(|rest| rest.strip_suffix("</i>"))
             .expect("prefix");
-        let words: Vec<&str> = preview
-            .trim_end_matches('.')
-            .split_whitespace()
-            .collect();
+        let body_lines: Vec<&str> = preview.lines().collect();
+        assert_eq!(body_lines.len(), EMAIL_BODY_MAX_LINES);
         assert!(preview.ends_with("..."));
-        assert_eq!(words.len(), EMAIL_BODY_MAX_WORDS);
-        assert!(preview.chars().count() <= TELEGRAM_LINE_CHARS * EMAIL_BODY_MAX_LINES);
+        for line in &body_lines {
+            assert!(line.chars().count() <= TELEGRAM_LINE_CHARS);
+        }
     }
 
     #[test]

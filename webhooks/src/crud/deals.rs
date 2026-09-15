@@ -265,6 +265,63 @@ pub async fn find_customer_id_by_phone_last10(
     .await
 }
 
+#[derive(Debug)]
+pub struct CustomerPhoneMatch {
+    pub customer_id: i32,
+    pub company_id: Option<i32>,
+}
+
+/// Find a customer by phone number across every company.
+///
+/// Used by integrations whose webhook does not carry a company id (Telnyx), so
+/// we match on the last 10 digits of the caller's phone number and return the
+/// customer together with their company for downstream attribution.
+pub async fn find_customer_by_phone(
+    pool: &MySqlPool,
+    last10: &str,
+) -> Result<Option<CustomerPhoneMatch>, sqlx::Error> {
+    if let Some(customer) = sqlx::query_as!(
+        CustomerPhoneMatch,
+        r#"
+        SELECT cc.customer_id, c.company_id
+        FROM cloudtalk_contacts cc
+        INNER JOIN customers c ON c.id = cc.customer_id AND c.deleted_at IS NULL
+        WHERE (
+            RIGHT(cc.phone_e164_1, 10) = ?
+            OR RIGHT(cc.phone_e164_2, 10) = ?
+        )
+        ORDER BY c.id DESC
+        LIMIT 1
+        "#,
+        last10,
+        last10,
+    )
+    .fetch_optional(pool)
+    .await?
+    {
+        return Ok(Some(customer));
+    }
+
+    sqlx::query_as!(
+        CustomerPhoneMatch,
+        r#"
+        SELECT c.id AS customer_id, c.company_id
+        FROM customers c
+        WHERE c.deleted_at IS NULL
+          AND (
+            RIGHT(REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', ''), 10) = ?
+            OR RIGHT(REGEXP_REPLACE(COALESCE(c.phone_2, ''), '[^0-9]', ''), 10) = ?
+          )
+        ORDER BY c.id DESC
+        LIMIT 1
+        "#,
+        last10,
+        last10,
+    )
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn move_deal_on_inbound_email(
     pool: &MySqlPool,
     send: &SendEmail,
@@ -506,7 +563,10 @@ mod tests {
             subject: Some("Re: hello".to_string()),
             body: "reply".to_string(),
             html_body: None,
+            body_with_quote: None,
+            html_body_with_quote: None,
             sender_email: sender.to_string(),
+            sender_display_name: None,
             receiver_email: receiver.to_string(),
             to_recipients: vec![ParsedRecipient {
                 address: receiver.to_lowercase(),

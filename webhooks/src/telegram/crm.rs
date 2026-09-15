@@ -1,6 +1,4 @@
-use common::telegram::crm::{
-    format_activity_notification, format_email_notification, format_sms_notification,
-};
+use common::telegram::crm::{format_activity_notification, format_email_notification};
 
 use crate::axum_helpers::guards::Telegram;
 use crate::crud::users::get_user_notifications_tg_info;
@@ -131,49 +129,15 @@ where
 }
 
 pub async fn send_inbound_sms_telegram_notification<T>(
-    pool: &MySqlPool,
-    bot: &T,
-    payload: &InboundSmsTelegramNotify,
+    _pool: &MySqlPool,
+    _bot: &T,
+    _payload: &InboundSmsTelegramNotify,
 ) -> Result<(), BasicResponse>
 where
     T: Telegram + Send + Sync,
 {
-    let user = match get_user_notifications_tg_info(pool, payload.receiver_user_id).await {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                receiver_user_id = payload.receiver_user_id,
-                "Failed to load receiver telegram info for inbound sms"
-            );
-            return Err(internal_error(ERR_SEND_TELEGRAM));
-        }
-    };
-    let Some(user) = user else {
-        return Ok(());
-    };
-    if !user.telegram_sms_notifications {
-        return Ok(());
-    }
-    let Some(telegram_id) = user.notifications_telegram_id else {
-        return Ok(());
-    };
-
-    let phone_digits: String = payload
-        .sender_phone
-        .chars()
-        .filter(|character| character.is_ascii_digit())
-        .collect();
-    let message = format_sms_notification(&payload.sender_phone, &payload.message, &phone_digits);
-    send_crm_message_with_button(
-        bot,
-        telegram_id,
-        &message.text,
-        message.button_label,
-        &message.button_url,
-        None,
-    )
-    .await
+    // CloudTalk / SMS Telegram alerts are disabled — inbound SMS must not notify Telegram.
+    Ok(())
 }
 
 pub async fn send_deadline_reminder_telegram<T>(

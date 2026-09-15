@@ -213,6 +213,7 @@ pub struct SendEmail {
     thread_id: String,
     receiver_user_id: Option<i32>,
     sender_email: String,
+    sender_display_name: Option<String>,
     pub receiver_email: Option<String>,
     message_id: String,
     /// Owning company, resolved from the receiver user. `None` when the
@@ -243,6 +244,7 @@ impl SendEmail {
             thread_id: final_thread_id,
             receiver_user_id,
             sender_email: email.sender_email.clone(),
+            sender_display_name: email.sender_display_name.clone(),
             receiver_email,
             message_id: email.message_id.clone(),
             company_id: None,
@@ -477,7 +479,7 @@ pub async fn insert_email_participants(
 ) -> Result<(), sqlx::Error> {
     let sender = ParsedRecipient {
         address: normalize_address(&send.sender_email),
-        display_name: None,
+        display_name: send.sender_display_name.clone(),
     };
     let from_recipients = if sender.address.is_empty() {
         Vec::new()

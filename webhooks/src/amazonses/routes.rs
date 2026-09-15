@@ -7,8 +7,16 @@ use crate::amazonses::parse_email::parse_email;
 use crate::amazonses::process::{EmailInfo, process_reply_email};
 use crate::amazonses::schemas::{S3Event, SesEvent};
 use crate::crud::email::{create_email_read, get_full_message_id};
-use crate::libs::constants::{BAD_REQUEST, NOT_FOUND_RESPONSE, OK_RESPONSE, internal_error};
+use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
+
+fn is_missing_s3_object(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("nosuchkey")
+        || lower.contains("the specified key does not exist")
+        || lower.contains("nosuchbucket")
+        || lower.contains("the specified bucket does not exist")
+}
 
 pub async fn read_receipt_handler(
     State(pool): State<MySqlPool>,
@@ -20,7 +28,7 @@ pub async fn read_receipt_handler(
 
     let final_message_id = match get_full_message_id(&pool, &message_id).await {
         Ok(Some(message_id)) => message_id,
-        Ok(None) => return NOT_FOUND_RESPONSE,
+        Ok(None) => return OK_RESPONSE,
         Err(error) => {
             tracing::error!(
                 "Error fetching email read: {} from the db: {}",
@@ -59,6 +67,9 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
                 key = key,
                 "Failed to read email content from S3"
             );
+            if is_missing_s3_object(&error) {
+                return OK_RESPONSE;
+            }
             return internal_error("Unable to read email content from S3");
         }
     };
@@ -104,6 +115,18 @@ mod local_tests {
     use crate::tests::utils::{MockClient, get_emails, insert_email, insert_user, new_test_app};
     use axum::http::StatusCode;
     use sqlx::MySqlPool;
+
+    #[test]
+    fn missing_s3_object_errors_are_detected() {
+        assert!(is_missing_s3_object(
+            "service error: NoSuchKey: The specified key does not exist."
+        ));
+        assert!(is_missing_s3_object(
+            "NoSuchBucket: The specified bucket does not exist"
+        ));
+        assert!(!is_missing_s3_object("AccessDenied"));
+        assert!(!is_missing_s3_object("timeout connecting to S3"));
+    }
 
     struct ReadDb {
         message_id: String,
@@ -176,6 +199,16 @@ mod local_tests {
         assert_eq!(result.message_id, message_id);
         assert_eq!(result.user_agent.unwrap(), expected_user_agent);
         assert_eq!(result.ip_address.unwrap(), expected_ip);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn open_event_unknown_message_is_ok(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+        let response = app
+            .post("/ses/read-receipt")
+            .json(&ses_open_event_json())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -342,8 +375,7 @@ mod local_tests {
         let data: S3Event = ses_received_json();
         let response = process_ses_received_event(&pool, mock_client, &data).await;
 
-        let correct_response = (StatusCode::NOT_FOUND, "receiver email not found");
-        assert_eq!(response, correct_response);
+        assert_eq!(response, OK_RESPONSE);
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 0);
@@ -466,8 +498,7 @@ mod local_tests {
         let data: S3Event = ses_received_json();
         let response = process_ses_received_event(&pool, mock_client, &data).await;
 
-        let correct_response = (StatusCode::NOT_FOUND, "receiver email not found");
-        assert_eq!(response, correct_response);
+        assert_eq!(response, OK_RESPONSE);
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
@@ -646,6 +677,26 @@ mod local_tests {
         assert_eq!(
             result[1].subject,
             Some("Re: Thank You for Your Request".to_string())
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn yahoo_reply_without_parent_keeps_quoted_original(pool: MySqlPool) {
+        insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/yahoo_iphone_thank_you_reply.eml");
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        let body = result[0].body.as_deref().unwrap_or("");
+        assert!(body.contains("I liked the glacier white leather granite."));
+        assert!(
+            body.contains("Thank you for your request"),
+            "Expected the unmatched reply to keep the quoted original, got: {body}"
         );
     }
 }

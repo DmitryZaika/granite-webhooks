@@ -1,9 +1,10 @@
 pub mod cloudtalk;
-pub mod ringcentral;
 pub mod company;
 pub mod deals;
 pub mod email;
 pub mod leads;
+pub mod ringcentral;
 pub mod telegram_messages;
+pub mod telnyx;
 pub mod user_position;
 pub mod users;
