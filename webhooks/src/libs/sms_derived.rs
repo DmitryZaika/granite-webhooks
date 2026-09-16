@@ -267,13 +267,16 @@ fn linkable_phones<'a>(sender10: Option<&'a str>, recipient10: &'a str) -> Vec<&
 }
 
 /// Contract step 3: record what this row proves about the company's own lines,
-/// then repair the threads of any line that just became a company line.
+/// then repair the threads of a line that just became a company line.
 ///
 /// A phone is a company line once it has BOTH sent an agent-tagged message and
-/// received an untagged inbound one. The upsert is monotone (`GREATEST`) and
-/// the repair runs whenever both flags are set — not only when this writer is
-/// the one that flipped them — which is what makes two concurrent webhooks
-/// safe: whichever commits second still sees both flags and repairs.
+/// received an untagged inbound one. The upsert is monotone (`GREATEST`), and
+/// MySQL reports how it went: `rows_affected` is 1 for a new row (one flag),
+/// 2 when an existing row changed (the other flag was already set, so the line
+/// just flipped) and 0 when nothing changed. Only the flip runs the repair, so
+/// two concurrent webhooks are safe — the upsert is atomic on the server, and
+/// whichever applies second is the one that sees the change — and an
+/// established line costs nothing extra per message.
 async fn apply_role_evidence(
     pool: &MySqlPool,
     provider: SmsProvider,
@@ -296,7 +299,7 @@ async fn apply_role_evidence(
         return Ok(());
     };
 
-    sqlx::query(
+    let upsert = sqlx::query(
         "INSERT INTO sms_company_phones \
            (provider, company_id, phone10, agent_sender, inbound_recipient) \
          VALUES (?, ?, ?, ?, ?) AS new \
@@ -314,25 +317,21 @@ async fn apply_role_evidence(
     .execute(pool)
     .await?;
 
-    let flags = sqlx::query_as::<_, (i8, i8)>(
-        "SELECT agent_sender, inbound_recipient FROM sms_company_phones \
-         WHERE provider = ? AND company_id = ? AND phone10 = ?",
-    )
-    .bind(provider.as_str())
-    .bind(company_id)
-    .bind(phone)
-    .fetch_optional(pool)
-    .await?;
-
-    if flags.is_some_and(|(sender_flag, recipient_flag)| sender_flag != 0 && recipient_flag != 0) {
+    if upsert.rows_affected() == UPSERT_CHANGED_EXISTING_ROW {
         repair_company_line_threads(pool, provider, company_id, phone).await?;
     }
     Ok(())
 }
 
+/// `rows_affected` of `INSERT ... ON DUPLICATE KEY UPDATE` when an existing
+/// row was changed (1 = inserted, 0 = existing row left as it was).
+const UPSERT_CHANGED_EXISTING_ROW: u64 = 2;
+
 /// Re-key the inbound history of a company line: rows it sent belong to the
-/// thread of whoever received them, not to the line itself. Idempotent, and
-/// cheap through `idx_sms_sender10`.
+/// thread of whoever received them, not to the line itself. Idempotent. The
+/// index is forced because the optimizer has been seen preferring the unique
+/// `(company_id, <provider>_id)` index for this UPDATE and reading the whole
+/// company.
 async fn repair_company_line_threads(
     pool: &MySqlPool,
     provider: SmsProvider,
@@ -340,7 +339,7 @@ async fn repair_company_line_threads(
     phone10: &str,
 ) -> Result<u64, sqlx::Error> {
     let sql = format!(
-        "UPDATE {} SET phone_digits = recipient10 \
+        "UPDATE {} FORCE INDEX (idx_sms_sender10) SET phone_digits = recipient10 \
          WHERE company_id = ? AND direction = 'inbound' \
            AND sender10 = ? AND phone_digits <> recipient10",
         provider.table(),

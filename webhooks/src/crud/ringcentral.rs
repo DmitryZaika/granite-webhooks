@@ -486,7 +486,16 @@ mod tests {
     // every RingCentral SMS failed to save. These two tests are that regression.
     #[sqlx::test(migrations = "../migrations")]
     async fn test_inbound_insert_succeeds_and_stores_derived_columns(pool: MySqlPool) {
-        let sms = echo_fixture(3_300_000_001, "inbound body");
+        // A real customer message: untagged, from the customer to the line.
+        let payload = serde_json::json!({
+            "id": 3_300_000_001_i64,
+            "sender": "+13173161456",
+            "recipient": "+16468956758",
+            "text": "inbound body",
+            "agent": "",
+        });
+        let sms: RingcentralSMS =
+            serde_json::from_value(payload).expect("valid RingcentralSMS fixture");
         insert_inbound_sms(&pool, &sms, 42)
             .await
             .expect("inbound insert must succeed");
@@ -494,10 +503,14 @@ mod tests {
         let rows = stored_sms(&pool).await;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].ringcentral_id, Some(3_300_000_001));
-        assert_eq!(rows[0].agent.as_deref(), Some("540273"));
-        assert_eq!(rows[0].sender10.as_deref(), Some("6468956758"));
-        assert_eq!(rows[0].recipient10.as_deref(), Some("3173161456"));
-        assert_eq!(rows[0].phone_digits.as_deref(), Some("6468956758"));
+        assert_eq!(rows[0].agent, None, "a blank agent is stored as NULL");
+        assert_eq!(rows[0].sender10.as_deref(), Some("3173161456"));
+        assert_eq!(rows[0].recipient10.as_deref(), Some("6468956758"));
+        assert_eq!(
+            rows[0].phone_digits.as_deref(),
+            Some("3173161456"),
+            "an inbound row threads under the customer who sent it"
+        );
         assert_eq!(rows[0].is_echo, 0);
         assert!(
             rows[0].created_date.is_some(),
