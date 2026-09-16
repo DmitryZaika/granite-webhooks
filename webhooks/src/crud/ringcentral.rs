@@ -6,8 +6,7 @@ use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
 use std::error::Error;
 
-/// The shared shape of a `RingCentral` SMS row; the derived thread/echo columns
-/// are computed and written by [`insert_sms`].
+/// The shared shape of a `RingCentral` SMS row; [`insert_sms`] derives the rest.
 fn sms_row_input(
     sms: &RingcentralSMS,
     company_id: i32,
@@ -246,7 +245,7 @@ pub async fn get_access_token(
         WHERE id = ?
         ",
     )
-    .bind(i64::try_from(company_id).unwrap_or(i64::MAX))
+    .bind(i64::try_from(company_id)?)
     .fetch_optional(pool)
     .await?;
 
@@ -482,8 +481,7 @@ mod tests {
         .expect("stored rows")
     }
 
-    // The shipped version of both statements had more placeholders than binds, so
-    // every RingCentral SMS failed to save. These two tests are that regression.
+    // Regression: column list and bind list must match for both inserts.
     #[sqlx::test(migrations = "../migrations")]
     async fn test_inbound_insert_succeeds_and_stores_derived_columns(pool: MySqlPool) {
         // A real customer message: untagged, from the customer to the line.

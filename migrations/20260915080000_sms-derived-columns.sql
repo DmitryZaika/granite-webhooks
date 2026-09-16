@@ -1,30 +1,17 @@
--- SMS derived columns (2026-09-15 performance fix).
+-- SMS derived columns: sender10/recipient10/phone_digits/is_echo/echo_of_sms_id
+-- hold the thread key and echo state so the read path only touches indexes.
 --
--- The thread-list / unread-count / desktop-alert queries used to recompute
--- phone normalization, thread keys, company lines and echo exclusion over the
--- company's entire SMS history on every poll. These columns move that work to
--- insert time so the read path only touches indexed stored fields.
+-- MySQL 8.0 only. Every step is guarded (IF NOT EXISTS / information_schema),
+-- so the file is idempotent and repairs a partially applied earlier run.
+-- Column adds are INSTANT; each table's indexes go in one LOCK=NONE ALTER. The
+-- phone columns carry an explicit collation so nothing joins across collations.
 --
--- MySQL 8.0 only. Every step is guarded by information_schema, so the file is
--- idempotent: it can be re-run after a partial failure, and it repairs the
--- state an earlier (MariaDB-syntax) version of this migration left behind
--- (its CREATE TABLE succeeded, its ALTER failed). Plain column adds are
--- INSTANT (no table rebuild); each table's indexes are built by ONE in-place
--- ALTER with LOCK=NONE (one metadata-lock upgrade per table, not six). Every
--- new phone column carries an explicit collation so joins between the SMS
--- tables, the thread-read markers and sms_company_phones never mix
--- collations, whatever the database default is.
+-- Rollout: deploy granite-webhooks -> run the CRM backfill
+-- (scripts/sms-backfill-derived-fields.ts) -> deploy the CRM -> run it again.
 --
--- `agent` is normalized at write time (TRIM, '' -> NULL) and by the backfill,
--- so "untagged" is simply `agent IS NULL` and no generated column is needed.
---
--- Operator checklist (RDS):
---   1. SELECT version, success FROM _sqlx_migrations WHERE version = 20260915080000;
---      a row with success = 0 blocks sqlx: DELETE it, then re-run.
---   2. Run off-peak. lock_wait_timeout below makes an ALTER fail instead of
---      queueing every query behind it; on failure fix step 1 and re-run.
---   3. Deploy granite-webhooks, run the CRM backfill, deploy the CRM, run the
---      backfill once more (see scripts/sms-backfill-derived-fields.ts).
+-- Operator (RDS): run off-peak; lock_wait_timeout makes an ALTER fail instead
+-- of queueing every query behind it. A failed run leaves a success = 0 row in
+-- _sqlx_migrations that blocks sqlx: DELETE it, then re-run.
 
 SET SESSION lock_wait_timeout = 30;
 
@@ -39,9 +26,8 @@ CREATE TABLE IF NOT EXISTS sms_company_phones (
   PRIMARY KEY (provider, company_id, phone10)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- A table left by the earlier migration attempt has VARCHAR provider and the
--- database default collation; bring it to this definition (it is empty or
--- tiny, so the rebuild is instant).
+-- A table left by a partial earlier run has VARCHAR provider and the database
+-- default collation; bring it to the definition above.
 SET @sql := IF(
   (SELECT COUNT(*) FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sms_company_phones'
@@ -79,9 +65,7 @@ SET @sql := IF(
   'DO 0');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
--- idx_sms_thread            covering index for the thread rollups: everything
---                           the list / unread / alert aggregates read, so they
---                           never touch the row (and never load `text`)
+-- idx_sms_thread            covers the thread rollups, so they never read the row
 -- idx_sms_agent_threads     the agent's own threads ('mine', sales-rep filter)
 -- idx_sms_inbound_recipient threads that wrote to the user's own line
 -- idx_sms_echo_window       forward echo lookup: live outbound rows in the window

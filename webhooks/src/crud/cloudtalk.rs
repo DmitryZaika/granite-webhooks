@@ -152,8 +152,7 @@ async fn resolved_sms_created_date(
     ))
 }
 
-/// The shared shape of a `CloudTalk` SMS row; the derived thread/echo columns
-/// are computed and written by [`insert_sms`].
+/// The shared shape of a `CloudTalk` SMS row; [`insert_sms`] derives the rest.
 fn sms_row_input(
     sms: &CloudtalkSMS,
     company_id: i32,
@@ -576,10 +575,13 @@ mod tests {
             .unwrap();
         assert_eq!(before.c, 1);
 
-        sqlx::query!("DELETE FROM cloudtalk_sms WHERE id = ?", i32::try_from(parent).unwrap())
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query!(
+            "DELETE FROM cloudtalk_sms WHERE id = ?",
+            i32::try_from(parent).unwrap()
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let after = sqlx::query!("SELECT COUNT(*) AS c FROM cloudtalk_sms_attachments")
             .fetch_one(&pool)

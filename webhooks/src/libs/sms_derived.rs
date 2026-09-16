@@ -1,48 +1,32 @@
-//! Insert-time derivation of the SMS thread columns.
+//! Insert-time derivation of the SMS thread columns: every writer stores the
+//! normalized phones, the thread key and the echo flags on the row itself, so
+//! the read path only touches indexed stored columns.
 //!
-//! The CRM used to recompute phone normalization, thread keys and "echo"
-//! detection over a company's whole SMS history on every poll, which is what
-//! overloaded the production database. Every writer now stores those values on
-//! the row itself, so the read path only touches indexed stored columns.
-//!
-//! The rules live in `SMS_DERIVED_CONTRACT.md` and are implemented identically
-//! by the TypeScript side (`app/utils/smsDerivedFields.server.ts`). Summary:
-//!
-//! * `agent` is stored normalized (trimmed, empty becomes `NULL`), so
-//!   "untagged" is simply `agent IS NULL` — there is no `agent_blank` column.
-//! * `sender10` / `recipient10` are the last ten digits of the two phones.
-//! * `phone_digits` is the thread key: the customer's phone. For an inbound row
-//!   that is the sender, unless the sender is one of the company's own lines
-//!   (tracked in `sms_company_phones`), in which case it is the recipient.
-//! * An untagged inbound row with non-empty text that repeats a live outbound
-//!   row's text within ±300 s is an "echo" of the provider reflecting our own
-//!   message back at us; it stores `is_echo = 1` and points at that row.
+//! Mirrored by the CRM's app/utils/smsDerivedFields.server.ts; keep the rules
+//! identical.
 
 use std::collections::HashSet;
 use std::hash::BuildHasher;
 
 use chrono::{DateTime, Utc};
-use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
+use sqlx::{MySql, MySqlPool, Transaction};
 
-/// Half-width of the echo window, in seconds. Must match
-/// `SMS_ECHO_WINDOW_SECONDS` in the CRM.
-pub const SMS_ECHO_WINDOW_SECONDS: i64 = 300;
+/// Half-width of the echo window, in seconds; must match the CRM constant.
+const SMS_ECHO_WINDOW_SECONDS: i64 = 300;
 
-/// The SMS provider whose table a row belongs to. Every table name in this
-/// module is interpolated from this enum only; all values are bound.
+/// The SMS provider whose table a row belongs to. Table names are interpolated
+/// from this enum only; every value is bound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SmsProvider {
-    /// `CloudTalk` (`cloudtalk_sms`).
     Cloudtalk,
-    /// `RingCentral` (`ringcentral_sms`).
     Ringcentral,
 }
 
 impl SmsProvider {
     /// Name of the provider's SMS table.
     #[must_use]
-    pub const fn table(self) -> &'static str {
+    const fn table(self) -> &'static str {
         match self {
             Self::Cloudtalk => "cloudtalk_sms",
             Self::Ringcentral => "ringcentral_sms",
@@ -51,7 +35,7 @@ impl SmsProvider {
 
     /// Name of the column holding the provider's own message id.
     #[must_use]
-    pub const fn id_column(self) -> &'static str {
+    const fn id_column(self) -> &'static str {
         match self {
             Self::Cloudtalk => "cloudtalk_id",
             Self::Ringcentral => "ringcentral_id",
@@ -60,7 +44,7 @@ impl SmsProvider {
 
     /// Value stored in the `sms_company_phones.provider` ENUM.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Cloudtalk => "cloudtalk",
             Self::Ringcentral => "ringcentral",
@@ -71,16 +55,14 @@ impl SmsProvider {
 /// Which way the message travelled, as stored in the `direction` ENUM.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SmsDirection {
-    /// A message from the customer to the company.
     Inbound,
-    /// A message from the company to the customer.
     Outbound,
 }
 
 impl SmsDirection {
     /// Value stored in the `direction` ENUM.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Inbound => "inbound",
             Self::Outbound => "outbound",
@@ -91,33 +73,18 @@ impl SmsDirection {
 /// Delivery state, as stored in the `status` ENUM.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SmsStatus {
-    /// An inbound message we received.
     Received,
-    /// An outbound message the provider accepted.
     Sent,
-    /// An outbound message still awaiting the provider's confirmation.
-    Pending,
-    /// An outbound message the provider rejected.
-    Failed,
 }
 
 impl SmsStatus {
     /// Value stored in the `status` ENUM.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Received => "received",
             Self::Sent => "sent",
-            Self::Pending => "pending",
-            Self::Failed => "failed",
         }
-    }
-
-    /// Whether an outbound row in this state can still be echoed back to us.
-    /// A failed send never produces an echo.
-    #[must_use]
-    pub const fn is_live_outbound(self) -> bool {
-        matches!(self, Self::Sent | Self::Pending)
     }
 }
 
@@ -130,13 +97,10 @@ pub struct SmsRowInput<'a> {
     pub provider_id: Option<i64>,
     /// Sending phone; `NULL` on CRM-originated outbound rows.
     pub sender: Option<u64>,
-    /// Receiving phone.
     pub recipient: u64,
     /// Message body; may be empty (attachment-only messages).
     pub text: &'a str,
-    /// Direction of the message.
     pub direction: SmsDirection,
-    /// Delivery state of the message.
     pub status: SmsStatus,
     /// Raw agent id from the provider, normalized before it is stored.
     pub agent: Option<&'a str>,
@@ -146,27 +110,21 @@ pub struct SmsRowInput<'a> {
 }
 
 /// The values derived for a row about to be inserted.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SmsDerived {
-    /// Normalized agent id (trimmed; `None` when blank).
-    pub agent: Option<String>,
-    /// Last ten digits of the sender.
-    pub sender10: Option<String>,
-    /// Last ten digits of the recipient (empty only if the recipient has no
-    /// digits at all, which the schema makes impossible).
-    pub recipient10: String,
+#[derive(Debug)]
+struct SmsDerived {
+    agent: Option<String>,
+    sender10: Option<String>,
+    recipient10: String,
     /// Thread key: the customer's phone for this row.
-    pub phone_digits: String,
-    /// Whether this row is a provider echo of one of our own outbound rows.
-    pub is_echo: bool,
-    /// The outbound row this one echoes, when [`SmsDerived::is_echo`].
-    pub echo_of_sms_id: Option<i64>,
+    phone_digits: String,
+    is_echo: bool,
+    echo_of_sms_id: Option<i64>,
 }
 
-/// Digits of `value`, keeping the last ten when longer. `None` when `value`
-/// holds no digits at all.
+/// Digits of `value`, keeping the last ten when longer; `None` when it holds no
+/// digits at all.
 #[must_use]
-pub fn last10_digits(value: &str) -> Option<String> {
+fn last10_digits(value: &str) -> Option<String> {
     let digits: String = value.chars().filter(char::is_ascii_digit).collect();
     if digits.is_empty() {
         return None;
@@ -177,9 +135,10 @@ pub fn last10_digits(value: &str) -> Option<String> {
     }
 }
 
-/// `NULLIF(TRIM(agent), '')`: what actually gets stored in the `agent` column.
+/// `NULLIF(TRIM(agent), '')`: what gets stored in the `agent` column, so
+/// "untagged" is simply `agent IS NULL`.
 #[must_use]
-pub fn normalize_agent(agent: Option<&str>) -> Option<String> {
+fn normalize_agent(agent: Option<&str>) -> Option<String> {
     agent
         .map(str::trim)
         .filter(|trimmed| !trimmed.is_empty())
@@ -188,12 +147,10 @@ pub fn normalize_agent(agent: Option<&str>) -> Option<String> {
 
 /// The thread key for a row: the customer's phone.
 ///
-/// Outbound rows thread under the recipient. Inbound rows thread under the
-/// sender, unless that sender is one of the company's own lines — an agent
-/// texting from the shared number — in which case the customer is the
-/// recipient.
+/// Outbound rows thread under the recipient; inbound rows under the sender,
+/// unless that sender is a company line, when the customer is the recipient.
 #[must_use]
-pub fn thread_phone_for_row<S: BuildHasher>(
+fn thread_phone_for_row<S: BuildHasher>(
     direction: SmsDirection,
     sender10: Option<&str>,
     recipient10: &str,
@@ -208,9 +165,8 @@ pub fn thread_phone_for_row<S: BuildHasher>(
     }
 }
 
-/// Columns written after the provider id column. The insert statement and its
-/// bind list are both built from this one place so they cannot drift apart
-/// (see `insert_statement_binds_every_column`).
+/// Columns written after the provider id column. The statement and the bind
+/// list in [`insert_sms`] are both built from here so they cannot drift apart.
 const INSERT_COLUMNS_AFTER_ID: [&str; 13] = [
     "sender",
     "recipient",
@@ -250,7 +206,7 @@ fn insert_statement(provider: SmsProvider) -> String {
     )
 }
 
-/// The distinct non-empty phones a row can be linked by, newest evidence first.
+/// The distinct non-empty phones a row can be linked by.
 fn linkable_phones<'a>(sender10: Option<&'a str>, recipient10: &'a str) -> Vec<&'a str> {
     let mut phones: Vec<&str> = Vec::with_capacity(2);
     let recipient = if recipient10.is_empty() {
@@ -266,17 +222,12 @@ fn linkable_phones<'a>(sender10: Option<&'a str>, recipient10: &'a str) -> Vec<&
     phones
 }
 
-/// Contract step 3: record what this row proves about the company's own lines,
-/// then repair the threads of a line that just became a company line.
+/// Records what this row proves about the company's own lines — a line has both
+/// sent an agent-tagged message and received an untagged inbound one.
 ///
-/// A phone is a company line once it has BOTH sent an agent-tagged message and
-/// received an untagged inbound one. The upsert is monotone (`GREATEST`), and
-/// MySQL reports how it went: `rows_affected` is 1 for a new row (one flag),
-/// 2 when an existing row changed (the other flag was already set, so the line
-/// just flipped) and 0 when nothing changed. Only the flip runs the repair, so
-/// two concurrent webhooks are safe — the upsert is atomic on the server, and
-/// whichever applies second is the one that sees the change — and an
-/// established line costs nothing extra per message.
+/// `rows_affected == 2` means the monotone `GREATEST` upsert set the second flag
+/// on an existing row, i.e. the line just flipped; that happens once and
+/// atomically, so only that call repairs and concurrent webhooks are safe.
 async fn apply_role_evidence(
     pool: &MySqlPool,
     provider: SmsProvider,
@@ -286,8 +237,7 @@ async fn apply_role_evidence(
     recipient10: &str,
     direction: SmsDirection,
 ) -> Result<(), sqlx::Error> {
-    // The two kinds of evidence are mutually exclusive: one needs a tagged
-    // agent, the other an untagged one.
+    // The two kinds of evidence are mutually exclusive: tagged vs untagged.
     let evidence = if let Some(phone) = sender10.filter(|_| agent.is_some()) {
         Some((phone, 1_i8, 0_i8))
     } else if direction == SmsDirection::Inbound && agent.is_none() && !recipient10.is_empty() {
@@ -299,6 +249,12 @@ async fn apply_role_evidence(
         return Ok(());
     };
 
+    // One transaction: if the repair fails, the flip rolls back with it and the
+    // next message retries, instead of the flags staying set with history
+    // never re-keyed.
+    let mut tx = pool.begin().await?;
+    // `GREATEST` must name the stored column table-qualified; a bare name there
+    // resolves to the row being inserted and the flag would never stick.
     let upsert = sqlx::query(
         "INSERT INTO sms_company_phones \
            (provider, company_id, phone10, agent_sender, inbound_recipient) \
@@ -314,45 +270,44 @@ async fn apply_role_evidence(
     .bind(phone)
     .bind(agent_sender)
     .bind(inbound_recipient)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     if upsert.rows_affected() == UPSERT_CHANGED_EXISTING_ROW {
-        repair_company_line_threads(pool, provider, company_id, phone).await?;
+        repair_company_line_threads(&mut tx, provider, company_id, phone).await?;
     }
-    Ok(())
+    tx.commit().await
 }
 
-/// `rows_affected` of `INSERT ... ON DUPLICATE KEY UPDATE` when an existing
-/// row was changed (1 = inserted, 0 = existing row left as it was).
+/// `rows_affected` of `INSERT ... ON DUPLICATE KEY UPDATE` when an existing row
+/// was changed (1 = inserted, 0 = existing row left as it was).
 const UPSERT_CHANGED_EXISTING_ROW: u64 = 2;
 
-/// Re-key the inbound history of a company line: rows it sent belong to the
-/// thread of whoever received them, not to the line itself. Idempotent. The
-/// index is forced because the optimizer has been seen preferring the unique
-/// `(company_id, <provider>_id)` index for this UPDATE and reading the whole
-/// company.
+/// Re-keys the inbound history of a company line: rows it sent belong to the
+/// thread of whoever received them. Idempotent. `FORCE INDEX` because the
+/// optimizer otherwise picks the unique `(company_id, <provider>_id)` index and
+/// reads the whole company.
 async fn repair_company_line_threads(
-    pool: &MySqlPool,
+    tx: &mut Transaction<'_, MySql>,
     provider: SmsProvider,
     company_id: i32,
     phone10: &str,
-) -> Result<u64, sqlx::Error> {
+) -> Result<(), sqlx::Error> {
     let sql = format!(
         "UPDATE {} FORCE INDEX (idx_sms_sender10) SET phone_digits = recipient10 \
          WHERE company_id = ? AND direction = 'inbound' \
            AND sender10 = ? AND phone_digits <> recipient10",
         provider.table(),
     );
-    let result = sqlx::query(sqlx::AssertSqlSafe(sql))
+    sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(company_id)
         .bind(phone10)
-        .execute(pool)
+        .execute(&mut **tx)
         .await?;
-    Ok(result.rows_affected())
+    Ok(())
 }
 
-/// Contract step 4: the company's own lines (both role flags set).
+/// The company's own lines: both role flags set.
 async fn company_sender_phones(
     pool: &MySqlPool,
     provider: SmsProvider,
@@ -370,11 +325,11 @@ async fn company_sender_phones(
     Ok(phones.into_iter().collect())
 }
 
-/// Contract step 6: the live outbound row this inbound row echoes, if any.
+/// The live outbound row this inbound row echoes, if any; closest in time wins,
+/// ties broken by id.
 ///
-/// The window is expressed as `created_date BETWEEN ? AND ?` so the index on
-/// `(company_id, direction, status, created_date)` is usable; the closest match
-/// in time wins, ties broken by id.
+/// The window is a `BETWEEN` so the `(company_id, direction, status,
+/// created_date)` index stays usable — `ABS(TIMESTAMPDIFF(...))` only orders.
 async fn find_echo_outbound_id(
     pool: &MySqlPool,
     provider: SmsProvider,
@@ -419,9 +374,8 @@ async fn find_echo_outbound_id(
     Ok(found)
 }
 
-/// Contract step 8: an outbound row was just stored, so any untagged inbound
-/// row that already repeated its text inside the window is its echo. Covers
-/// out-of-order webhook delivery, where the echo lands before the send.
+/// An outbound row was just stored, so any untagged inbound row that already
+/// repeated its text inside the window is its echo, delivered out of order.
 async fn mark_inbound_echoes_of_outbound(
     pool: &MySqlPool,
     provider: SmsProvider,
@@ -462,11 +416,9 @@ async fn mark_inbound_echoes_of_outbound(
     Ok(query.execute(pool).await?.rows_affected())
 }
 
-/// Compute every derived value for a row about to be inserted (contract steps
-/// 1–6), maintaining `sms_company_phones` on the way.
-///
-/// Call [`insert_sms`] instead unless you need the values without inserting.
-pub async fn derive(
+/// Every derived value for a row about to be inserted, maintaining
+/// `sms_company_phones` on the way.
+async fn derive(
     pool: &MySqlPool,
     provider: SmsProvider,
     input: &SmsRowInput<'_>,
@@ -514,12 +466,11 @@ pub async fn derive(
     })
 }
 
-/// Derive and insert one SMS row (contract steps 1–8).
+/// Derive and insert one SMS row, then mark earlier inbound echoes of it.
 ///
-/// The insert is `INSERT IGNORE`, so a provider id we already stored is a
-/// no-op. After a live outbound row is stored, earlier inbound echoes of it are
-/// marked; `rows_affected() == 0` means nothing was inserted and nothing is
-/// marked.
+/// The insert is `INSERT IGNORE`, so a provider id we already stored is a no-op:
+/// `rows_affected() == 0` leaves `last_insert_id` stale, which is why nothing is
+/// marked unless a row was really inserted.
 pub async fn insert_sms(
     pool: &MySqlPool,
     provider: SmsProvider,
@@ -545,7 +496,6 @@ pub async fn insert_sms(
         .await?;
 
     if input.direction == SmsDirection::Outbound
-        && input.status.is_live_outbound()
         && result.rows_affected() > 0
         && let Ok(outbound_id) = i64::try_from(result.last_insert_id())
     {
@@ -582,7 +532,10 @@ mod tests {
 
     #[test]
     fn normalize_agent_trims_and_nulls_blanks() {
-        assert_eq!(normalize_agent(Some("  540273 ")).as_deref(), Some("540273"));
+        assert_eq!(
+            normalize_agent(Some("  540273 ")).as_deref(),
+            Some("540273")
+        );
         assert_eq!(normalize_agent(Some("540273")).as_deref(), Some("540273"));
         assert_eq!(normalize_agent(Some("   ")), None);
         assert_eq!(normalize_agent(Some("")), None);
@@ -912,15 +865,17 @@ mod tests {
 
         let rows = stored_rows(&pool, SmsProvider::Ringcentral).await;
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].is_echo, 1, "the earlier inbound must become an echo");
+        assert_eq!(
+            rows[0].is_echo, 1,
+            "the earlier inbound must become an echo"
+        );
         assert_eq!(rows[0].echo_of_sms_id, Some(rows[1].id));
         assert_eq!(rows[1].is_echo, 0, "outbound rows are never echoes");
     }
 
     #[sqlx::test(migrations = "../migrations")]
     async fn company_line_flip_rekeys_earlier_inbound_rows(pool: MySqlPool) {
-        // 1. The company line texts a customer without an agent tag yet: at this
-        //    point nothing proves it is a company line, so it threads under itself.
+        // Nothing proves the line yet, so this row threads under the line itself.
         insert_sms(
             &pool,
             SmsProvider::Cloudtalk,
@@ -939,7 +894,7 @@ mod tests {
         let early = stored_rows(&pool, SmsProvider::Cloudtalk).await;
         assert_eq!(early[0].phone_digits.as_deref(), Some("6468956758"));
 
-        // 2. An agent-tagged send from the line proves `agent_sender`.
+        // An agent-tagged send from the line proves `agent_sender`.
         insert_sms(
             &pool,
             SmsProvider::Cloudtalk,
@@ -956,8 +911,7 @@ mod tests {
         .await
         .expect("tagged outbound insert");
 
-        // 3. An untagged inbound TO the line proves `inbound_recipient`; both
-        //    flags are now set, so the earlier rows must be re-keyed.
+        // An untagged inbound to the line sets the second flag: rows are re-keyed.
         insert_sms(
             &pool,
             SmsProvider::Cloudtalk,
