@@ -1,49 +1,49 @@
+use crate::libs::sms_derived::{SmsDirection, SmsProvider, SmsRowInput, SmsStatus, insert_sms};
 use crate::ringcentral::schemas::{RingcentralSMS, phone_last10};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use chrono::{DateTime, Utc};
 use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
 use std::error::Error;
+
+/// The shared shape of a `RingCentral` SMS row; the derived thread/echo columns
+/// are computed and written by [`insert_sms`].
+fn sms_row_input(
+    sms: &RingcentralSMS,
+    company_id: i32,
+    direction: SmsDirection,
+    status: SmsStatus,
+    created_date: DateTime<Utc>,
+) -> SmsRowInput<'_> {
+    SmsRowInput {
+        company_id,
+        provider_id: sms.id,
+        sender: Some(sms.sender()),
+        recipient: sms.recipient(),
+        text: &sms.text.0,
+        direction,
+        status,
+        agent: sms.agent.as_deref(),
+        created_date,
+    }
+}
 
 pub async fn insert_inbound_sms(
     pool: &MySqlPool,
     sms: &RingcentralSMS,
     company_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
-    let created_date = chrono::Utc::now();
-    let sender_str = sms.sender().to_string();
-    let recipient_str = sms.recipient().to_string();
-    let derived = crate::libs::sms_derived::compute_sms_derived_fields(
+    insert_sms(
         pool,
-        "ringcentral",
-        company_id,
-        Some(sender_str.as_str()),
-        &recipient_str,
-        &sms.text.0,
-        "inbound",
-        sms.agent.as_deref(),
-        &created_date,
+        SmsProvider::Ringcentral,
+        &sms_row_input(
+            sms,
+            company_id,
+            SmsDirection::Inbound,
+            SmsStatus::Received,
+            Utc::now(),
+        ),
     )
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT IGNORE INTO ringcentral_sms
-            (ringcentral_id, sender, recipient, text, agent, company_id, direction, status, created_date,
-             sender10, recipient10, phone_digits, is_echo, echo_of_sms_id)
-        VALUES (?, ?, ?, ?, ?, ?, 'inbound', 'received', ?, ?, ?, ?, ?, ?, ?)
-        "#,
-    )
-    .bind(sms.id)
-    .bind(sms.sender())
-    .bind(sms.recipient())
-    .bind(&sms.text.0)
-    .bind(&sms.agent)
-    .bind(company_id)
-    .bind(derived.sender10.as_deref())
-    .bind(&derived.recipient10)
-    .bind(&derived.phone_digits)
-    .bind(derived.is_echo as i8)
-    .bind(derived.echo_of_sms_id)
-    .execute(pool)
     .await
 }
 
@@ -56,7 +56,7 @@ pub async fn insert_outbound_sms(
         // Tier 1: exact text match for normal text-only and true-MMS sends.
         // Oldest unclaimed row first: echoes arrive in send order, so it is the one waiting.
         let merged = sqlx::query(
-            r#"
+            r"
             UPDATE ringcentral_sms
                SET ringcentral_id = ?
              WHERE company_id = ?
@@ -68,7 +68,7 @@ pub async fn insert_outbound_sms(
                AND created_date >= (NOW() - INTERVAL 10 MINUTE)
              ORDER BY created_date ASC, id ASC
              LIMIT 1
-            "#,
+            ",
         )
         .bind(ringcentral_id)
         .bind(company_id)
@@ -84,7 +84,7 @@ pub async fn insert_outbound_sms(
         // Photo 1: images and File 1: non-images); byte-exact LEFT/CONCAT (not LIKE) stops a
         // caption's own '%'/'_' acting as a wildcard, gated on an attachment existing.
         let merged_loose = sqlx::query(
-            r#"
+            r"
             UPDATE ringcentral_sms
                SET ringcentral_id = ?
              WHERE company_id = ?
@@ -110,7 +110,7 @@ pub async fn insert_outbound_sms(
                AND created_date >= (NOW() - INTERVAL 10 MINUTE)
              ORDER BY created_date ASC, id ASC
              LIMIT 1
-            "#,
+            ",
         )
         .bind(ringcentral_id)
         .bind(company_id)
@@ -127,59 +127,18 @@ pub async fn insert_outbound_sms(
         }
     }
 
-    let created_date = chrono::Utc::now();
-    let sender_str = sms.sender().to_string();
-    let recipient_str = sms.recipient().to_string();
-    let derived = crate::libs::sms_derived::compute_sms_derived_fields(
+    insert_sms(
         pool,
-        "ringcentral",
-        company_id,
-        Some(sender_str.as_str()),
-        &recipient_str,
-        &sms.text.0,
-        "outbound",
-        sms.agent.as_deref(),
-        &created_date,
-    )
-    .await?;
-    let result = sqlx::query(
-        r#"
-        INSERT IGNORE INTO ringcentral_sms
-            (ringcentral_id, sender, recipient, text, agent, company_id, direction, status, created_date,
-             sender10, recipient10, phone_digits, is_echo, echo_of_sms_id)
-        VALUES (?, ?, ?, ?, ?, ?, 'outbound', 'sent', ?, ?, ?, ?, ?, 0, NULL)
-        "#,
-    )
-    .bind(sms.id)
-    .bind(sms.sender())
-    .bind(sms.recipient())
-    .bind(&sms.text.0)
-    .bind(&sms.agent)
-    .bind(company_id)
-    .bind(created_date)
-    .bind(derived.sender10.as_deref())
-    .bind(&derived.recipient10)
-    .bind(&derived.phone_digits)
-    .execute(pool)
-    .await?;
-    // Reverse echo check: an inbound row that arrived first may echo this
-    // outbound (out-of-order webhook delivery).
-    if result.rows_affected() > 0 {
-        let outbound_id = result.last_insert_id() as i64;
-        crate::libs::sms_derived::mark_inbound_echoes_of_outbound(
-            pool,
-            "ringcentral",
+        SmsProvider::Ringcentral,
+        &sms_row_input(
+            sms,
             company_id,
-            outbound_id,
-            &sms.text.0,
-            derived.sender10.as_deref(),
-            &derived.recipient10,
-            &derived.phone_digits,
-            &created_date,
-        )
-        .await?;
-    }
-    Ok(result)
+            SmsDirection::Outbound,
+            SmsStatus::Sent,
+            Utc::now(),
+        ),
+    )
+    .await
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -203,7 +162,7 @@ pub async fn load_customer_with_mapping(
     customer_id: i32,
 ) -> Result<Option<CustomerWithMapping>, sqlx::Error> {
     let customer = sqlx::query_as::<_, CustomerWithMapping>(
-        r#"
+        r"
         SELECT
             c.id,
             c.company_id,
@@ -218,7 +177,7 @@ pub async fn load_customer_with_mapping(
         LEFT JOIN customers_emails ce ON ce.id = c.email_id
         LEFT JOIN ringcentral_contacts cc ON cc.customer_id = c.id
         WHERE c.id = ? AND c.deleted_at IS NULL
-        "#,
+        ",
     )
     .bind(customer_id)
     .fetch_optional(pool)
@@ -239,11 +198,11 @@ pub async fn company_has_ring_central(
     company_id: i32,
 ) -> Result<bool, sqlx::Error> {
     let row = sqlx::query_as::<_, RingCentralCompanyCreds>(
-        r#"
+        r"
         SELECT ringcentral_client_id, ringcentral_client_secret, ringcentral_jwt
         FROM company
         WHERE id = ?
-        "#,
+        ",
     )
     .bind(company_id)
     .fetch_optional(pool)
@@ -280,14 +239,14 @@ pub async fn get_access_token(
     company_id: u64,
 ) -> Result<(String, String), Box<dyn Error + Send + Sync>> {
     let row = sqlx::query_as::<_, RingCentralTokenCreds>(
-        r#"
+        r"
         SELECT ringcentral_client_id, ringcentral_client_secret, ringcentral_jwt,
                ringcentral_server_url
         FROM company
         WHERE id = ?
-        "#,
+        ",
     )
-    .bind(company_id as i64)
+    .bind(i64::try_from(company_id).unwrap_or(i64::MAX))
     .fetch_optional(pool)
     .await?;
 
@@ -354,7 +313,7 @@ pub async fn upsert_ringcentral_mapping(
     phone2: Option<String>,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     sqlx::query(
-        r#"
+        r"
         INSERT INTO ringcentral_contacts
             (customer_id, company_id, ringcentral_id, phone_e164_1, phone_e164_2)
         VALUES (?, ?, ?, ?, ?)
@@ -364,7 +323,7 @@ pub async fn upsert_ringcentral_mapping(
             phone_e164_2 = VALUES(phone_e164_2),
             last_error = NULL,
             last_synced_at = CURRENT_TIMESTAMP
-        "#,
+        ",
     )
     .bind(customer_id)
     .bind(company_id)
@@ -382,11 +341,11 @@ pub async fn update_ringcentral_phone(
     ringcentral_id: i64,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     sqlx::query(
-        r#"
+        r"
             UPDATE ringcentral_contacts
             SET last_error = NULL, phone_e164_1 = ?, phone_e164_2 = ?
             WHERE id = ?
-            "#,
+            ",
     )
     .bind(phone1)
     .bind(phone2)
@@ -437,10 +396,10 @@ pub async fn cancel_flow_enrollments_on_reply(
     phone_digits: u64,
 ) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
-        r#"UPDATE sms_flow_enrollments
+        r"UPDATE sms_flow_enrollments
            SET status = 'stopped_by_reply', updated_at = UTC_TIMESTAMP()
            WHERE company_id = ? AND customer_phone_digits = ?
-             AND status IN ('active', 'paused')"#,
+             AND status IN ('active', 'paused')",
     )
     .bind(company_id)
     .bind(phone_digits)
@@ -464,9 +423,9 @@ pub async fn cancel_flow_enrollments_for_customer(
     customer_id: i32,
 ) -> Result<u64, sqlx::Error> {
     let phones = sqlx::query_as::<_, CustomerPhones>(
-        r#"SELECT phone, phone_2
+        r"SELECT phone, phone_2
            FROM customers
-           WHERE id = ? AND company_id = ? AND deleted_at IS NULL"#,
+           WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
     .bind(customer_id)
     .bind(company_id)
@@ -474,10 +433,10 @@ pub async fn cancel_flow_enrollments_for_customer(
     .await?;
 
     let mut affected = sqlx::query(
-        r#"UPDATE sms_flow_enrollments
+        r"UPDATE sms_flow_enrollments
            SET status = 'stopped_by_reply', updated_at = UTC_TIMESTAMP()
            WHERE company_id = ? AND customer_id = ?
-             AND status IN ('active', 'paused')"#,
+             AND status IN ('active', 'paused')",
     )
     .bind(company_id)
     .bind(customer_id)
@@ -497,9 +456,75 @@ pub async fn cancel_flow_enrollments_for_customer(
 
 #[cfg(test)]
 mod tests {
-    use super::insert_outbound_sms;
+    use super::{insert_inbound_sms, insert_outbound_sms};
     use crate::ringcentral::schemas::RingcentralSMS;
     use sqlx::MySqlPool;
+
+    #[derive(sqlx::FromRow, Debug)]
+    struct StoredSms {
+        ringcentral_id: Option<i64>,
+        agent: Option<String>,
+        sender10: Option<String>,
+        recipient10: Option<String>,
+        phone_digits: Option<String>,
+        is_echo: i8,
+        created_date: Option<chrono::DateTime<chrono::Utc>>,
+    }
+
+    async fn stored_sms(pool: &MySqlPool) -> Vec<StoredSms> {
+        sqlx::query_as::<_, StoredSms>(
+            "SELECT ringcentral_id, agent, sender10, recipient10, phone_digits, is_echo, \
+                    created_date \
+               FROM ringcentral_sms WHERE company_id = 42 ORDER BY id ASC",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("stored rows")
+    }
+
+    // The shipped version of both statements had more placeholders than binds, so
+    // every RingCentral SMS failed to save. These two tests are that regression.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_inbound_insert_succeeds_and_stores_derived_columns(pool: MySqlPool) {
+        let sms = echo_fixture(3_300_000_001, "inbound body");
+        insert_inbound_sms(&pool, &sms, 42)
+            .await
+            .expect("inbound insert must succeed");
+
+        let rows = stored_sms(&pool).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].ringcentral_id, Some(3_300_000_001));
+        assert_eq!(rows[0].agent.as_deref(), Some("540273"));
+        assert_eq!(rows[0].sender10.as_deref(), Some("6468956758"));
+        assert_eq!(rows[0].recipient10.as_deref(), Some("3173161456"));
+        assert_eq!(rows[0].phone_digits.as_deref(), Some("6468956758"));
+        assert_eq!(rows[0].is_echo, 0);
+        assert!(
+            rows[0].created_date.is_some(),
+            "created_date must be bound, not left to the column default"
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_outbound_insert_succeeds_and_stores_derived_columns(pool: MySqlPool) {
+        let sms = echo_fixture(3_300_000_002, "outbound body");
+        insert_outbound_sms(&pool, &sms, 42)
+            .await
+            .expect("outbound insert must succeed");
+
+        let rows = stored_sms(&pool).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].ringcentral_id, Some(3_300_000_002));
+        assert_eq!(rows[0].sender10.as_deref(), Some("6468956758"));
+        assert_eq!(rows[0].recipient10.as_deref(), Some("3173161456"));
+        assert_eq!(
+            rows[0].phone_digits.as_deref(),
+            Some("3173161456"),
+            "outbound rows thread under the recipient"
+        );
+        assert_eq!(rows[0].is_echo, 0);
+        assert!(rows[0].created_date.is_some());
+    }
 
     #[sqlx::test(migrations = "../migrations")]
     async fn test_sms_attachments_cascade_delete(pool: MySqlPool) {
@@ -518,7 +543,7 @@ mod tests {
                 (ringcentral_sms_id, content_type, filename, s3_key, s3_url, width, height, position) \
              VALUES (?, 'image/jpeg', 'a.jpg', '42/u/a.jpg', 's3://gd-sms-attachments/42/u/a.jpg', 800, 600, 0)",
         )
-        .bind(parent as i32)
+        .bind(i32::try_from(parent).unwrap())
         .execute(&pool)
         .await
         .unwrap();
@@ -530,7 +555,7 @@ mod tests {
         assert_eq!(before, 1);
 
         sqlx::query("DELETE FROM ringcentral_sms WHERE id = ?")
-            .bind(parent as i32)
+            .bind(i32::try_from(parent).unwrap())
             .execute(&pool)
             .await
             .unwrap();
