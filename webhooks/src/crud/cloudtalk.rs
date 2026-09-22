@@ -47,14 +47,9 @@ fn interpolate_sms_created_date(
                 interpolated
             }
         }
-        (Some(prev), None) => {
-            let guessed = prev.created_date + Duration::seconds(1);
-            if guessed > now {
-                now
-            } else {
-                guessed
-            }
-        }
+        // No later CloudTalk id yet. The previous id is another conversation,
+        // so copying its time (plus one second) shows the wrong send time.
+        (Some(_prev), None) => now,
         (None, Some(next)) => {
             let guessed = next.created_date - Duration::seconds(1);
             if guessed > now {
@@ -530,6 +525,35 @@ mod tests {
         let payload = Utc.with_ymd_and_hms(2026, 9, 4, 16, 4, 0).unwrap();
         let got = interpolate_sms_created_date(now, Some(payload), Some(200), None, None);
         assert_eq!(got, payload);
+    }
+
+    #[test]
+    fn interpolate_without_next_neighbor_uses_receive_time() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 22, 14, 4, 0).unwrap();
+        let prev = SmsTimeNeighbor {
+            cloudtalk_id: 54_459_098,
+            created_date: Utc.with_ymd_and_hms(2026, 9, 22, 13, 41, 27).unwrap(),
+        };
+        let got = interpolate_sms_created_date(now, None, Some(54_459_990), Some(prev), None);
+        assert_eq!(got, now);
+    }
+
+    #[test]
+    fn interpolate_future_payload_without_next_uses_receive_time() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 22, 14, 4, 0).unwrap();
+        let payload = Utc.with_ymd_and_hms(2026, 9, 22, 14, 10, 0).unwrap();
+        let prev = SmsTimeNeighbor {
+            cloudtalk_id: 54_459_098,
+            created_date: Utc.with_ymd_and_hms(2026, 9, 22, 13, 41, 27).unwrap(),
+        };
+        let got = interpolate_sms_created_date(
+            now,
+            Some(payload),
+            Some(54_459_990),
+            Some(prev),
+            None,
+        );
+        assert_eq!(got, now);
     }
 
     #[test]

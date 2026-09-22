@@ -466,19 +466,20 @@ async fn derive(
     })
 }
 
-/// Derive and insert one SMS row, then mark earlier inbound echoes of it.
-///
-/// The insert is `INSERT IGNORE`, so a provider id we already stored is a no-op:
-/// `rows_affected() == 0` leaves `last_insert_id` stale, which is why nothing is
-/// marked unless a row was really inserted.
-pub async fn insert_sms(
+/// How far back a message with the same body counts as a redelivery rather than
+/// a new message that reused a provider id.
+const PROVIDER_ID_REUSE_LOOKBACK_HOURS: i64 = 24;
+
+/// One `INSERT IGNORE` of an already-derived row, under the given provider id.
+async fn insert_derived_row(
     pool: &MySqlPool,
     provider: SmsProvider,
     input: &SmsRowInput<'_>,
+    derived: &SmsDerived,
+    provider_id: Option<i64>,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
-    let derived = derive(pool, provider, input).await?;
-    let result = sqlx::query(sqlx::AssertSqlSafe(insert_statement(provider)))
-        .bind(input.provider_id)
+    sqlx::query(sqlx::AssertSqlSafe(insert_statement(provider)))
+        .bind(provider_id)
         .bind(input.sender)
         .bind(input.recipient)
         .bind(input.text)
@@ -493,7 +494,62 @@ pub async fn insert_sms(
         .bind(i8::from(derived.is_echo))
         .bind(derived.echo_of_sms_id)
         .execute(pool)
+        .await
+}
+
+/// Whether this exact message is already stored, regardless of provider id.
+async fn same_message_already_stored(
+    pool: &MySqlPool,
+    provider: SmsProvider,
+    input: &SmsRowInput<'_>,
+) -> Result<bool, sqlx::Error> {
+    let sql = format!(
+        "SELECT 1 FROM {} \
+          WHERE company_id = ? \
+            AND direction = ? \
+            AND text = ? \
+            AND recipient = ? \
+            AND sender <=> ? \
+            AND created_date >= (? - INTERVAL {PROVIDER_ID_REUSE_LOOKBACK_HOURS} HOUR) \
+          LIMIT 1",
+        provider.table(),
+    );
+    let hit: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(input.company_id)
+        .bind(input.direction.as_str())
+        .bind(input.text)
+        .bind(input.recipient)
+        .bind(input.sender)
+        .bind(input.created_date)
+        .fetch_optional(pool)
         .await?;
+    Ok(hit.is_some())
+}
+
+/// Derive and insert one SMS row, then mark earlier inbound echoes of it.
+///
+/// The insert is `INSERT IGNORE`, so a provider id we already stored is a no-op:
+/// `rows_affected() == 0` leaves `last_insert_id` stale, which is why nothing is
+/// marked unless a row was really inserted.
+///
+/// `CloudTalk` has been seen sending a second, different message under a provider
+/// id we already hold. The unique `(company_id, provider_id)` key would drop it,
+/// so that message is stored unlinked instead of lost; a real redelivery repeats
+/// the body and stays deduped.
+pub async fn insert_sms(
+    pool: &MySqlPool,
+    provider: SmsProvider,
+    input: &SmsRowInput<'_>,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    let derived = derive(pool, provider, input).await?;
+    let mut result = insert_derived_row(pool, provider, input, &derived, input.provider_id).await?;
+
+    if result.rows_affected() == 0
+        && input.provider_id.is_some()
+        && !same_message_already_stored(pool, provider, input).await?
+    {
+        result = insert_derived_row(pool, provider, input, &derived, None).await?;
+    }
 
     if input.direction == SmsDirection::Outbound
         && result.rows_affected() > 0
@@ -645,6 +701,71 @@ mod tests {
             .fetch_all(pool)
             .await
             .expect("stored rows")
+    }
+
+    async fn stored_texts(pool: &MySqlPool, provider: SmsProvider) -> Vec<(Option<i64>, String)> {
+        let sql = format!(
+            "SELECT {}, text FROM {} WHERE company_id = ? ORDER BY id ASC",
+            provider.id_column(),
+            provider.table(),
+        );
+        sqlx::query_as::<_, (Option<i64>, String)>(sqlx::AssertSqlSafe(sql))
+            .bind(COMPANY)
+            .fetch_all(pool)
+            .await
+            .expect("stored texts")
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_reused_provider_id_keeps_the_second_message(pool: MySqlPool) {
+        let mut first = row(
+            SmsDirection::Inbound,
+            SmsStatus::Received,
+            CUSTOMER,
+            COMPANY_LINE,
+            "Can I get pricing for Calacatta Izaro",
+            None,
+            at(0, 0),
+        );
+        first.provider_id = Some(54_464_458);
+        insert_sms(&pool, SmsProvider::Cloudtalk, &first)
+            .await
+            .expect("first insert");
+
+        let mut second = row(
+            SmsDirection::Inbound,
+            SmsStatus::Received,
+            CUSTOMER,
+            COMPANY_LINE,
+            "speedway1839@example.com",
+            None,
+            at(16, 0),
+        );
+        second.provider_id = Some(54_464_458);
+        insert_sms(&pool, SmsProvider::Cloudtalk, &second)
+            .await
+            .expect("second insert");
+
+        assert_eq!(
+            stored_texts(&pool, SmsProvider::Cloudtalk).await,
+            vec![
+                (
+                    Some(54_464_458),
+                    "Can I get pricing for Calacatta Izaro".to_string()
+                ),
+                (None, "speedway1839@example.com".to_string()),
+            ],
+            "a different message under a held provider id must be stored unlinked",
+        );
+
+        // Redelivering either message must not add a row.
+        insert_sms(&pool, SmsProvider::Cloudtalk, &second)
+            .await
+            .expect("second redelivery");
+        insert_sms(&pool, SmsProvider::Cloudtalk, &first)
+            .await
+            .expect("first redelivery");
+        assert_eq!(stored_texts(&pool, SmsProvider::Cloudtalk).await.len(), 2);
     }
 
     #[sqlx::test(migrations = "../migrations")]

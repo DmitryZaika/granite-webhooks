@@ -369,6 +369,42 @@ mod local_tests {
         assert_eq!(result[1].message_id, Some(MESSAGE_ID.to_string()));
     }
 
+    /// Customer is the first To. Employees later on the same header still receive it.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn received_when_customer_is_first_to(pool: MySqlPool) {
+        const LIZA: &str = "liza@granitedepotindy.com";
+        const MASHA: &str = "masha@granitedepotindy.com";
+        let liza_id = insert_user(&pool, LIZA, None).await.unwrap();
+        let masha_id = insert_user(&pool, MASHA, None).await.unwrap();
+        let mock_client = MockClient::new("src/tests/data/customer_first_to.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].receiver_user_id.unwrap(), liza_id);
+        assert_eq!(
+            result[0].receiver_email.as_deref(),
+            Some("pdekemper58@gmail.com")
+        );
+
+        let participant_users: Vec<(String, Option<i32>)> = sqlx::query_as(
+            "SELECT email, user_id FROM email_participants WHERE type = 'to' AND user_id IS NOT NULL ORDER BY position",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            participant_users,
+            vec![
+                (LIZA.to_string(), Some(liza_id)),
+                (MASHA.to_string(), Some(masha_id)),
+            ]
+        );
+    }
+
     #[sqlx::test(migrations = "../migrations")]
     async fn received_no_start_email(pool: MySqlPool) {
         let mock_client = MockClient::new("src/tests/data/external1.eml");
