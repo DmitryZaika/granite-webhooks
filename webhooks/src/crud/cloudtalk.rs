@@ -1,4 +1,5 @@
 use crate::cloudtalk::schemas::{CloudtalkSMS, phone_last10};
+use crate::libs::sms_derived::{SmsDirection, SmsProvider, SmsRowInput, SmsStatus, insert_sms};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Duration, Utc};
 use sqlx::MySqlPool;
@@ -21,10 +22,10 @@ fn interpolate_sms_created_date(
     prev: Option<SmsTimeNeighbor>,
     next: Option<SmsTimeNeighbor>,
 ) -> DateTime<Utc> {
-    if let Some(payload) = payload_time {
-        if payload <= now {
-            return payload;
-        }
+    if let Some(payload) = payload_time
+        && payload <= now
+    {
+        return payload;
     }
     let Some(id) = cloudtalk_id else {
         return now;
@@ -46,14 +47,9 @@ fn interpolate_sms_created_date(
                 interpolated
             }
         }
-        (Some(prev), None) => {
-            let guessed = prev.created_date + Duration::seconds(1);
-            if guessed > now {
-                now
-            } else {
-                guessed
-            }
-        }
+        // No later CloudTalk id yet. The previous id is another conversation,
+        // so copying its time (plus one second) shows the wrong send time.
+        (Some(_prev), None) => now,
         (None, Some(next)) => {
             let guessed = next.created_date - Duration::seconds(1);
             if guessed > now {
@@ -96,13 +92,13 @@ async fn neighboring_sms_times(
     cloudtalk_id: i64,
 ) -> Result<(Option<SmsTimeNeighbor>, Option<SmsTimeNeighbor>), sqlx::Error> {
     let prev = sqlx::query_as::<_, (i64, DateTime<Utc>)>(
-        r#"SELECT cloudtalk_id, created_date
+        r"SELECT cloudtalk_id, created_date
              FROM cloudtalk_sms
             WHERE company_id = ?
               AND cloudtalk_id IS NOT NULL
               AND cloudtalk_id < ?
             ORDER BY cloudtalk_id DESC
-            LIMIT 1"#,
+            LIMIT 1",
     )
     .bind(company_id)
     .bind(cloudtalk_id)
@@ -113,13 +109,13 @@ async fn neighboring_sms_times(
         created_date,
     });
     let next = sqlx::query_as::<_, (i64, DateTime<Utc>)>(
-        r#"SELECT cloudtalk_id, created_date
+        r"SELECT cloudtalk_id, created_date
              FROM cloudtalk_sms
             WHERE company_id = ?
               AND cloudtalk_id IS NOT NULL
               AND cloudtalk_id > ?
             ORDER BY cloudtalk_id ASC
-            LIMIT 1"#,
+            LIMIT 1",
     )
     .bind(company_id)
     .bind(cloudtalk_id)
@@ -151,27 +147,44 @@ async fn resolved_sms_created_date(
     ))
 }
 
+/// The shared shape of a `CloudTalk` SMS row; [`insert_sms`] derives the rest.
+fn sms_row_input(
+    sms: &CloudtalkSMS,
+    company_id: i32,
+    direction: SmsDirection,
+    status: SmsStatus,
+    created_date: DateTime<Utc>,
+) -> SmsRowInput<'_> {
+    SmsRowInput {
+        company_id,
+        provider_id: sms.id,
+        sender: Some(sms.sender()),
+        recipient: sms.recipient(),
+        text: &sms.text.0,
+        direction,
+        status,
+        agent: sms.agent.as_deref(),
+        created_date,
+    }
+}
+
 pub async fn insert_inbound_sms(
     pool: &MySqlPool,
     sms: &CloudtalkSMS,
     company_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     let created_date = resolved_sms_created_date(pool, sms, company_id).await?;
-    sqlx::query(
-        r#"
-        INSERT IGNORE INTO cloudtalk_sms
-            (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status, created_date)
-        VALUES (?, ?, ?, ?, ?, ?, 'inbound', 'received', ?)
-        "#,
+    insert_sms(
+        pool,
+        SmsProvider::Cloudtalk,
+        &sms_row_input(
+            sms,
+            company_id,
+            SmsDirection::Inbound,
+            SmsStatus::Received,
+            created_date,
+        ),
     )
-    .bind(sms.id)
-    .bind(sms.sender())
-    .bind(sms.recipient())
-    .bind(&sms.text.0)
-    .bind(&sms.agent)
-    .bind(company_id)
-    .bind(created_date)
-    .execute(pool)
     .await
 }
 
@@ -258,21 +271,17 @@ pub async fn insert_outbound_sms(
     }
 
     let created_date = resolved_sms_created_date(pool, sms, company_id).await?;
-    sqlx::query(
-        r#"
-        INSERT IGNORE INTO cloudtalk_sms
-            (cloudtalk_id, sender, recipient, text, agent, company_id, direction, status, created_date)
-        VALUES (?, ?, ?, ?, ?, ?, 'outbound', 'sent', ?)
-        "#,
+    insert_sms(
+        pool,
+        SmsProvider::Cloudtalk,
+        &sms_row_input(
+            sms,
+            company_id,
+            SmsDirection::Outbound,
+            SmsStatus::Sent,
+            created_date,
+        ),
     )
-    .bind(sms.id)
-    .bind(sms.sender())
-    .bind(sms.recipient())
-    .bind(&sms.text.0)
-    .bind(&sms.agent)
-    .bind(company_id)
-    .bind(created_date)
-    .execute(pool)
     .await
 }
 
@@ -519,6 +528,35 @@ mod tests {
     }
 
     #[test]
+    fn interpolate_without_next_neighbor_uses_receive_time() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 22, 14, 4, 0).unwrap();
+        let prev = SmsTimeNeighbor {
+            cloudtalk_id: 54_459_098,
+            created_date: Utc.with_ymd_and_hms(2026, 9, 22, 13, 41, 27).unwrap(),
+        };
+        let got = interpolate_sms_created_date(now, None, Some(54_459_990), Some(prev), None);
+        assert_eq!(got, now);
+    }
+
+    #[test]
+    fn interpolate_future_payload_without_next_uses_receive_time() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 22, 14, 4, 0).unwrap();
+        let payload = Utc.with_ymd_and_hms(2026, 9, 22, 14, 10, 0).unwrap();
+        let prev = SmsTimeNeighbor {
+            cloudtalk_id: 54_459_098,
+            created_date: Utc.with_ymd_and_hms(2026, 9, 22, 13, 41, 27).unwrap(),
+        };
+        let got = interpolate_sms_created_date(
+            now,
+            Some(payload),
+            Some(54_459_990),
+            Some(prev),
+            None,
+        );
+        assert_eq!(got, now);
+    }
+
+    #[test]
     fn interpolate_splits_neighbor_window() {
         let now = Utc.with_ymd_and_hms(2026, 9, 4, 18, 0, 0).unwrap();
         let prev = SmsTimeNeighbor {
@@ -549,7 +587,7 @@ mod tests {
             "INSERT INTO cloudtalk_sms_attachments \
                 (cloudtalk_sms_id, content_type, filename, s3_key, s3_url, width, height, position) \
              VALUES (?, 'image/jpeg', 'a.jpg', '42/u/a.jpg', 's3://gd-sms-attachments/42/u/a.jpg', 800, 600, 0)",
-            parent as i32,
+            i32::try_from(parent).unwrap(),
         )
         .execute(&pool)
         .await
@@ -561,10 +599,13 @@ mod tests {
             .unwrap();
         assert_eq!(before.c, 1);
 
-        sqlx::query!("DELETE FROM cloudtalk_sms WHERE id = ?", parent as i32)
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query!(
+            "DELETE FROM cloudtalk_sms WHERE id = ?",
+            i32::try_from(parent).unwrap()
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let after = sqlx::query!("SELECT COUNT(*) AS c FROM cloudtalk_sms_attachments")
             .fetch_one(&pool)

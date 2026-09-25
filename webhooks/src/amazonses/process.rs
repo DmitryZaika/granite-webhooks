@@ -12,7 +12,8 @@ use crate::crud::email::{
     resolve_inbound_customer_name,
 };
 use crate::crud::users::{
-    ReceivingEmail, get_company_id_by_user_id, get_id_by_email, get_id_by_email_with_forward,
+    ReceivingEmail, get_company_id_by_user_id, get_id_by_email_normalized,
+    get_id_by_email_with_forward,
 };
 use crate::libs::constants::{OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
@@ -160,10 +161,9 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
     };
     let received_id = match prior.receiver_user_id {
         Some(user_id) => Some(ReceivingEmail::To(user_id)),
-        None => get_id_by_email(pool, &email_info.parsed.receiver_email)
+        None => resolve_first_email_receiver(pool, email_info.parsed)
             .await
-            .unwrap()
-            .map(ReceivingEmail::To),
+            .unwrap(),
     };
     let company_id = resolve_company_id(pool, received_id.map(ReceivingEmail::inner)).await;
     let send_email =
@@ -211,16 +211,22 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Failed to upload attachments");
         }
     };
-    let Some(receiver) = get_id_by_email_with_forward(
-        pool,
-        &email_info.parsed.receiver_email,
-        email_info.parsed.forward_to_email.as_deref(),
-    )
-    .await
-    .unwrap() else {
+    let Some(receiver) = resolve_first_email_receiver(pool, email_info.parsed)
+        .await
+        .unwrap()
+    else {
+        let recipients: Vec<&str> = email_info
+            .parsed
+            .to_recipients
+            .iter()
+            .chain(email_info.parsed.cc_recipients.iter())
+            .chain(email_info.parsed.bcc_recipients.iter())
+            .map(|recipient| recipient.address.as_str())
+            .collect();
         tracing::error!(
             bucket = email_info.bucket,
             to_email = email_info.parsed.receiver_email,
+            ?recipients,
             "Reciever email not found"
         );
         return OK_RESPONSE;
@@ -237,6 +243,33 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
     maybe_cancel_flow_on_inbound_email(pool, &send_email).await;
     maybe_send_inbound_email_telegram(pool, &send_email).await;
     OK_RESPONSE
+}
+
+/// A company user anywhere on To/Cc/Bcc receives the message.
+///
+/// The first `To:` is often the customer (`pdekemper58@gmail.com,
+/// liza@…, masha@…`). Looking only at that address dropped the copy
+/// SES had already accepted for the employees.
+async fn resolve_first_email_receiver(
+    pool: &MySqlPool,
+    parsed: &ParsedEmail,
+) -> Result<Option<ReceivingEmail>, sqlx::Error> {
+    let candidates = parsed
+        .to_recipients
+        .iter()
+        .chain(parsed.cc_recipients.iter())
+        .chain(parsed.bcc_recipients.iter());
+    for recipient in candidates {
+        if let Some(user_id) = get_id_by_email_normalized(pool, &recipient.address).await? {
+            return Ok(Some(ReceivingEmail::To(user_id)));
+        }
+    }
+    get_id_by_email_with_forward(
+        pool,
+        &parsed.receiver_email,
+        parsed.forward_to_email.as_deref(),
+    )
+    .await
 }
 
 async fn maybe_send_inbound_email_telegram(pool: &MySqlPool, send: &SendEmail) {

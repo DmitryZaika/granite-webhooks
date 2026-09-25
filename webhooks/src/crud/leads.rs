@@ -69,7 +69,7 @@ pub async fn create_lead_from_wordpress(
         data.your_message,
         data.attached_file,
         company_id,
-        "wordpress-form",
+        "website",
         "leads"
     )
     .execute(pool)
@@ -130,7 +130,7 @@ pub async fn create_lead_from_facebook(
         data.adset_name,
         data.ad_name,
         company_id,
-        "facebook-form",
+        "facebook",
         "leads"
     )
     .execute(pool)
