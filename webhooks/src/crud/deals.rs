@@ -17,6 +17,7 @@ struct DealMoveContext {
     company_id: Option<i32>,
     group_id: i32,
     list_position: i32,
+    is_won: Option<i32>,
 }
 
 struct NextDealList {
@@ -38,7 +39,8 @@ async fn load_deal_move_context(
             d.list_id,
             c.company_id,
             dl.group_id,
-            dl.position AS list_position
+            dl.position AS list_position,
+            d.is_won
         FROM deals d
         INNER JOIN customers c ON c.id = d.customer_id
         INNER JOIN deals_list dl ON dl.id = d.list_id AND dl.deleted_at IS NULL
@@ -177,6 +179,10 @@ pub async fn move_deal_to_contacted_if_uncontacted(
     let Some(deal) = load_deal_move_context(pool, deal_id).await? else {
         return Ok(false);
     };
+    // A won deal stays on its current list. A customer reply must not reopen it.
+    if deal.is_won == Some(1) {
+        return Ok(false);
+    }
     let Some(first_list_id) = first_list_id_in_group(pool, deal.group_id).await? else {
         return Ok(false);
     };
@@ -619,6 +625,30 @@ mod tests {
         .await
         .unwrap();
         assert!(second_exited.is_none());
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn does_not_move_won_deal(pool: MySqlPool) {
+        let board = setup_board(&pool, Some("3173161456")).await;
+        sqlx::query!(r#"UPDATE deals SET is_won = 1 WHERE id = ?"#, board.deal_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let moved = move_deal_to_contacted_if_uncontacted(&pool, board.deal_id)
+            .await
+            .unwrap();
+        assert!(!moved);
+        assert_eq!(
+            deal_list_id(&pool, board.deal_id).await,
+            board.first_list_id
+        );
+        let is_won: Option<i32> =
+            sqlx::query_scalar!(r#"SELECT is_won FROM deals WHERE id = ?"#, board.deal_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(is_won, Some(1));
     }
 
     #[sqlx::test(migrations = "../migrations")]
