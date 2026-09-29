@@ -18,6 +18,7 @@ pub mod crud;
 pub mod google;
 pub mod libs;
 pub mod middleware;
+pub mod openai;
 pub mod posthog;
 pub mod ringcentral;
 pub mod schemas;

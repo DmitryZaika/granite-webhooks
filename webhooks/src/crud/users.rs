@@ -45,6 +45,7 @@ pub async fn get_sales_users(
             AND c.company_id = u.company_id
             AND c.deleted_at IS NULL
         WHERE u.company_id = ?
+        AND u.is_deleted = 0
         AND (up.position_id = 1 OR up.position_id = 2)
         GROUP BY u.id, u.telegram_id, u.name, up.position_id, user_position_id
         "#,
