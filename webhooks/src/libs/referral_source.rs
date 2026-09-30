@@ -3,7 +3,7 @@
 //! 1. Known values (aliases of `facebook`/`website`, or a name from the company's
 //!    referral source catalog) are rewritten by fixed rules, no AI involved.
 //! 2. Values seen before reuse the remembered decision (`referral_source_aliases`).
-//! 3. New values go to GPT-6 Sol, which must pick one allowed value and say it is
+//! 3. New values go to GPT-6.1 Sol, which must pick one allowed value and say it is
 //!    certain. Only then is the value changed.
 //! 4. Otherwise the lead is saved with the value as sent and a review email goes
 //!    out, at most once a day per value.
@@ -26,7 +26,7 @@ use std::time::Instant;
 
 pub const FACEBOOK: &str = "facebook";
 pub const WEBSITE: &str = "website";
-pub const AI_MODEL: &str = "gpt-6-sol";
+pub const AI_MODEL: &str = "gpt-6.1-sol";
 const AI_FEATURE: &str = "lead_referral_source";
 const AI_NONE: &str = "none";
 /// Length of the `VARCHAR(255)` columns the raw value is stored in.
@@ -219,15 +219,15 @@ impl ReferralClassifier for OpenAiReferralClassifier {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Resolution {
-    /// Resolved the same way for an earlier lead (by GPT-6 Sol or by hand).
+    /// Resolved the same way for an earlier lead (by GPT-6.1 Sol or by hand).
     Remembered(String),
-    /// GPT-6 Sol was certain the value means this allowed value.
+    /// GPT-6.1 Sol was certain the value means this allowed value.
     AiCorrected { value: String, reason: String },
-    /// GPT-6 Sol was not certain, now or earlier, or could not be asked.
+    /// GPT-6.1 Sol was not certain, now or earlier, or could not be asked.
     NeedsReview { reason: String },
 }
 
-/// What to remember about a value after asking GPT-6 Sol.
+/// What to remember about a value after asking GPT-6.1 Sol.
 #[derive(Debug, PartialEq, Eq)]
 pub struct AliasDecision {
     pub resolved_value: Option<String>,
@@ -236,7 +236,7 @@ pub struct AliasDecision {
 }
 
 /// Resolves a value no fixed rule recognized. Also returns what to remember
-/// when GPT-6 Sol was asked.
+/// when GPT-6.1 Sol was asked.
 pub async fn resolve_unknown<C: ReferralClassifier>(
     company_id: i32,
     lead: &ReferralContext<'_>,
@@ -257,7 +257,7 @@ pub async fn resolve_unknown<C: ReferralClassifier>(
         let earlier = remembered.reason.as_deref().unwrap_or("no reason given");
         return (
             Resolution::NeedsReview {
-                reason: format!("GPT-6 Sol was not sure when this value was first seen: {earlier}"),
+                reason: format!("GPT-6.1 Sol was not sure when this value was first seen: {earlier}"),
             },
             None,
         );
@@ -272,7 +272,7 @@ pub async fn resolve_unknown<C: ReferralClassifier>(
                 ai_certain: None,
                 reason: e.clone(),
             };
-            let reason = format!("GPT-6 Sol check failed: {e}");
+            let reason = format!("GPT-6.1 Sol check failed: {e}");
             return (Resolution::NeedsReview { reason }, Some(decision));
         }
     };
@@ -297,11 +297,11 @@ pub async fn resolve_unknown<C: ReferralClassifier>(
     }
     let reason = if verdict.certain && verdict.referral_source != AI_NONE {
         format!(
-            "GPT-6 Sol answered \"{}\", which is not an allowed value",
+            "GPT-6.1 Sol answered \"{}\", which is not an allowed value",
             verdict.referral_source
         )
     } else {
-        format!("GPT-6 Sol was not sure: {}", verdict.reason)
+        format!("GPT-6.1 Sol was not sure: {}", verdict.reason)
     };
     let decision = AliasDecision {
         resolved_value: None,
@@ -400,7 +400,7 @@ pub async fn check_referral_source<C: ReferralClassifier>(
                 from = %raw,
                 to = %value,
                 %reason,
-                "GPT-6 Sol corrected lead referral_source"
+                "GPT-6.1 Sol corrected lead referral_source"
             );
             set_referral_source(form, &raw, value);
             None
@@ -469,7 +469,7 @@ pub fn review_email(
 
     let body = format!(
         "<p>A lead for company #{company_id} came in through the new-lead-form webhook with a referral source that is not recognized. \
-GPT-6 Sol was not certain what it should be, so the lead was saved with the value exactly as sent.</p>\
+GPT-6.1 Sol was not certain what it should be, so the lead was saved with the value exactly as sent.</p>\
 <p>Until it is fixed, this lead is <b>not counted</b> in the Facebook / Website statistics.</p>\
 <table style=\"border-collapse:collapse\">{table}</table>\
 <p>Allowed values: {allowed}</p>\
@@ -710,7 +710,7 @@ mod tests {
         assert_eq!(
             resolution,
             Resolution::NeedsReview {
-                reason: "GPT-6 Sol was not sure when this value was first seen: could be Facebook or Instagram".to_string()
+                reason: "GPT-6.1 Sol was not sure when this value was first seen: could be Facebook or Instagram".to_string()
             }
         );
         assert_eq!(decision, None);
@@ -743,7 +743,7 @@ mod tests {
         assert_eq!(
             resolution,
             Resolution::NeedsReview {
-                reason: "GPT-6 Sol answered \"tiktok\", which is not an allowed value".to_string()
+                reason: "GPT-6.1 Sol answered \"tiktok\", which is not an allowed value".to_string()
             }
         );
     }
@@ -762,7 +762,7 @@ mod tests {
         assert_eq!(
             resolution,
             Resolution::NeedsReview {
-                reason: "GPT-6 Sol check failed: OPEN_AI_SECRET_KEY is not set".to_string()
+                reason: "GPT-6.1 Sol check failed: OPEN_AI_SECRET_KEY is not set".to_string()
             }
         );
         assert_eq!(decision.unwrap().ai_certain, None);
@@ -805,7 +805,7 @@ mod tests {
         }));
         let review = ReferralReview {
             sent: "Facebook <One>".to_string(),
-            reason: "GPT-6 Sol was not sure: two matches".to_string(),
+            reason: "GPT-6.1 Sol was not sure: two matches".to_string(),
             allowed: allowed_values(&[]),
             times_seen: 3,
         };
