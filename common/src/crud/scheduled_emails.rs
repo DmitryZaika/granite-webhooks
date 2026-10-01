@@ -2,7 +2,8 @@ use chrono::{Duration, Utc};
 use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
 
-use crate::crud::email_template::{get_templates_for_list_id, EmailTemplate};
+use crate::crud::email_template::{EmailTemplate, get_templates_for_list_id};
+use crate::utils::email_send_window::clamp_automated_email_send_at;
 
 pub struct ScheduledEmail {
     pub id: i32,
@@ -24,8 +25,25 @@ pub async fn insert_scheduled_email(
     company_id: i32,
     list_id: Option<i32>,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
+    let existing = sqlx::query_scalar!(
+        r#"
+        SELECT id FROM scheduled_emails
+        WHERE template_id = ?
+          AND customer_id = ?
+          AND status IN ('pending', 'sent')
+        LIMIT 1
+        "#,
+        template.id,
+        customer_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    if existing.is_some() {
+        return Ok(sqlx::query("SELECT 1").execute(pool).await?);
+    }
+
     let hour_delay: i64 = template.hour_delay.unwrap_or(0).into();
-    let send_at = Utc::now() + Duration::hours(hour_delay);
+    let send_at = clamp_automated_email_send_at(Utc::now() + Duration::hours(hour_delay));
     sqlx::query!(
         r#"
         INSERT INTO scheduled_emails (template_id, deal_id, list_id, customer_id, user_id, company_id, send_at)
@@ -79,6 +97,56 @@ pub async fn cancel_pending_emails_left_list(
     .await
 }
 
+pub async fn cancel_pending_emails_for_non_leads(
+    pool: &MySqlPool,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    sqlx::query!(
+        r#"
+        UPDATE scheduled_emails se
+        INNER JOIN customers c ON c.id = se.customer_id
+        SET se.status = 'cancelled',
+            se.error_message = 'Customer is not a lead'
+        WHERE se.status = 'pending'
+          AND LOWER(TRIM(IFNULL(c.source, ''))) <> 'leads'
+        "#
+    )
+    .execute(pool)
+    .await
+}
+
+async fn is_lead_customer(pool: &MySqlPool, customer_id: i32) -> Result<bool, sqlx::Error> {
+    let source = sqlx::query_scalar!(
+        r#"SELECT source FROM customers WHERE id = ? AND deleted_at IS NULL"#,
+        customer_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(source
+        .flatten()
+        .map(|value| value.trim().eq_ignore_ascii_case("leads"))
+        .unwrap_or(false))
+}
+
+async fn customer_has_other_deals(
+    pool: &MySqlPool,
+    customer_id: i32,
+    exclude_deal_id: u64,
+) -> Result<bool, sqlx::Error> {
+    let other = sqlx::query_scalar!(
+        r#"SELECT id FROM deals
+           WHERE customer_id = ?
+             AND id <> ?
+             AND deleted_at IS NULL
+           LIMIT 1"#,
+        customer_id,
+        exclude_deal_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(other.is_some())
+}
+
 pub async fn schedule_templates_for_deal_list(
     pool: &MySqlPool,
     list_id: i32,
@@ -86,7 +154,14 @@ pub async fn schedule_templates_for_deal_list(
     deal_id: u64,
     customer_id: i32,
     user_id: i32,
+    new_deal: bool,
 ) -> Result<(), sqlx::Error> {
+    if new_deal && customer_has_other_deals(pool, customer_id, deal_id).await? {
+        return Ok(());
+    }
+    if !is_lead_customer(pool, customer_id).await? {
+        return Ok(());
+    }
     let templates = get_templates_for_list_id(pool, list_id, company_id).await?;
     for template in templates {
         insert_scheduled_email(
@@ -110,10 +185,19 @@ pub async fn reschedule_templates_for_deal_list(
     deal_id: u64,
     customer_id: i32,
     user_id: i32,
+    new_deal: bool,
 ) -> Result<(), sqlx::Error> {
     cancel_pending_scheduled_emails_for_deal(pool, deal_id).await?;
-    schedule_templates_for_deal_list(pool, list_id, company_id, deal_id, customer_id, user_id)
-        .await
+    schedule_templates_for_deal_list(
+        pool,
+        list_id,
+        company_id,
+        deal_id,
+        customer_id,
+        user_id,
+        new_deal,
+    )
+    .await
 }
 
 pub async fn get_ready_scheduled_emails(
@@ -122,7 +206,7 @@ pub async fn get_ready_scheduled_emails(
     sqlx::query_as!(
         ScheduledEmail,
         r#"
-        SELECT scheduled_emails.id, template_body, template_subject, scheduled_emails.customer_id, customers_emails.email, scheduled_emails.user_id, scheduled_emails.deal_id, scheduled_emails.company_id
+        SELECT scheduled_emails.id, template_body, template_subject, scheduled_emails.customer_id, customers_emails.email, COALESCE(customers.sales_rep, scheduled_emails.user_id) AS "user_id!", scheduled_emails.deal_id, scheduled_emails.company_id
         FROM scheduled_emails
         JOIN customers ON scheduled_emails.customer_id = customers.id
         LEFT JOIN customers_emails ON customers.email_id = customers_emails.id
@@ -130,6 +214,7 @@ pub async fn get_ready_scheduled_emails(
         WHERE send_at <= UTC_TIMESTAMP()
           AND sent_at IS NULL
           AND status = 'pending'
+          AND LOWER(TRIM(IFNULL(customers.source, ''))) = 'leads'
           AND (
             scheduled_emails.list_id IS NULL
             OR EXISTS (
@@ -166,14 +251,24 @@ pub async fn mark_scheduled_email_as_failed(
     pool: &MySqlPool,
     id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
-    sqlx::query!(
+    mark_scheduled_email_failed_with_reason(pool, id, "failed").await
+}
+
+pub async fn mark_scheduled_email_failed_with_reason(
+    pool: &MySqlPool,
+    id: i32,
+    error_message: &str,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    sqlx::query(
         r#"
         UPDATE scheduled_emails
-        SET status = 'failed'
+        SET status = 'failed',
+            error_message = ?
         WHERE id = ?
         "#,
-        id
     )
+    .bind(error_message)
+    .bind(id)
     .execute(pool)
     .await
 }
@@ -182,6 +277,7 @@ pub async fn mark_scheduled_email_as_failed(
 mod tests {
     use super::*;
     use sqlx::MySqlPool;
+    use sqlx::Row;
     use std::time::Duration;
 
     /// Helper: insert a user and return its id.
@@ -205,7 +301,7 @@ mod tests {
         company_id: i32,
     ) -> i32 {
         let result = sqlx::query!(
-            "INSERT INTO customers (name, company_id) VALUES (?, ?)",
+            "INSERT INTO customers (name, company_id, source) VALUES (?, ?, 'leads')",
             name,
             company_id
         )
@@ -257,6 +353,20 @@ mod tests {
         EmailTemplate { id, hour_delay }
     }
 
+    async fn make_all_scheduled_emails_due(pool: &MySqlPool) {
+        sqlx::query(
+            r#"
+            UPDATE scheduled_emails se
+            JOIN email_templates et ON et.id = se.template_id
+            SET se.send_at = UTC_TIMESTAMP() - INTERVAL 1 MINUTE
+            WHERE IFNULL(et.hour_delay, 0) <= 0
+            "#,
+        )
+        .execute(pool)
+        .await
+        .expect("force scheduled emails due");
+    }
+
     /// Test that emails with hour_delay=0 appear in ready emails.
     #[sqlx::test(migrations = "../migrations")]
     async fn test_immediate_send_appears_in_ready(pool: MySqlPool) {
@@ -269,8 +379,8 @@ mod tests {
             .await
             .expect("insert should succeed");
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool)
             .await
@@ -297,8 +407,8 @@ mod tests {
             .await
             .expect("insert should succeed");
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool)
             .await
@@ -347,8 +457,8 @@ mod tests {
             .await
             .expect("insert should succeed");
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         // Should appear in ready.
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
@@ -410,8 +520,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         // At this point, 2 should be ready (imm + mark).
         let ready_before = get_ready_scheduled_emails(&pool).await.unwrap();
@@ -464,8 +574,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(ready.len(), 1);
@@ -489,6 +599,8 @@ mod tests {
         insert_scheduled_email(&pool, template, 90030, customer_id, user_id, 1, None)
             .await
             .unwrap();
+
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(
@@ -522,8 +634,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         let email_id = ready[0].id;
@@ -594,8 +706,8 @@ mod tests {
         .await
         .unwrap();
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(ready.len(), 3);
@@ -642,8 +754,8 @@ mod tests {
         .await
         .unwrap();
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(ready.len(), 1);
@@ -662,8 +774,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Allow send_at to become <= NOW() in MySQL.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Force due so get_ready is independent of the 8:30 AM send window.
+        make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
         assert_eq!(ready.len(), 1);
@@ -699,5 +811,242 @@ mod tests {
         let result = mark_scheduled_email_as_failed(&pool, -1).await;
         assert!(result.is_ok(), "marking a non-existent id should not error");
         assert_eq!(result.unwrap().rows_affected(), 0);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_does_not_schedule_same_template_twice_for_customer(pool: MySqlPool) {
+        let user_id = insert_test_user(&pool, "test_dup_tpl@example.com", "Dup Tpl").await;
+        let customer_id = insert_test_customer(&pool, "custdup@test.com", "Cust Dup", 1).await;
+        let template_id = insert_test_template(&pool, "test_dup_tpl", "Hello again", Some(0)).await;
+
+        insert_scheduled_email(
+            &pool,
+            make_template(template_id, Some(0)),
+            90080,
+            customer_id,
+            user_id,
+            1,
+            None,
+        )
+        .await
+        .unwrap();
+        insert_scheduled_email(
+            &pool,
+            make_template(template_id, Some(0)),
+            90081,
+            customer_id,
+            user_id,
+            1,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) FROM scheduled_emails WHERE customer_id = ? AND template_id = ?"#,
+            customer_id,
+            template_id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn thank_you_for_lead_on_not_contacted_yet_is_ready_and_recorded(
+        pool: MySqlPool,
+    ) {
+        use crate::crud::outbound_email::{
+            OutboundScheduledEmail, record_outbound_scheduled_email,
+        };
+
+        let user_id =
+            insert_test_user(&pool, "dema@granitedepotindy.com", "Dema").await;
+        let customer_id = insert_test_customer(
+            &pool,
+            "dema.gdindy@gmail.com",
+            "Dema Test",
+            1,
+        )
+        .await;
+
+        let group_id = sqlx::query("INSERT INTO groups_list (name, company_id) VALUES (?, 1)")
+            .bind("Leads")
+            .execute(&pool)
+            .await
+            .unwrap()
+            .last_insert_id() as i32;
+        let list_id = sqlx::query(
+            "INSERT INTO deals_list (name, group_id, position) VALUES (?, ?, 0)",
+        )
+        .bind("Not Contacted Yet")
+        .bind(group_id)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id() as i32;
+        let deal_id = sqlx::query(
+            "INSERT INTO deals (customer_id, status, list_id, position, user_id) VALUES (?, 'Not Contacted Yet', ?, 0, ?)",
+        )
+        .bind(customer_id)
+        .bind(list_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+
+        sqlx::query(
+            "INSERT INTO email_templates (template_name, template_subject, template_body, company_id, lead_list_id, hour_delay, show_template) VALUES (?, ?, ?, 1, ?, 0, 1)",
+        )
+        .bind("Thank You for Your Request")
+        .bind("Thank You for Your Request")
+        .bind("<p>Hi Dema</p>")
+        .bind(list_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        schedule_templates_for_deal_list(
+            &pool,
+            list_id,
+            1,
+            deal_id,
+            customer_id,
+            user_id,
+            false,
+        )
+        .await
+        .unwrap();
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        make_all_scheduled_emails_due(&pool).await;
+
+        let ready = get_ready_scheduled_emails(&pool).await.unwrap();
+        assert_eq!(ready.len(), 1, "hour_delay=0 Thank You should be ready to send");
+        assert_eq!(ready[0].email.as_deref(), Some("dema.gdindy@gmail.com"));
+        assert_eq!(ready[0].template_subject, "Thank You for Your Request");
+
+        let email_id = record_outbound_scheduled_email(
+            &pool,
+            &OutboundScheduledEmail {
+                scheduled_email_id: ready[0].id,
+                user_id,
+                customer_id,
+                company_id: 1,
+                deal_id: i32::try_from(deal_id).unwrap(),
+                subject: ready[0].template_subject.clone(),
+                html_body: ready[0].template_body.clone(),
+                sender_from: "\"Dema Granite Depot\" <dema@granitedepotindy.com>".to_string(),
+                recipient_email: ready[0].email.clone().unwrap(),
+                message_id: "0100018f-thank-you-history@email.amazonses.com".to_string(),
+            },
+        )
+        .await
+        .expect("recording the Thank You should succeed");
+
+        mark_scheduled_email_as_sent(&pool, ready[0].id)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            r#"
+            SELECT sender_user_id, subject, receiver_email, deal_id, thread_id, deleted_at
+            FROM emails
+            WHERE id = ?
+            "#,
+        )
+        .bind(email_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(row.get::<Option<i32>, _>("sender_user_id"), Some(user_id));
+        assert_eq!(
+            row.get::<Option<String>, _>("subject").as_deref(),
+            Some("Thank You for Your Request")
+        );
+        assert_eq!(
+            row.get::<Option<String>, _>("receiver_email").as_deref(),
+            Some("dema.gdindy@gmail.com")
+        );
+        assert_eq!(row.get::<Option<u64>, _>("deal_id"), Some(deal_id));
+        assert!(row.get::<Option<chrono::NaiveDateTime>, _>("deleted_at").is_none());
+        assert!(
+            row.get::<Option<String>, _>("thread_id")
+                .as_ref()
+                .is_some_and(|id| id.len() == 36)
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn does_not_schedule_thank_you_when_customer_is_not_a_lead(pool: MySqlPool) {
+        let user_id = insert_test_user(&pool, "rep@example.com", "Rep").await;
+        let customer_id = sqlx::query!(
+            "INSERT INTO customers (name, company_id, source) VALUES (?, 1, 'walk-in')",
+            "Walk In"
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id() as i32;
+
+        let group_id = sqlx::query("INSERT INTO groups_list (name, company_id) VALUES (?, 1)")
+            .bind("Leads")
+            .execute(&pool)
+            .await
+            .unwrap()
+            .last_insert_id() as i32;
+        let list_id = sqlx::query(
+            "INSERT INTO deals_list (name, group_id, position) VALUES (?, ?, 0)",
+        )
+        .bind("Not Contacted Yet")
+        .bind(group_id)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id() as i32;
+        let deal_id = sqlx::query(
+            "INSERT INTO deals (customer_id, status, list_id, position, user_id) VALUES (?, 'Not Contacted Yet', ?, 0, ?)",
+        )
+        .bind(customer_id)
+        .bind(list_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+
+        sqlx::query(
+            "INSERT INTO email_templates (template_name, template_subject, template_body, company_id, lead_list_id, hour_delay, show_template) VALUES (?, ?, ?, 1, ?, 0, 1)",
+        )
+        .bind("Thank You for Your Request")
+        .bind("Thank You for Your Request")
+        .bind("<p>Hi</p>")
+        .bind(list_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        schedule_templates_for_deal_list(
+            &pool,
+            list_id,
+            1,
+            deal_id,
+            customer_id,
+            user_id,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scheduled_emails WHERE customer_id = ?")
+            .bind(customer_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

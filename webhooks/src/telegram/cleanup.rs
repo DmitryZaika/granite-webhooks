@@ -48,7 +48,10 @@ where
     };
 
     for message in messages {
-        if let Err(error) = bot.delete_message(message.chat_id, message.message_id).await {
+        if let Err(error) = bot
+            .delete_message(message.chat_id, message.message_id)
+            .await
+        {
             tracing::error!(
                 ?error,
                 chat_id = message.chat_id,
@@ -140,7 +143,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(active_message_count(&pool, company_id, customer_id).await, 2);
+        assert_eq!(
+            active_message_count(&pool, company_id, customer_id).await,
+            2
+        );
         assert_eq!(bot.sent.lock().unwrap().len(), 2);
     }
 
@@ -163,7 +169,10 @@ mod tests {
         let response =
             delete_lead_telegram_messages_inner(&pool, &bot, company_id, customer_id).await;
         assert_eq!(response, OK_RESPONSE);
-        assert_eq!(active_message_count(&pool, company_id, customer_id).await, 0);
+        assert_eq!(
+            active_message_count(&pool, company_id, customer_id).await,
+            0
+        );
 
         let mut deleted = bot.deleted.lock().unwrap().clone();
         deleted.sort();
@@ -184,7 +193,10 @@ mod tests {
         let response =
             delete_lead_telegram_messages_inner(&pool, &bot, other_company_id, customer_id).await;
         assert_eq!(response, FORBIDDEN_RESPONSE);
-        assert_eq!(active_message_count(&pool, company_id, customer_id).await, 1);
+        assert_eq!(
+            active_message_count(&pool, company_id, customer_id).await,
+            1
+        );
         assert!(bot.deleted.lock().unwrap().is_empty());
     }
 
@@ -202,7 +214,10 @@ mod tests {
         let response =
             delete_lead_telegram_messages_inner(&pool, &bot, company_id, customer_id).await;
         assert_eq!(response, OK_RESPONSE);
-        assert_eq!(active_message_count(&pool, company_id, customer_id).await, 0);
+        assert_eq!(
+            active_message_count(&pool, company_id, customer_id).await,
+            0
+        );
         assert!(bot.deleted.lock().unwrap().is_empty());
     }
 
@@ -242,7 +257,10 @@ mod tests {
         let response =
             delete_lead_telegram_messages_inner(&pool, &bot, company_id, customer_id).await;
         assert_eq!(response, OK_RESPONSE);
-        assert_eq!(active_message_count(&pool, company_id, customer_id).await, 0);
+        assert_eq!(
+            active_message_count(&pool, company_id, customer_id).await,
+            0
+        );
 
         let mut deleted = bot.deleted.lock().unwrap().clone();
         deleted.sort();
@@ -303,7 +321,10 @@ mod tests {
         let response =
             delete_lead_telegram_messages_inner(&pool, &bot, company_id, customer_id).await;
         assert_eq!(response, OK_RESPONSE);
-        assert_eq!(active_message_count(&pool, company_id, customer_id).await, 0);
+        assert_eq!(
+            active_message_count(&pool, company_id, customer_id).await,
+            0
+        );
 
         let mut deleted = bot.deleted.lock().unwrap().clone();
         deleted.sort();
@@ -353,7 +374,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(active_message_count(&pool, company_id, customer_id).await, 1);
+        assert_eq!(
+            active_message_count(&pool, company_id, customer_id).await,
+            1
+        );
         assert_eq!(
             active_message_count(&pool, company_id, other_customer_id).await,
             1
@@ -362,7 +386,10 @@ mod tests {
         let response =
             delete_lead_telegram_messages_inner(&pool, &bot, company_id, customer_id).await;
         assert_eq!(response, OK_RESPONSE);
-        assert_eq!(active_message_count(&pool, company_id, customer_id).await, 0);
+        assert_eq!(
+            active_message_count(&pool, company_id, customer_id).await,
+            0
+        );
         assert_eq!(
             active_message_count(&pool, company_id, other_customer_id).await,
             1
@@ -391,7 +418,10 @@ mod tests {
         let response =
             delete_lead_telegram_messages_inner(&pool, &bot, company_id, customer_id).await;
         assert_eq!(response, OK_RESPONSE);
-        assert_eq!(active_message_count(&pool, company_id, customer_id).await, 0);
+        assert_eq!(
+            active_message_count(&pool, company_id, customer_id).await,
+            0
+        );
         assert_eq!(bot.deleted.lock().unwrap().clone(), vec![(111, 10)]);
     }
 }

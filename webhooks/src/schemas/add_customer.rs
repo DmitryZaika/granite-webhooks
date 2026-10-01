@@ -322,6 +322,10 @@ pub struct NewLeadForm {
     #[serde(default)]
     #[schema(example = "cabinet_quote")]
     pub form_name: Option<String>,
+
+    /// `referral_source` as sent, set only when it was rewritten before saving.
+    #[serde(skip)]
+    pub referral_source_raw: Option<String>,
 }
 
 impl LeadPayload for NewLeadForm {

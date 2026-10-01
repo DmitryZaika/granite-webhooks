@@ -6,15 +6,18 @@ use crate::crud::user::get_user_template;
 pub struct UserVariableData {
     pub name: Option<String>,
     pub email: Option<String>,
+    pub email_name: Option<String>,
     pub phone_number: Option<String>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Default)]
 pub struct InfoVariableData {
+    pub id: Option<i32>,
     pub name: Option<String>,
     pub address: Option<String>,
     pub hours_of_operation: Option<String>,
     pub domain: Option<String>,
+    pub subdomain: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -38,12 +41,13 @@ pub async fn fetch_template_variable_data(
     let user = get_user_template(pool, user_id).await?;
     let (customer_data, company_data) = tokio::try_join!(
         fetch_customer_data(pool, deal_id, customer_id, company_id),
-        fetch_company_data(pool, user.company_id)
+        fetch_company_data(pool, Some(company_id))
     )?;
 
     let clean_user = UserVariableData {
         name: user.name,
         email: user.email,
+        email_name: user.email_name,
         phone_number: user.phone_number,
     };
 
@@ -83,8 +87,7 @@ async fn fetch_customer_data(
             return Ok(Some(InfoVariableData {
                 name: r.name,
                 address: r.address,
-                hours_of_operation: None,
-                domain: None,
+                ..Default::default()
             }));
         }
     }
@@ -107,8 +110,7 @@ async fn fetch_customer_data(
             return Ok(Some(InfoVariableData {
                 name: r.name,
                 address: r.address,
-                hours_of_operation: None,
-                domain: None,
+                ..Default::default()
             }));
         }
     }
@@ -127,7 +129,7 @@ async fn fetch_company_data(
 
     let row = sqlx::query!(
         r#"
-        SELECT name, address, hours_of_operation, domain
+        SELECT id, name, address, hours_of_operation, domain, subdomain
         FROM company
         WHERE id = ?
         LIMIT 1
@@ -138,9 +140,11 @@ async fn fetch_company_data(
     .await?;
 
     Ok(row.map(|r| InfoVariableData {
+        id: Some(r.id),
         name: Some(r.name),
         address: r.address,
         hours_of_operation: r.hours_of_operation,
         domain: r.domain,
+        subdomain: r.subdomain,
     }))
 }

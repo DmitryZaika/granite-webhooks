@@ -4,11 +4,19 @@ use sqlx::MySqlPool;
 
 use crate::amazon::bucket::{CustomClient, S3Bucket};
 use crate::amazonses::parse_email::parse_email;
-use crate::amazonses::process::{EmailInfo, process_first_email, process_reply_email};
+use crate::amazonses::process::{EmailInfo, process_reply_email};
 use crate::amazonses::schemas::{S3Event, SesEvent};
 use crate::crud::email::{create_email_read, get_full_message_id};
-use crate::libs::constants::{BAD_REQUEST, NOT_FOUND_RESPONSE, OK_RESPONSE, internal_error};
+use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
+
+fn is_missing_s3_object(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("nosuchkey")
+        || lower.contains("the specified key does not exist")
+        || lower.contains("nosuchbucket")
+        || lower.contains("the specified bucket does not exist")
+}
 
 pub async fn read_receipt_handler(
     State(pool): State<MySqlPool>,
@@ -20,7 +28,7 @@ pub async fn read_receipt_handler(
 
     let final_message_id = match get_full_message_id(&pool, &message_id).await {
         Ok(Some(message_id)) => message_id,
-        Ok(None) => return NOT_FOUND_RESPONSE,
+        Ok(None) => return OK_RESPONSE,
         Err(error) => {
             tracing::error!(
                 "Error fetching email read: {} from the db: {}",
@@ -59,6 +67,9 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
                 key = key,
                 "Failed to read email content from S3"
             );
+            if is_missing_s3_object(&error) {
+                return OK_RESPONSE;
+            }
             return internal_error("Unable to read email content from S3");
         }
     };
@@ -81,13 +92,11 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
         bucket,
         key,
     };
-    // Either header is enough to attempt threading; `process_reply_email`
-    // falls back to treating it as a new thread when nothing matches.
-    if parsed.in_reply_to.is_some() || !parsed.references.is_empty() {
-        process_reply_email(pool, client, email_info).await
-    } else {
-        process_first_email(pool, client, email_info).await
-    }
+    // Always attempt threading. `In-Reply-To` / `References` come first;
+    // `process_reply_email` also matches a recent outbound with the same
+    // subject and addresses (Yahoo/iPhone sometimes omits those headers)
+    // and falls back to a new thread when nothing matches.
+    process_reply_email(pool, client, email_info).await
 }
 
 pub async fn receive_handler(
@@ -106,6 +115,18 @@ mod local_tests {
     use crate::tests::utils::{MockClient, get_emails, insert_email, insert_user, new_test_app};
     use axum::http::StatusCode;
     use sqlx::MySqlPool;
+
+    #[test]
+    fn missing_s3_object_errors_are_detected() {
+        assert!(is_missing_s3_object(
+            "service error: NoSuchKey: The specified key does not exist."
+        ));
+        assert!(is_missing_s3_object(
+            "NoSuchBucket: The specified bucket does not exist"
+        ));
+        assert!(!is_missing_s3_object("AccessDenied"));
+        assert!(!is_missing_s3_object("timeout connecting to S3"));
+    }
 
     struct ReadDb {
         message_id: String,
@@ -178,6 +199,16 @@ mod local_tests {
         assert_eq!(result.message_id, message_id);
         assert_eq!(result.user_agent.unwrap(), expected_user_agent);
         assert_eq!(result.ip_address.unwrap(), expected_ip);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn open_event_unknown_message_is_ok(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+        let response = app
+            .post("/ses/read-receipt")
+            .json(&ses_open_event_json())
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -338,14 +369,49 @@ mod local_tests {
         assert_eq!(result[1].message_id, Some(MESSAGE_ID.to_string()));
     }
 
+    /// Customer is the first To. Employees later on the same header still receive it.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn received_when_customer_is_first_to(pool: MySqlPool) {
+        const LIZA: &str = "liza@granitedepotindy.com";
+        const MASHA: &str = "masha@granitedepotindy.com";
+        let liza_id = insert_user(&pool, LIZA, None).await.unwrap();
+        let masha_id = insert_user(&pool, MASHA, None).await.unwrap();
+        let mock_client = MockClient::new("src/tests/data/customer_first_to.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].receiver_user_id.unwrap(), liza_id);
+        assert_eq!(
+            result[0].receiver_email.as_deref(),
+            Some("pdekemper58@gmail.com")
+        );
+
+        let participant_users: Vec<(String, Option<i32>)> = sqlx::query_as(
+            "SELECT email, user_id FROM email_participants WHERE type = 'to' AND user_id IS NOT NULL ORDER BY position",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            participant_users,
+            vec![
+                (LIZA.to_string(), Some(liza_id)),
+                (MASHA.to_string(), Some(masha_id)),
+            ]
+        );
+    }
+
     #[sqlx::test(migrations = "../migrations")]
     async fn received_no_start_email(pool: MySqlPool) {
         let mock_client = MockClient::new("src/tests/data/external1.eml");
         let data: S3Event = ses_received_json();
         let response = process_ses_received_event(&pool, mock_client, &data).await;
 
-        let correct_response = (StatusCode::NOT_FOUND, "receiver email not found");
-        assert_eq!(response, correct_response);
+        assert_eq!(response, OK_RESPONSE);
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 0);
@@ -468,8 +534,7 @@ mod local_tests {
         let data: S3Event = ses_received_json();
         let response = process_ses_received_event(&pool, mock_client, &data).await;
 
-        let correct_response = (StatusCode::NOT_FOUND, "receiver email not found");
-        assert_eq!(response, correct_response);
+        assert_eq!(response, OK_RESPONSE);
 
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
@@ -583,5 +648,91 @@ mod local_tests {
             let extension = attachment.url.split('.').last().unwrap();
             assert_eq!(extension, filename.split('.').last().unwrap());
         }
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn yahoo_thank_you_reply_joins_truncated_ses_message_id(pool: MySqlPool) {
+        insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        const FULL_ID: &str =
+            "010f01a01a13f5b0-4f13d0d2-4e15-41f9-abfe-2b297e4c650d-000000@us-east-2.amazonses.com";
+        let truncated: String = FULL_ID.chars().take(72).collect();
+        insert_email(&pool, &truncated).await.unwrap();
+
+        let mock_client = MockClient::new("src/tests/data/yahoo_iphone_thank_you_reply.eml");
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(
+            result[1].subject,
+            Some("Re: Thank You for Your Request".to_string())
+        );
+        assert_eq!(
+            result[1].thread_id.clone().unwrap(),
+            result[0].thread_id.clone().unwrap()
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn yahoo_thank_you_reply_joins_uuid_backfilled_drip(pool: MySqlPool) {
+        let user_id = insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        let thread_id = uuid::Uuid::new_v4().to_string();
+        let drip_message_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            r#"
+            INSERT INTO emails (
+                sender_user_id, subject, body, message_id, thread_id,
+                sender_email, receiver_email
+            )
+            VALUES (?, 'Thank You for Your Request', 'Thanks', ?, ?, ?, ?)
+            "#,
+        )
+        .bind(user_id)
+        .bind(&drip_message_id)
+        .bind(&thread_id)
+        .bind("dema@granitedepotindy.com")
+        .bind("dicemoon@sbcglobal.net")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mock_client = MockClient::new("src/tests/data/yahoo_iphone_thank_you_reply.eml");
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[1].thread_id.as_deref(), Some(thread_id.as_str()));
+        assert_eq!(
+            result[1].subject,
+            Some("Re: Thank You for Your Request".to_string())
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn yahoo_reply_without_parent_keeps_quoted_original(pool: MySqlPool) {
+        insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/yahoo_iphone_thank_you_reply.eml");
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        let body = result[0].body.as_deref().unwrap_or("");
+        assert!(body.contains("I liked the glacier white leather granite."));
+        assert!(
+            body.contains("Thank you for your request"),
+            "Expected the unmatched reply to keep the quoted original, got: {body}"
+        );
     }
 }

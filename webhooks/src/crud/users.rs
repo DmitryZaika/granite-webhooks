@@ -45,6 +45,7 @@ pub async fn get_sales_users(
             AND c.company_id = u.company_id
             AND c.deleted_at IS NULL
         WHERE u.company_id = ?
+        AND u.is_deleted = 0
         AND (up.position_id = 1 OR up.position_id = 2)
         GROUP BY u.id, u.telegram_id, u.name, up.position_id, user_position_id
         "#,
@@ -146,6 +147,44 @@ pub async fn get_user_notifications_tg_info(
     .await
 }
 
+pub async fn get_company_id_by_cloudtalk_agent(
+    pool: &MySqlPool,
+    agent_id: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar::<_, i32>(
+        r#"
+        SELECT company_id
+        FROM users
+        WHERE is_deleted = 0
+          AND company_id IS NOT NULL
+          AND cloudtalk_agent_id = ?
+        LIMIT 1
+        "#,
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_company_id_by_cloudtalk_phone(
+    pool: &MySqlPool,
+    phone_last10: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar::<_, i32>(
+        r#"
+        SELECT company_id
+        FROM users
+        WHERE is_deleted = 0
+          AND company_id IS NOT NULL
+          AND RIGHT(REGEXP_REPLACE(COALESCE(cloudtalk_phone_number, ''), '[^0-9]', ''), 10) = ?
+        LIMIT 1
+        "#,
+    )
+    .bind(phone_last10)
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn get_user_id_by_cloudtalk_agent(
     pool: &MySqlPool,
     company_id: i32,
@@ -163,6 +202,27 @@ pub async fn get_user_id_by_cloudtalk_agent(
         company_id,
         agent_id
     )
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_user_id_by_ringcentral_agent(
+    pool: &MySqlPool,
+    company_id: i32,
+    extension_id: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar::<_, i32>(
+        r#"
+        SELECT id
+        FROM users
+        WHERE company_id = ?
+          AND ringcentral_extension_id = ?
+          AND is_deleted = 0
+        LIMIT 1
+        "#,
+    )
+    .bind(company_id)
+    .bind(extension_id)
     .fetch_optional(pool)
     .await
 }

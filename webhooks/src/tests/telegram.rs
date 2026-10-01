@@ -156,6 +156,7 @@ impl Telegram for MockTelegram {
         chat: C,
         text: T,
         repliable: InlineKeyboardMarkup,
+        _parse_mode: Option<teloxide::types::ParseMode>,
     ) -> Result<Message, teloxide::RequestError>
     where
         C: Into<Recipient> + Send,

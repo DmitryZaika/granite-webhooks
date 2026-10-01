@@ -32,14 +32,16 @@ pub async fn get_due_activity_deadline_reminders(
         JOIN customers c ON c.id = d.customer_id
         JOIN users u ON u.id = n.user_id
         WHERE n.notification_type = 'activity_deadline_reminder'
-          AND n.is_done = 0
           AND (n.actor_name IS NULL OR n.actor_name != ?)
           AND n.due_at <= UTC_TIMESTAMP()
+          AND n.due_at > UTC_TIMESTAMP() - INTERVAL 1 MINUTE
           AND EXISTS (
             SELECT 1 FROM deal_activities da
             WHERE da.deal_id = n.deal_id
               AND da.deleted_at IS NULL
               AND da.is_completed = 0
+              AND da.deadline IS NOT NULL
+              AND TIME(da.deadline) <> '00:00:00'
               AND LEFT(da.name, 255) = n.message
           )
         "#,
@@ -59,9 +61,30 @@ pub async fn mark_deadline_reminder_telegram_sent(
         SET actor_name = ?
         WHERE id = ?
           AND notification_type = 'activity_deadline_reminder'
+          AND (actor_name IS NULL OR actor_name != ?)
         "#,
         TELEGRAM_SENT_MARKER,
-        notification_id
+        notification_id,
+        TELEGRAM_SENT_MARKER
+    )
+    .execute(pool)
+    .await
+}
+
+pub async fn unmark_deadline_reminder_telegram_sent(
+    pool: &MySqlPool,
+    notification_id: u64,
+) -> Result<MySqlQueryResult, sqlx::Error> {
+    sqlx::query!(
+        r#"
+        UPDATE notifications
+        SET actor_name = NULL
+        WHERE id = ?
+          AND notification_type = 'activity_deadline_reminder'
+          AND actor_name = ?
+        "#,
+        notification_id,
+        TELEGRAM_SENT_MARKER
     )
     .execute(pool)
     .await

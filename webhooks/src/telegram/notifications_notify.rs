@@ -23,8 +23,8 @@ pub async fn notifications_notify_handler(
     Json(body): Json<NotificationsNotifyRequest>,
 ) -> BasicResponse {
     let bot = NotificationsTelegramBot::default();
-    if let Err(error) = send_notifications_telegram_message(&pool, &bot, body.user_id, &body.message)
-        .await
+    if let Err(error) =
+        send_notifications_telegram_message(&pool, &bot, body.user_id, &body.message).await
     {
         tracing::error!(
             ?error,

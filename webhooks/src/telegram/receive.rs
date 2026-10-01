@@ -282,16 +282,19 @@ async fn handle_assign_lead<T: Telegram>(
         }
     };
     update_manager_lead_messages(pool, bot, position.company_id, lead_id, &full_content).await;
-    schedule_templates_for_deal_list(
-        pool,
-        list_id,
-        position.company_id,
-        result.last_insert_id(),
-        lead_id,
-        position.user_id,
-    )
-    .await
-    .unwrap();
+    if result.created {
+        schedule_templates_for_deal_list(
+            pool,
+            list_id,
+            position.company_id,
+            result.id,
+            lead_id,
+            position.user_id,
+            true,
+        )
+        .await
+        .unwrap();
+    }
     let client = Client::new();
     // For right now we log but ignore errors
     sync_customer_to_cloud_talk(pool, &client, lead_id).await;
@@ -365,6 +368,7 @@ mod local_tests {
     use chrono::{DateTime, Duration, NaiveDateTime, Utc};
     use common::crud::email_template::CreateEmailTemplate;
     use common::crud::email_template::insert_email_template;
+    use common::utils::email_send_window::clamp_automated_email_send_at;
     use serde_json::json;
     use sqlx::MySqlPool;
     use teloxide::types::{CallbackQuery, InlineKeyboardButtonKind, MaybeInaccessibleMessage};
@@ -789,6 +793,53 @@ mod local_tests {
     }
 
     #[sqlx::test(migrations = "../migrations")]
+    async fn test_callback_twice_creates_one_deal(pool: MySqlPool) {
+        let sales_id = positioned_user(&pool, 1, 1, 123).await;
+        positioned_user(&pool, 1, 2, 789).await;
+        let (_, bot) = send_lead(&pool).await;
+
+        let sent_options = bot.clone().sent.lock().unwrap().clone()[0]
+            .clone()
+            .2
+            .unwrap();
+        let option = match sent_options.inline_keyboard[0][0].clone().kind {
+            InlineKeyboardButtonKind::CallbackData(data) => data,
+            _ => unreachable!(),
+        };
+        let inner_m = generate_message(1, "hello");
+        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let cb = CallbackQuery {
+            id: "a".into(),
+            from: telegram_user(456),
+            message: Some(full),
+            inline_message_id: None,
+            chat_instance: "".into(),
+            data: Some(option.clone()),
+            game_short_name: None,
+        };
+        let first = handle_callback(cb, &pool, &bot).await;
+        assert_eq!(first.0, StatusCode::OK);
+
+        let inner_m = generate_message(1, "hello");
+        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let cb = CallbackQuery {
+            id: "b".into(),
+            from: telegram_user(456),
+            message: Some(full),
+            inline_message_id: None,
+            chat_instance: "".into(),
+            data: Some(option),
+            game_short_name: None,
+        };
+        let second = handle_callback(cb, &pool, &bot).await;
+        assert_eq!(second.0, StatusCode::OK);
+
+        let deals = get_all_deals(&pool).await;
+        assert_eq!(deals.len(), 1);
+        assert_eq!(deals[0].user_id, Some(sales_id));
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
     async fn test_callback_updates_only_identified_manager_messages(pool: MySqlPool) {
         use crate::crud::telegram_messages::insert_telegram_lead_message;
 
@@ -1061,11 +1112,27 @@ mod local_tests {
             message: Some(full),
             inline_message_id: None,
             chat_instance: "".into(),
-            data: Some(option),
+            data: Some(option.clone()),
             game_short_name: None,
         };
         let res = handle_callback(cb, &pool, &bot).await;
         assert_eq!(res.0, StatusCode::OK);
+
+        let inner_m = generate_message(1, "hello");
+        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let retry = CallbackQuery {
+            id: "retry".into(),
+            from: telegram_user(manager_id as u64),
+            message: Some(full),
+            inline_message_id: None,
+            chat_instance: "".into(),
+            data: Some(option),
+            game_short_name: None,
+        };
+        let retry_res = handle_callback(retry, &pool, &bot).await;
+        assert_eq!(retry_res.0, StatusCode::OK);
+
+        assert_eq!(get_all_deals(&pool).await.len(), 1);
 
         // Really process their result
         let scheduled_emails = get_all_scheduled_emails(&pool).await.unwrap();
@@ -1079,7 +1146,8 @@ mod local_tests {
         assert_eq!(scheduled_email.user_id, sales_id as i32);
         assert_eq!(scheduled_email.company_id, company_id as i32);
 
-        let expected_send_at = Utc::now().naive_utc() + Duration::hours(2);
+        let expected_send_at =
+            clamp_automated_email_send_at(Utc::now() + Duration::hours(2)).naive_utc();
         let duration_diff = scheduled_email.send_at - expected_send_at;
         let seconds_diff = duration_diff.num_seconds().abs();
         assert!(

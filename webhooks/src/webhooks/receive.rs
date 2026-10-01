@@ -1,6 +1,9 @@
 use crate::axum_helpers::guards::MarketingUser;
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
 use crate::libs::leads::process_lead;
+use crate::libs::referral_source::{
+    OpenAiReferralClassifier, check_referral_source, review_email, send_review_email,
+};
 use crate::libs::types::BasicResponse;
 use crate::schemas::add_customer::{
     FaceBookContactForm, LeadPayload, NewLeadForm, WordpressContactForm,
@@ -33,7 +36,9 @@ pub async fn facebook_contact_form(
     post,
     path = "/v1/webhooks/new-lead-form/{company_id}",
     description = "Create a marketing lead from Make, Zapier, or the website.\n\n\
-**`referral_source`** is optional. When provided, prefer `website` or `facebook` so statistics group correctly.\n\n\
+**`referral_source`** is optional. When provided, prefer `website` or `facebook` so statistics group correctly. \
+Aliases such as `Facebook Form` or `WordPress` are rewritten automatically; other unrecognized values are \
+stored as sent and flagged for review.\n\n\
 **`form_name`** is optional. When provided, use the specific form id, for example `cabinet_quote`, \
 `facebook_form`, `facebook_cabinet_quote_form`, or `quick_quote`.",
     params(("company_id" = i32, Path, description = "Company ID")),
@@ -44,10 +49,21 @@ pub async fn new_lead_form(
     _: MarketingUser,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
-    Json(contact_form): Json<NewLeadForm>,
+    Json(mut contact_form): Json<NewLeadForm>,
 ) -> BasicResponse {
     let tg_bot = TelegramBot::default();
-    new_lead_form_inner(company_id, pool, contact_form, &tg_bot).await
+    let classifier = OpenAiReferralClassifier::from_env(pool.clone());
+    let review_email = check_referral_source(&pool, company_id, &mut contact_form, &classifier)
+        .await
+        .map(|review| review_email(&review, &contact_form, company_id));
+    let response = new_lead_form_inner(company_id, pool, contact_form, &tg_bot).await;
+    // Only once the lead is saved: a failed request gets retried by the sender and checked again.
+    if let Some((subject, body)) = review_email
+        && response.0.is_success()
+    {
+        send_review_email(&subject, &body).await;
+    }
+    response
 }
 
 pub async fn new_lead_form_inner<T, V: LeadPayload>(
@@ -69,9 +85,11 @@ mod local_tests {
     use crate::tests::telegram::MockTelegram;
     use crate::tests::utils::{assigned_user_position, insert_user, new_test_app, positioned_user};
     use axum::http::StatusCode;
+    use lambda_http::tracing;
     use serde_json::Value;
     use serde_json::json;
     use sqlx::MySqlPool;
+    use tracing_test::traced_test;
 
     #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
     struct Customer {
@@ -371,6 +389,102 @@ mod local_tests {
     }
 
     #[sqlx::test(migrations = "../migrations")]
+    async fn duplicate_lead_resets_activity_due_dates(pool: MySqlPool) {
+        let company_id = 1;
+        let data = json!({ "name": "Test", "phone": "+13179995973" });
+        let lead: NewLeadForm = serde_json::from_value(data).unwrap();
+        let bot = MockTelegram::new();
+
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
+
+        let response = new_lead_form_inner(1, pool.clone(), lead.clone(), &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        let customers = get_customers(&pool).await.unwrap();
+        assert_eq!(customers.len(), 1);
+
+        let deal_id = create_deal(&pool, customers[0].id, 2, 0, sales_id)
+            .await
+            .unwrap()
+            .last_insert_id();
+
+        let open_future = sqlx::query!(
+            r#"INSERT INTO deal_activities (deal_id, company_id, name, deadline, priority)
+               VALUES (?, ?, 'Call him', '2026-12-01 00:00:00', 'medium')"#,
+            deal_id,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+        let open_past = sqlx::query!(
+            r#"INSERT INTO deal_activities (deal_id, company_id, name, deadline, priority)
+               VALUES (?, ?, 'Follow up', '2026-01-15 00:00:00', 'high')"#,
+            deal_id,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+        let completed = sqlx::query!(
+            r#"INSERT INTO deal_activities (deal_id, company_id, name, deadline, priority, is_completed)
+               VALUES (?, ?, 'Left voicemail', '2026-11-01 09:30:00', 'low', 1)"#,
+            deal_id,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+        let deleted = sqlx::query!(
+            r#"INSERT INTO deal_activities (deal_id, company_id, name, deadline, priority, deleted_at)
+               VALUES (?, ?, 'Old task', '2026-10-01 00:00:00', 'medium', NOW())"#,
+            deal_id,
+            company_id
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+
+        let response = new_lead_form_inner(1, pool.clone(), lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+
+        let today = sqlx::query_scalar!("SELECT CURDATE()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let reset_deadlines = sqlx::query_scalar!(
+            r#"SELECT DATE(deadline) FROM deal_activities WHERE id IN (?, ?, ?) ORDER BY id"#,
+            open_future,
+            open_past,
+            completed
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            reset_deadlines,
+            vec![Some(today), Some(today), Some(today)]
+        );
+
+        let deleted_deadline = sqlx::query_scalar!(
+            r#"SELECT DATE(deadline) FROM deal_activities WHERE id = ?"#,
+            deleted
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            deleted_deadline,
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap())
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
     async fn duplicate_lead_moves_existing_deal_without_copying(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -619,5 +733,62 @@ mod local_tests {
         );
         assert!(!second_message.1.ends_with("Choose a salesperson."));
         assert_eq!(second_message.0, 456);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn repeat_lead_with_unassigned_deal_asks_managers(pool: MySqlPool) {
+        let company_id = 1;
+        let lead: NewLeadForm =
+            serde_json::from_value(json!({ "name": "Test", "phone": "+13179995973" })).unwrap();
+        let bot = MockTelegram::new();
+        let sales_id = positioned_user(&pool, company_id, 1, 123).await;
+        positioned_user(&pool, company_id, 2, 456).await;
+
+        new_lead_form_inner(company_id, pool.clone(), lead.clone(), &bot).await;
+        let customers = get_customers(&pool).await.unwrap();
+        let deal = create_deal(&pool, customers[0].id, 1, 0, sales_id)
+            .await
+            .unwrap();
+        sqlx::query!("UPDATE deals SET user_id = NULL WHERE id = ?", deal.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let response = new_lead_form_inner(company_id, pool, lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+        let last = bot.sent.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(last.0, 456);
+        assert!(
+            last.1
+                .starts_with("You received a REPEATED lead Test with no sales rep")
+        );
+        assert!(last.1.ends_with("Choose a salesperson."));
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    #[traced_test]
+    async fn new_lead_alerts_when_telegram_fails(pool: MySqlPool) {
+        let mut bot = MockTelegram::new();
+        bot.fail = true;
+        positioned_user(&pool, 1, 2, 456).await;
+        let lead: NewLeadForm =
+            serde_json::from_value(json!({ "name": "Test", "phone": "+13179995973" })).unwrap();
+
+        let response = new_lead_form_inner(1, pool, lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+        assert!(logs_contain("Lead alert"));
+        assert!(logs_contain("Lead not delivered in Telegram (company #1)"));
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    #[traced_test]
+    async fn new_lead_alerts_when_no_manager(pool: MySqlPool) {
+        let bot = MockTelegram::new();
+        let lead: NewLeadForm =
+            serde_json::from_value(json!({ "name": "Test", "phone": "+13179995973" })).unwrap();
+
+        let response = new_lead_form_inner(1, pool, lead, &bot).await;
+        assert_eq!(response.0, StatusCode::CREATED);
+        assert!(logs_contain("Lead not delivered in Telegram (company #1)"));
     }
 }

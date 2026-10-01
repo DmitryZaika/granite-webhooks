@@ -6,7 +6,7 @@ use lambda_http::tracing;
 use std::env::var;
 use teloxide::prelude::*;
 use teloxide::types::InlineKeyboardMarkup;
-use teloxide::types::{Message, Recipient};
+use teloxide::types::{Message, ParseMode, Recipient};
 use uuid::{Uuid, uuid};
 
 use crate::axum_helpers::utils::get_remix_key;
@@ -30,6 +30,7 @@ pub trait Telegram: Send + Sync {
         chat: C,
         text: T,
         repliable: InlineKeyboardMarkup,
+        parse_mode: Option<ParseMode>,
     ) -> impl Future<Output = Result<Message, teloxide::RequestError>> + Send
     where
         C: Into<Recipient> + Send,
@@ -91,13 +92,20 @@ impl Telegram for TelegramBot {
         chat: C,
         text: T,
         repliable: InlineKeyboardMarkup,
+        parse_mode: Option<ParseMode>,
     ) -> impl Future<Output = Result<Message, teloxide::RequestError>> + Send
     where
         C: Into<Recipient> + Send,
         T: Into<String> + Send,
     {
         let bot = self.bot.clone();
-        async move { bot.send_message(chat, text).reply_markup(repliable).await }
+        async move {
+            let mut request = bot.send_message(chat, text).reply_markup(repliable);
+            if let Some(mode) = parse_mode {
+                request = request.parse_mode(mode);
+            }
+            request.await
+        }
     }
 
     fn edit_message_text<T>(
@@ -203,13 +211,20 @@ impl Telegram for NotificationsTelegramBot {
         chat: C,
         text: T,
         repliable: InlineKeyboardMarkup,
+        parse_mode: Option<ParseMode>,
     ) -> impl Future<Output = Result<Message, teloxide::RequestError>> + Send
     where
         C: Into<Recipient> + Send,
         T: Into<String> + Send,
     {
         let bot = self.bot.clone();
-        async move { bot.send_message(chat, text).reply_markup(repliable).await }
+        async move {
+            let mut request = bot.send_message(chat, text).reply_markup(repliable);
+            if let Some(mode) = parse_mode {
+                request = request.parse_mode(mode);
+            }
+            request.await
+        }
     }
 
     fn edit_message_text<T>(
@@ -312,6 +327,9 @@ fn parse_uuid_from_bearer(header: &str) -> Option<Uuid> {
 }
 
 async fn report_to_posthog(message: &str) {
+    if message == "Authorization header not found" {
+        return;
+    }
     let Ok(api_key) = std::env::var("POSTHOG_API_KEY") else {
         tracing::error!("POSTHOG_API_KEY not set");
         return;
@@ -422,6 +440,36 @@ where
             Some(uuid) if uuid == CORRECT_ID => Ok(Self),
             _ => {
                 tracing::error!("CloudTalk SMS webhook: missing or invalid bearer token");
+                Err((StatusCode::FORBIDDEN, "Forbidden"))
+            }
+        }
+    }
+}
+
+/// Same shared webhook bearer as CloudTalk (`CORRECT_ID`), for RingCentral routes.
+pub struct RingCentralWebhookUser;
+
+impl<S> FromRequestParts<S> for RingCentralWebhookUser
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // RingCentral subscription handshake: Validation-Token must be accepted
+        // before auth so the webhook URL can be verified.
+        if parts.headers.get("Validation-Token").is_some() {
+            return Ok(Self);
+        }
+        let bearer_uuid = parts
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_uuid_from_bearer);
+        match bearer_uuid {
+            Some(uuid) if uuid == CORRECT_ID => Ok(Self),
+            _ => {
+                tracing::error!("RingCentral SMS webhook: missing or invalid bearer token");
                 Err((StatusCode::FORBIDDEN, "Forbidden"))
             }
         }

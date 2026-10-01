@@ -51,7 +51,7 @@ async fn log_request_body(request: Request, uri: &Uri) -> Result<Request, BasicR
         .to_bytes();
 
     // Redact body for SMS routes — they contain customer phone numbers and message text (PII)
-    if uri.path().starts_with("/cloudtalk/sms/") {
+    if uri.path() == "/cloudtalk/sms" || uri.path().starts_with("/cloudtalk/sms/") {
         // Attempt to parse bytes as JSON to extract metadata
         if let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(&bytes) {
             // Map each key to its corresponding data type string
@@ -105,6 +105,9 @@ async fn log_response_body(
 }
 
 async fn posthog_capture_request(status: StatusCode, uri: &Uri, body: &Bytes) {
+    if !PostHogEvent::should_report_http_exception(status) {
+        return;
+    }
     if let Ok(api_key) = std::env::var("POSTHOG_API_KEY") {
         let body_str = String::from_utf8_lossy(body);
         let event = PostHogEvent::new_http_exception(api_key, body_str, status, uri);

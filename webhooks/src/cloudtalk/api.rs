@@ -148,8 +148,13 @@ pub async fn sync_customer_to_cloud_talk(
     }
     let us_country_id = get_cloudtalk_us_country_id(pool, client, clean_company_id).await;
     let payload = build_payload(&mapping, us_country_id);
+    // build_payload only returns None when the customer has no usable phone,
+    // which is bad customer data, not a server fault.
     let Some(clean_payload) = payload.await else {
-        return internal_error("Failed to build payload");
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Customer has no usable phone number",
+        );
     };
     upsert_contact(pool, client, &mapping, &clean_payload, clean_company_id).await;
     OK_RESPONSE
@@ -424,8 +429,8 @@ mod local_tests {
 
         let res = sync_customer_to_cloud_talk(&pool, &client, customer_id as i32).await;
 
-        assert_eq!(res.0, StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(res.1.contains("Failed to build payload"));
+        assert_eq!(res.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(res.1.contains("no usable phone number"));
     }
 
     #[sqlx::test(migrations = "../migrations")]

@@ -67,6 +67,119 @@ pub async fn get_prior_email(
     .await
 }
 
+/// Match a stored `emails.message_id` that was truncated (VARCHAR(72) era /
+/// `scheduled_emails`) or stored as the SES local-part while the reply still
+/// carries the full `@us-east-2.amazonses.com` id.
+pub async fn get_prior_email_by_message_id_prefix(
+    pool: &MySqlPool,
+    message_id: &str,
+) -> Result<Option<PriorEmail>, sqlx::Error> {
+    if message_id.len() < 32 {
+        return Ok(None);
+    }
+    sqlx::query_as!(
+        PriorEmail,
+        r#"
+        SELECT thread_id, receiver_user_id
+        FROM emails
+        WHERE message_id IS NOT NULL
+          AND CHAR_LENGTH(message_id) >= 32
+          AND (
+            message_id LIKE CONCAT(?, '%')
+            OR ? LIKE CONCAT(message_id, '%')
+          )
+        ORDER BY sent_at DESC
+        LIMIT 1
+        "#,
+        message_id,
+        message_id
+    )
+    .fetch_optional(pool)
+    .await
+}
+
+#[allow(dead_code)]
+struct PriorEmailContextRow {
+    thread_id: Option<String>,
+    receiver_user_id: Option<i32>,
+    subject: Option<String>,
+    sender_email: Option<String>,
+    receiver_email: Option<String>,
+}
+
+fn normalize_thread_subject(raw: &str) -> String {
+    let mut subject = raw.trim().to_lowercase();
+    loop {
+        let stripped = subject
+            .strip_prefix("re:")
+            .or_else(|| subject.strip_prefix("fwd:"))
+            .or_else(|| subject.strip_prefix("fw:"));
+        match stripped {
+            Some(rest) => subject = rest.trim_start().to_string(),
+            None => break,
+        }
+    }
+    subject.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Last-resort threading when `In-Reply-To` / `References` do not match a
+/// stored Message-ID (CRM backfill used a UUID, or the drip row is missing
+/// the SES id). Same people + same subject, recent outbound only.
+pub async fn get_prior_email_by_reply_context(
+    pool: &MySqlPool,
+    inbound_sender: &str,
+    inbound_receiver: &str,
+    subject: Option<&str>,
+) -> Result<Option<PriorEmail>, sqlx::Error> {
+    let want_subject = subject
+        .map(normalize_thread_subject)
+        .filter(|value| !value.is_empty());
+    let Some(want_subject) = want_subject else {
+        return Ok(None);
+    };
+    let customer = normalize_address(inbound_sender);
+    let employee = normalize_address(inbound_receiver);
+    if customer.is_empty() || employee.is_empty() {
+        return Ok(None);
+    }
+
+    let rows = sqlx::query_as!(
+        PriorEmailContextRow,
+        r#"
+        SELECT thread_id, receiver_user_id, subject, sender_email, receiver_email
+        FROM emails
+        WHERE sender_user_id IS NOT NULL
+          AND deleted_at IS NULL
+          AND sent_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 45 DAY)
+          AND (
+            LOWER(receiver_email) = ?
+            OR LOWER(receiver_email) LIKE CONCAT('%<', ?, '>%')
+          )
+        ORDER BY sent_at DESC
+        LIMIT 40
+        "#,
+        customer,
+        customer
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().find_map(|row| {
+        let stored_subject = normalize_thread_subject(row.subject.as_deref().unwrap_or(""));
+        if stored_subject != want_subject {
+            return None;
+        }
+        let stored_sender = normalize_address(row.sender_email.as_deref().unwrap_or(""));
+        if stored_sender != employee {
+            return None;
+        }
+        Some(PriorEmail {
+            thread_id: row.thread_id,
+            receiver_user_id: row.receiver_user_id,
+        })
+    }))
+}
+
 pub async fn insert_email_attachment(
     pool: &MySqlPool,
     email_id: u64,
@@ -100,6 +213,7 @@ pub struct SendEmail {
     thread_id: String,
     receiver_user_id: Option<i32>,
     sender_email: String,
+    sender_display_name: Option<String>,
     pub receiver_email: Option<String>,
     message_id: String,
     /// Owning company, resolved from the receiver user. `None` when the
@@ -130,6 +244,7 @@ impl SendEmail {
             thread_id: final_thread_id,
             receiver_user_id,
             sender_email: email.sender_email.clone(),
+            sender_display_name: email.sender_display_name.clone(),
             receiver_email,
             message_id: email.message_id.clone(),
             company_id: None,
@@ -155,6 +270,14 @@ impl SendEmail {
 
     pub fn subject(&self) -> Option<&str> {
         self.subject.as_deref()
+    }
+
+    pub fn body(&self) -> &str {
+        &self.body
+    }
+
+    pub fn sender_email(&self) -> &str {
+        &self.sender_email
     }
 }
 
@@ -279,6 +402,18 @@ mod tests {
             Some("chew@example.com".to_string())
         );
     }
+
+    #[test]
+    fn normalize_thread_subject_strips_reply_prefixes() {
+        assert_eq!(
+            normalize_thread_subject("Re: Thank You for Your Request"),
+            "thank you for your request"
+        );
+        assert_eq!(
+            normalize_thread_subject("RE: Fwd:  Thank You for Your Request"),
+            "thank you for your request"
+        );
+    }
 }
 
 /// Resolve many addresses to CRM users in one round trip, so the query count
@@ -344,7 +479,7 @@ pub async fn insert_email_participants(
 ) -> Result<(), sqlx::Error> {
     let sender = ParsedRecipient {
         address: normalize_address(&send.sender_email),
-        display_name: None,
+        display_name: send.sender_display_name.clone(),
     };
     let from_recipients = if sender.address.is_empty() {
         Vec::new()

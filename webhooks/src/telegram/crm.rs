@@ -1,6 +1,4 @@
-use common::telegram::crm::{
-    format_activity_notification, format_email_notification, format_sms_notification,
-};
+use common::telegram::crm::{format_activity_notification, format_email_notification};
 
 use crate::axum_helpers::guards::Telegram;
 use crate::crud::users::get_user_notifications_tg_info;
@@ -10,6 +8,7 @@ use crate::libs::types::BasicResponse;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
 pub struct CrmTelegramNotify {
     pub user_id: i32,
@@ -24,6 +23,7 @@ pub struct InboundEmailTelegramNotify {
     pub receiver_user_id: i32,
     pub thread_id: String,
     pub subject: Option<String>,
+    pub body: Option<String>,
     pub deal_id: Option<u64>,
     pub customer_name: Option<String>,
 }
@@ -45,7 +45,11 @@ where
     let user = match get_user_notifications_tg_info(pool, payload.user_id).await {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(?error, user_id = payload.user_id, "Failed to load user telegram info");
+            tracing::error!(
+                ?error,
+                user_id = payload.user_id,
+                "Failed to load user telegram info"
+            );
             return Err(internal_error(ERR_SEND_TELEGRAM));
         }
     };
@@ -59,14 +63,22 @@ where
         return Ok(());
     };
 
-    let text = format_activity_notification(
+    let message = format_activity_notification(
         &payload.notification_type,
         payload.customer_name.as_deref(),
         payload.actor_name.as_deref(),
         &payload.message,
         payload.deal_id,
     );
-    send_plain_crm_message(bot, telegram_id, &text).await
+    send_crm_message_with_button(
+        bot,
+        telegram_id,
+        &message.text,
+        message.button_label,
+        &message.button_url,
+        None,
+    )
+    .await
 }
 
 pub async fn send_inbound_email_telegram_notification<T>(
@@ -98,55 +110,34 @@ where
         return Ok(());
     };
 
-    let text = format_email_notification(
+    let message = format_email_notification(
         payload.customer_name.as_deref(),
         payload.subject.as_deref(),
+        payload.body.as_deref(),
         payload.deal_id,
         &payload.thread_id,
     );
-    send_plain_crm_message(bot, telegram_id, &text).await
+    send_crm_message_with_button(
+        bot,
+        telegram_id,
+        &message.text,
+        message.button_label,
+        &message.button_url,
+        Some(ParseMode::Html),
+    )
+    .await
 }
 
 pub async fn send_inbound_sms_telegram_notification<T>(
-    pool: &MySqlPool,
-    bot: &T,
-    payload: &InboundSmsTelegramNotify,
+    _pool: &MySqlPool,
+    _bot: &T,
+    _payload: &InboundSmsTelegramNotify,
 ) -> Result<(), BasicResponse>
 where
     T: Telegram + Send + Sync,
 {
-    let user = match get_user_notifications_tg_info(pool, payload.receiver_user_id).await {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                receiver_user_id = payload.receiver_user_id,
-                "Failed to load receiver telegram info for inbound sms"
-            );
-            return Err(internal_error(ERR_SEND_TELEGRAM));
-        }
-    };
-    let Some(user) = user else {
-        return Ok(());
-    };
-    if !user.telegram_sms_notifications {
-        return Ok(());
-    }
-    let Some(telegram_id) = user.notifications_telegram_id else {
-        return Ok(());
-    };
-
-    let phone_digits: String = payload
-        .sender_phone
-        .chars()
-        .filter(|character| character.is_ascii_digit())
-        .collect();
-    let text = format_sms_notification(
-        &payload.sender_phone,
-        &payload.message,
-        &phone_digits,
-    );
-    send_plain_crm_message(bot, telegram_id, &text).await
+    // CloudTalk / SMS Telegram alerts are disabled — inbound SMS must not notify Telegram.
+    Ok(())
 }
 
 pub async fn send_deadline_reminder_telegram<T>(
@@ -159,25 +150,56 @@ pub async fn send_deadline_reminder_telegram<T>(
 where
     T: Telegram + Send + Sync,
 {
-    let text = format_activity_notification(
+    let notification = format_activity_notification(
         "activity_deadline_reminder",
         customer_name,
         None,
         message,
         deal_id,
     );
-    send_plain_crm_message(bot, telegram_id, &text).await
+    send_crm_message_with_button(
+        bot,
+        telegram_id,
+        &notification.text,
+        notification.button_label,
+        &notification.button_url,
+        None,
+    )
+    .await
 }
 
-async fn send_plain_crm_message<T>(
+fn open_url_keyboard(label: &str, url: &str) -> Result<InlineKeyboardMarkup, BasicResponse> {
+    let parsed = url.parse::<reqwest::Url>().map_err(|error| {
+        tracing::error!(?error, url, "Invalid CRM telegram button url");
+        internal_error(ERR_SEND_TELEGRAM)
+    })?;
+    Ok(InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
+        label.to_string(),
+        parsed,
+    )]]))
+}
+
+async fn send_crm_message_with_button<T>(
     bot: &T,
     telegram_id: i64,
     text: &str,
+    button_label: &str,
+    button_url: &str,
+    parse_mode: Option<ParseMode>,
 ) -> Result<(), BasicResponse>
 where
     T: Telegram + Send + Sync,
 {
-    match bot.send_message(ChatId(telegram_id), text.to_string()).await {
+    let keyboard = open_url_keyboard(button_label, button_url)?;
+    match bot
+        .send_repliable_message(
+            ChatId(telegram_id),
+            text.to_string(),
+            keyboard,
+            parse_mode,
+        )
+        .await
+    {
         Ok(_) => Ok(()),
         Err(error) => {
             tracing::error!(

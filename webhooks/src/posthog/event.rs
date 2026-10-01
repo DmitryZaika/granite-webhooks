@@ -72,23 +72,32 @@ fn create_fingerprint(value: &str) -> String {
 }
 
 impl PostHogEvent {
+    pub fn should_report_http_exception(status: StatusCode) -> bool {
+        status.is_server_error()
+    }
+
     pub fn new_http_exception(
         api_key: impl Into<String>,
         value: impl Into<String>,
         status: StatusCode,
         uri: &Uri,
     ) -> Self {
+        let value = value.into();
         let item = ExceptionItem {
             exception_type: "HTTPError".into(),
-            value: value.into(),
+            value: value.clone(),
             stacktrace: Some(StackTrace {
                 kind: "raw".into(),
                 frames: vec![],
             }),
         };
 
-        let value = format!("HTTPError|{}|{}", status.as_u16(), uri);
-        let fingerprint = create_fingerprint(&value);
+        let fingerprint = create_fingerprint(&format!(
+            "HTTPError|{}|{}|{}",
+            status.as_u16(),
+            uri,
+            value
+        ));
         Self {
             api_key: api_key.into(),
             event: "$exception".into(),
@@ -131,5 +140,57 @@ impl PostHogEvent {
             }),
             timestamp: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{StatusCode, Uri};
+
+    fn fingerprint(event: &PostHogEvent) -> String {
+        match &event.properties {
+            Some(properties) => properties.exception_fingerprint.clone(),
+            None => panic!("missing properties"),
+        }
+    }
+
+    #[test]
+    fn reports_only_server_errors() {
+        assert!(!PostHogEvent::should_report_http_exception(
+            StatusCode::NOT_FOUND
+        ));
+        assert!(!PostHogEvent::should_report_http_exception(
+            StatusCode::BAD_REQUEST
+        ));
+        assert!(PostHogEvent::should_report_http_exception(
+            StatusCode::INTERNAL_SERVER_ERROR
+        ));
+    }
+
+    #[test]
+    fn fingerprints_http_exceptions_by_response_body() {
+        let uri: Uri = "/ses/receive-email".parse().unwrap();
+        let insert = PostHogEvent::new_http_exception(
+            "key",
+            "Failed to insert email into the database",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &uri,
+        );
+        let s3_read = PostHogEvent::new_http_exception(
+            "key",
+            "Unable to read email content from S3",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &uri,
+        );
+        let insert_again = PostHogEvent::new_http_exception(
+            "key",
+            "Failed to insert email into the database",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &uri,
+        );
+
+        assert_ne!(fingerprint(&insert), fingerprint(&s3_read));
+        assert_eq!(fingerprint(&insert), fingerprint(&insert_again));
     }
 }

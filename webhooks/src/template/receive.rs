@@ -214,6 +214,7 @@ mod tests {
         assert_eq!(company.address, Some("123 Main St".to_string()));
         assert_eq!(company.hours_of_operation, Some("Mon-Fri 9-5".to_string()));
         assert_eq!(company.domain, Some("granitedepot.com".to_string()));
+        assert_eq!(company.id, Some(company_id));
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -327,19 +328,21 @@ mod tests {
             user: UserVariableData {
                 name: Some("Alice Johnson".to_string()),
                 email: Some("alice@test.com".to_string()),
+                email_name: Some("Alice Johnson".to_string()),
                 phone_number: Some("555-1234".to_string()),
             },
             customer: Some(InfoVariableData {
                 name: Some("Acme Client".to_string()),
                 address: Some("456 Market St".to_string()),
-                hours_of_operation: None,
-                domain: None,
+                ..Default::default()
             }),
             company: Some(InfoVariableData {
+                id: Some(1),
                 name: Some("Granite Depot".to_string()),
                 address: Some("123 Main St".to_string()),
                 hours_of_operation: Some("Mon-Fri 9-5".to_string()),
                 domain: Some("granitedepot.com".to_string()),
+                subdomain: Some("granitedepot".to_string()),
             }),
         }
     }
@@ -350,6 +353,7 @@ mod tests {
             user: UserVariableData {
                 name: Some("Bob".to_string()),
                 email: Some("bob@test.com".to_string()),
+                email_name: None,
                 phone_number: None,
             },
             customer: None,
@@ -582,20 +586,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let customer_id =
-            insert_test_customer(&pool, Some(company_id), "Jordan Smith", None)
+        let customer_id = insert_test_customer(&pool, Some(company_id), "Jordan Smith", None)
+            .await
+            .unwrap();
+
+        let data =
+            fetch_template_variable_data(&pool, user_id, None, Some(customer_id), company_id)
                 .await
                 .unwrap();
-
-        let data = fetch_template_variable_data(
-            &pool,
-            user_id,
-            None,
-            Some(customer_id),
-            company_id,
-        )
-        .await
-        .unwrap();
 
         let rendered = replace_template_variables(
             "Hi {{Customer.first_name}}, this is {{user.first_name}}.",
@@ -690,9 +688,7 @@ mod tests {
         let mut data = make_full_data();
         data.company = Some(InfoVariableData {
             name: Some("Test Co".to_string()),
-            address: None,
-            hours_of_operation: None,
-            domain: None,
+            ..Default::default()
         });
         let template = "<p>Hours: {{company.hours_of_operation}}</p>";
         let result = replace_template_variables(template, &data);
@@ -705,9 +701,8 @@ mod tests {
         let mut data = make_full_data();
         data.company = Some(InfoVariableData {
             name: Some("Test Co".to_string()),
-            address: None,
             hours_of_operation: Some("".to_string()),
-            domain: None,
+            ..Default::default()
         });
         let template = "<p>Hours: {{company.hours_of_operation}}</p>";
         let result = replace_template_variables(template, &data);
@@ -737,9 +732,7 @@ mod tests {
         let mut data = make_full_data();
         data.company = Some(InfoVariableData {
             name: Some("Test Co".to_string()),
-            address: None,
-            hours_of_operation: None,
-            domain: None,
+            ..Default::default()
         });
         let template = "<p>Domain: {{company.domain}}</p>";
         let result = replace_template_variables(template, &data);
@@ -752,9 +745,8 @@ mod tests {
         let mut data = make_full_data();
         data.company = Some(InfoVariableData {
             name: Some("Test Co".to_string()),
-            address: None,
-            hours_of_operation: None,
             domain: Some("".to_string()),
+            ..Default::default()
         });
         let template = "<p>Domain: {{company.domain}}</p>";
         let result = replace_template_variables(template, &data);
@@ -773,6 +765,17 @@ mod tests {
     }
 
     #[test]
+    fn test_replace_customer_inventory_link() {
+        let template = "<p>{{customer.inventory_link}}</p>";
+        let data = make_full_data();
+        let result = replace_template_variables(template, &data);
+        assert_eq!(
+            result,
+            "<p>https://granitedepot.granite-manager.com/customer/1/stones</p>"
+        );
+    }
+
+    #[test]
     fn test_first_name_extracts_only_first_word() {
         // "Alice Johnson" → first_name should be "Alice"
         let template = "{{user.first_name}}";
@@ -786,9 +789,7 @@ mod tests {
         let mut data = make_full_data();
         data.customer = Some(InfoVariableData {
             name: Some("Acme Client Corp".to_string()),
-            address: None,
-            hours_of_operation: None,
-            domain: None,
+            ..Default::default()
         });
         let template = "{{customer.first_name}}";
         let result = replace_template_variables(template, &data);
@@ -811,9 +812,7 @@ mod tests {
         let mut data = make_full_data();
         data.company = Some(InfoVariableData {
             name: Some("Granite Depot & Sons".to_string()),
-            address: None,
-            hours_of_operation: None,
-            domain: None,
+            ..Default::default()
         });
         let template = "<p>{{company.name}}</p>";
         let result = replace_template_variables(template, &data);
