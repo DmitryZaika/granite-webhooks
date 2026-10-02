@@ -1,6 +1,9 @@
 use lambda_http::tracing;
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sqlx::MySqlPool;
+
+use crate::crud::deals::maybe_move_deal_on_outbound_call;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -14,16 +17,34 @@ pub struct SmsFollowupCallCheckBody {
     pub recording_link: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SmsFollowupCallCheckResponse {
+    #[serde(default)]
+    customer_responded: bool,
+}
+
 /// Fire-and-forget POST to the Remix app. Returns immediately; failures are logged.
-pub fn spawn_sms_followup_call_check(body: SmsFollowupCallCheckBody) {
+/// When the app's transcript shows the customer answered, the deal moves to Contacted.
+pub fn spawn_sms_followup_call_check(pool: MySqlPool, body: SmsFollowupCallCheckBody) {
     tokio::spawn(async move {
-        if let Err(error) = post_sms_followup_call_check(body).await {
-            tracing::warn!(?error, "Failed to enqueue sms follow-up call check");
+        let company_id = body.company_id;
+        let phone_digits = body.phone_digits;
+        match post_sms_followup_call_check(body).await {
+            Ok(response) if response.customer_responded => {
+                maybe_move_deal_on_outbound_call(&pool, company_id, phone_digits).await;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(?error, "Failed to enqueue sms follow-up call check");
+            }
         }
     });
 }
 
-async fn post_sms_followup_call_check(body: SmsFollowupCallCheckBody) -> Result<(), String> {
+async fn post_sms_followup_call_check(
+    body: SmsFollowupCallCheckBody,
+) -> Result<SmsFollowupCallCheckResponse, String> {
     let app_url = std::env::var("APP_URL").map_err(|error| error.to_string())?;
     let lambda_key = std::env::var("LAMBDA_KEY").map_err(|error| error.to_string())?;
     let url = format!(
@@ -40,5 +61,8 @@ async fn post_sms_followup_call_check(body: SmsFollowupCallCheckBody) -> Result<
     if !response.status().is_success() {
         return Err(format!("status {}", response.status().as_u16()));
     }
-    Ok(())
+    response
+        .json::<SmsFollowupCallCheckResponse>()
+        .await
+        .map_err(|error| error.to_string())
 }
