@@ -429,6 +429,22 @@ pub async fn maybe_move_deal_on_inbound_sms(pool: &MySqlPool, company_id: i32, s
     }
 }
 
+/// Outbound calls this long move the deal to Contacted without a transcript.
+pub const AUTO_CONTACTED_MIN_TALKING_SECONDS: u64 = 90;
+
+/// Moves the deal after an outbound call that reached the customer: either it
+/// ran past [`AUTO_CONTACTED_MIN_TALKING_SECONDS`] or the app's transcript check
+/// found a real conversation.
+pub async fn maybe_move_deal_on_outbound_call(pool: &MySqlPool, company_id: i32, callee: u64) {
+    if let Err(error) = move_deal_on_inbound_sms(pool, company_id, callee).await {
+        tracing::error!(
+            ?error,
+            company_id,
+            "Failed to move deal to contacted on outbound call"
+        );
+    }
+}
+
 pub async fn maybe_move_deal_on_inbound_call(pool: &MySqlPool, company_id: i32, caller: u64) {
     if let Err(error) = move_deal_on_inbound_sms(pool, company_id, caller).await {
         tracing::error!(
