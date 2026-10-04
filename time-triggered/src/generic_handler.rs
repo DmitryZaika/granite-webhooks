@@ -174,6 +174,10 @@ async fn process_sms_followups() -> Result<usize, Error> {
     post_app_process_route("api/sms-followups/process", "sms follow-ups").await
 }
 
+async fn process_call_points() -> Result<usize, Error> {
+    post_app_process_route("api/call-points/process", "call points").await
+}
+
 async fn process_checklist_surveys() -> Result<usize, Error> {
     post_app_process_route(
         "api/survey-notifications/process",
@@ -310,14 +314,22 @@ pub(crate) async fn function_handler(
     let maintenance_reminder_count = process_maintenance_due_reminders().await?;
     let sms_followup_count = process_sms_followups().await?;
     let checklist_survey_count = process_checklist_surveys().await?;
+    let call_points_count = match process_call_points().await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(?error, "Failed to process call points; continuing");
+            0
+        }
+    };
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, and {} checklist surveys",
+        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, and {} call points",
         processed_email_count,
         reminder_count,
         estimate_reminder_count,
         maintenance_reminder_count,
         sms_followup_count,
-        checklist_survey_count
+        checklist_survey_count,
+        call_points_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);
