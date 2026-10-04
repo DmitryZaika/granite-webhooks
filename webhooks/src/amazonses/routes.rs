@@ -664,6 +664,60 @@ mod local_tests {
         assert_eq!(get_emails(&pool).await.unwrap().len(), 0);
     }
 
+    /// Our employee was BCC'd: the only `To:` is an outside address and no
+    /// `Bcc:` header is left. SES's top `Received` still names the employee.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn bcc_employee_found_through_the_ses_envelope(pool: MySqlPool) {
+        let user_id = insert_user(&pool, "rep@granitedepotcolumbus.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/customer_to_envelope_user.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].receiver_user_id, Some(user_id));
+        assert_eq!(
+            result[0].receiver_email.as_deref(),
+            Some("contractor@example.org")
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn envelope_that_is_not_a_user_is_still_dropped(pool: MySqlPool) {
+        let mock_client = MockClient::new("src/tests/data/customer_to_envelope_user.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 0);
+    }
+
+    /// `To: undisclosed-recipients:;` used to fail parsing (500, lost after
+    /// three tries). It is now stored for the SES envelope recipient.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn undisclosed_recipients_forward_is_stored(pool: MySqlPool) {
+        let user_id = insert_user(&pool, "sales@granitedepotcolumbus.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/undisclosed_forwarded.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].receiver_user_id, Some(user_id));
+        assert_eq!(
+            result[0].receiver_email.as_deref(),
+            Some("sales@granitedepotcolumbus.com")
+        );
+    }
+
     #[sqlx::test(migrations = "../migrations")]
     async fn response_to_received_success(pool: MySqlPool) {
         let message_id =

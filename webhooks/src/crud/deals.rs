@@ -597,6 +597,7 @@ mod tests {
             cc_recipients: vec![],
             bcc_recipients: vec![],
             forward_to_email: None,
+            envelope_recipient: None,
             in_reply_to: None,
             references: vec![],
             message_id: format!("msg-{}", Uuid::new_v4()),

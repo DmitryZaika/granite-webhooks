@@ -290,12 +290,42 @@ async fn resolve_first_email_receiver(
             return Ok(Some(ReceivingEmail::To(user_id)));
         }
     }
-    get_id_by_email_with_forward(
+    if let Some(receiver) = get_id_by_email_with_forward(
         pool,
         &parsed.receiver_email,
         parsed.forward_to_email.as_deref(),
     )
-    .await
+    .await?
+    {
+        return Ok(Some(receiver));
+    }
+    resolve_envelope_receiver(pool, parsed).await
+}
+
+/// SES accepted the message for an address no header names: the employee was
+/// BCC'd, or a copy addressed to `undisclosed-recipients:;` was forwarded in.
+/// Tried last, so an email that resolves today keeps its receiver and stored
+/// `receiver_email`. `To` (not `Forward`): `Forward` would store
+/// `forward_to_email`, which such an email usually lacks.
+async fn resolve_envelope_receiver(
+    pool: &MySqlPool,
+    parsed: &ParsedEmail,
+) -> Result<Option<ReceivingEmail>, sqlx::Error> {
+    let Some(envelope) = parsed.envelope_recipient.as_deref() else {
+        return Ok(None);
+    };
+    let already_tried = parsed
+        .to_recipients
+        .iter()
+        .chain(parsed.cc_recipients.iter())
+        .chain(parsed.bcc_recipients.iter())
+        .any(|recipient| recipient.address == envelope);
+    if already_tried {
+        return Ok(None);
+    }
+    Ok(get_id_by_email_normalized(pool, envelope)
+        .await?
+        .map(ReceivingEmail::To))
 }
 
 async fn maybe_send_inbound_email_telegram(pool: &MySqlPool, send: &SendEmail) {
