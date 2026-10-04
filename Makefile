@@ -10,7 +10,7 @@ BUILD_BASE := uvx cargo-lambda lambda build --release --x86-64
 # --- Webhooks ---
 .PHONY: build-webhooks
 build-webhooks:
-	$(BUILD_BASE) -p webhooks --bin webhooks
+	GIT_SHA=$$(git rev-parse --short HEAD) $(BUILD_BASE) -p webhooks --bin webhooks
 
 .PHONY: deploy-webhooks
 deploy-webhooks: build-webhooks
@@ -36,7 +36,7 @@ local-time-triggered:
 # --- Time-Triggered ---
 .PHONY: build-time-triggered
 build-time-triggered:
-	$(BUILD_BASE) -p time-triggered --bin time-triggered
+	GIT_SHA=$$(git rev-parse --short HEAD) $(BUILD_BASE) -p time-triggered --bin time-triggered
 
 .PHONY: deploy-time-triggered
 deploy-time-triggered: build-time-triggered

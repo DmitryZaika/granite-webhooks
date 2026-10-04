@@ -25,6 +25,7 @@ pub struct Properties {
 
     pub status: Option<u16>,
     pub path: Option<String>,
+    pub route: Option<String>,
 
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
@@ -71,6 +72,71 @@ fn create_fingerprint(value: &str) -> String {
     })
 }
 
+/// True when `segment` is 8-4-4-4-12 hex (a UUID), case-insensitive.
+fn is_uuid_like(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    bytes.iter().enumerate().all(|(i, b)| match i {
+        8 | 13 | 18 | 23 => *b == b'-',
+        _ => b.is_ascii_hexdigit(),
+    })
+}
+
+/// Reduces a URI to a grouping-friendly route pattern: path only (no scheme,
+/// host or query), with any purely-numeric or UUID-shaped segment replaced by
+/// `{id}`. An empty path becomes `/`.
+pub fn route_pattern(uri: &Uri) -> String {
+    let path = uri.path();
+    if path.is_empty() || path == "/" {
+        return "/".to_string();
+    }
+
+    path.split('/')
+        .map(|segment| {
+            if !segment.is_empty()
+                && (segment.bytes().all(|b| b.is_ascii_digit()) || is_uuid_like(segment))
+            {
+                "{id}"
+            } else {
+                segment
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Build info attached to every event, read through a lookup closure so tests
+/// never need to mutate process environment (unsafe in edition 2024).
+fn build_info_extra<F>(lookup: F) -> HashMap<String, serde_json::Value>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut extra = HashMap::new();
+    extra.insert(
+        "lambda_function".to_string(),
+        serde_json::Value::String(
+            lookup("AWS_LAMBDA_FUNCTION_NAME").unwrap_or_else(|| "local".to_string()),
+        ),
+    );
+    extra.insert(
+        "lambda_version".to_string(),
+        serde_json::Value::String(
+            lookup("AWS_LAMBDA_FUNCTION_VERSION").unwrap_or_else(|| "local".to_string()),
+        ),
+    );
+    extra.insert(
+        "release".to_string(),
+        serde_json::Value::String(option_env!("GIT_SHA").unwrap_or("unknown").to_string()),
+    );
+    extra
+}
+
+fn env_lookup(key: &str) -> Option<String> {
+    std::env::var(key).ok()
+}
+
 impl PostHogEvent {
     pub fn should_report_http_exception(status: StatusCode) -> bool {
         status.is_server_error()
@@ -83,6 +149,7 @@ impl PostHogEvent {
         uri: &Uri,
     ) -> Self {
         let value = value.into();
+        let route = route_pattern(uri);
         let item = ExceptionItem {
             exception_type: "HTTPError".into(),
             value: value.clone(),
@@ -95,7 +162,7 @@ impl PostHogEvent {
         let fingerprint = create_fingerprint(&format!(
             "HTTPError|{}|{}|{}",
             status.as_u16(),
-            uri,
+            route,
             value
         ));
         Self {
@@ -107,7 +174,8 @@ impl PostHogEvent {
                 exception_fingerprint: fingerprint,
                 status: Some(status.as_u16()),
                 path: Some(uri.to_string()),
-                extra: HashMap::new(),
+                route: Some(route),
+                extra: build_info_extra(env_lookup),
             }),
             timestamp: None,
         }
@@ -136,7 +204,8 @@ impl PostHogEvent {
                 exception_fingerprint: fingerprint,
                 status: None,
                 path: None,
-                extra: HashMap::new(),
+                route: None,
+                extra: build_info_extra(env_lookup),
             }),
             timestamp: None,
         }
@@ -192,5 +261,158 @@ mod tests {
 
         assert_ne!(fingerprint(&insert), fingerprint(&s3_read));
         assert_eq!(fingerprint(&insert), fingerprint(&insert_again));
+    }
+
+    #[test]
+    fn fingerprints_equal_for_same_route_different_ids() {
+        let uri_a: Uri = "https://abc123.lambda-url.us-east-2.on.aws/cloudtalk/sync/1/23"
+            .parse()
+            .unwrap();
+        let uri_b: Uri = "https://abc123.lambda-url.us-east-2.on.aws/cloudtalk/sync/1/45"
+            .parse()
+            .unwrap();
+        let a = PostHogEvent::new_http_exception(
+            "key",
+            "boom",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &uri_a,
+        );
+        let b = PostHogEvent::new_http_exception(
+            "key",
+            "boom",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &uri_b,
+        );
+        assert_eq!(fingerprint(&a), fingerprint(&b));
+    }
+
+    #[test]
+    fn fingerprints_differ_for_different_bodies_same_route() {
+        let uri: Uri = "https://abc123.lambda-url.us-east-2.on.aws/cloudtalk/sync/1/23"
+            .parse()
+            .unwrap();
+        let a = PostHogEvent::new_http_exception(
+            "key",
+            "boom",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &uri,
+        );
+        let b = PostHogEvent::new_http_exception(
+            "key",
+            "kaboom",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &uri,
+        );
+        assert_ne!(fingerprint(&a), fingerprint(&b));
+    }
+
+    #[test]
+    fn fingerprints_equal_for_different_hosts_same_path() {
+        let uri_a: Uri = "https://staging.example.com/cloudtalk/sync/1/23"
+            .parse()
+            .unwrap();
+        let uri_b: Uri = "https://production.example.com/cloudtalk/sync/1/23"
+            .parse()
+            .unwrap();
+        let a = PostHogEvent::new_http_exception(
+            "key",
+            "boom",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &uri_a,
+        );
+        let b = PostHogEvent::new_http_exception(
+            "key",
+            "boom",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &uri_b,
+        );
+        assert_eq!(fingerprint(&a), fingerprint(&b));
+    }
+
+    #[test]
+    fn route_pattern_normalizes_uuid_segment() {
+        let uri: Uri = "https://example.com/leads/550e8400-E29B-41d4-A716-446655440000/assign"
+            .parse()
+            .unwrap();
+        assert_eq!(route_pattern(&uri), "/leads/{id}/assign");
+    }
+
+    #[test]
+    fn route_pattern_normalizes_numeric_segments() {
+        let uri: Uri = "https://example.com/cloudtalk/sync/1/23".parse().unwrap();
+        assert_eq!(route_pattern(&uri), "/cloudtalk/sync/{id}/{id}");
+    }
+
+    #[test]
+    fn route_pattern_ignores_query_string() {
+        let uri: Uri = "https://example.com/cloudtalk/sync/1/23?x=1&y=2"
+            .parse()
+            .unwrap();
+        assert_eq!(route_pattern(&uri), "/cloudtalk/sync/{id}/{id}");
+    }
+
+    #[test]
+    fn route_pattern_empty_path_is_root() {
+        let uri: Uri = "https://example.com".parse().unwrap();
+        assert_eq!(route_pattern(&uri), "/");
+    }
+
+    #[test]
+    fn route_pattern_does_not_treat_short_hex_run_as_uuid() {
+        // Same length digit run as the dash positions in a UUID would require,
+        // but not actually UUID-shaped: must stay untouched.
+        let uri: Uri = "https://example.com/users/abc-def".parse().unwrap();
+        assert_eq!(route_pattern(&uri), "/users/abc-def");
+    }
+
+    #[test]
+    fn events_carry_build_info_and_route() {
+        let uri: Uri = "/x/1".parse().unwrap();
+        let event = PostHogEvent::new_http_exception(
+            "key",
+            "boom",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &uri,
+        );
+        let props = event.properties.as_ref().expect("missing properties");
+        assert!(props.extra.contains_key("lambda_function"));
+        assert!(props.extra.contains_key("lambda_version"));
+        assert!(props.extra.contains_key("release"));
+        assert_eq!(props.route.as_deref(), Some("/x/{id}"));
+        assert_eq!(props.path.as_deref(), Some("/x/1"));
+
+        let general = PostHogEvent::new_general_exception("key", "boom", "Title");
+        let general_props = general.properties.as_ref().expect("missing properties");
+        assert!(general_props.extra.contains_key("lambda_function"));
+        assert!(general_props.extra.contains_key("lambda_version"));
+        assert!(general_props.extra.contains_key("release"));
+        assert_eq!(general_props.route, None);
+    }
+
+    #[test]
+    fn build_info_extra_uses_lookup_without_touching_process_env() {
+        let extra = build_info_extra(|key| match key {
+            "AWS_LAMBDA_FUNCTION_NAME" => Some("webhooks-prod".to_string()),
+            "AWS_LAMBDA_FUNCTION_VERSION" => Some("7".to_string()),
+            _ => None,
+        });
+        assert_eq!(
+            extra.get("lambda_function").and_then(|v| v.as_str()),
+            Some("webhooks-prod")
+        );
+        assert_eq!(
+            extra.get("lambda_version").and_then(|v| v.as_str()),
+            Some("7")
+        );
+
+        let defaults = build_info_extra(|_| None);
+        assert_eq!(
+            defaults.get("lambda_function").and_then(|v| v.as_str()),
+            Some("local")
+        );
+        assert_eq!(
+            defaults.get("lambda_version").and_then(|v| v.as_str()),
+            Some("local")
+        );
     }
 }
