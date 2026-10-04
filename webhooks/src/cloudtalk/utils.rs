@@ -162,16 +162,18 @@ pub async fn build_payload(
         Ok(Some(parsed)) => parsed,
         Ok(None) => {
             tracing::error!(
-                "No valid address found for customer address: {}",
-                customer_address
+                customer_id = customer.id,
+                company_id = ?customer.company_id,
+                "No valid address found for customer"
             );
             return Some(payload);
         }
         Err(error) => {
             tracing::error!(
-                "Failed to parse address for customer address: {}, error: {}",
-                customer_address,
-                error
+                customer_id = customer.id,
+                company_id = ?customer.company_id,
+                ?error,
+                "Failed to parse address for customer"
             );
             return Some(payload);
         }
