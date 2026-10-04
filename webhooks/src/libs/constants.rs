@@ -19,6 +19,9 @@ pub const fn not_acceptable(error: &'static str) -> (StatusCode, &'static str) {
     (StatusCode::NOT_ACCEPTABLE, error)
 }
 
+/// Deals in this list are finished, so a new lead from the same customer starts a new deal.
+pub const CLOSED_WON_LIST_ID: i32 = 4;
+
 pub const SALES_WORKER: i32 = 1;
 pub const SALES_MANAGER: i32 = 2;
 

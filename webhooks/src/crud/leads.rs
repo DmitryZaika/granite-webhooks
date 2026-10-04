@@ -1,3 +1,4 @@
+use crate::libs::constants::CLOSED_WON_LIST_ID;
 use crate::schemas::add_customer::{FaceBookContactForm, NewLeadForm, WordpressContactForm};
 use sqlx::mysql::MySqlQueryResult;
 use sqlx::{MySqlPool, query};
@@ -271,8 +272,8 @@ pub async fn create_lead_from_new_lead_form(
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     let result = query!(
         r#"INSERT INTO customers
-               (name, phone, address, remove_and_dispose, details, city, postal_code, compaign_name, adset_name, ad_name, remodal_type, project_size, contact_time, when_start, improve_offer, sink, kitchen_stove, backsplash, your_message, attached_file, company_id, referral_source, form_name, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+               (name, phone, address, remove_and_dispose, details, city, postal_code, compaign_name, adset_name, ad_name, remodal_type, project_size, contact_time, when_start, improve_offer, sink, kitchen_stove, backsplash, your_message, attached_file, company_id, referral_source, referral_source_raw, form_name, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         data.name,
         data.phone,
         data.address,
@@ -295,6 +296,7 @@ pub async fn create_lead_from_new_lead_form(
         data.attached_file,
         company_id,
         data.referral_source,
+        data.referral_source_raw,
         data.form_name,
         "leads"
     )
@@ -313,7 +315,7 @@ pub async fn update_lead_from_new_lead_form(
 ) -> Result<MySqlQueryResult, sqlx::Error> {
     let result = query!(
         r#"UPDATE customers
-               SET phone = ?, address = ?, remove_and_dispose = ?, details = ?, city = ?, postal_code = ?, compaign_name = ?, adset_name = ?, ad_name = ?, remodal_type = ?, project_size = ?, contact_time = ?, when_start = ?, improve_offer = ?, sink = ?, kitchen_stove = ?, backsplash = ?, your_message = ?, attached_file = ?, company_id = ?, referral_source = ?, form_name = ?, source = ?
+               SET phone = ?, address = ?, remove_and_dispose = ?, details = ?, city = ?, postal_code = ?, compaign_name = ?, adset_name = ?, ad_name = ?, remodal_type = ?, project_size = ?, contact_time = ?, when_start = ?, improve_offer = ?, sink = ?, kitchen_stove = ?, backsplash = ?, your_message = ?, attached_file = ?, company_id = ?, referral_source = ?, referral_source_raw = ?, form_name = ?, source = ?
                WHERE id = ?"#,
         data.phone,
         data.address,
@@ -336,6 +338,7 @@ pub async fn update_lead_from_new_lead_form(
         data.attached_file,
         company_id,
         data.referral_source,
+        data.referral_source_raw,
         data.form_name,
         "leads",
         id,
@@ -357,13 +360,27 @@ pub struct Deal {
     pub user_id: Option<i32>,
 }
 
+/// Last 10 digits of a phone number, so `(317) 555-1212`, `317-555-1212` and
+/// `+13175551212` all match. Shorter numbers keep all their digits.
+fn phone_match_key(phone: &str) -> Option<String> {
+    let digits: String = phone.chars().filter(char::is_ascii_digit).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    Some(digits[digits.len().saturating_sub(10)..].to_string())
+}
+
+/// Matches on any of the customer's emails (case-insensitive) or on the last
+/// 10 digits of `phone`/`phone_2`, whatever format they were stored in.
 pub async fn find_existing_customer(
     pool: &MySqlPool,
     email: Option<&str>,
     phone: Option<&str>,
     company_id: i32,
 ) -> Result<Option<ExistingCustomer>, sqlx::Error> {
-    if email.is_none() && phone.is_none() {
+    let email = email.map(str::trim).filter(|e| !e.is_empty());
+    let phone_key = phone.and_then(phone_match_key);
+    if email.is_none() && phone_key.is_none() {
         return Ok(None);
     }
     sqlx::query_as!(
@@ -371,16 +388,27 @@ pub async fn find_existing_customer(
         r#"
         SELECT c.id, c.name, c.sales_rep
         FROM customers c
-        LEFT JOIN customers_emails ce ON ce.id = c.email_id
         WHERE c.company_id = ?
           AND c.deleted_at IS NULL
-          AND (ce.email = ? OR c.phone = ?)
+          AND (
+            (? IS NOT NULL AND EXISTS (
+                SELECT 1 FROM customers_emails ce
+                WHERE ce.customer_id = c.id AND LOWER(ce.email) = LOWER(?)
+            ))
+            OR (? IS NOT NULL AND (
+                RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', ''), 10) = ?
+                OR RIGHT(REGEXP_REPLACE(c.phone_2, '[^0-9]', ''), 10) = ?
+            ))
+          )
         ORDER BY c.id DESC
         LIMIT 1
         "#,
         company_id,
         email,
-        phone
+        email,
+        phone_key,
+        phone_key,
+        phone_key
     )
     .fetch_optional(pool)
     .await
@@ -392,8 +420,9 @@ pub async fn get_existing_deal(
 ) -> Result<Option<Deal>, sqlx::Error> {
     sqlx::query_as!(
         Deal,
-        r#"SELECT id, user_id FROM deals WHERE customer_id = ? AND list_id != 4 AND deleted_at IS NULL ORDER BY id DESC LIMIT 1"#,
-        customer_id
+        r#"SELECT id, user_id FROM deals WHERE customer_id = ? AND list_id != ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1"#,
+        customer_id,
+        CLOSED_WON_LIST_ID
     )
     .fetch_optional(pool)
     .await
@@ -792,5 +821,68 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(primary, "jeremy.gerber@icloud.com");
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_find_existing_customer_matches_phone_digits(pool: MySqlPool) {
+        let id = sqlx::query!(
+            r#"INSERT INTO customers (name, company_id, phone, source) VALUES ('Formatted', 1, '(317) 999-5973', 'leads')"#
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+        let id = i32::try_from(id).unwrap();
+
+        for phone in ["317-999-5973", "+13179995973", "3179995973"] {
+            let found = find_existing_customer(&pool, None, Some(phone), 1)
+                .await
+                .unwrap();
+            assert_eq!(found.map(|c| c.id), Some(id), "{phone}");
+        }
+        let other = find_existing_customer(&pool, None, Some("317-999-0000"), 1)
+            .await
+            .unwrap();
+        assert!(other.is_none());
+        let empty = find_existing_customer(&pool, None, Some(""), 1)
+            .await
+            .unwrap();
+        assert!(empty.is_none());
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_find_existing_customer_matches_phone_2_and_any_email(pool: MySqlPool) {
+        let id = sqlx::query!(
+            r#"INSERT INTO customers (name, company_id, phone, phone_2, source) VALUES ('Two', 1, '111-111-1111', '+1 (812) 374-4195', 'leads')"#
+        )
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_id();
+        let id = i32::try_from(id).unwrap();
+        set_customer_email(&pool, id, Some("first@example.com"))
+            .await
+            .unwrap();
+        // A second email that is not the primary one.
+        sqlx::query!(
+            "INSERT INTO customers_emails (customer_id, email) VALUES (?, 'Second@Example.com')",
+            id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let by_phone_2 = find_existing_customer(&pool, None, Some("812-374-4195"), 1)
+            .await
+            .unwrap();
+        assert_eq!(by_phone_2.map(|c| c.id), Some(id));
+        let by_second_email = find_existing_customer(&pool, Some("second@example.com"), None, 1)
+            .await
+            .unwrap();
+        assert_eq!(by_second_email.map(|c| c.id), Some(id));
+        let other_company = find_existing_customer(&pool, Some("second@example.com"), None, 2)
+            .await
+            .unwrap();
+        assert!(other_company.is_none());
     }
 }

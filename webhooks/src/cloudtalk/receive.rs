@@ -9,7 +9,9 @@ use crate::crud::cloudtalk::{
     insert_outbound_sms,
 };
 use crate::crud::deals::{
-    find_customer_id_by_phone_last10, maybe_move_deal_on_inbound_call, maybe_move_deal_on_inbound_sms,
+    AUTO_CONTACTED_MIN_TALKING_SECONDS, find_customer_id_by_phone_last10,
+    maybe_move_deal_on_inbound_call, maybe_move_deal_on_inbound_sms,
+    maybe_move_deal_on_outbound_call,
 };
 use crate::crud::users::{
     get_company_id_by_cloudtalk_agent, get_company_id_by_cloudtalk_phone,
@@ -214,14 +216,20 @@ pub async fn call_received(
             talking_time = check.talking_time,
             "Enqueueing sms follow-up call check for outbound call"
         );
-        spawn_sms_followup_call_check(SmsFollowupCallCheckBody {
-            company_id,
-            phone_digits: check.phone_digits,
-            call_id: check.call_id,
-            talking_time: check.talking_time,
-            is_voicemail: check.is_voicemail,
-            recording_link: check.recording_link,
-        });
+        if check.talking_time > AUTO_CONTACTED_MIN_TALKING_SECONDS {
+            maybe_move_deal_on_outbound_call(&pool, company_id, check.phone_digits).await;
+        }
+        spawn_sms_followup_call_check(
+            pool.clone(),
+            SmsFollowupCallCheckBody {
+                company_id,
+                phone_digits: check.phone_digits,
+                call_id: check.call_id,
+                talking_time: check.talking_time,
+                is_voicemail: check.is_voicemail,
+                recording_link: check.recording_link,
+            },
+        );
         return OK_RESPONSE;
     }
 

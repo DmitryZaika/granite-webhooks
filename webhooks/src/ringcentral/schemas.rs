@@ -172,7 +172,8 @@ pub fn inbound_customer_phone_from_call_payload(value: &serde_json::Value) -> Op
     customer_phone_from_call_payload(value)
 }
 
-const OUTBOUND_FOLLOWUP_MIN_TALKING_SECONDS: u64 = 60;
+/// Shorter outbound calls are not worth transcribing.
+const OUTBOUND_FOLLOWUP_MIN_TALKING_SECONDS: u64 = 30;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutboundCallFollowupCheck {
@@ -370,15 +371,15 @@ mod tests {
     }
 
     #[test]
-    fn outbound_call_followup_check_requires_outgoing_over_60s() {
+    fn outbound_call_followup_check_requires_outgoing_over_30s() {
         let short: serde_json::Value = serde_json::from_str(
-            r#"{"Cdr":{"public_external":"+15551234567","type":"outgoing","talking_time":"60","id":"99"}}"#,
+            r#"{"Cdr":{"public_external":"+15551234567","type":"outgoing","talking_time":"30","id":"99"}}"#,
         )
         .unwrap();
         assert_eq!(outbound_call_followup_check(&short), None);
 
         let long: serde_json::Value = serde_json::from_str(
-            r#"{"Cdr":{"public_external":"+15551234567","type":"outgoing","talking_time":"61","id":"77","is_voicemail":true}}"#,
+            r#"{"Cdr":{"public_external":"+15551234567","type":"outgoing","talking_time":"31","id":"77","is_voicemail":true}}"#,
         )
         .unwrap();
         assert_eq!(
@@ -386,7 +387,7 @@ mod tests {
             Some(OutboundCallFollowupCheck {
                 phone_digits: 5_551_234_567,
                 call_id: 77,
-                talking_time: 61,
+                talking_time: 31,
                 is_voicemail: true,
                 recording_link: None,
             })

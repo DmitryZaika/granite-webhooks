@@ -7,7 +7,9 @@ use tokio::task::JoinSet;
 
 use crate::crud::telegram_messages::insert_telegram_lead_message;
 use crate::crud::users::{SalesUser, get_sales_users};
-use crate::libs::constants::{ERR_DB, OK_RESPONSE, SALES_MANAGER, SALES_WORKER, internal_error};
+use crate::libs::constants::{
+    ERR_DB, ERR_SEND_TELEGRAM, OK_RESPONSE, SALES_MANAGER, SALES_WORKER, internal_error,
+};
 use crate::libs::types::BasicResponse;
 
 use lambda_http::tracing;
@@ -207,6 +209,7 @@ where
                 telegram_ids = %telegram_ids_str,
                 "Error sending message to lead manager 1"
             );
+            return Err(internal_error(ERR_SEND_TELEGRAM));
         }
     }
 
@@ -260,6 +263,7 @@ where
     Ok(out)
 }
 
+/// Returns `true` when no manager received the notification.
 pub async fn send_telegram_duplicate_notification<T>(
     pool: &MySqlPool,
     company_id: i32,
@@ -276,7 +280,7 @@ where
         Ok(users) => users,
         Err(e) => {
             tracing::error!(?e, company_id = company_id, "Error fetching users");
-            return false;
+            return true;
         }
     };
     let assigned_name = all_users.iter().find(|u| u.id == assigned_id).map_or_else(
@@ -290,7 +294,7 @@ where
             position_id = SALES_MANAGER,
             "No sales manager found"
         );
-        return false;
+        return true;
     }
     let message = format!("Repeat lead {lead_name} for sales rep {assigned_name}\n\n{lead_body}");
     let new_bot = Arc::new(bot.clone());
