@@ -2,7 +2,9 @@ use bytes::Bytes;
 use email_reply_parser::EmailReplyParser;
 use mail_parser::{Address, HeaderValue, MessageParser, MessagePart, MimeHeaders, PartType};
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::fmt::Write;
 use std::path::Path;
 use std::sync::LazyLock;
 use uuid::Uuid;
@@ -21,6 +23,30 @@ pub fn filename_to_uuid(original: &str) -> String {
     format!("{}{}", Uuid::new_v4(), ext)
 }
 
+/// S3 key for attachment `index` of the message `message_id`.
+///
+/// The key is derived from the message, so a redelivery of the same email
+/// (`EventBridge` retries after its 5 s timeout while the first run is still
+/// uploading) overwrites the same objects instead of adding orphan copies.
+/// A message without an id falls back to a random key.
+pub fn attachment_object_key(message_id: &str, index: usize, original: &str) -> String {
+    let message_id = message_id.trim();
+    if message_id.is_empty() {
+        return filename_to_uuid(original);
+    }
+    let ext = Path::new(original)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    let digest = Sha256::digest(message_id.as_bytes());
+    let hash = digest.iter().take(16).fold(String::new(), |mut output, b| {
+        let _ = write!(output, "{b:02x}");
+        output
+    });
+    format!("{hash}-{index}{ext}")
+}
+
 pub struct Attachment {
     content_type: String,
     content_subtype: Option<String>,
@@ -36,10 +62,17 @@ pub struct UploadedAttachment {
 }
 
 impl Attachment {
-    pub async fn to_uploaded_attachment<C: S3Bucket>(self, client: &C) -> UploadedAttachment {
-        let filename = filename_to_uuid(&self.filename);
+    pub fn filename(&self) -> &str {
+        &self.filename
+    }
+
+    pub async fn to_uploaded_attachment<C: S3Bucket>(
+        self,
+        client: &C,
+        key: String,
+    ) -> UploadedAttachment {
         let url = client
-            .send_file("gd-email-attachments", &filename, self.data)
+            .send_file("gd-email-attachments", &key, self.data)
             .await
             .unwrap();
         UploadedAttachment {
@@ -467,6 +500,32 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
 mod local_tests {
     use super::*;
     use crate::tests::utils::{read_file_as_bytes, replace_bytes};
+
+    #[test]
+    fn attachment_key_is_stable_per_message_and_index() {
+        let id = "CAG6QthaOtf0GWH6Ba9eOfRkfbviRi-RJw_vVnRc4U5cW_9GPmA@mail.gmail.com";
+        let first = attachment_object_key(id, 0, "img_0.png");
+        assert_eq!(first, attachment_object_key(id, 0, "img_0.png"));
+        assert!(first.ends_with("-0.png"));
+        assert_eq!(first.len(), 32 + "-0.png".len());
+        assert_ne!(first, attachment_object_key(id, 1, "img_0.png"));
+        assert_ne!(
+            first,
+            attachment_object_key("other@example.com", 0, "img_0.png")
+        );
+        assert!(attachment_object_key(id, 2, "no_extension").ends_with("-2"));
+    }
+
+    #[test]
+    fn attachment_key_without_message_id_is_random() {
+        let a = attachment_object_key("  ", 0, "photo.jpg");
+        let b = attachment_object_key("", 0, "photo.jpg");
+        assert_ne!(a, b);
+        assert_eq!(
+            Path::new(&a).extension().and_then(|e| e.to_str()),
+            Some("jpg")
+        );
+    }
 
     #[test]
     fn test_parse_email() {

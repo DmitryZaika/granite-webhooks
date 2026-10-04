@@ -11,16 +11,26 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct MockClient {
     pub path: PathBuf,
+    /// Keys passed to `send_file`, shared by every clone of this client.
+    uploads: Arc<Mutex<Vec<String>>>,
 }
 
 impl MockClient {
     pub fn new<P: Into<PathBuf>>(path: P) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            uploads: Arc::default(),
+        }
+    }
+
+    pub fn uploaded_keys(&self) -> Vec<String> {
+        self.uploads.lock().unwrap().clone()
     }
 }
 
@@ -29,6 +39,7 @@ impl S3Bucket for MockClient {
         read_file_as_bytes(&self.path).map_err(|e| e.to_string())
     }
     async fn send_file(&self, bucket: &str, key: &str, _data: Bytes) -> Result<String, String> {
+        self.uploads.lock().unwrap().push(key.to_string());
         Ok(format!("s3://{bucket}/{key}"))
     }
 }

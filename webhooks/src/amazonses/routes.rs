@@ -6,7 +6,7 @@ use crate::amazon::bucket::{CustomClient, S3Bucket};
 use crate::amazonses::parse_email::parse_email;
 use crate::amazonses::process::{EmailInfo, process_reply_email};
 use crate::amazonses::schemas::{S3Event, SesEvent};
-use crate::crud::email::{create_email_read, get_full_message_id};
+use crate::crud::email::{create_email_read, email_exists, get_full_message_id};
 use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 
@@ -86,6 +86,28 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
             return internal_error("Unable to parse email content from S3");
         }
     };
+    // EventBridge redelivers an email when the first run takes longer than its
+    // 5 s timeout, even if that run stored it. A redelivery must repeat no side
+    // effect: no attachment upload, no deal move, no Telegram message.
+    match email_exists(pool, &parsed.message_id).await {
+        Ok(true) => {
+            tracing::info!(
+                bucket = bucket,
+                key = key,
+                "Inbound email already stored; skipping redelivery"
+            );
+            return OK_RESPONSE;
+        }
+        Ok(false) => {}
+        Err(error) => {
+            tracing::warn!(
+                ?error,
+                bucket = bucket,
+                key = key,
+                "Failed to check for an already stored email"
+            );
+        }
+    }
     let email_info = EmailInfo {
         parsed: &parsed,
         attachments,
@@ -578,6 +600,68 @@ mod local_tests {
             .await
             .unwrap();
         assert_eq!(attachments.len(), 1);
+    }
+
+    /// `EventBridge` redelivers an email whose first run took over 5 s. The
+    /// redelivery must not upload the attachments again (each upload used to
+    /// leave an orphan copy in `gd-email-attachments`) or store a second row.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn redelivered_email_uploads_nothing(pool: MySqlPool) {
+        insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/image_only.eml");
+        let data: S3Event = ses_received_json();
+
+        let first = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+        assert_eq!(first, OK_RESPONSE);
+        assert_eq!(mock_client.uploaded_keys().len(), 1);
+
+        let redelivery = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+        assert_eq!(redelivery, OK_RESPONSE);
+        assert_eq!(mock_client.uploaded_keys().len(), 1);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        let email_id = u64::try_from(result[0].id).unwrap();
+        let attachments = get_email_attachments(&pool, email_id).await.unwrap();
+        assert_eq!(attachments.len(), 1);
+    }
+
+    /// Same for a reply that joins a thread: a redelivery uploads nothing.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn redelivered_reply_uploads_nothing(pool: MySqlPool) {
+        let parent_id = "CAG6QthaOtf0GWH6Ba9eOfRkfbviRi-RJw_vVnRc4U5cW_9GPmA@mail.gmail.com";
+        insert_email(&pool, parent_id).await.unwrap();
+        let mock_client = MockClient::new("src/tests/data/reply_attachment_2.eml");
+        let data: S3Event = ses_received_json();
+
+        assert_eq!(
+            process_ses_received_event(&pool, mock_client.clone(), &data).await,
+            OK_RESPONSE
+        );
+        let first_keys = mock_client.uploaded_keys();
+        assert_eq!(first_keys.len(), 4);
+
+        assert_eq!(
+            process_ses_received_event(&pool, mock_client.clone(), &data).await,
+            OK_RESPONSE
+        );
+        assert_eq!(mock_client.uploaded_keys(), first_keys);
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 2);
+    }
+
+    /// An email nobody in the CRM receives is not stored, so its attachments
+    /// must not reach S3 either.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn unknown_receiver_uploads_nothing(pool: MySqlPool) {
+        let mock_client = MockClient::new("src/tests/data/image_only.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+        assert_eq!(response, OK_RESPONSE);
+        assert!(mock_client.uploaded_keys().is_empty());
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 0);
     }
 
     #[sqlx::test(migrations = "../migrations")]

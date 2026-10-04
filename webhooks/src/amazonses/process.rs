@@ -147,7 +147,20 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
         return process_first_email(pool, client, restored).await;
     };
 
-    let uploaded_attachments = match upload_attachments(client, email_info.attachments).await {
+    let received_id = match prior.receiver_user_id {
+        Some(user_id) => Some(ReceivingEmail::To(user_id)),
+        None => match resolve_first_email_receiver(pool, email_info.parsed).await {
+            Ok(receiver) => receiver,
+            Err(error) => return receiver_lookup_failure(&email_info, &error),
+        },
+    };
+    let uploaded_attachments = match upload_attachments(
+        client,
+        &email_info.parsed.message_id,
+        email_info.attachments,
+    )
+    .await
+    {
         Ok(attachments) => attachments,
         Err(error) => {
             tracing::error!(
@@ -158,12 +171,6 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
             );
             return internal_error("Failed to upload attachments");
         }
-    };
-    let received_id = match prior.receiver_user_id {
-        Some(user_id) => Some(ReceivingEmail::To(user_id)),
-        None => resolve_first_email_receiver(pool, email_info.parsed)
-            .await
-            .unwrap(),
     };
     let company_id = resolve_company_id(pool, received_id.map(ReceivingEmail::inner)).await;
     let send_email =
@@ -177,6 +184,16 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
     maybe_cancel_flow_on_inbound_email(pool, &send_email).await;
     maybe_send_inbound_email_telegram(pool, &send_email).await;
     OK_RESPONSE
+}
+
+fn receiver_lookup_failure(email_info: &EmailInfo<'_>, error: &sqlx::Error) -> BasicResponse {
+    tracing::error!(
+        ?error,
+        bucket = email_info.bucket,
+        key = email_info.key,
+        "Failed to resolve email receiver"
+    );
+    internal_error("Unable to resolve email receiver")
 }
 
 fn is_duplicate_email_insert(error: &sqlx::Error) -> bool {
@@ -199,22 +216,13 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
     email_info: EmailInfo<'_>,
 ) -> BasicResponse {
     let s3_url = email_info.s3_url();
-    let uploaded_attachments = match upload_attachments(client, email_info.attachments).await {
-        Ok(attachments) => attachments,
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                bucket = email_info.bucket,
-                key = email_info.key,
-                "Failed to upload attachments"
-            );
-            return internal_error("Failed to upload attachments");
-        }
+    // Resolve the receiver before uploading: an email nobody receives is not
+    // stored, so its attachments must not be written to S3 either.
+    let receiver = match resolve_first_email_receiver(pool, email_info.parsed).await {
+        Ok(receiver) => receiver,
+        Err(error) => return receiver_lookup_failure(&email_info, &error),
     };
-    let Some(receiver) = resolve_first_email_receiver(pool, email_info.parsed)
-        .await
-        .unwrap()
-    else {
+    let Some(receiver) = receiver else {
         let recipients: Vec<&str> = email_info
             .parsed
             .to_recipients
@@ -230,6 +238,24 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
             "Reciever email not found"
         );
         return OK_RESPONSE;
+    };
+    let uploaded_attachments = match upload_attachments(
+        client,
+        &email_info.parsed.message_id,
+        email_info.attachments,
+    )
+    .await
+    {
+        Ok(attachments) => attachments,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                bucket = email_info.bucket,
+                key = email_info.key,
+                "Failed to upload attachments"
+            );
+            return internal_error("Failed to upload attachments");
+        }
     };
     let company_id = resolve_company_id(pool, Some(receiver.inner())).await;
     let send_email =
