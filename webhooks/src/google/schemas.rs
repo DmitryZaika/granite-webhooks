@@ -1,6 +1,29 @@
 use crate::cloudtalk::schemas::ParsedAddress;
 use serde::{Deserialize, Serialize};
 
+/// Longest response body kept on a non-success Google API status, in characters.
+const MAX_ERROR_BODY_CHARS: usize = 500;
+
+/// Error from a `generic_post_request` call.
+///
+/// Either a transport failure, or a non-success HTTP status, in which case
+/// the (truncated) response body is kept so the actual Google error message
+/// survives instead of being discarded by `error_for_status`.
+#[derive(thiserror::Error, Debug)]
+pub enum GoogleApiError {
+    #[error("Network error: {0}")]
+    Net(#[from] reqwest::Error),
+    #[error("Google API error: status {status}, body: {body}")]
+    Status { status: u16, body: String },
+}
+
+impl GoogleApiError {
+    pub fn status(status: u16, body: impl AsRef<str>) -> Self {
+        let body: String = body.as_ref().chars().take(MAX_ERROR_BODY_CHARS).collect();
+        Self::Status { status, body }
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum DistanceError {
     #[error("Google API error: {0}")]
@@ -11,6 +34,8 @@ pub enum DistanceError {
     Net(#[from] reqwest::Error),
     #[error("Unexpected response shape")]
     Shape,
+    #[error(transparent)]
+    GoogleApi(#[from] GoogleApiError),
 }
 
 // google.rpc.Status
@@ -122,6 +147,8 @@ pub enum AutocompleteError {
     Net(#[from] reqwest::Error),
     #[error("API configuration error: {0}")]
     Config(String),
+    #[error(transparent)]
+    GoogleApi(#[from] GoogleApiError),
 }
 
 // --- Request body types ---
@@ -298,4 +325,42 @@ impl FinalSuggestion {
 #[derive(Deserialize)]
 pub struct AddressRequest {
     pub query: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn google_api_error_display_and_debug_include_status_and_body() {
+        let error = GoogleApiError::status(400, "INVALID_ARGUMENT: API key not valid");
+
+        let display = format!("{error}");
+        assert!(display.contains("400"));
+        assert!(display.contains("API key not valid"));
+
+        let debug = format!("{error:?}");
+        assert!(debug.contains("400"));
+        assert!(debug.contains("API key not valid"));
+    }
+
+    #[test]
+    fn google_api_error_truncates_long_body() {
+        let long_body = "x".repeat(600);
+        let error = GoogleApiError::status(400, &long_body);
+        match error {
+            GoogleApiError::Status { body, .. } => assert_eq!(body.len(), MAX_ERROR_BODY_CHARS),
+            GoogleApiError::Net(_) => panic!("expected Status variant"),
+        }
+    }
+
+    #[test]
+    fn autocomplete_request_serializes_expected_body() {
+        let request = AutocompleteRequest::new("123 Main St, Springfield, IL");
+        let json = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            json,
+            r#"{"input":"123 Main St, Springfield, IL","languageCode":"en","includedRegionCodes":["US"]}"#
+        );
+    }
 }

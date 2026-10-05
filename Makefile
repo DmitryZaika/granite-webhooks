@@ -11,7 +11,7 @@ BUILD_BASE := uvx cargo-lambda lambda build --release --x86-64
 # --- Webhooks ---
 .PHONY: build-webhooks
 build-webhooks:
-	$(BUILD_BASE) -p webhooks --bin webhooks
+	GIT_SHA=$$(git rev-parse --short HEAD) $(BUILD_BASE) -p webhooks --bin webhooks
 
 .PHONY: deploy-webhooks
 deploy-webhooks: build-webhooks
@@ -38,7 +38,7 @@ local-time-triggered:
 # --- Time-Triggered ---
 .PHONY: build-time-triggered
 build-time-triggered:
-	$(BUILD_BASE) -p time-triggered --bin time-triggered
+	GIT_SHA=$$(git rev-parse --short HEAD) $(BUILD_BASE) -p time-triggered --bin time-triggered
 
 .PHONY: deploy-time-triggered
 deploy-time-triggered: build-time-triggered
@@ -50,6 +50,21 @@ deploy-time-triggered: build-time-triggered
 		--region $(REGION) \
 		--binary-name time-triggered \
 		time-triggered
+
+# --- Tests ---
+# Refuses to run cargo test against the shared RDS. DATABASE_URL is read from
+# the environment, falling back to .env, and is never printed.
+.PHONY: test
+test:
+	@URL="$${DATABASE_URL:-}"; \
+	if [ -z "$$URL" ] && [ -f .env ]; then \
+		URL=$$(grep -E '^DATABASE_URL=' .env | tail -n1 | cut -d'=' -f2-); \
+	fi; \
+	if printf '%s' "$$URL" | grep -Eiq '\.rds\.amazonaws\.com'; then \
+		echo "Refusing: DATABASE_URL points at an RDS host. Tests must run against a local MySQL, never the shared RDS."; \
+		exit 1; \
+	fi; \
+	cargo test
 
 # --- API (frontend-facing Lambda, see api/README.md) ---
 LOCAL_DB_URL := mysql://root:granite@127.0.0.1:3307/granite_local

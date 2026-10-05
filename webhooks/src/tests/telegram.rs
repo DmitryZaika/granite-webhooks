@@ -13,6 +13,33 @@ use teloxide::types::{
     MessageKind, User, UserId,
 };
 
+/// An email the code under test tried to send.
+#[derive(Clone, Debug)]
+pub struct SentEmail {
+    pub to: Vec<String>,
+    pub subject: String,
+    pub body: String,
+}
+
+thread_local! {
+    static SENT_EMAILS: std::cell::RefCell<Vec<SentEmail>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Called instead of SES while tests run. Thread-local: each test has its own thread.
+pub fn record_email(to: &[&str], subject: &str, body: &str) {
+    SENT_EMAILS.with(|sent| {
+        sent.borrow_mut().push(SentEmail {
+            to: to.iter().map(|addr| (*addr).to_string()).collect(),
+            subject: subject.to_string(),
+            body: body.to_string(),
+        });
+    });
+}
+
+pub fn take_sent_emails() -> Vec<SentEmail> {
+    SENT_EMAILS.with(|sent| std::mem::take(&mut *sent.borrow_mut()))
+}
+
 pub fn telegram_user(id: u64) -> User {
     User {
         id: UserId(id),

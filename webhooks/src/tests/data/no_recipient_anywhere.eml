@@ -1,0 +1,26 @@
+Return-Path: <customer@example.net>
+Received: from [192.0.2.31] (client.example.net [192.0.2.31])
+        by mail.example.net with ESMTPSA id 1a2b3c4d5e6f;
+        Sat, 03 Oct 2026 12:10:01 -0400 (EDT)
+X-SES-Spam-Verdict: PASS
+X-SES-Virus-Verdict: PASS
+From: Customer Name <customer@example.net>
+To: undisclosed-recipients:;
+Subject: Kitchen measurements
+Date: Sat, 3 Oct 2026 12:10:00 -0400
+Message-ID: <no-recipient-anywhere-1@mail.example.net>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="b1"
+
+--b1
+Content-Type: text/plain; charset="UTF-8"
+
+The island is 96 by 42 inches. Photo attached.
+
+--b1
+Content-Type: image/png; name="island.png"
+Content-Disposition: attachment; filename="island.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+--b1--

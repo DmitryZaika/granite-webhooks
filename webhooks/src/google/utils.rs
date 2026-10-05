@@ -1,32 +1,56 @@
 use crate::google::schemas::{
-    AutocompleteError, AutocompleteRequest, AutocompleteResponse, FinalSuggestion,
+    AutocompleteError, AutocompleteRequest, AutocompleteResponse, FinalSuggestion, GoogleApiError,
     PlaceDetailsResponse, Suggestion, TextOrObject,
 };
 use lambda_http::tracing;
 use reqwest::Client;
+
+const PLACES_BASE_URL: &str = "https://places.googleapis.com/v1";
+
+/// Places API root and the key to send. Tests that installed a loopback stub
+/// get it, with a placeholder key, so they need neither network nor secrets.
+fn places_endpoint() -> (String, String) {
+    #[cfg(test)]
+    if let Some(stub) = crate::tests::stub_http::google_places_base_url() {
+        return (stub, "test-key".to_string());
+    }
+    (
+        PLACES_BASE_URL.to_string(),
+        std::env::var("GOOGLE_MAPS_API_KEY").expect("GOOGLE_MAPS_API_KEY must be set"),
+    )
+}
 /// Common function to handle the initial autocomplete API post request.
+///
+/// On a non-success status, the response body is read (and truncated) so the
+/// caller can see Google's actual error message instead of it being
+/// discarded by `error_for_status`.
 pub async fn generic_post_request<T, V>(
     url: &str,
     body: &T,
     field_mask: &str,
-) -> Result<V, reqwest::Error>
+) -> Result<V, GoogleApiError>
 where
     T: serde::Serialize + Send + Sync,
     V: serde::de::DeserializeOwned + Send,
 {
     let client = Client::new();
-    let api_key = std::env::var("GOOGLE_MAPS_API_KEY").expect("GOOGLE_MAPS_API_KEY must be set");
-    client
+    let api_key = places_endpoint().1;
+    let response = client
         .post(url)
         .header("Content-Type", "application/json")
         .header("X-Goog-Api-Key", &api_key)
         .header("X-Goog-FieldMask", field_mask)
         .json(body)
         .send()
-        .await?
-        .error_for_status()? // non-2xx -> error
-        .json::<V>() // REST returns a JSON array of elements
-        .await
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body_text = response.text().await.unwrap_or_default();
+        return Err(GoogleApiError::status(status.as_u16(), body_text));
+    }
+
+    Ok(response.json::<V>().await?)
 }
 
 async fn generic_get_request<V>(url: &str, field_mask: &str) -> Result<V, reqwest::Error>
@@ -34,7 +58,7 @@ where
     V: serde::de::DeserializeOwned,
 {
     let client = Client::new();
-    let api_key = std::env::var("GOOGLE_MAPS_API_KEY").expect("GOOGLE_MAPS_API_KEY must be set");
+    let api_key = places_endpoint().1;
     client
         .get(url)
         .header("Content-Type", "application/json")
@@ -52,7 +76,7 @@ pub async fn fetch_autocomplete_suggestions(
     let body = AutocompleteRequest::new(query);
 
     let response: AutocompleteResponse = generic_post_request(
-        "https://places.googleapis.com/v1/places:autocomplete",
+        &format!("{}/places:autocomplete", places_endpoint().0),
         &body,
         "suggestions.placePrediction.text,suggestions.placePrediction.placeId",
     )
@@ -70,7 +94,7 @@ pub async fn process_single_suggestion(s: Suggestion) -> Option<FinalSuggestion>
         TextOrObject::String(str_val) => str_val,
     };
 
-    let details_url = format!("https://places.googleapis.com/v1/places/{place_id}");
+    let details_url = format!("{}/places/{place_id}", places_endpoint().0);
 
     // Fetch place details; returns None early if the HTTP call fails
     let address = generic_get_request::<PlaceDetailsResponse>(&details_url, "addressComponents")

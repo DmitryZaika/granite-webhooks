@@ -1,12 +1,18 @@
 use axum::extract::{Json, State};
+use axum::http::header::RETRY_AFTER;
+use axum::http::{HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use lambda_http::tracing;
 use sqlx::MySqlPool;
+use uuid::Uuid;
 
 use crate::amazon::bucket::{CustomClient, S3Bucket};
 use crate::amazonses::parse_email::parse_email;
 use crate::amazonses::process::{EmailInfo, process_reply_email};
 use crate::amazonses::schemas::{S3Event, SesEvent};
-use crate::crud::email::{create_email_read, get_full_message_id};
+use crate::amazonses::unprocessed::{PostHogUnprocessedEmailReporter, UnprocessedEmailReporter};
+use crate::crud::email::{create_email_read, email_exists, get_full_message_id};
+use crate::crud::email_claims::{EmailClaim, claim_email_processing, release_email_processing};
 use crate::libs::constants::{BAD_REQUEST, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 
@@ -16,6 +22,29 @@ fn is_missing_s3_object(error: &str) -> bool {
         || lower.contains("the specified key does not exist")
         || lower.contains("nosuchbucket")
         || lower.contains("the specified bucket does not exist")
+}
+
+/// Another invocation is processing this email right now. `EventBridge` API
+/// destinations retry a 429 later; by then the email is stored (the retry is
+/// a no-op) or the claim has expired (the retry takes over). Not a 5xx, so the
+/// request logger does not report it to `PostHog` as an exception.
+const EMAIL_IN_PROGRESS: BasicResponse = (
+    StatusCode::TOO_MANY_REQUESTS,
+    "Email is being processed by another invocation",
+);
+
+/// Seconds a turned-away delivery is asked to wait (`Retry-After`).
+const EMAIL_IN_PROGRESS_RETRY_AFTER: &str = "30";
+
+/// A fixed, personal-data-free name for each `parse_email` failure.
+fn parse_error_kind(error: &str) -> &'static str {
+    match error {
+        "Failed to parse email" => "unreadable_message",
+        "Failed to parse message ID" => "missing_message_id",
+        "Failed to parse sender email" => "missing_sender",
+        "Failed to parse receiver email" => "missing_receiver",
+        _ => "other",
+    }
 }
 
 pub async fn read_receipt_handler(
@@ -55,6 +84,19 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
     client: C,
     event: &S3Event,
 ) -> BasicResponse {
+    process_ses_received_event_with(pool, client, event, &PostHogUnprocessedEmailReporter).await
+}
+
+pub async fn process_ses_received_event_with<C, R>(
+    pool: &MySqlPool,
+    client: C,
+    event: &S3Event,
+    reporter: &R,
+) -> BasicResponse
+where
+    C: S3Bucket + Send + Sync + 'static,
+    R: UnprocessedEmailReporter,
+{
     let bucket = &event.detail.bucket.name;
     let key = &event.detail.object.key;
 
@@ -77,14 +119,70 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
     let (parsed, attachments) = match parse_email(&email_bytes) {
         Ok(email) => email,
         Err(error) => {
+            // No retry can fix a parse error, so answer 200 and stop the
+            // retries. The raw email stays in the bucket; the event names it.
+            let error_kind = parse_error_kind(&error);
             tracing::error!(
+                error_kind,
+                bucket = bucket,
+                key = key,
+                "Inbound email cannot be parsed; not processed"
+            );
+            reporter.report(bucket, key, error_kind).await;
+            return OK_RESPONSE;
+        }
+    };
+    // EventBridge redelivers an email when the first run takes longer than its
+    // 5 s timeout, even if that run stored it. A redelivery must repeat no side
+    // effect: no attachment upload, no deal move, no Telegram message.
+    match email_exists(pool, &parsed.message_id).await {
+        Ok(true) => {
+            tracing::info!(
+                bucket = bucket,
+                key = key,
+                "Inbound email already stored; skipping redelivery"
+            );
+            return OK_RESPONSE;
+        }
+        Ok(false) => {}
+        Err(error) => {
+            tracing::warn!(
                 ?error,
                 bucket = bucket,
                 key = key,
-                "Failed to parse email content from S3"
+                "Failed to check for an already stored email"
             );
-            return internal_error("Unable to parse email content from S3");
         }
+    }
+    // `email_exists` misses a delivery that overlaps a run still in progress
+    // (the slowest emails). The claim turns that overlap away before any
+    // attachment work; the overlapping call gets 429 (retry later), not 200,
+    // because the running invocation may still be killed by the Lambda timeout.
+    let token = Uuid::new_v4().to_string();
+    let claimed = match claim_email_processing(pool, &parsed.message_id, &token).await {
+        EmailClaim::Acquired => {
+            // Another run may have stored the email between the check above
+            // and this claim (it releases its claim right after the insert).
+            if matches!(email_exists(pool, &parsed.message_id).await, Ok(true)) {
+                release_claim(pool, &parsed.message_id, &token, bucket, key).await;
+                tracing::info!(
+                    bucket = bucket,
+                    key = key,
+                    "Inbound email stored by another invocation; skipping"
+                );
+                return OK_RESPONSE;
+            }
+            true
+        }
+        EmailClaim::HeldByAnother => {
+            tracing::info!(
+                bucket = bucket,
+                key = key,
+                "Inbound email is being processed by another invocation; retry later"
+            );
+            return EMAIL_IN_PROGRESS;
+        }
+        EmailClaim::Unavailable => false,
     };
     let email_info = EmailInfo {
         parsed: &parsed,
@@ -96,23 +194,54 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
     // `process_reply_email` also matches a recent outbound with the same
     // subject and addresses (Yahoo/iPhone sometimes omits those headers)
     // and falls back to a new thread when nothing matches.
-    process_reply_email(pool, client, email_info).await
+    let response = process_reply_email(pool, client, email_info).await;
+    if claimed {
+        release_claim(pool, &parsed.message_id, &token, bucket, key).await;
+    }
+    response
+}
+
+async fn release_claim(pool: &MySqlPool, message_id: &str, token: &str, bucket: &str, key: &str) {
+    if let Err(error) = release_email_processing(pool, message_id, token).await {
+        tracing::warn!(
+            ?error,
+            bucket = bucket,
+            key = key,
+            "Failed to release the inbound email claim; it expires on its own"
+        );
+    }
+}
+
+/// Adds `Retry-After` to the "in progress" answer.
+fn into_http_response(response: BasicResponse) -> Response {
+    let mut http_response = response.into_response();
+    if response.0 == StatusCode::TOO_MANY_REQUESTS {
+        http_response.headers_mut().insert(
+            RETRY_AFTER,
+            HeaderValue::from_static(EMAIL_IN_PROGRESS_RETRY_AFTER),
+        );
+    }
+    http_response
 }
 
 pub async fn receive_handler(
     State(pool): State<MySqlPool>,
     Json(event): Json<S3Event>,
-) -> BasicResponse {
+) -> Response {
     let custom_client = CustomClient {};
-    process_ses_received_event(&pool, custom_client, &event).await
+    into_http_response(process_ses_received_event(&pool, custom_client, &event).await)
 }
 
 #[cfg(test)]
 mod local_tests {
     use super::*;
+    use crate::posthog::PostHogEvent;
     use crate::tests::data::ses_open_json::ses_open_event_json;
     use crate::tests::data::ses_received::ses_received_json;
-    use crate::tests::utils::{MockClient, get_emails, insert_email, insert_user, new_test_app};
+    use crate::tests::utils::{
+        MockClient, MockUnprocessedReporter, get_emails, insert_email, insert_user, new_test_app,
+        read_file_as_bytes,
+    };
     use axum::http::StatusCode;
     use sqlx::MySqlPool;
 
@@ -335,8 +464,14 @@ mod local_tests {
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].subject, Some("Re: COLINS TEST".to_string()));
-        const EMAIL_BODY: &str = "Please respond.";
-        assert_eq!(result[0].body.clone().unwrap(), EMAIL_BODY);
+        // The In-Reply-To id matches no CRM email, so the reply is stored as a
+        // first email with its quoted original kept (4106d99, `for_unknown_parent`).
+        let body = result[0].body.clone().unwrap();
+        assert!(body.starts_with("Please respond."), "got: {body}");
+        assert!(
+            body.contains("Are you interested? I would love to sell you a countertop."),
+            "Expected the unmatched reply to keep the quoted original, got: {body}"
+        );
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -578,6 +713,323 @@ mod local_tests {
             .await
             .unwrap();
         assert_eq!(attachments.len(), 1);
+    }
+
+    /// An email that still cannot be parsed (no recipient in any header or in
+    /// the SES envelope) is answered 200, so `EventBridge` does not retry what
+    /// no retry can fix, and reported once as `inbound_email_unprocessed`.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn unparseable_email_is_reported_and_not_retried(pool: MySqlPool) {
+        let mock_client = MockClient::new("src/tests/data/no_recipient_anywhere.eml");
+        let reporter = MockUnprocessedReporter::default();
+        let data: S3Event = ses_received_json();
+
+        let response =
+            process_ses_received_event_with(&pool, mock_client.clone(), &data, &reporter).await;
+
+        assert_eq!(response, OK_RESPONSE);
+        assert_eq!(
+            reporter.reports(),
+            vec![(
+                "granite-ses-inbound-emails".to_string(),
+                "p51f95lgdaa8rpcjp0q7loemss3a17avpnc48ug1".to_string(),
+                "missing_receiver",
+            )]
+        );
+        assert!(mock_client.uploaded_keys().is_empty());
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 0);
+    }
+
+    /// A transient S3 read error is still a 500: a retry can fix it.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn s3_read_error_is_still_retried(pool: MySqlPool) {
+        let mock_client = MockClient::new("src/tests/data/does_not_exist.eml");
+        let reporter = MockUnprocessedReporter::default();
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event_with(&pool, mock_client, &data, &reporter).await;
+
+        assert_eq!(response.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(reporter.reports().is_empty());
+    }
+
+    #[test]
+    fn parse_error_kinds_name_each_parse_email_failure() {
+        assert_eq!(
+            parse_error_kind("Failed to parse email"),
+            "unreadable_message"
+        );
+        assert_eq!(
+            parse_error_kind("Failed to parse message ID"),
+            "missing_message_id"
+        );
+        assert_eq!(
+            parse_error_kind("Failed to parse sender email"),
+            "missing_sender"
+        );
+        assert_eq!(
+            parse_error_kind("Failed to parse receiver email"),
+            "missing_receiver"
+        );
+        assert_eq!(parse_error_kind("anything else"), "other");
+    }
+
+    /// The overlapping delivery of an email another invocation is still
+    /// processing gets 429 (`EventBridge` retries later) and does no
+    /// attachment work. Once that claim expires, a retry takes over.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn overlapping_delivery_is_told_to_retry_later(pool: MySqlPool) {
+        insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/image_only.eml");
+        let data: S3Event = ses_received_json();
+        let email_bytes = read_file_as_bytes("src/tests/data/image_only.eml").unwrap();
+        let (parsed, _) = parse_email(&email_bytes).unwrap();
+        let first_run = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        assert_eq!(
+            claim_email_processing(&pool, &parsed.message_id, first_run).await,
+            EmailClaim::Acquired
+        );
+
+        let overlap = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+        assert_eq!(overlap.0, StatusCode::TOO_MANY_REQUESTS);
+        assert!(mock_client.uploaded_keys().is_empty());
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 0);
+
+        // The first run was killed by the Lambda timeout: its claim expires.
+        sqlx::query(
+            "UPDATE email_processing_claims SET claimed_at = claimed_at - INTERVAL 41 SECOND",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let retry = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+        assert_eq!(retry, OK_RESPONSE);
+        assert_eq!(mock_client.uploaded_keys().len(), 1);
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 1);
+        assert_eq!(
+            claim_rows(&pool).await,
+            0,
+            "the finished run releases its claim"
+        );
+    }
+
+    /// `EventBridge` retries a 429, but the request logger reports only 5xx
+    /// to `PostHog`, so a turned-away overlap is not an exception there.
+    #[test]
+    fn overlap_response_is_retried_but_not_reported_to_posthog() {
+        assert_eq!(EMAIL_IN_PROGRESS.0, StatusCode::TOO_MANY_REQUESTS);
+        assert!(!PostHogEvent::should_report_http_exception(
+            EMAIL_IN_PROGRESS.0
+        ));
+    }
+
+    #[test]
+    fn overlap_response_asks_to_retry_after_30_seconds() {
+        let response = into_http_response(EMAIL_IN_PROGRESS);
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("30")
+        );
+        let ok = into_http_response(OK_RESPONSE);
+        assert_eq!(ok.status(), StatusCode::OK);
+        assert!(ok.headers().get(axum::http::header::RETRY_AFTER).is_none());
+    }
+
+    /// Another run stores the email between our `email_exists` check and our
+    /// claim (simulated by a trigger on the claims table). The second check
+    /// after the claim catches it: 200, no upload, claim released.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn email_stored_while_claiming_is_not_processed_again(pool: MySqlPool) {
+        insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "CREATE TRIGGER other_run_stores_email AFTER INSERT ON email_processing_claims \
+             FOR EACH ROW INSERT INTO emails (subject, body, message_id, thread_id) \
+             VALUES ('Stored by the other run', 'body', NEW.message_id, UUID())",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mock_client = MockClient::new("src/tests/data/image_only.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+
+        assert_eq!(response, OK_RESPONSE);
+        assert!(mock_client.uploaded_keys().is_empty());
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 1);
+        assert_eq!(claim_rows(&pool).await, 0);
+    }
+
+    /// Every finished run releases its claim, so a later redelivery is
+    /// answered by the `email_exists` check, not held off by a stale claim.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn finished_run_releases_its_claim(pool: MySqlPool) {
+        let data: S3Event = ses_received_json();
+        let mock_client = MockClient::new("src/tests/data/image_only.eml");
+
+        // Unknown receiver: handled, nothing stored, and the claim released.
+        let unknown = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+        assert_eq!(unknown, OK_RESPONSE);
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 0);
+        assert_eq!(claim_rows(&pool).await, 0);
+
+        insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        let stored = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+        assert_eq!(stored, OK_RESPONSE);
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 1);
+        assert_eq!(claim_rows(&pool).await, 0);
+    }
+
+    /// Lambda deployed before the migration: emails are processed as before.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn missing_claims_table_still_stores_the_email(pool: MySqlPool) {
+        sqlx::query("DROP TABLE email_processing_claims")
+            .execute(&pool)
+            .await
+            .unwrap();
+        insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/image_only.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+        assert_eq!(response, OK_RESPONSE);
+        assert_eq!(mock_client.uploaded_keys().len(), 1);
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 1);
+    }
+
+    async fn claim_rows(pool: &MySqlPool) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM email_processing_claims")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// `EventBridge` redelivers an email whose first run took over 5 s. The
+    /// redelivery must not upload the attachments again (each upload used to
+    /// leave an orphan copy in `gd-email-attachments`) or store a second row.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn redelivered_email_uploads_nothing(pool: MySqlPool) {
+        insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/image_only.eml");
+        let data: S3Event = ses_received_json();
+
+        let first = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+        assert_eq!(first, OK_RESPONSE);
+        assert_eq!(mock_client.uploaded_keys().len(), 1);
+
+        let redelivery = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+        assert_eq!(redelivery, OK_RESPONSE);
+        assert_eq!(mock_client.uploaded_keys().len(), 1);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        let email_id = u64::try_from(result[0].id).unwrap();
+        let attachments = get_email_attachments(&pool, email_id).await.unwrap();
+        assert_eq!(attachments.len(), 1);
+    }
+
+    /// Same for a reply that joins a thread: a redelivery uploads nothing.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn redelivered_reply_uploads_nothing(pool: MySqlPool) {
+        let parent_id = "CAG6QthaOtf0GWH6Ba9eOfRkfbviRi-RJw_vVnRc4U5cW_9GPmA@mail.gmail.com";
+        insert_email(&pool, parent_id).await.unwrap();
+        let mock_client = MockClient::new("src/tests/data/reply_attachment_2.eml");
+        let data: S3Event = ses_received_json();
+
+        assert_eq!(
+            process_ses_received_event(&pool, mock_client.clone(), &data).await,
+            OK_RESPONSE
+        );
+        let first_keys = mock_client.uploaded_keys();
+        assert_eq!(first_keys.len(), 4);
+
+        assert_eq!(
+            process_ses_received_event(&pool, mock_client.clone(), &data).await,
+            OK_RESPONSE
+        );
+        assert_eq!(mock_client.uploaded_keys(), first_keys);
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 2);
+    }
+
+    /// An email nobody in the CRM receives is not stored, so its attachments
+    /// must not reach S3 either.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn unknown_receiver_uploads_nothing(pool: MySqlPool) {
+        let mock_client = MockClient::new("src/tests/data/image_only.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+        assert_eq!(response, OK_RESPONSE);
+        assert!(mock_client.uploaded_keys().is_empty());
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 0);
+    }
+
+    /// Our employee was BCC'd: the only `To:` is an outside address and no
+    /// `Bcc:` header is left. SES's top `Received` still names the employee.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn bcc_employee_found_through_the_ses_envelope(pool: MySqlPool) {
+        let user_id = insert_user(&pool, "rep@granitedepotcolumbus.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/customer_to_envelope_user.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].receiver_user_id, Some(user_id));
+        assert_eq!(
+            result[0].receiver_email.as_deref(),
+            Some("contractor@example.org")
+        );
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn envelope_that_is_not_a_user_is_still_dropped(pool: MySqlPool) {
+        let mock_client = MockClient::new("src/tests/data/customer_to_envelope_user.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 0);
+    }
+
+    /// `To: undisclosed-recipients:;` used to fail parsing (500, lost after
+    /// three tries). It is now stored for the SES envelope recipient.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn undisclosed_recipients_forward_is_stored(pool: MySqlPool) {
+        let user_id = insert_user(&pool, "sales@granitedepotcolumbus.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/undisclosed_forwarded.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].receiver_user_id, Some(user_id));
+        assert_eq!(
+            result[0].receiver_email.as_deref(),
+            Some("sales@granitedepotcolumbus.com")
+        );
     }
 
     #[sqlx::test(migrations = "../migrations")]

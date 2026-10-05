@@ -1,0 +1,17 @@
+Return-Path: <customer@example.net>
+Received: from mail.example.net (mail.example.net [192.0.2.30]) by inbound-smtp.us-east-2.amazonaws.com with SMTP id 2hd8s7f6g5j4k3l2m1n0b9v8c7x6z5a4s3d2f1gh for rep@granitedepotcolumbus.com; Sat, 03 Oct 2026 18:12:45 +0000 (UTC)
+X-SES-Spam-Verdict: PASS
+X-SES-Virus-Verdict: PASS
+Received: from [192.0.2.31] (client.example.net [192.0.2.31])
+        by mail.example.net with ESMTPSA id 1a2b3c4d5e6f
+        for <rep@granitedepotcolumbus.com>;
+        Sat, 03 Oct 2026 14:12:44 -0400 (EDT)
+From: Customer Name <customer@example.net>
+To: Contractor <contractor@example.org>
+Subject: Cabinet install date
+Date: Sat, 3 Oct 2026 14:12:43 -0400
+Message-ID: <customer-to-envelope-user-1@mail.example.net>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+
+The cabinets go in on Monday, so the template can be on Wednesday.
