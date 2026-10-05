@@ -90,3 +90,9 @@ INSERT INTO sales (id, customer_id, price, status, project_address) VALUES
   (7001, 1004, 2000.00, 'sold', '5 Oak Ave'),
   (7002, 1005, 500.25,  'sold', '6 Oak Ave'),
   (7003, 2000, 9999.99, 'sold', 'elsewhere');
+
+-- Sales reps (position 1). A deleted user holding the position must not be
+-- listed; 101 holds it only in company 101 but is listed in 100 (Remix parity:
+-- `up.company_id` is not filtered).
+INSERT INTO users_positions (user_id, position_id, company_id) VALUES
+  (105, 1, 100);

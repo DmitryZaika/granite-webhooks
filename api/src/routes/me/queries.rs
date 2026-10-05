@@ -1,8 +1,11 @@
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
+use utoipa::ToSchema;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow)]
+/// A position the user holds in the current company.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
 pub struct PositionRow {
+    /// `positions.id`, e.g. 1 = sales rep, 9 = super admin.
     pub position_id: i32,
 }
 

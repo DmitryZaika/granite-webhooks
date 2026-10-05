@@ -11,13 +11,10 @@ pub mod queries;
 pub mod schemas;
 
 use crate::state::AppState;
-use axum::{
-    Router,
-    routing::{get, post},
-};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/v1/customers", get(handlers::list))
-        .route("/v1/customers/emails/batch", post(handlers::emails_batch))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(handlers::list))
+        .routes(routes!(handlers::emails_batch))
 }

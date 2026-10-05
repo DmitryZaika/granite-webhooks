@@ -12,6 +12,7 @@ api/
   src/
     main.rs              Lambda entry (lambda_http + axum)
     lib.rs               app(state) -> Router; used by main and by tests
+    openapi.rs           OpenAPI document info, security scheme, tags
     state.rs             AppState (pool, SESSION_SECRET, CORS origins)
     error.rs             ApiError -> JSON {"error": "..."} with 400/401/403/500
     auth/
@@ -21,13 +22,15 @@ api/
     routes/
       mod.rs             merges every domain router
       <domain>/
-        mod.rs           router() with full paths + a doc list of the routes
-        handlers.rs      auth extractor + params -> query -> Json
+        mod.rs           router() registering handlers with routes! + a doc list of the routes
+        handlers.rs      #[utoipa::path] + auth extractor + params -> query -> Json
         queries.rs       SQL, one function per database read
-        schemas.rs       request params, response rows (serde + FromRow)
+        schemas.rs       request params, response rows (serde + FromRow + ToSchema)
   tests/
     common/mod.rs        test server, signed cookies, seeded session ids
     <domain>.rs          integration tests per domain
+    openapi.rs           every route documented, openapi.json current (no DB)
+  openapi.json           generated spec, checked in (`make api-openapi`)
   seed/local_seed.sql    deterministic data for tests and local runs
   examples/sign_session.rs   print a Cookie header for curl
 ```
@@ -49,7 +52,7 @@ the Remix page that uses it. Pick the folder by the main table the query reads:
 | `schedule`      | `/v1/events/...`          | `events`, calendars                            |
 | `emails` / `sms`| `/v1/emails/...`          | message tables                                 |
 
-Only `me` and `customers` exist so far; create the others as their first route
+Only `me`, `customers` and `users` exist so far; create the others as their first route
 is migrated, following the same four files.
 
 ## Rules for every migrated endpoint
@@ -77,18 +80,57 @@ is migrated, following the same four files.
    `tests/<domain>.rs` must cover every branch of the old SQL against seeded
    data: exact JSON for at least one row per response shape, each filter,
    NULL/deleted rows, tenant isolation, and the auth cases.
+8. **Document it for agents.** AI agents call this API from the OpenAPI spec
+   alone, so every route is described well enough to use without reading
+   the code. See [OpenAPI](#openapi) below; `tests/openapi.rs` fails on
+   anything missing.
 
 ### Steps to migrate a route
 
 1. Read the Remix loader; list each database read and the permission check.
 2. Add rows to `seed/local_seed.sql` (append only; ids >= 100) covering each
    branch of the query (filters, NULLs, deleted rows, a second company).
-3. For each read: add a function in `queries.rs`, a handler, a route in the
-   domain `mod.rs`, and tests. `make api-test`.
+3. For each read: add a function in `queries.rs`, a handler with
+   `#[utoipa::path]`, `.routes(routes!(handlers::name))` in the domain
+   `mod.rs`, and tests. `make api-openapi`, then `make api-test`.
 4. Frontend: add typed callers in `app/lib/api/<domain>.ts`, move the
    composition into a client-safe module, replace the route's `loader` with a
    `clientLoader`, and delete the old loader code. See
    `docs/backend-migration.md` in that repo.
+
+## OpenAPI
+
+The spec is generated from the code with `utoipa` and served unauthenticated
+at `GET /openapi.json`; the same document is checked in as `api/openapi.json`.
+AI agents turn each operation into a tool: `operationId` becomes the tool
+name, `summary` + `description` its description, and the parameter and schema
+descriptions tell it what to send and what comes back.
+
+For every route:
+
+- **Handler**: `#[utoipa::path(...)]` with the method, full `path`, an explicit
+  verb_noun `operation_id` (`list_customers`, not `list`), `tag` = the domain,
+  `params(...)` / `request_body = ...`, every status the handler can return
+  (`body = ErrorBody` for errors; always 401, 403 when it takes
+  `EmployeeUser`/`AdminUser`, 400 when it validates input, 500 when it
+  queries), and `security(("session_cookie" = []))`.
+- **Doc comment on the handler**: first line is the summary (imperative,
+  e.g. "List the company's customers"); the paragraph after it says what is
+  returned, which filters apply, what is hidden by default, and which other
+  route to call next.
+- **Schemas**: request/response types derive `ToSchema`, query structs derive
+  `IntoParams` with `#[into_params(parameter_in = Query)]`. Every type and
+  every field gets a doc comment saying what it means in business terms,
+  units/format, and when it is null. When a param is parsed from a string,
+  set `#[param(value_type = ...)]` to the type the client should send, and
+  add `inline` when that type is not a body schema.
+- **Router**: `.routes(routes!(handlers::name))`, never `.route(...)`, or the
+  route is served but missing from the spec.
+- Run `make api-openapi` to regenerate `api/openapi.json` and commit it.
+
+`tests/openapi.rs` checks all of this (descriptions, operation ids, tags,
+security, 401s, unresolved `$ref`s, plain `.route(` calls) and that
+`api/openapi.json` is current.
 
 ## Auth
 
