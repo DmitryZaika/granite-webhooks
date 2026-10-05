@@ -1,0 +1,24 @@
+# Local MySQL for the `api` Lambda: integration tests (sqlx::test creates a
+# throwaway database per test) and `make api-local` against seeded data.
+# Port 3307 so it never collides with another MySQL already on 3306.
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: granite-local-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: granite
+      MYSQL_DATABASE: granite_local
+    ports:
+      - "3307:3306"
+    command: ["--default-authentication-plugin=mysql_native_password", "--log-bin-trust-function-creators=1"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pgranite"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+    volumes:
+      - granite_local_mysql:/var/lib/mysql
+
+volumes:
+  granite_local_mysql:

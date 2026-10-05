@@ -48,3 +48,9 @@ curl -v -X POST \
 ```
 
 ###
+
+## API (frontend-facing Lambda)
+
+The `api/` crate replaces Remix loaders with JSON endpoints. See `api/README.md`
+for the route layout, auth, local setup (`make api-db-reset api-test api-local`)
+and the migration playbook.

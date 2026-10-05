@@ -3,5 +3,6 @@ members = [
     "common",
     "webhooks",
     "time-triggered",
+    "api",
 ]
 resolver = "2"
