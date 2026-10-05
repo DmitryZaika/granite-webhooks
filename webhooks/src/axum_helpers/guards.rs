@@ -439,7 +439,7 @@ where
         match bearer_uuid {
             Some(uuid) if uuid == CORRECT_ID => Ok(Self),
             _ => {
-                tracing::error!("CloudTalk SMS webhook: missing or invalid bearer token");
+                tracing::warn!("CloudTalk SMS webhook: missing or invalid bearer token");
                 Err((StatusCode::FORBIDDEN, "Forbidden"))
             }
         }
@@ -469,7 +469,7 @@ where
         match bearer_uuid {
             Some(uuid) if uuid == CORRECT_ID => Ok(Self),
             _ => {
-                tracing::error!("RingCentral SMS webhook: missing or invalid bearer token");
+                tracing::warn!("RingCentral SMS webhook: missing or invalid bearer token");
                 Err((StatusCode::FORBIDDEN, "Forbidden"))
             }
         }

@@ -137,7 +137,8 @@ pub async fn sync_customer_to_cloud_talk(
             );
         }
         Err(error) => {
-            tracing::error!(
+            // A sync for a company without CloudTalk is expected, not a fault.
+            tracing::warn!(
                 ?error,
                 company_id,
                 customer_id,

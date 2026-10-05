@@ -94,7 +94,6 @@ async fn handle_start_command<T: Telegram>(
         tracing::error!(
             ?db_result,
             chat_id = chat_id.0,
-            email = email,
             "Failed to set user telegram token"
         );
         return internal_error(ERR_DB);
@@ -106,7 +105,7 @@ async fn handle_start_command<T: Telegram>(
     )
     .await;
     if let Err(e) = message_result {
-        tracing::error!(?e, email = email, "email send failed");
+        tracing::error!(?e, chat_id = chat_id.0, "email send failed");
         return internal_error(ERR_SEND_EMAIL);
     }
 
@@ -195,11 +194,11 @@ async fn handle_message<T: Telegram>(msg: Message, pool: &MySqlPool, bot: &T) ->
                 return handle_start_command(pool, bot, &email, chat_id).await;
             }
             Ok(false) => {
-                tracing::error!(email = email, "Email does not exist");
+                tracing::warn!(chat_id = chat_id.0, "Email does not exist");
                 return FORBIDDEN_RESPONSE;
             }
             Err(e) => {
-                tracing::error!(?e, email = email, "Failed to check email existence");
+                tracing::error!(?e, chat_id = chat_id.0, "Failed to check email existence");
                 return internal_error(ERR_DB);
             }
         }
@@ -320,11 +319,7 @@ async fn handle_assign_lead<T: Telegram>(
     );
     let message_result = send_message(&[&tg_info.email], "Lead assigned", &message).await;
     if message_result.is_err() {
-        tracing::error!(
-            ?message_result,
-            email = tg_info.email,
-            "Error sending email"
-        );
+        tracing::error!(?message_result, "Error sending lead assigned email");
         return internal_error(ERR_SEND_EMAIL);
     }
 

@@ -132,7 +132,7 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
         }
     };
     let Some(prior) = prior_raw else {
-        tracing::error!(
+        tracing::info!(
             bucket = email_info.bucket,
             key = email_info.key,
             "No prior email found. Processed as first email"
@@ -231,10 +231,11 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
             .chain(email_info.parsed.bcc_recipients.iter())
             .map(|recipient| recipient.address.as_str())
             .collect();
+        // No addresses in logs: bucket and key locate the raw email in S3.
         tracing::error!(
             bucket = email_info.bucket,
-            to_email = email_info.parsed.receiver_email,
-            ?recipients,
+            key = email_info.key,
+            recipient_count = recipients.len(),
             "Reciever email not found"
         );
         return OK_RESPONSE;
