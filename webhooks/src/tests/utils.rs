@@ -1,4 +1,5 @@
 use crate::amazon::bucket::S3Bucket;
+use crate::amazonses::unprocessed::UnprocessedEmailReporter;
 #[cfg(test)]
 use crate::axum_helpers::axum_app::new_main_app;
 #[cfg(test)]
@@ -41,6 +42,30 @@ impl S3Bucket for MockClient {
     async fn send_file(&self, bucket: &str, key: &str, _data: Bytes) -> Result<String, String> {
         self.uploads.lock().unwrap().push(key.to_string());
         Ok(format!("s3://{bucket}/{key}"))
+    }
+}
+
+/// Records `(bucket, key, error_kind)` for each unprocessed-email report
+/// instead of sending it to `PostHog`.
+type UnprocessedReport = (String, String, &'static str);
+
+#[derive(Clone, Default)]
+pub struct MockUnprocessedReporter {
+    reports: Arc<Mutex<Vec<UnprocessedReport>>>,
+}
+
+impl MockUnprocessedReporter {
+    pub fn reports(&self) -> Vec<UnprocessedReport> {
+        self.reports.lock().unwrap().clone()
+    }
+}
+
+impl UnprocessedEmailReporter for MockUnprocessedReporter {
+    async fn report(&self, bucket: &str, key: &str, error_kind: &'static str) {
+        self.reports
+            .lock()
+            .unwrap()
+            .push((bucket.to_string(), key.to_string(), error_kind));
     }
 }
 

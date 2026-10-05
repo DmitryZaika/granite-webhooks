@@ -20,11 +20,17 @@ pub struct PostHogEvent {
 pub struct Properties {
     #[serde(rename = "$exception_list", skip_serializing_if = "Option::is_none")]
     pub exception_list: Option<Vec<ExceptionItem>>,
-    #[serde(rename = "$exception_fingerprint")]
+    #[serde(
+        rename = "$exception_fingerprint",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub exception_fingerprint: String,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
 
     #[serde(flatten)]
@@ -138,6 +144,31 @@ fn env_lookup(key: &str) -> Option<String> {
 }
 
 impl PostHogEvent {
+    /// A plain named event (not `$exception`) from this Lambda. It creates no
+    /// person profile for the shared `server-webhooks` distinct id.
+    pub fn new_named_event(
+        api_key: impl Into<String>,
+        event: impl Into<String>,
+        properties: HashMap<String, serde_json::Value>,
+    ) -> Self {
+        let mut extra = build_info_extra(env_lookup);
+        extra.extend(properties);
+        extra.insert(
+            "$process_person_profile".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        Self {
+            api_key: api_key.into(),
+            event: event.into(),
+            distinct_id: "server-webhooks".into(),
+            properties: Some(Properties {
+                extra,
+                ..Properties::default()
+            }),
+            timestamp: None,
+        }
+    }
+
     pub fn should_report_http_exception(status: StatusCode) -> bool {
         status.is_server_error()
     }
