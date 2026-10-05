@@ -464,8 +464,14 @@ mod local_tests {
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].subject, Some("Re: COLINS TEST".to_string()));
-        const EMAIL_BODY: &str = "Please respond.";
-        assert_eq!(result[0].body.clone().unwrap(), EMAIL_BODY);
+        // The In-Reply-To id matches no CRM email, so the reply is stored as a
+        // first email with its quoted original kept (4106d99, `for_unknown_parent`).
+        let body = result[0].body.clone().unwrap();
+        assert!(body.starts_with("Please respond."), "got: {body}");
+        assert!(
+            body.contains("Are you interested? I would love to sell you a countertop."),
+            "Expected the unmatched reply to keep the quoted original, got: {body}"
+        );
     }
 
     #[sqlx::test(migrations = "../migrations")]

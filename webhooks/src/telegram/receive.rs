@@ -14,13 +14,32 @@ use crate::telegram::utils::parse_code;
 use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
 use axum::extract::State;
 use axum::http::StatusCode;
-use common::amazon::email::send_message;
 use common::crud::scheduled_emails::schedule_templates_for_deal_list;
 use lambda_http::tracing;
 use reqwest::Client;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, Update, UpdateKind};
+
+/// Sends a transactional email through SES. Under `cargo test` nothing leaves the
+/// process: the message is recorded for the test to inspect instead.
+async fn send_message(
+    to: &[&str],
+    subject: &str,
+    message: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[cfg(test)]
+    {
+        crate::tests::telegram::record_email(to, subject, message);
+        Ok(())
+    }
+    #[cfg(not(test))]
+    {
+        common::amazon::email::send_message(to, subject, message)
+            .await
+            .map_err(Into::into)
+    }
+}
 
 const MESSAGE: &str = r"
 Invalid message. Please send one of the following commands:
@@ -356,7 +375,7 @@ pub async fn webhook_handler(
 mod local_tests {
     use super::*;
     use crate::schemas::add_customer::NewLeadForm;
-    use crate::tests::telegram::{MockTelegram, generate_message, telegram_user};
+    use crate::tests::telegram::{MockTelegram, generate_message, take_sent_emails, telegram_user};
     use crate::tests::utils::{assigned_user_position, insert_user, positioned_user};
     use crate::webhooks::receive::new_lead_form_inner;
     use axum::http::StatusCode;
@@ -579,7 +598,13 @@ mod local_tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert!(tok.telegram_conf_code.is_some());
+        let code = tok.telegram_conf_code.expect("code is stored");
+
+        // the same code goes out by email, to the registering address
+        let emails = take_sent_emails();
+        assert_eq!(emails.len(), 1);
+        assert_eq!(emails[0].to, vec!["t@x.com".to_string()]);
+        assert!(emails[0].body.contains(&code.to_string()));
     }
 
     // -----------------------------
@@ -689,6 +714,7 @@ mod local_tests {
         let res = handle_message(msg, &pool, &bot).await;
 
         assert_eq!(res.0, StatusCode::OK);
+        assert_eq!(take_sent_emails().len(), 1, "the code email is sent once");
     }
 
     #[sqlx::test(migrations = "../migrations")]

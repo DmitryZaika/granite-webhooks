@@ -370,6 +370,7 @@ pub fn extract_id(hit: &ContactSearchHit) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::stub_http::{StubServer, carmel_places_responder, use_google_places};
 
     #[tokio::test]
     #[tracing_test::traced_test]
@@ -398,6 +399,9 @@ mod tests {
             zip: Some("46033".to_string()),
             country_id: Some(13),
         };
+        // Resolve the address through a loopback Places stub, not the real API.
+        let places = StubServer::start(carmel_places_responder).await;
+        use_google_places(&places.base);
         let payload = build_payload(&mapping, Some(13)).await.unwrap();
         assert_eq!(payload, result);
     }

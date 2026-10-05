@@ -14,6 +14,14 @@ use sqlx::MySqlPool;
 
 const BASE_URL: &str = "https://my.cloudtalk.io/api";
 
+fn base_url() -> String {
+    #[cfg(test)]
+    if let Some(stub) = crate::tests::stub_http::cloudtalk_base_url() {
+        return stub;
+    }
+    BASE_URL.to_string()
+}
+
 pub async fn cloudtalk_request<T: Serialize + Sync, R: DeserializeOwned + Send>(
     pool: &MySqlPool,
     client: &Client,
@@ -23,7 +31,7 @@ pub async fn cloudtalk_request<T: Serialize + Sync, R: DeserializeOwned + Send>(
     body: Option<&T>,
 ) -> Result<R, Box<dyn std::error::Error + Send + Sync>> {
     let auth = get_auth_string(pool, company_id).await?;
-    let url = format!("{BASE_URL}/{path}");
+    let url = format!("{}/{path}", base_url());
 
     let mut req = client
         .request(method.clone(), &url)
@@ -126,7 +134,8 @@ pub async fn sync_customer_to_cloud_talk(
     match company_has_cloud_talk(pool, company_id).await {
         Ok(true) => {}
         Ok(false) => {
-            tracing::error!(
+            // A sync for a company without CloudTalk is expected, not a fault.
+            tracing::warn!(
                 company_id,
                 customer_id,
                 "Cloudtalk not configured for this company"
@@ -137,8 +146,7 @@ pub async fn sync_customer_to_cloud_talk(
             );
         }
         Err(error) => {
-            // A sync for a company without CloudTalk is expected, not a fault.
-            tracing::warn!(
+            tracing::error!(
                 ?error,
                 company_id,
                 customer_id,
@@ -253,6 +261,9 @@ pub async fn find_cloudtalk_contact_by_phone(
 #[cfg(test)]
 mod local_tests {
     use super::*;
+    use crate::tests::stub_http::{
+        StubServer, carmel_places_responder, use_cloudtalk, use_google_places,
+    };
     use axum::http::StatusCode;
     use sqlx::MySqlPool;
 
@@ -406,7 +417,9 @@ mod local_tests {
 
         let res = sync_customer_to_cloud_talk(&pool, &client, customer_id as i32).await;
 
-        assert_eq!(res.0, StatusCode::INTERNAL_SERVER_ERROR);
+        // 401 since 57d78f6 ("Better cloudtalk not configured"): a company without
+        // credentials is a configuration problem, not a server fault.
+        assert_eq!(res.0, StatusCode::UNAUTHORIZED);
         assert!(res.1.contains("Cloudtalk not configured for this company"));
     }
 
@@ -451,10 +464,48 @@ mod local_tests {
         .await
         .unwrap();
 
-        // Execution path will call get_cloudtalk_us_country_id, build_payload, and upsert_contact
+        // Execution path calls get_cloudtalk_us_country_id, build_payload and
+        // upsert_contact; CloudTalk and Google Places are loopback stubs.
+        let cloudtalk = StubServer::start(|req| {
+            let path = req.path.split('?').next().unwrap_or_default();
+            match (req.method.as_str(), path) {
+                ("GET", "/countries/index.json") => Some(serde_json::json!({
+                    "responseData": { "data": [{ "Country": { "id": "13", "iso_code": "US" } }] }
+                })),
+                ("GET", "/contacts/index.json") => {
+                    Some(serde_json::json!({ "responseData": { "data": [] } }))
+                }
+                ("PUT", "/contacts/add.json") => Some(serde_json::json!({
+                    "responseData": { "data": { "Contact": { "id": "9001" } } }
+                })),
+                _ => None,
+            }
+        })
+        .await;
+        use_cloudtalk(&cloudtalk.base);
+        let places = StubServer::start(carmel_places_responder).await;
+        use_google_places(&places.base);
+
         let res = sync_customer_to_cloud_talk(&pool, &client, customer_id as i32).await;
 
         assert_eq!(res.0, StatusCode::OK);
+
+        let created = cloudtalk
+            .requests()
+            .into_iter()
+            .find(|req| req.method == "PUT" && req.path == "/contacts/add.json")
+            .expect("contact should be created in CloudTalk");
+        let sent: serde_json::Value = serde_json::from_str(&created.body).unwrap();
+        assert_eq!(sent["address"], "2001 East Greyhound Pass");
+        assert_eq!(sent["country_id"], 13);
+        let mapped = sqlx::query_scalar!(
+            "SELECT cloudtalk_id FROM cloudtalk_contacts WHERE customer_id = ?",
+            customer_id as i32
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(mapped, 9001);
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -473,6 +524,12 @@ mod local_tests {
         )
         .await
         .unwrap();
+
+        // The known mapping makes this an update call; CloudTalk is a loopback stub.
+        let cloudtalk =
+            StubServer::start(|_| Some(serde_json::json!({ "responseData": { "data": [] } })))
+                .await;
+        use_cloudtalk(&cloudtalk.base);
 
         // Setup an existing mapping reference in the DB table beforehand
         insert_cloudtalk_contact_mapping(&pool, customer_id as i32, company_id as i32, 4242)
