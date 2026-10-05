@@ -7,10 +7,10 @@ mod handlers;
 pub mod queries;
 
 use crate::state::AppState;
-use axum::{Router, routing::get};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/v1/me", get(handlers::me))
-        .route("/v1/me/positions", get(handlers::positions))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(handlers::me))
+        .routes(routes!(handlers::positions))
 }

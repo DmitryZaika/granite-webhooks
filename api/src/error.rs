@@ -2,7 +2,8 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use lambda_http::tracing;
-use serde_json::json;
+use serde::Serialize;
+use utoipa::ToSchema;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -29,8 +30,19 @@ impl IntoResponse for ApiError {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         };
-        (status, Json(json!({ "error": self.to_string() }))).into_response()
+        let body = ErrorBody {
+            error: self.to_string(),
+        };
+        (status, Json(body)).into_response()
     }
+}
+
+/// Body of every error response.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ErrorBody {
+    /// Short reason: `unauthorized`, `forbidden`, `database error`, or the
+    /// bad-request message (e.g. `invalid sales_rep: abc`).
+    pub error: String,
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;

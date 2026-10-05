@@ -3,6 +3,7 @@
 
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
+use utoipa::ToSchema;
 
 /// Sessions older than this are rejected even if `expiration_date` is later
 /// (Remix `SESSION_MAX_AGE_MONTHS`).
@@ -11,21 +12,37 @@ pub const SESSION_MAX_AGE_MONTHS: i32 = 2;
 /// `Positions.SuperAdmin` in the Remix app.
 pub const SUPER_ADMIN_POSITION: i32 = 9;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow)]
+/// The signed-in user, after the super-admin rule is applied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
 pub struct SessionUser {
+    /// User id.
     pub id: i32,
+    /// Login email.
     pub email: String,
+    /// Display name.
     pub name: Option<String>,
+    /// Personal phone number.
     pub phone_number: Option<String>,
+    /// Staff member of the company (sees customers, deals, inventory).
     pub is_employee: bool,
+    /// Company admin. Always true for super admins.
     pub is_admin: bool,
+    /// Platform-wide superuser.
     pub is_superuser: bool,
+    /// Company every request acts in. For a super admin this is the company
+    /// selected in the session, otherwise the user's own company.
     pub company_id: i32,
+    /// UI preference: the sidebar is pinned open.
     pub pined_bar: bool,
+    /// CloudTalk telephony agent id, when the user has a CloudTalk seat.
     pub cloudtalk_agent_id: Option<String>,
+    /// Outbound CloudTalk phone number.
     pub cloudtalk_phone_number: Option<String>,
+    /// RingCentral extension id, when the user has a RingCentral seat.
     pub ringcentral_extension_id: Option<String>,
+    /// Outbound RingCentral phone number.
     pub ringcentral_phone_number: Option<String>,
+    /// Feature flag: the user may use e-signatures.
     pub is_signature_available: bool,
 }
 

@@ -1,0 +1,706 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Granite Manager API",
+    "description": "JSON API behind Granite Manager, a CRM for countertop and stone fabrication companies. Every request acts as the signed-in user and only sees data of that user's company.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/v1/me": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Get the signed-in user",
+        "description": "Returns the user behind the session, including their permission flags and\nthe company every other request acts in.",
+        "operationId": "get_current_user",
+        "responses": {
+          "200": {
+            "description": "The signed-in user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionUser"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/positions": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "List the signed-in user's positions",
+        "description": "Returns the position ids (job roles such as sales rep) the user holds in\nthe company the request acts in.",
+        "operationId": "list_current_user_positions",
+        "responses": {
+          "200": {
+            "description": "Position ids in the current company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PositionRow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/customers": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "List the company's customers",
+        "description": "Returns every non-deleted customer of the caller's company, optionally\nfiltered by sales rep. Invalid leads are hidden unless `show_invalid=1`.\nWith `view=companies` it returns only customers that have a company name,\neach with revenue and project totals. Rows carry the primary email only;\nuse `POST /v1/customers/emails/batch` for all addresses.",
+        "operationId": "list_customers",
+        "parameters": [
+          {
+            "name": "view",
+            "in": "query",
+            "description": "`customers` (default) lists every customer. `companies` lists only\ncustomers with a company name and adds revenue and project totals.\nAny other value is treated as `customers`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Which list `GET /v1/customers` returns.",
+              "enum": [
+                "customers",
+                "companies"
+              ]
+            }
+          },
+          {
+            "name": "sales_rep",
+            "in": "query",
+            "description": "Only customers assigned to this sales rep (a user id, see\n`GET /v1/users/sales-reps`). Omit or leave empty for all reps.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "show_invalid",
+            "in": "query",
+            "description": "`1` also returns leads marked invalid. Ignored when `view=companies`,\nwhich never filters invalid leads out.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "1"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Customer rows, or company rows when `view=companies`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`sales_rep` is not an integer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/customers/emails/batch": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Get all emails of several customers",
+        "description": "Returns every email address of the given customers, primary address\nfirst, keyed by customer id. Customers without emails, and ids belonging\nto another company, are absent from the result.",
+        "operationId": "get_customer_emails",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailsBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Map of customer id to email addresses, primary first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "example": {
+                  "1000": [
+                    "primary@example.com",
+                    "other@example.com"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "More than 20000 ids, or a malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/users/sales-reps": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List the company's sales reps",
+        "description": "Returns the non-deleted users of the caller's company who hold the sales\nrep position. Use their ids for the `sales_rep` filter of `GET /v1/customers`.",
+        "operationId": "list_sales_reps",
+        "responses": {
+          "200": {
+            "description": "Sales reps of the current company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserNameRow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CompanyRow": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CustomerRow"
+          },
+          {
+            "type": "object",
+            "required": [
+              "projects_count"
+            ],
+            "properties": {
+              "revenue_generated": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Sum of sale prices as a decimal string (e.g. `\"1500.00\"`), the way\nmysql2 returns DECIMAL; null when there are no sales."
+              },
+              "projects_count": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Number of sales."
+              }
+            }
+          }
+        ],
+        "description": "A customer row of the `companies` view, with totals over its own sales\nand those of its child customers."
+      },
+      "CustomerRow": {
+        "type": "object",
+        "description": "One row of the customers table. Field names match the Remix\n`CustomersListCustomer` type exactly, including `customerTemperature`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contact person's name."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Primary email address; all addresses come from\n`POST /v1/customers/emails/batch`."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Main phone number."
+          },
+          "phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Secondary phone number."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Street address."
+          },
+          "sales_rep": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "User id of the assigned sales rep."
+          },
+          "created_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the customer was created."
+          },
+          "assigned_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the current sales rep was assigned."
+          },
+          "sales_rep_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the assigned sales rep; null if unassigned or the rep was deleted."
+          },
+          "company_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Company (tenant) the customer belongs to."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lead source, e.g. a website form or referral."
+          },
+          "invalid_lead": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reason the lead was marked invalid. Null or empty means valid."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Business name when the customer is a company (contractor, designer...)."
+          },
+          "customerTemperature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lead temperature: `hot`, `medium` or `cold`; null if not set."
+          }
+        }
+      },
+      "EmailsBatchRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/customers/emails/batch`.",
+        "required": [
+          "customer_ids"
+        ],
+        "properties": {
+          "customer_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Customer ids to look up, at most 20000. Ids of other companies are ignored."
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "Body of every error response.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Short reason: `unauthorized`, `forbidden`, `database error`, or the\nbad-request message (e.g. `invalid sales_rep: abc`)."
+          }
+        }
+      },
+      "ListResponse": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerRow"
+            }
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompanyRow"
+            }
+          }
+        ],
+        "description": "`GET /v1/customers` returns `CustomerRow`s, or `CompanyRow`s when `view=companies`."
+      },
+      "PositionRow": {
+        "type": "object",
+        "description": "A position the user holds in the current company.",
+        "required": [
+          "position_id"
+        ],
+        "properties": {
+          "position_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`positions.id`, e.g. 1 = sales rep, 9 = super admin."
+          }
+        }
+      },
+      "SessionUser": {
+        "type": "object",
+        "description": "The signed-in user, after the super-admin rule is applied.",
+        "required": [
+          "id",
+          "email",
+          "is_employee",
+          "is_admin",
+          "is_superuser",
+          "company_id",
+          "pined_bar",
+          "is_signature_available"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "User id."
+          },
+          "email": {
+            "type": "string",
+            "description": "Login email."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Personal phone number."
+          },
+          "is_employee": {
+            "type": "boolean",
+            "description": "Staff member of the company (sees customers, deals, inventory)."
+          },
+          "is_admin": {
+            "type": "boolean",
+            "description": "Company admin. Always true for super admins."
+          },
+          "is_superuser": {
+            "type": "boolean",
+            "description": "Platform-wide superuser."
+          },
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company every request acts in. For a super admin this is the company\nselected in the session, otherwise the user's own company."
+          },
+          "pined_bar": {
+            "type": "boolean",
+            "description": "UI preference: the sidebar is pinned open."
+          },
+          "cloudtalk_agent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "CloudTalk telephony agent id, when the user has a CloudTalk seat."
+          },
+          "cloudtalk_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Outbound CloudTalk phone number."
+          },
+          "ringcentral_extension_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RingCentral extension id, when the user has a RingCentral seat."
+          },
+          "ringcentral_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Outbound RingCentral phone number."
+          },
+          "is_signature_available": {
+            "type": "boolean",
+            "description": "Feature flag: the user may use e-signatures."
+          }
+        }
+      },
+      "UserNameRow": {
+        "type": "object",
+        "description": "A user's id and display name.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "User id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name."
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "session_cookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__session",
+        "description": "Signed React Router session cookie set by the Granite Manager login."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "me",
+      "description": "The signed-in user"
+    },
+    {
+      "name": "customers",
+      "description": "Customers and leads of the company"
+    },
+    {
+      "name": "users",
+      "description": "Other users of the company"
+    }
+  ]
+}

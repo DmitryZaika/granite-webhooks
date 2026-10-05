@@ -69,6 +69,11 @@ api-db-reset: api-db-up
 api-test: api-db-up
 	DATABASE_URL=$(LOCAL_DB_URL) cargo test -p api
 
+# Regenerates api/openapi.json from the route annotations (no database needed).
+.PHONY: api-openapi
+api-openapi:
+	UPDATE_OPENAPI=1 cargo test -p api --test openapi spec_file_is_current
+
 # Serves http://localhost:9100/lambda-url/api/... through the Lambda runtime emulator.
 .PHONY: api-local
 api-local: api-db-up
