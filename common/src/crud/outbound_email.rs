@@ -31,6 +31,7 @@ pub fn normalize_outbound_message_id(raw: &str) -> String {
     }
 }
 
+/// Recorded with `is_automated = 1`: a scheduled send earns the rep no points.
 pub async fn record_outbound_scheduled_email(
     pool: &MySqlPool,
     email: &OutboundScheduledEmail,
@@ -44,9 +45,10 @@ pub async fn record_outbound_scheduled_email(
         r#"
         INSERT INTO emails (
             sender_user_id, subject, body, html_body, message_id,
-            sender_email, receiver_email, thread_id, deal_id, company_id, sent_at
+            sender_email, receiver_email, thread_id, deal_id, company_id, sent_at,
+            is_automated
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 1)
         "#,
     )
     .bind(email.user_id)
@@ -68,9 +70,10 @@ pub async fn record_outbound_scheduled_email(
                 r#"
                 INSERT INTO emails (
                     sender_user_id, subject, body, message_id,
-                    sender_email, receiver_email, thread_id, deal_id, company_id, sent_at
+                    sender_email, receiver_email, thread_id, deal_id, company_id, sent_at,
+                    is_automated
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 1)
                 "#,
             )
             .bind(email.user_id)
