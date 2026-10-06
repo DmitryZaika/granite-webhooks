@@ -1,4 +1,5 @@
 use crate::amazon::bucket::S3Bucket;
+use crate::amazonses::unprocessed::UnprocessedEmailReporter;
 #[cfg(test)]
 use crate::axum_helpers::axum_app::new_main_app;
 #[cfg(test)]
@@ -11,16 +12,26 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct MockClient {
     pub path: PathBuf,
+    /// Keys passed to `send_file`, shared by every clone of this client.
+    uploads: Arc<Mutex<Vec<String>>>,
 }
 
 impl MockClient {
     pub fn new<P: Into<PathBuf>>(path: P) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            uploads: Arc::default(),
+        }
+    }
+
+    pub fn uploaded_keys(&self) -> Vec<String> {
+        self.uploads.lock().unwrap().clone()
     }
 }
 
@@ -29,7 +40,32 @@ impl S3Bucket for MockClient {
         read_file_as_bytes(&self.path).map_err(|e| e.to_string())
     }
     async fn send_file(&self, bucket: &str, key: &str, _data: Bytes) -> Result<String, String> {
+        self.uploads.lock().unwrap().push(key.to_string());
         Ok(format!("s3://{bucket}/{key}"))
+    }
+}
+
+/// Records `(bucket, key, error_kind)` for each unprocessed-email report
+/// instead of sending it to `PostHog`.
+type UnprocessedReport = (String, String, &'static str);
+
+#[derive(Clone, Default)]
+pub struct MockUnprocessedReporter {
+    reports: Arc<Mutex<Vec<UnprocessedReport>>>,
+}
+
+impl MockUnprocessedReporter {
+    pub fn reports(&self) -> Vec<UnprocessedReport> {
+        self.reports.lock().unwrap().clone()
+    }
+}
+
+impl UnprocessedEmailReporter for MockUnprocessedReporter {
+    async fn report(&self, bucket: &str, key: &str, error_kind: &'static str) {
+        self.reports
+            .lock()
+            .unwrap()
+            .push((bucket.to_string(), key.to_string(), error_kind));
     }
 }
 

@@ -1,0 +1,18 @@
+Return-Path: <customer@example.net>
+Received: from mail.example.net (mail.example.net [192.0.2.20]) by inbound-smtp.us-east-2.amazonaws.com with SMTP id 7kq2m9xw3plv01234ab5cd6ef7gh8ij9kl0mn1op for estimates@granitedepotcolumbus.com; Sat, 03 Oct 2026 15:40:02 +0000 (UTC)
+X-SES-Spam-Verdict: PASS
+X-SES-Virus-Verdict: PASS
+Received: from [192.0.2.21] (client.example.net [192.0.2.21])
+        by mail.example.net with ESMTPSA id 9f8e7d6c5b4a
+        for <estimates@granitedepotcolumbus.com>;
+        Sat, 03 Oct 2026 11:40:01 -0400 (EDT)
+From: Customer Name <customer@example.net>
+To: undisclosed-recipients:;
+Bcc: estimates@granitedepotcolumbus.com
+Subject: Measurements for the vanity
+Date: Sat, 3 Oct 2026 11:40:00 -0400
+Message-ID: <undisclosed-bcc-1@mail.example.net>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+
+The vanity is 61 inches wide. Please send a quote.

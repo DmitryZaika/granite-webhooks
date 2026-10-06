@@ -360,6 +360,11 @@ mod tests {
 
     #[sqlx::test(migrations = "../migrations")]
     async fn test_unscoped_sms_resolves_company_from_agent(pool: MySqlPool) {
+        // users.company_id has a foreign key to company, so the company must exist.
+        sqlx::query("INSERT INTO company (id, name) VALUES (42, 'CloudTalk Agent Co')")
+            .execute(&pool)
+            .await
+            .unwrap();
         let user_id = insert_user(&pool, "agent@example.com", None)
             .await
             .unwrap();
@@ -465,7 +470,9 @@ mod tests {
             .authorization_bearer(CORRECT_ID.to_string())
             .text("{not json")
             .await;
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        // 500 since 0b2162e: a payload we cannot parse is answered with a 5xx so
+        // CloudTalk retries it instead of dropping it for good.
+        assert_eq!(response.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
 
         let smss = get_sms_received(&pool).await;
         assert_eq!(smss.len(), 0, "malformed payload must not insert a row");

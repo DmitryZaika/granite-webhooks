@@ -1,0 +1,32 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "api"
+path = "src/main.rs"
+
+[dependencies]
+common = { path = "../common" }
+axum = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+hmac = "0.13"
+lambda_http = "1.1"
+percent-encoding = "2.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.11"
+sqlx = { version = "0.9", features = ["runtime-tokio", "mysql", "chrono"] }
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tower-http = { version = "0.6", features = ["cors"] }
+utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "preserve_order", "preserve_path_order"] }
+utoipa-axum = "0.3.0"
+
+[dev-dependencies]
+axum-test = "19"

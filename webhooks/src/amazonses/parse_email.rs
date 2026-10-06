@@ -1,8 +1,13 @@
 use bytes::Bytes;
 use email_reply_parser::EmailReplyParser;
-use mail_parser::{Address, HeaderValue, MessageParser, MessagePart, MimeHeaders, PartType};
+use mail_parser::{
+    Address, HeaderName, HeaderValue, Host, Message, MessageParser, MessagePart, MimeHeaders,
+    PartType,
+};
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::fmt::Write;
 use std::path::Path;
 use std::sync::LazyLock;
 use uuid::Uuid;
@@ -21,6 +26,30 @@ pub fn filename_to_uuid(original: &str) -> String {
     format!("{}{}", Uuid::new_v4(), ext)
 }
 
+/// S3 key for attachment `index` of the message `message_id`.
+///
+/// The key is derived from the message, so a redelivery of the same email
+/// (`EventBridge` retries after its 5 s timeout while the first run is still
+/// uploading) overwrites the same objects instead of adding orphan copies.
+/// A message without an id falls back to a random key.
+pub fn attachment_object_key(message_id: &str, index: usize, original: &str) -> String {
+    let message_id = message_id.trim();
+    if message_id.is_empty() {
+        return filename_to_uuid(original);
+    }
+    let ext = Path::new(original)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    let digest = Sha256::digest(message_id.as_bytes());
+    let hash = digest.iter().take(16).fold(String::new(), |mut output, b| {
+        let _ = write!(output, "{b:02x}");
+        output
+    });
+    format!("{hash}-{index}{ext}")
+}
+
 pub struct Attachment {
     content_type: String,
     content_subtype: Option<String>,
@@ -36,10 +65,17 @@ pub struct UploadedAttachment {
 }
 
 impl Attachment {
-    pub async fn to_uploaded_attachment<C: S3Bucket>(self, client: &C) -> UploadedAttachment {
-        let filename = filename_to_uuid(&self.filename);
+    pub fn filename(&self) -> &str {
+        &self.filename
+    }
+
+    pub async fn to_uploaded_attachment<C: S3Bucket>(
+        self,
+        client: &C,
+        key: String,
+    ) -> UploadedAttachment {
         let url = client
-            .send_file("gd-email-attachments", &filename, self.data)
+            .send_file("gd-email-attachments", &key, self.data)
             .await
             .unwrap();
         UploadedAttachment {
@@ -73,7 +109,9 @@ pub struct ParsedEmail {
     /// `From:` display name (Gmail's sender column), when the header has one.
     pub sender_display_name: Option<String>,
     /// First `To:` address. Retained verbatim so existing callers and the
-    /// `emails.receiver_email` column keep their current meaning.
+    /// `emails.receiver_email` column keep their current meaning. When `To:`
+    /// carries no address (`undisclosed-recipients:;`), see
+    /// [`resolve_receiver_email`] for where it comes from instead.
     pub receiver_email: String,
     /// Every `To:` address, in header order.
     pub to_recipients: Vec<ParsedRecipient>,
@@ -83,6 +121,11 @@ pub struct ParsedEmail {
     /// recipient's copy does not carry the header — but stored when present.
     pub bcc_recipients: Vec<ParsedRecipient>,
     pub forward_to_email: Option<String>,
+    /// Address SES accepted this message for, from the `for` clause of the
+    /// `Received:` header SES prepends. Set only when the topmost `Received`
+    /// was written by an SES inbound host; lower ones can be forged by the
+    /// sender. Normalized like every stored address.
+    pub envelope_recipient: Option<String>,
     pub in_reply_to: Option<String>,
     /// `References:` chain, oldest first. Used as a threading fallback when
     /// `In-Reply-To` does not match anything we issued.
@@ -163,6 +206,71 @@ fn collect_references(value: &HeaderValue<'_>) -> Vec<String> {
         .filter(|entry| !entry.is_empty())
         .filter(|entry| seen.insert(entry.clone()))
         .collect()
+}
+
+/// The first `To:` address, verbatim. An empty group
+/// (`undisclosed-recipients:;`) or an entry with no address part yields `None`.
+fn first_to_address(address: Option<&Address<'_>>) -> Option<String> {
+    address?.iter().find_map(|addr| {
+        addr.address
+            .as_ref()
+            .filter(|raw| !raw.trim().is_empty())
+            .map(std::string::ToString::to_string)
+    })
+}
+
+/// Topmost occurrence of a single-address header such as `Delivered-To:`,
+/// normalized. Topmost is the hop nearest to us.
+fn top_header_address(message: &Message<'_>, name: &'static str) -> Option<String> {
+    let raw = match message.header_values(name).next()? {
+        HeaderValue::Address(address) => address.first()?.address.as_ref()?.to_string(),
+        HeaderValue::Text(text) => text.to_string(),
+        _ => return None,
+    };
+    let address = normalize_address(&raw);
+    address.contains('@').then_some(address)
+}
+
+/// Recipient named by the `Received:` header SES prepends on arrival.
+///
+/// Only the topmost `Received` is read, and only when its `by` host is an SES
+/// inbound endpoint (`inbound-smtp.<region>.amazonaws.com`). Every lower
+/// `Received` was written before SES saw the message, so the sender controls
+/// it. `Message::received()` must not be used here: it returns the LAST
+/// (bottom) occurrence.
+fn ses_envelope_recipient(message: &Message<'_>) -> Option<String> {
+    let received = message
+        .header_values(HeaderName::Received)
+        .next()?
+        .as_received()?;
+    let Some(Host::Name(by)) = received.by.as_ref() else {
+        return None;
+    };
+    let by = by.trim().to_ascii_lowercase();
+    if !(by.starts_with("inbound-smtp.") && by.ends_with(".amazonaws.com")) {
+        return None;
+    }
+    let address = normalize_address(received.for_.as_deref()?);
+    address.contains('@').then_some(address)
+}
+
+/// `receiver_email`: the first `To:` address verbatim, as before. When `To:`
+/// has no address (`undisclosed-recipients:;`), the SES envelope recipient,
+/// then the first `Cc:`, the first `Bcc:`, `X-Forwarded-To:`,
+/// `Delivered-To:` and `X-Original-To:`.
+fn resolve_receiver_email(
+    message: &Message<'_>,
+    envelope_recipient: Option<&str>,
+    cc_recipients: &[ParsedRecipient],
+    bcc_recipients: &[ParsedRecipient],
+) -> Option<String> {
+    first_to_address(message.to())
+        .or_else(|| envelope_recipient.map(str::to_string))
+        .or_else(|| cc_recipients.first().map(|r| r.address.clone()))
+        .or_else(|| bcc_recipients.first().map(|r| r.address.clone()))
+        .or_else(|| top_header_address(message, "X-Forwarded-To"))
+        .or_else(|| top_header_address(message, "Delivered-To"))
+        .or_else(|| top_header_address(message, "X-Original-To"))
 }
 
 fn parse_header_value(value: &HeaderValue) -> Option<String> {
@@ -425,17 +533,17 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         .as_ref()
         .map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty());
-    let receiver_emails = message.to().ok_or("Failed to parse receiver email")?;
-    let receiver_email = receiver_emails
-        .first()
-        .ok_or("Failed to parse receiver email")?
-        .address
-        .as_ref()
-        .ok_or("Failed to parse receiver email")?
-        .to_string();
     let to_recipients = collect_recipients(message.to());
     let cc_recipients = collect_recipients(message.cc());
     let bcc_recipients = collect_recipients(message.bcc());
+    let envelope_recipient = ses_envelope_recipient(&message);
+    let receiver_email = resolve_receiver_email(
+        &message,
+        envelope_recipient.as_deref(),
+        &cc_recipients,
+        &bcc_recipients,
+    )
+    .ok_or("Failed to parse receiver email")?;
     let references = collect_references(message.references());
     let forward_to_email = if let Some(forwarded_to_email_raw) = message.header("X-Forwarded-To") {
         parse_header_value(forwarded_to_email_raw)
@@ -456,6 +564,7 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
         cc_recipients,
         bcc_recipients,
         forward_to_email,
+        envelope_recipient,
         in_reply_to,
         references,
         message_id: message_id.to_string(),
@@ -467,6 +576,32 @@ pub fn parse_email(email_bytes: &Bytes) -> Result<(ParsedEmail, Vec<Attachment>)
 mod local_tests {
     use super::*;
     use crate::tests::utils::{read_file_as_bytes, replace_bytes};
+
+    #[test]
+    fn attachment_key_is_stable_per_message_and_index() {
+        let id = "CAG6QthaOtf0GWH6Ba9eOfRkfbviRi-RJw_vVnRc4U5cW_9GPmA@mail.gmail.com";
+        let first = attachment_object_key(id, 0, "img_0.png");
+        assert_eq!(first, attachment_object_key(id, 0, "img_0.png"));
+        assert!(first.ends_with("-0.png"));
+        assert_eq!(first.len(), 32 + "-0.png".len());
+        assert_ne!(first, attachment_object_key(id, 1, "img_0.png"));
+        assert_ne!(
+            first,
+            attachment_object_key("other@example.com", 0, "img_0.png")
+        );
+        assert!(attachment_object_key(id, 2, "no_extension").ends_with("-2"));
+    }
+
+    #[test]
+    fn attachment_key_without_message_id_is_random() {
+        let a = attachment_object_key("  ", 0, "photo.jpg");
+        let b = attachment_object_key("", 0, "photo.jpg");
+        assert_ne!(a, b);
+        assert_eq!(
+            Path::new(&a).extension().and_then(|e| e.to_str()),
+            Some("jpg")
+        );
+    }
 
     #[test]
     fn test_parse_email() {
@@ -1096,5 +1231,193 @@ Subject: Dup\r\n\
 Body\r\n";
         let (parsed, _) = parse_email(&Bytes::from_static(DUP_EML)).unwrap();
         assert_eq!(parsed.to_recipients.len(), 1);
+    }
+
+    /// Gmail auto-forward of a message sent to `undisclosed-recipients:;`.
+    /// The only reliable trace of our mailbox is SES's own top `Received`.
+    #[test]
+    fn undisclosed_forward_uses_the_ses_envelope_recipient() {
+        let email_bytes = read_file_as_bytes("src/tests/data/undisclosed_forwarded.eml").unwrap();
+        let (parsed, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(parsed.receiver_email, "sales@granitedepotcolumbus.com");
+        assert_eq!(
+            parsed.envelope_recipient.as_deref(),
+            Some("sales@granitedepotcolumbus.com")
+        );
+        assert!(parsed.to_recipients.is_empty());
+        assert_eq!(
+            parsed.bcc_recipients[0].address,
+            "outside.mailbox@example.com"
+        );
+        assert_eq!(
+            parsed.forward_to_email.as_deref(),
+            Some("sales@granitedepotcolumbus.com")
+        );
+    }
+
+    #[test]
+    fn undisclosed_bcc_uses_the_ses_envelope_recipient() {
+        let email_bytes = read_file_as_bytes("src/tests/data/undisclosed_bcc.eml").unwrap();
+        let (parsed, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(parsed.receiver_email, "estimates@granitedepotcolumbus.com");
+        assert_eq!(
+            parsed.envelope_recipient.as_deref(),
+            Some("estimates@granitedepotcolumbus.com")
+        );
+        assert_eq!(
+            parsed.bcc_recipients[0].address,
+            "estimates@granitedepotcolumbus.com"
+        );
+    }
+
+    const SES_RECEIVED_FOR_SALES: &str = "Received: from mail.example.net (mail.example.net [192.0.2.10]) by inbound-smtp.us-east-2.amazonaws.com with SMTP id abc123 for sales@granitedepotcolumbus.com; Fri, 02 Oct 2026 21:05:11 +0000 (UTC)\r\n";
+
+    fn eml(headers: &str) -> Bytes {
+        Bytes::from(format!(
+            "{headers}From: customer@example.net\r\n\
+Subject: Hi\r\n\
+Message-ID: <inline-1@example.net>\r\n\
+\r\n\
+Body\r\n"
+        ))
+    }
+
+    #[test]
+    fn first_to_wins_over_the_ses_envelope() {
+        let bytes = eml(&format!(
+            "{SES_RECEIVED_FOR_SALES}To: Rep <Rep@GraniteDepotColumbus.com>, other@example.net\r\n"
+        ));
+        let (parsed, _) = parse_email(&bytes).unwrap();
+        assert_eq!(parsed.receiver_email, "Rep@GraniteDepotColumbus.com");
+        assert_eq!(
+            parsed.envelope_recipient.as_deref(),
+            Some("sales@granitedepotcolumbus.com")
+        );
+    }
+
+    #[test]
+    fn envelope_recipient_comes_from_the_top_received_only() {
+        let bytes = eml(&format!(
+            "Received: from mail.example.net by INBOUND-SMTP.us-east-2.AmazonAWS.com with SMTP id top1 for <Estimates@GraniteDepotColumbus.com>; Fri, 02 Oct 2026 21:05:12 +0000 (UTC)\r\n\
+{SES_RECEIVED_FOR_SALES}\
+To: undisclosed-recipients:;\r\n"
+        ));
+        let (parsed, _) = parse_email(&bytes).unwrap();
+        assert_eq!(
+            parsed.envelope_recipient.as_deref(),
+            Some("estimates@granitedepotcolumbus.com")
+        );
+        assert_eq!(parsed.receiver_email, "estimates@granitedepotcolumbus.com");
+    }
+
+    /// Real SES captures fold the header over several lines.
+    #[test]
+    fn folded_ses_received_in_a_real_capture_gives_the_envelope() {
+        let email_bytes = read_file_as_bytes("src/tests/data/forwarded.eml").unwrap();
+        let (parsed, _) = parse_email(&email_bytes).unwrap();
+        assert_eq!(
+            parsed.envelope_recipient.as_deref(),
+            Some("dema@granitedepotindy.com")
+        );
+        assert_eq!(parsed.receiver_email, "dema.gdindy@gmail.com");
+    }
+
+    #[test]
+    fn empty_group_without_ses_header_falls_back_to_first_cc() {
+        let bytes = eml("To: undisclosed-recipients:;\r\n\
+Cc: First <first.cc@example.net>, second.cc@example.net\r\n\
+Bcc: hidden@example.net\r\n");
+        let (parsed, _) = parse_email(&bytes).unwrap();
+        assert_eq!(parsed.receiver_email, "first.cc@example.net");
+    }
+
+    #[test]
+    fn empty_group_falls_back_to_bcc_then_forwarded_to_then_delivered_to() {
+        let bcc = eml("To: undisclosed-recipients:;\r\nBcc: hidden@example.net\r\n");
+        assert_eq!(
+            parse_email(&bcc).unwrap().0.receiver_email,
+            "hidden@example.net"
+        );
+
+        let forwarded = eml("To: undisclosed-recipients:;\r\n\
+X-Forwarded-To: Sales@GraniteDepotColumbus.com\r\n\
+Delivered-To: outside.mailbox@example.com\r\n");
+        assert_eq!(
+            parse_email(&forwarded).unwrap().0.receiver_email,
+            "sales@granitedepotcolumbus.com"
+        );
+
+        let delivered = eml("To: undisclosed-recipients:;\r\nDelivered-To: box@example.com\r\n");
+        assert_eq!(
+            parse_email(&delivered).unwrap().0.receiver_email,
+            "box@example.com"
+        );
+
+        let original = eml("To: undisclosed-recipients:;\r\nX-Original-To: orig@example.com\r\n");
+        assert_eq!(
+            parse_email(&original).unwrap().0.receiver_email,
+            "orig@example.com"
+        );
+    }
+
+    /// Only the top `Received` is written by SES. A lower one comes from the
+    /// sender's side and can name any address.
+    #[test]
+    fn forged_lower_received_is_not_used() {
+        let bytes = eml(&format!(
+            "Received: from client.example.net by mx.example.net with ESMTP id q1 for <first@example.net>; Fri, 02 Oct 2026 21:05:11 +0000\r\n\
+{SES_RECEIVED_FOR_SALES}\
+To: undisclosed-recipients:;\r\n\
+Cc: cc@example.net\r\n"
+        ));
+        let (parsed, _) = parse_email(&bytes).unwrap();
+        assert_eq!(parsed.receiver_email, "cc@example.net");
+        assert_eq!(parsed.envelope_recipient, None);
+    }
+
+    #[test]
+    fn forged_lower_received_alone_still_fails() {
+        let bytes = eml(&format!(
+            "Received: from client.example.net by mx.example.net with ESMTP id q1 for <first@example.net>; Fri, 02 Oct 2026 21:05:11 +0000\r\n\
+{SES_RECEIVED_FOR_SALES}\
+To: undisclosed-recipients:;\r\n"
+        ));
+        assert_eq!(
+            parse_email(&bytes).err().as_deref(),
+            Some("Failed to parse receiver email")
+        );
+    }
+
+    #[test]
+    fn top_received_from_a_non_ses_host_is_not_used() {
+        for host in [
+            "mx.example.net",
+            "inbound-smtp.us-east-2.amazonaws.com.example.net",
+            "smtp.us-east-2.amazonaws.com",
+        ] {
+            let bytes = eml(&format!(
+                "Received: from mail.example.net (mail.example.net [192.0.2.10]) by {host} with SMTP id abc for sales@granitedepotcolumbus.com; Fri, 02 Oct 2026 21:05:11 +0000 (UTC)\r\n\
+To: undisclosed-recipients:;\r\n"
+            ));
+            assert_eq!(
+                parse_email(&bytes).err().as_deref(),
+                Some("Failed to parse receiver email"),
+                "host {host} must not be trusted"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_anywhere_still_fails_to_parse_the_receiver() {
+        let bytes = eml("To: undisclosed-recipients:;\r\n");
+        assert_eq!(
+            parse_email(&bytes).err().as_deref(),
+            Some("Failed to parse receiver email")
+        );
+        let no_to = eml("");
+        assert_eq!(
+            parse_email(&no_to).err().as_deref(),
+            Some("Failed to parse receiver email")
+        );
     }
 }

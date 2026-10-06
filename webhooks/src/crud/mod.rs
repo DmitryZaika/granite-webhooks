@@ -3,6 +3,7 @@ pub mod cloudtalk;
 pub mod company;
 pub mod deals;
 pub mod email;
+pub mod email_claims;
 pub mod leads;
 pub mod referral_sources;
 pub mod ringcentral;

@@ -28,6 +28,16 @@ pub async fn get_full_message_id(
     .map(std::option::Option::flatten)
 }
 
+/// Whether an email with this exact `Message-ID` is already stored
+/// (`emails.message_id` is unique).
+pub async fn email_exists(pool: &MySqlPool, message_id: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query("SELECT 1 FROM emails WHERE message_id = ? LIMIT 1")
+        .bind(message_id)
+        .fetch_optional(pool)
+        .await
+        .map(|row| row.is_some())
+}
+
 pub async fn create_email_read(
     pool: &MySqlPool,
     message_id: &str,
