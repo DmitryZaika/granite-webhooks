@@ -186,6 +186,14 @@ async fn process_checklist_surveys() -> Result<usize, Error> {
     .await
 }
 
+async fn process_billing_reminders() -> Result<usize, Error> {
+    post_app_process_route(
+        "api/subscription-reminders/process",
+        "subscription payment reminders",
+    )
+    .await
+}
+
 pub fn scheduled_email_recipient(email: Option<&str>) -> Option<&str> {
     email.map(str::trim).filter(|value| !value.is_empty())
 }
@@ -310,6 +318,16 @@ pub(crate) async fn function_handler(
             0
         }
     };
+    let billing_reminder_count = match process_billing_reminders().await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                "Failed to process subscription payment reminders; continuing"
+            );
+            0
+        }
+    };
     let estimate_reminder_count = process_estimate_appointment_reminders().await?;
     let maintenance_reminder_count = process_maintenance_due_reminders().await?;
     let sms_followup_count = process_sms_followups().await?;
@@ -322,14 +340,15 @@ pub(crate) async fn function_handler(
         }
     };
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, and {} call points",
+        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, and {} subscription payment reminders",
         processed_email_count,
         reminder_count,
         estimate_reminder_count,
         maintenance_reminder_count,
         sms_followup_count,
         checklist_survey_count,
-        call_points_count
+        call_points_count,
+        billing_reminder_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);
@@ -371,6 +390,38 @@ mod tests {
         assert!(
             source.contains("Failed to send activity deadline reminders; continuing scheduled work"),
             "Reminder failures must not abort SMS follow-ups"
+        );
+    }
+
+    #[test]
+    fn billing_reminders_run_before_fallible_jobs_and_do_not_abort_the_tick() {
+        let source = include_str!("generic_handler.rs");
+        let start = source
+            .find("pub(crate) async fn function_handler")
+            .expect("function_handler");
+        let end = source.find("#[cfg(test)]").expect("test module");
+        let handler = &source[start..end];
+        assert!(
+            source[..end].contains("\"api/subscription-reminders/process\""),
+            "Billing reminders must call the subscription reminders route"
+        );
+        assert!(
+            handler.contains("Failed to process subscription payment reminders; continuing"),
+            "Billing reminder failures must be logged and skipped"
+        );
+        let billing = handler
+            .find("process_billing_reminders().await")
+            .expect("billing reminders call");
+        let estimate = handler
+            .find("process_estimate_appointment_reminders().await?")
+            .expect("estimate reminders call");
+        assert!(
+            billing < estimate,
+            "Billing must run before the jobs that abort the tick with `?`"
+        );
+        assert!(
+            !handler.contains("process_billing_reminders().await?"),
+            "Billing reminders must not abort the tick"
         );
     }
 
