@@ -1,13 +1,16 @@
--- Payment-failure reminder emails (dunning), sent by the SPA's
+-- Billing reminder emails (dunning), sent by the SPA's
 -- api/subscription-reminders/process route on each time-triggered tick.
 --
 -- billing_reminder_emails: one row per recipient, per dunning cycle, per step.
 -- The unique key is the send claim: the row is inserted (status 'sending')
 -- BEFORE the email goes out, so overlapping ticks can never email twice. Rows
 -- stuck in 'sending' are never resent.
---   step:   payment_failed | three_days_left | pause_tomorrow | paused | recovered
---   status: sending | sent | failed | unknown
---   cycle_failed_at is company_billing.failed_payment_at of the cycle.
+--   cycle_kind:       payment_failed (a renewal failed) | first_payment (asked
+--                     to pay, never subscribed)
+--   cycle_started_at: company_billing.failed_payment_at, or
+--                     company.billing_required_at, of the cycle
+--   step:             started | three_days_left | pause_tomorrow | paused | resolved
+--   status:           sending | sent | failed | unknown
 --
 -- company_billing.recovered_failed_at / recovered_at: the failed_payment_at of
 -- the dunning cycle that last recovered, and when; written in the same
@@ -47,7 +50,8 @@ CREATE TABLE IF NOT EXISTS billing_reminder_emails (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     company_id INT NOT NULL,
     user_id INT NOT NULL,
-    cycle_failed_at DATETIME NOT NULL,
+    cycle_kind VARCHAR(16) NOT NULL,
+    cycle_started_at DATETIME NOT NULL,
     step VARCHAR(32) NOT NULL,
     status VARCHAR(16) NOT NULL,
     attempts INT NOT NULL DEFAULT 1,
@@ -56,6 +60,6 @@ CREATE TABLE IF NOT EXISTS billing_reminder_emails (
     claimed_at DATETIME NOT NULL,
     sent_at DATETIME NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uniq_billing_reminder (company_id, user_id, cycle_failed_at, step),
+    UNIQUE KEY uniq_billing_reminder (company_id, user_id, cycle_kind, cycle_started_at, step),
     KEY idx_billing_reminder_status (status, claimed_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
