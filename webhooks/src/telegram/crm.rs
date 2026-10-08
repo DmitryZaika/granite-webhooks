@@ -192,12 +192,7 @@ where
 {
     let keyboard = open_url_keyboard(button_label, button_url)?;
     match bot
-        .send_repliable_message(
-            ChatId(telegram_id),
-            text.to_string(),
-            keyboard,
-            parse_mode,
-        )
+        .send_repliable_message(ChatId(telegram_id), text.to_string(), keyboard, parse_mode)
         .await
     {
         Ok(_) => Ok(()),

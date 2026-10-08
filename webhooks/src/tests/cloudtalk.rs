@@ -116,7 +116,10 @@ mod flow_enrollment_tests {
             status_of(&pool, company_id, 5_551_234_567, "stopped_by_reply").await,
             1
         );
-        assert_eq!(status_of(&pool, company_id, 5_559_999_999, "active").await, 1);
+        assert_eq!(
+            status_of(&pool, company_id, 5_559_999_999, "active").await,
+            1
+        );
         assert_eq!(
             status_of(&pool, company_id + 1, 5_551_234_567, "active").await,
             1

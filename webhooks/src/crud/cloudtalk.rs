@@ -52,11 +52,7 @@ fn interpolate_sms_created_date(
         (Some(_prev), None) => now,
         (None, Some(next)) => {
             let guessed = next.created_date - Duration::seconds(1);
-            if guessed > now {
-                now
-            } else {
-                guessed
-            }
+            if guessed > now { now } else { guessed }
         }
         _ => now,
     }
@@ -546,13 +542,8 @@ mod tests {
             cloudtalk_id: 54_459_098,
             created_date: Utc.with_ymd_and_hms(2026, 9, 22, 13, 41, 27).unwrap(),
         };
-        let got = interpolate_sms_created_date(
-            now,
-            Some(payload),
-            Some(54_459_990),
-            Some(prev),
-            None,
-        );
+        let got =
+            interpolate_sms_created_date(now, Some(payload), Some(54_459_990), Some(prev), None);
         assert_eq!(got, now);
     }
 
@@ -725,10 +716,7 @@ mod tests {
         let row_id = insert_pending_outbound(&pool, "cap", "sent").await;
         insert_attachment_for(&pool, row_id).await;
 
-        let sms = echo_fixture(
-            2_200_000_110,
-            "cap\nFile 1: quote.pdf\nhttps://x/q.pdf",
-        );
+        let sms = echo_fixture(2_200_000_110, "cap\nFile 1: quote.pdf\nhttps://x/q.pdf");
         insert_outbound_sms(&pool, &sms, 42).await.unwrap();
 
         assert_eq!(cloudtalk_id_of(&pool, row_id).await, Some(2_200_000_110));
@@ -745,10 +733,7 @@ mod tests {
         let row_id = insert_pending_outbound(&pool, "", "sent").await;
         insert_attachment_for(&pool, row_id).await;
 
-        let sms = echo_fixture(
-            2_200_000_111,
-            "File 1: quote.pdf\nhttps://x/q.pdf",
-        );
+        let sms = echo_fixture(2_200_000_111, "File 1: quote.pdf\nhttps://x/q.pdf");
         insert_outbound_sms(&pool, &sms, 42).await.unwrap();
 
         assert_eq!(cloudtalk_id_of(&pool, row_id).await, Some(2_200_000_111));

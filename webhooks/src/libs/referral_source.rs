@@ -257,7 +257,9 @@ pub async fn resolve_unknown<C: ReferralClassifier>(
         let earlier = remembered.reason.as_deref().unwrap_or("no reason given");
         return (
             Resolution::NeedsReview {
-                reason: format!("GPT-6.1 Sol was not sure when this value was first seen: {earlier}"),
+                reason: format!(
+                    "GPT-6.1 Sol was not sure when this value was first seen: {earlier}"
+                ),
             },
             None,
         );
@@ -743,7 +745,8 @@ mod tests {
         assert_eq!(
             resolution,
             Resolution::NeedsReview {
-                reason: "GPT-6.1 Sol answered \"tiktok\", which is not an allowed value".to_string()
+                reason: "GPT-6.1 Sol answered \"tiktok\", which is not an allowed value"
+                    .to_string()
             }
         );
     }

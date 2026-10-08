@@ -475,3 +475,33 @@ where
         }
     }
 }
+
+/// `RingCentral`'s own webhook push (`/ringcentral/notify`). It cannot send a bearer, so the
+/// subscription carries `CORRECT_ID` as its `verificationToken`, echoed in `Verification-Token`.
+pub struct RingCentralNotificationUser;
+
+impl<S> FromRequestParts<S> for RingCentralNotificationUser
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // Subscription handshake: accepted before auth so the address can be verified.
+        if parts.headers.get("Validation-Token").is_some() {
+            return Ok(Self);
+        }
+        let token = parts
+            .headers
+            .get("Verification-Token")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| Uuid::parse_str(value.trim()).ok());
+        match token {
+            Some(uuid) if uuid == CORRECT_ID => Ok(Self),
+            _ => {
+                tracing::warn!("RingCentral notification: missing or invalid verification token");
+                Err((StatusCode::FORBIDDEN, "Forbidden"))
+            }
+        }
+    }
+}

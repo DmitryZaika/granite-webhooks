@@ -686,10 +686,7 @@ mod tests {
         let row_id = insert_pending_outbound(&pool, "cap", "sent").await;
         insert_attachment_for(&pool, row_id).await;
 
-        let sms = echo_fixture(
-            2_200_000_110,
-            "cap\nFile 1: quote.pdf\nhttps://x/q.pdf",
-        );
+        let sms = echo_fixture(2_200_000_110, "cap\nFile 1: quote.pdf\nhttps://x/q.pdf");
         insert_outbound_sms(&pool, &sms, 42).await.unwrap();
 
         assert_eq!(ringcentral_id_of(&pool, row_id).await, Some(2_200_000_110));
@@ -706,10 +703,7 @@ mod tests {
         let row_id = insert_pending_outbound(&pool, "", "sent").await;
         insert_attachment_for(&pool, row_id).await;
 
-        let sms = echo_fixture(
-            2_200_000_111,
-            "File 1: quote.pdf\nhttps://x/q.pdf",
-        );
+        let sms = echo_fixture(2_200_000_111, "File 1: quote.pdf\nhttps://x/q.pdf");
         insert_outbound_sms(&pool, &sms, 42).await.unwrap();
 
         assert_eq!(ringcentral_id_of(&pool, row_id).await, Some(2_200_000_111));

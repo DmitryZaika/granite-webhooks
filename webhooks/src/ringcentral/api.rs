@@ -1,7 +1,7 @@
 use crate::crud::ringcentral::{
-    company_has_ring_central, find_local_ringcentral_id_by_phone, get_access_token,
-    load_customer_with_mapping, update_ringcentral_phone, upsert_ringcentral_mapping,
-    CustomerWithMapping,
+    CustomerWithMapping, company_has_ring_central, find_local_ringcentral_id_by_phone,
+    get_access_token, load_customer_with_mapping, update_ringcentral_phone,
+    upsert_ringcentral_mapping,
 };
 use crate::libs::constants::{NOT_FOUND_RESPONSE, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;

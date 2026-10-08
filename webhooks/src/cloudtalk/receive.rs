@@ -13,9 +13,7 @@ use crate::crud::deals::{
     maybe_move_deal_on_inbound_call, maybe_move_deal_on_inbound_sms,
     maybe_move_deal_on_outbound_call,
 };
-use crate::crud::users::{
-    get_company_id_by_cloudtalk_agent, get_company_id_by_cloudtalk_phone,
-};
+use crate::crud::users::{get_company_id_by_cloudtalk_agent, get_company_id_by_cloudtalk_phone};
 use crate::libs::app_request::{SmsFollowupCallCheckBody, spawn_sms_followup_call_check};
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
@@ -365,9 +363,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let user_id = insert_user(&pool, "agent@example.com", None)
-            .await
-            .unwrap();
+        let user_id = insert_user(&pool, "agent@example.com", None).await.unwrap();
         sqlx::query("UPDATE users SET cloudtalk_agent_id = ?, company_id = ? WHERE id = ?")
             .bind("540273")
             .bind(42)

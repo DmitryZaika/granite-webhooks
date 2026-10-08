@@ -1,4 +1,4 @@
-use crate::axum_helpers::guards::RingCentralWebhookUser;
+use crate::axum_helpers::guards::{RingCentralNotificationUser, RingCentralWebhookUser};
 use crate::crud::deals::{
     AUTO_CONTACTED_MIN_TALKING_SECONDS, find_customer_id_by_phone_last10,
     maybe_move_deal_on_inbound_call, maybe_move_deal_on_inbound_sms,
@@ -13,11 +13,12 @@ use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use crate::ringcentral::api::sync_customer_to_ring_central;
 use crate::ringcentral::schemas::{
-    RingcentralSMS, inbound_customer_phone_from_call_payload, outbound_call_followup_check,
+    NotifiedSms, RingcentralSMS, RingcentralSmsNotification,
+    inbound_customer_phone_from_call_payload, outbound_call_followup_check,
 };
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use lambda_http::tracing;
 use reqwest::Client;
@@ -30,6 +31,11 @@ fn validation_token_response(headers: &HeaderMap) -> Option<Response> {
     response
         .headers_mut()
         .insert("Validation-Token", token.clone());
+    // RingCentral rejects the handshake (SUB-525) without a JSON content type.
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
     Some(response)
 }
 
@@ -61,24 +67,29 @@ pub async fn sms_received(
     if let Some(response) = validation_token_response(&headers) {
         return response;
     }
-    sms_received_inner(pool, company_id, body).await.into_response()
+    sms_received_inner(pool, company_id, body)
+        .await
+        .into_response()
 }
 
-async fn sms_received_inner(
-    pool: MySqlPool,
-    company_id: i32,
-    body: Bytes,
-) -> BasicResponse {
+async fn sms_received_inner(pool: MySqlPool, company_id: i32, body: Bytes) -> BasicResponse {
     let Some(form) = parse_ringcentral_sms(&body, "received") else {
         return BAD_REQUEST;
     };
+    store_inbound_sms(&pool, company_id, &form).await
+}
 
-    match insert_inbound_sms(&pool, &form, company_id).await {
+async fn store_inbound_sms(
+    pool: &MySqlPool,
+    company_id: i32,
+    form: &RingcentralSMS,
+) -> BasicResponse {
+    match insert_inbound_sms(pool, form, company_id).await {
         Ok(result) => {
             let rows_affected = result.rows_affected();
             if rows_affected > 0 {
                 if let Err(error) =
-                    cancel_flow_enrollments_on_reply(&pool, company_id, form.sender()).await
+                    cancel_flow_enrollments_on_reply(pool, company_id, form.sender()).await
                 {
                     tracing::error!(
                         ?error,
@@ -87,7 +98,7 @@ async fn sms_received_inner(
                     );
                 }
 
-                maybe_move_deal_on_inbound_sms(&pool, company_id, form.sender()).await;
+                maybe_move_deal_on_inbound_sms(pool, company_id, form.sender()).await;
             } else {
                 // 0 rows: INSERT IGNORE deduped a redelivered webhook — don't cancel
                 // or move deals again. Never log message text or phone numbers here.
@@ -116,14 +127,12 @@ pub async fn call_received(
     if let Some(response) = validation_token_response(&headers) {
         return response;
     }
-    call_received_inner(pool, company_id, body).await.into_response()
+    call_received_inner(pool, company_id, body)
+        .await
+        .into_response()
 }
 
-async fn call_received_inner(
-    pool: MySqlPool,
-    company_id: i32,
-    body: Bytes,
-) -> BasicResponse {
+async fn call_received_inner(pool: MySqlPool, company_id: i32, body: Bytes) -> BasicResponse {
     let payload: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(value) => value,
         Err(error) => {
@@ -219,16 +228,19 @@ pub async fn sms_sent(
     sms_sent_inner(pool, company_id, body).await.into_response()
 }
 
-async fn sms_sent_inner(
-    pool: MySqlPool,
-    company_id: i32,
-    body: Bytes,
-) -> BasicResponse {
+async fn sms_sent_inner(pool: MySqlPool, company_id: i32, body: Bytes) -> BasicResponse {
     let Some(form) = parse_ringcentral_sms(&body, "sent") else {
         return BAD_REQUEST;
     };
+    store_outbound_sms(&pool, company_id, &form).await
+}
 
-    match insert_outbound_sms(&pool, &form, company_id).await {
+async fn store_outbound_sms(
+    pool: &MySqlPool,
+    company_id: i32,
+    form: &RingcentralSMS,
+) -> BasicResponse {
+    match insert_outbound_sms(pool, form, company_id).await {
         Ok(_) => OK_RESPONSE,
         Err(error) => {
             tracing::error!("Error inserting sms sent into the database: {}", error);
@@ -236,6 +248,45 @@ async fn sms_sent_inner(
         }
     }
 }
+/// `RingCentral`'s own webhook (`message-store/instant?type=SMS`), registered by the CRM
+/// when a company connects. Same storage as the `/ringcentral/sms` routes.
+pub async fn sms_notification(
+    headers: HeaderMap,
+    _: RingCentralNotificationUser,
+    State(pool): State<MySqlPool>,
+    Path(company_id): Path<i32>,
+    body: Bytes,
+) -> Response {
+    if let Some(response) = validation_token_response(&headers) {
+        return response;
+    }
+    let notification = match serde_json::from_slice::<RingcentralSmsNotification>(&body) {
+        Ok(notification) => notification,
+        Err(error) => {
+            tracing::error!(
+                route = "notify",
+                category = ?error.classify(),
+                line = error.line(),
+                column = error.column(),
+                "Error parsing ringcentral notification payload"
+            );
+            return BAD_REQUEST.into_response();
+        }
+    };
+    match notification.into_sms() {
+        Some(NotifiedSms::Inbound(sms)) => store_inbound_sms(&pool, company_id, &sms).await,
+        Some(NotifiedSms::Outbound(sms)) => store_outbound_sms(&pool, company_id, &sms).await,
+        None => {
+            tracing::info!(
+                company_id,
+                "Skipped ringcentral notification: not a one-to-one SMS"
+            );
+            OK_RESPONSE
+        }
+    }
+    .into_response()
+}
+
 pub async fn sync_ringcentral(
     _: crate::axum_helpers::guards::RemixBackend,
     State(pool): State<MySqlPool>,
@@ -672,5 +723,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(list_id, second_list_id);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_notify_stores_inbound_sms(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+        let body: serde_json::Value =
+            serde_json::from_slice(crate::tests::ringcentral::NOTIFY_INBOUND_SMS).unwrap();
+
+        let response = app
+            .post("/ringcentral/notify/42")
+            .add_header("Verification-Token", CORRECT_ID.to_string())
+            .json(&body)
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let smss = get_sms_received(&pool).await;
+        assert_eq!(smss.len(), 1);
+        assert_eq!(smss[0].sender, Some(6468956758));
+        assert_eq!(smss[0].recipient, 3173161456);
+        assert_eq!(smss[0].text, "Is the slab still available?".to_string());
+        assert_eq!(smss[0].agent, Some("540273".to_string()));
+        assert_eq!(smss[0].company_id, Some(42));
+
+        // Redelivery of the same RingCentral message id is deduped.
+        let again = app
+            .post("/ringcentral/notify/42")
+            .add_header("Verification-Token", CORRECT_ID.to_string())
+            .json(&body)
+            .await;
+        assert_eq!(again.status_code(), StatusCode::OK);
+        assert_eq!(get_sms_received(&pool).await.len(), 1);
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_notify_rejects_missing_token_and_echoes_validation(pool: MySqlPool) {
+        let app = new_test_app(pool.clone());
+        let body: serde_json::Value =
+            serde_json::from_slice(crate::tests::ringcentral::NOTIFY_INBOUND_SMS).unwrap();
+
+        let forbidden = app.post("/ringcentral/notify/42").json(&body).await;
+        assert_eq!(forbidden.status_code(), StatusCode::FORBIDDEN);
+
+        let handshake = app
+            .post("/ringcentral/notify/42")
+            .add_header("Validation-Token", "abc-123")
+            .await;
+        assert_eq!(handshake.status_code(), StatusCode::OK);
+        assert_eq!(handshake.header("Validation-Token"), "abc-123");
+        assert!(get_sms_received(&pool).await.is_empty());
     }
 }

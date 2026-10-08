@@ -466,10 +466,7 @@ mod local_tests {
         .fetch_all(&pool)
         .await
         .unwrap();
-        assert_eq!(
-            reset_deadlines,
-            vec![Some(today), Some(today), Some(today)]
-        );
+        assert_eq!(reset_deadlines, vec![Some(today), Some(today), Some(today)]);
 
         let deleted_deadline = sqlx::query_scalar!(
             r#"SELECT DATE(deadline) FROM deal_activities WHERE id = ?"#,

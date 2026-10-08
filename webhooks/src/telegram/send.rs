@@ -69,7 +69,10 @@ where
         let msg = full_message.clone();
         let kb = kb.clone();
 
-        set.spawn(async move { bot.send_repliable_message(ChatId(user_id), msg, kb, None).await });
+        set.spawn(async move {
+            bot.send_repliable_message(ChatId(user_id), msg, kb, None)
+                .await
+        });
     }
 
     let mut out = Vec::new();

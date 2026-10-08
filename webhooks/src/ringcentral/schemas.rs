@@ -188,7 +188,9 @@ fn json_u64(value: &serde_json::Value) -> Option<u64> {
     match value {
         serde_json::Value::Number(n) => n.as_u64().or_else(|| n.as_f64().map(|f| f as u64)),
         serde_json::Value::String(s) => s.trim().parse().ok(),
-        serde_json::Value::Bool(_) | serde_json::Value::Null | serde_json::Value::Array(_)
+        serde_json::Value::Bool(_)
+        | serde_json::Value::Null
+        | serde_json::Value::Array(_)
         | serde_json::Value::Object(_) => None,
     }
 }
@@ -235,17 +237,20 @@ fn first_field_in_call_objects<'a>(
 
 /// Outbound call longer than 60s talking time — enqueue background transcript
 /// check before cancelling automated follow-ups.
-pub fn outbound_call_followup_check(value: &serde_json::Value) -> Option<OutboundCallFollowupCheck> {
+pub fn outbound_call_followup_check(
+    value: &serde_json::Value,
+) -> Option<OutboundCallFollowupCheck> {
     if !call_payload_is_outgoing(value) {
         return None;
     }
-    let talking_time = first_field_in_call_objects(value, &["talking_time", "talkingTime"])
-        .and_then(json_u64)?;
+    let talking_time =
+        first_field_in_call_objects(value, &["talking_time", "talkingTime"]).and_then(json_u64)?;
     if talking_time <= OUTBOUND_FOLLOWUP_MIN_TALKING_SECONDS {
         return None;
     }
     let phone_digits = customer_phone_from_call_payload(value)?;
-    let call_id = first_field_in_call_objects(value, &["id", "call_id", "callId"]).and_then(json_u64)?;
+    let call_id =
+        first_field_in_call_objects(value, &["id", "call_id", "callId"]).and_then(json_u64)?;
     let is_voicemail = first_field_in_call_objects(value, &["is_voicemail", "isVoicemail"])
         .and_then(json_bool)
         .unwrap_or(false);
@@ -264,6 +269,75 @@ pub fn outbound_call_followup_check(value: &serde_json::Value) -> Option<Outboun
     })
 }
 
+/// `RingCentral`'s own push for a `message-store/instant?type=SMS` subscription.
+#[derive(Deserialize, Debug)]
+pub struct RingcentralSmsNotification {
+    #[serde(default)]
+    event: String,
+    body: Option<NotificationMessage>,
+}
+
+#[derive(Deserialize, Debug)]
+struct NotificationMessage {
+    id: Option<serde_json::Value>,
+    direction: Option<String>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    from: Option<NotificationParty>,
+    #[serde(default)]
+    to: Vec<NotificationParty>,
+    subject: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct NotificationParty {
+    #[serde(rename = "phoneNumber")]
+    phone_number: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum NotifiedSms {
+    Inbound(RingcentralSMS),
+    Outbound(RingcentralSMS),
+}
+
+impl RingcentralSmsNotification {
+    /// The SMS in the same shape the `/ringcentral/sms` routes store. `None` for anything
+    /// that is not a one-to-one SMS with both phone numbers.
+    pub fn into_sms(self) -> Option<NotifiedSms> {
+        let body = self.body?;
+        if body.kind.as_deref() != Some("SMS") {
+            return None;
+        }
+        let sender = phone_last10(body.from?.phone_number.as_deref()?)?;
+        let recipient = phone_last10(body.to.first()?.phone_number.as_deref()?)?;
+        let id = match body.id {
+            Some(serde_json::Value::Number(n)) => n.as_i64(),
+            Some(serde_json::Value::String(s)) => s.parse().ok(),
+            _ => None,
+        };
+        let sms = RingcentralSMS {
+            id,
+            sender: CleanedPhone(sender),
+            recipient: CleanedPhone(recipient),
+            text: CleanText(body.subject.unwrap_or_default()),
+            agent: extension_from_event(&self.event),
+        };
+        match body.direction.as_deref() {
+            Some("Inbound") => Some(NotifiedSms::Inbound(sms)),
+            Some("Outbound") => Some(NotifiedSms::Outbound(sms)),
+            _ => None,
+        }
+    }
+}
+
+/// `/restapi/v1.0/account/~/extension/540273/message-store/instant?type=SMS` → `540273`.
+fn extension_from_event(event: &str) -> Option<String> {
+    let rest = event.split("/extension/").nth(1)?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    (!digits.is_empty()).then_some(digits)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,7 +349,8 @@ mod tests {
 
     #[test]
     fn test_ringcentral_payload_parsing() {
-        let sms: RingcentralSMS = serde_json::from_slice(INBOUND_SMS).expect("Failed to parse JSON");
+        let sms: RingcentralSMS =
+            serde_json::from_slice(INBOUND_SMS).expect("Failed to parse JSON");
 
         assert_eq!(sms.sender(), 6468956758);
         assert_eq!(sms.recipient(), 3173161456);
@@ -356,10 +431,9 @@ mod tests {
 
     #[test]
     fn outbound_call_payload_does_not_yield_a_phone() {
-        let outgoing: serde_json::Value = serde_json::from_str(
-            r#"{"external_number":"+15551234567","type":"outgoing"}"#,
-        )
-        .unwrap();
+        let outgoing: serde_json::Value =
+            serde_json::from_str(r#"{"external_number":"+15551234567","type":"outgoing"}"#)
+                .unwrap();
         assert_eq!(inbound_customer_phone_from_call_payload(&outgoing), None);
 
         let missing_type: serde_json::Value =
@@ -392,5 +466,46 @@ mod tests {
                 recording_link: None,
             })
         );
+    }
+
+    fn notification(json: &str) -> RingcentralSmsNotification {
+        serde_json::from_str(json).expect("notification json")
+    }
+
+    #[test]
+    fn notification_inbound_sms_maps_to_stored_shape() {
+        let parsed: RingcentralSmsNotification =
+            serde_json::from_slice(crate::tests::ringcentral::NOTIFY_INBOUND_SMS).unwrap();
+        let Some(NotifiedSms::Inbound(sms)) = parsed.into_sms() else {
+            panic!("expected inbound sms");
+        };
+        assert_eq!(sms.id, Some(3_894_319_559_027));
+        assert_eq!(sms.sender(), 6_468_956_758);
+        assert_eq!(sms.recipient(), 3_173_161_456);
+        assert_eq!(sms.text.0, "Is the slab still available?");
+        assert_eq!(sms.agent.as_deref(), Some("540273"));
+    }
+
+    #[test]
+    fn notification_outbound_and_skips() {
+        let outbound = notification(
+            r#"{"event":"/restapi/v1.0/account/~/extension/~/message-store/instant?type=SMS","body":{"id":5,"type":"SMS","direction":"Outbound","from":{"phoneNumber":"+13173161456"},"to":[{"phoneNumber":"+16468956758"}],"subject":"Hi"}}"#,
+        );
+        let Some(NotifiedSms::Outbound(sms)) = outbound.into_sms() else {
+            panic!("expected outbound sms");
+        };
+        assert_eq!(sms.id, Some(5));
+        assert_eq!(sms.agent, None);
+
+        let fax = notification(
+            r#"{"body":{"type":"Fax","direction":"Inbound","from":{"phoneNumber":"+16468956758"},"to":[{"phoneNumber":"+13173161456"}]}}"#,
+        );
+        assert!(fax.into_sms().is_none());
+        let no_body = notification(r#"{"event":"x"}"#);
+        assert!(no_body.into_sms().is_none());
+        let no_recipient = notification(
+            r#"{"body":{"type":"SMS","direction":"Inbound","from":{"phoneNumber":"+16468956758"},"to":[]}}"#,
+        );
+        assert!(no_recipient.into_sms().is_none());
     }
 }

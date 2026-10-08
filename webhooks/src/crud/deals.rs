@@ -956,7 +956,10 @@ mod tests {
             .json(&outgoing_leg)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
-        assert_eq!(deal_list_id(&pool, board.deal_id).await, board.first_list_id);
+        assert_eq!(
+            deal_list_id(&pool, board.deal_id).await,
+            board.first_list_id
+        );
 
         let incoming = serde_json::json!({
             "Cdr": { "public_external": "+15557711113", "type": "incoming", "talking_time": "343", "id": "2" }

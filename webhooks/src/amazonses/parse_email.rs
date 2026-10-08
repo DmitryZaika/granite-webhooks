@@ -1110,10 +1110,7 @@ Please confirm the slab.\r\n";
     fn parses_from_display_name() {
         let (parsed, _) = parse_email(&Bytes::from_static(MULTI_RECIPIENT_EML)).unwrap();
         assert_eq!(parsed.sender_email, "customer@example.com");
-        assert_eq!(
-            parsed.sender_display_name.as_deref(),
-            Some("Customer Name")
-        );
+        assert_eq!(parsed.sender_display_name.as_deref(), Some("Customer Name"));
     }
 
     #[test]

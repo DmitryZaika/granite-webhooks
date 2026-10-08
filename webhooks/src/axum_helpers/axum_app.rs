@@ -8,8 +8,8 @@ use crate::google::receive::address_information;
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
 use crate::ringcentral::receive::{
-    call_received as ringcentral_call_received, sms_received as ringcentral_sms_received,
-    sms_sent as ringcentral_sms_sent, sync_ringcentral,
+    call_received as ringcentral_call_received, sms_notification as ringcentral_sms_notification,
+    sms_received as ringcentral_sms_received, sms_sent as ringcentral_sms_sent, sync_ringcentral,
 };
 use crate::schemas::add_customer::NewLeadForm;
 use crate::telegram::cleanup::delete_lead_telegram_messages;
@@ -98,6 +98,10 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         .route(
             "/ringcentral/sms/sent/{company_id}",
             post(ringcentral_sms_sent),
+        )
+        .route(
+            "/ringcentral/notify/{company_id}",
+            post(ringcentral_sms_notification),
         )
         .route(
             "/ringcentral/call/{company_id}",
