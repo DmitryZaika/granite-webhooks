@@ -22,6 +22,10 @@ deploy-webhooks: build-webhooks
 		--binary-name webhooks \
 		granite-webhooks
 
+# Build the webhooks binary, then deploy it.
+.PHONY: start
+start: deploy-webhooks
+
 # --- Local ---
 WATCH_BASE := uvx cargo-lambda lambda watch --release
 
