@@ -317,7 +317,12 @@ async fn resize_rejects_bad_sizes(pool: MySqlPool) {
             "width must be a positive number",
         ),
         (json!({ "length": "5", "width": 5 }), "invalid body"),
-        (json!({ "length": 5 }), "invalid body"),
+        (
+            json!({ "length": 5 }),
+            "length and width must be sent together",
+        ),
+        (json!({}), "nothing to change"),
+        (json!({ "bundle": " " }), "Bundle name is required"),
         (
             json!({ "length": 5, "width": 5, "extra": 1 }),
             "invalid body",

@@ -11,17 +11,27 @@
 //! (`stoneQueryBuilder` in `app/utils/queries.server.ts`).
 
 mod handlers;
+mod media;
 pub mod queries;
 pub mod schemas;
+mod writes;
 
 use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
-        .routes(routes!(handlers::list))
+        .routes(routes!(handlers::list, writes::create))
         .routes(routes!(handlers::search))
         .routes(routes!(handlers::quick_add))
-        .routes(routes!(handlers::get))
-        .routes(routes!(handlers::slabs))
+        .routes(routes!(handlers::get, writes::update, writes::delete))
+        .routes(routes!(handlers::slabs, media::add_slab))
+        .routes(routes!(media::names))
+        .routes(routes!(media::links))
+        .routes(routes!(media::images, media::add_images))
+        .routes(routes!(media::delete_image))
+        .routes(routes!(media::link_images))
+        .routes(routes!(media::unlink_images))
+        .routes(routes!(media::link_slabs))
+        .routes(routes!(media::unlink_slabs))
 }

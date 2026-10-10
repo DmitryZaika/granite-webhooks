@@ -682,6 +682,91 @@
             "session_cookie": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Add a stone",
+        "description": "Creates a stone of the caller's company with its image (an upload to the\n`stones` folder, thumbnail made here) and colors. Add its slabs with\n`POST /v1/stones/{id}/slabs`.",
+        "operationId": "create_stone",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoneInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Stone created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedStone"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name or image, unknown type, supplier or color, bad finishing, level, size or date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Uploads are not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/stones/search": {
@@ -948,6 +1033,185 @@
             "session_cookie": []
           }
         ]
+      },
+      "put": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Edit a stone",
+        "description": "Saves every field of the body on a stone of the caller's company and\nreplaces its colors. With a new `image_url` the image is replaced and the\nold file deleted; without one the image is kept.",
+        "operationId": "update_stone",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoneInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stone saved"
+          },
+          "400": {
+            "description": "Invalid field (see `create_stone`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Delete a stone",
+        "description": "Hides a stone of the caller's company from every list (soft delete;\nnothing is erased). A stone that still has slabs in the yard needs\n`include_slabs=true`, which hides those slabs too.",
+        "operationId": "delete_stone",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "include_slabs",
+            "in": "query",
+            "description": "`true` also hides the stone's slabs in the yard. Without it, a stone\nthat still has slabs is not deleted (409).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Stone deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The stone has slabs and `include_slabs` is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/stones/{id}/slabs": {
@@ -996,6 +1260,880 @@
           },
           "403": {
             "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Add a slab to a stone",
+        "description": "Adds a slab in the yard with a bundle label, a size (the stone's size\nwhen length and width are 0 or missing) and an optional photo (an upload\nto the `stones` folder).",
+        "operationId": "add_stone_slab",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewSlab"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Slab added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedSlab"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty bundle, negative size, or a photo URL that is not an upload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stones/names": {
+      "get": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "List stone names",
+        "description": "Returns the live stones of the caller's company that have installed\nphotos (`has=images`) or slabs in the yard (`has=slabs`), by name: the\nchoices for linking photos or slabs.",
+        "operationId": "list_stone_names",
+        "parameters": [
+          {
+            "name": "has",
+            "in": "query",
+            "description": "`images` or `slabs`: only stones that have some.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "What a stone must have to be listed by `GET /v1/stones/names`.",
+              "enum": [
+                "images",
+                "slabs"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stones by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StoneRef"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or unknown `has`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stones/{id}/links": {
+      "get": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "List a stone's links",
+        "description": "Returns the stones this one draws slabs from, the stones that draw slabs\nfrom it, and the stones whose photos it shows, each by name.",
+        "operationId": "get_stone_links",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Links of the stone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoneLinks"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stones/{id}/images": {
+      "get": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "List a stone's installed photos",
+        "description": "Returns the stone's own installed (project) photos, by id, then those of\nthe stones it links photos from, by stone name (marked with\n`source_stone`).",
+        "operationId": "list_stone_images",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Own photos, then linked ones",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StoneImage"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Add installed photos to a stone",
+        "description": "Saves uploads (`POST /v1/uploads`, folder `stones`) as installed photos\nof the stone and stores their thumbnails. Returns the new photos.",
+        "operationId": "add_stone_images",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddImages"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Photos added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StoneImage"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No URLs, more than 50, or a URL that is not an upload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stones/{id}/images/{image_id}": {
+      "delete": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Delete an installed photo",
+        "description": "Deletes one of the stone's own photos and its stored file.",
+        "operationId": "delete_stone_image",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "image_id",
+            "in": "path",
+            "description": "Photo id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Photo deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such photo on this stone of the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stones/{id}/image-links": {
+      "post": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Show another stone's photos on this stone",
+        "description": "Links the installed photos of `source_stone_id` (same company) to the\nstone: they appear in `GET /v1/stones/{id}/images`. Linking twice is a\nno-op.",
+        "operationId": "link_stone_images",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Linked"
+          },
+          "400": {
+            "description": "Unknown source stone, or the stone itself",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stones/{id}/image-links/{source_stone_id}": {
+      "delete": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Stop showing another stone's photos",
+        "description": "Removes the photo link from `source_stone_id`; its photos stay on that\nstone.",
+        "operationId": "unlink_stone_images",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "source_stone_id",
+            "in": "path",
+            "description": "Stone whose photos were linked",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Unlinked (also when there was no link)"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stones/{id}/slab-links": {
+      "post": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Draw slabs from another stone",
+        "description": "Links `source_stone_id` (same company): its slabs count as this stone's\n(lists, slabs dialog, sales). A stone cannot draw from itself or from a\nstone that already draws from it. Linking twice is a no-op.",
+        "operationId": "link_stone_slabs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Linked"
+          },
+          "400": {
+            "description": "Unknown source stone, the stone itself, or a reverse link exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stones/{id}/slab-links/{source_stone_id}": {
+      "delete": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Stop drawing slabs from another stone",
+        "description": "Removes the slab link: the source stone's slabs no longer count as this\nstone's. Sales already made are not touched.",
+        "operationId": "unlink_stone_slabs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "source_stone_id",
+            "in": "path",
+            "description": "Stone the slabs came from",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Unlinked (also when there was no link)"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -1342,13 +2480,83 @@
       }
     },
     "/v1/slabs/{id}": {
+      "delete": {
+        "tags": [
+          "slabs"
+        ],
+        "summary": "Delete a slab",
+        "description": "Removes a slab of the caller's company from the yard (soft delete: it\ndisappears from every list).",
+        "operationId": "delete_slab",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Slab id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such slab in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
       "patch": {
         "tags": [
           "slabs"
         ],
-        "summary": "Change a slab's size",
-        "description": "Sets the length and width (inches) of one slab or remnant of the\ncaller's company. Both must be positive numbers. Returns no body; reload\nthe stone's slabs (`GET /v1/stones/{id}/slabs`) to see the change.",
-        "operationId": "update_slab_size",
+        "summary": "Change a slab's size or number",
+        "description": "Sets the length and width (inches, both positive, sent together) and/or\nthe bundle label of one slab or remnant of the caller's company. Returns\nno body; reload the stone's slabs (`GET /v1/stones/{id}/slabs`) to see it.",
+        "operationId": "update_slab",
         "parameters": [
           {
             "name": "id",
@@ -1373,10 +2581,10 @@
         },
         "responses": {
           "204": {
-            "description": "Size saved"
+            "description": "Saved"
           },
           "400": {
-            "description": "Missing, non-numeric or non-positive size",
+            "description": "Nothing to change, only one of length/width, a non-positive size, or an empty bundle",
             "content": {
               "application/json": {
                 "schema": {
@@ -1750,10 +2958,592 @@
           }
         ]
       }
+    },
+    "/v1/suppliers": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "List the company's suppliers",
+        "description": "Returns every supplier of the caller's company, by name. Stones, sinks and\nfaucets refer to them by `supplier_id`.",
+        "operationId": "list_suppliers",
+        "responses": {
+          "200": {
+            "description": "Suppliers by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Supplier"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/colors": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "List the stone colors",
+        "description": "Returns every color a stone can be tagged with (the same list for all\ncompanies), by name. Stones carry them as `color_ids`.",
+        "operationId": "list_colors",
+        "responses": {
+          "200": {
+            "description": "Colors by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Color"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stone-types": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "List the company's stone types",
+        "description": "Returns the materials stones of the company can have (`granite`,\n`quartz`...), by name. A stone's `type` must be one of them.",
+        "operationId": "list_stone_types",
+        "responses": {
+          "200": {
+            "description": "Stone types by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StoneType"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Add a stone type",
+        "description": "Creates a type for the caller's company. Names are unique per company,\nignoring case.",
+        "operationId": "create_stone_type",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoneTypeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Type created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoneType"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or longer than 255 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A type with this name exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stone-types/{id}": {
+      "delete": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Delete a stone type",
+        "description": "Deletes a type no live stone uses. When stones still use it, answers 409\nwith those stones; delete or retype them first.",
+        "operationId": "delete_stone_type",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone type id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Type deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such type in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Live stones use the type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoneTypeInUse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Rename a stone type",
+        "description": "Renames the type and sets the new name on every stone of the company that\nhad the old one.",
+        "operationId": "rename_stone_type",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone type id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoneTypeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Type renamed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoneType"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or longer than 255 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such type in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another type has this name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/uploads": {
+      "post": {
+        "tags": [
+          "uploads"
+        ],
+        "summary": "Start an image upload",
+        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`) or\n`POST /v1/stones/{id}/images`; that route also makes the thumbnail.",
+        "operationId": "create_upload",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Upload URL and public URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Upload"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an image content type, or a malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Uploads are not configured on this server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
     "schemas": {
+      "AddImages": {
+        "type": "object",
+        "description": "Body of `POST /v1/stones/{id}/images`.",
+        "required": [
+          "urls"
+        ],
+        "properties": {
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "URLs of uploads to the `stones` folder (`POST /v1/uploads`), 1 to 50."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Color": {
+        "type": "object",
+        "description": "A stone color tag.",
+        "required": [
+          "id",
+          "name",
+          "hex_code"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Color id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Color name, e.g. \"Black\"."
+          },
+          "hex_code": {
+            "type": "string",
+            "description": "Display color, `#RRGGBB`."
+          }
+        }
+      },
       "CompanyRow": {
         "allOf": [
           {
@@ -1793,6 +3583,56 @@
             "type": "integer",
             "format": "int32",
             "description": "Id of the new sale."
+          }
+        }
+      },
+      "CreatedSlab": {
+        "type": "object",
+        "description": "A slab just added.",
+        "required": [
+          "id",
+          "bundle",
+          "length",
+          "width"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Slab id."
+          },
+          "bundle": {
+            "type": "string",
+            "description": "Bundle label."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Photo URL; null when none."
+          },
+          "length": {
+            "type": "string",
+            "description": "Length in inches as stored, e.g. \"110\"."
+          },
+          "width": {
+            "type": "string",
+            "description": "Width in inches as stored."
+          }
+        }
+      },
+      "CreatedStone": {
+        "type": "object",
+        "description": "Response of `POST /v1/stones`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Id of the new stone."
           }
         }
       },
@@ -2217,6 +4057,21 @@
         },
         "additionalProperties": false
       },
+      "LinkInput": {
+        "type": "object",
+        "description": "Body of the link routes.",
+        "required": [
+          "source_stone_id"
+        ],
+        "properties": {
+          "source_stone_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The other stone of the company."
+          }
+        },
+        "additionalProperties": false
+      },
       "ListResponse": {
         "oneOf": [
           {
@@ -2233,6 +4088,43 @@
           }
         ],
         "description": "`GET /v1/customers` returns `CustomerRow`s, or `CompanyRow`s when `view=companies`."
+      },
+      "NewSlab": {
+        "type": "object",
+        "description": "Body of `POST /v1/stones/{id}/slabs`.",
+        "required": [
+          "bundle"
+        ],
+        "properties": {
+          "bundle": {
+            "type": "string",
+            "description": "Bundle label, e.g. \"B-12-7\"; required."
+          },
+          "length": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Length in inches; with width 0 or missing, the stone's size is used."
+          },
+          "width": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Width in inches."
+          },
+          "image_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Photo of the slab: an upload to the `stones` folder; null for none\n(the stone image is shown)."
+          }
+        },
+        "additionalProperties": false
       },
       "PositionRow": {
         "type": "object",
@@ -3401,6 +5293,190 @@
           }
         }
       },
+      "StoneImage": {
+        "type": "object",
+        "description": "An installed (project) photo shown for a stone.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Photo id."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Photo URL."
+          },
+          "source_stone": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StoneRef",
+                "description": "Set for photos of a stone this one links photos from; null for the\nstone's own photos (only those can be deleted here)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "StoneInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/stones` and `PUT /v1/stones/{id}`.",
+        "required": [
+          "name",
+          "type",
+          "finishing"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Display name; required."
+          },
+          "type": {
+            "type": "string",
+            "description": "Material; one of the company's stone types (`GET /v1/stone-types`)."
+          },
+          "finishing": {
+            "type": "string",
+            "description": "`polished`, `leathered` or `honed`."
+          },
+          "image_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Image: the `url` of an upload to the `stones` folder\n(`POST /v1/uploads`). Required when creating; when editing, omit it\nto keep the current image."
+          },
+          "is_display": {
+            "type": "boolean",
+            "description": "Shown in the catalogs."
+          },
+          "on_sale": {
+            "type": "boolean",
+            "description": "Marked as on sale."
+          },
+          "regular_stock": {
+            "type": "boolean",
+            "description": "Always orderable, never sold out."
+          },
+          "supplier_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Supplier id of the company (`GET /v1/suppliers`); null for none."
+          },
+          "length": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Typical slab length in inches."
+          },
+          "width": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Typical slab width in inches."
+          },
+          "cost_per_sqft": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Cost per square foot, whole dollars."
+          },
+          "retail_price": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Retail price per square foot, whole dollars; 0 = priced by slab."
+          },
+          "level": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Price level 1 to 7; null for none."
+          },
+          "bundle_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Supplier bundle number."
+          },
+          "bundle_location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the bundle is in the yard."
+          },
+          "delivery_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expected delivery, `YYYY-MM-DD`; null for none."
+          },
+          "color_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Colors to tag the stone with (`GET /v1/colors`); replaces the old ones."
+          }
+        },
+        "additionalProperties": false
+      },
+      "StoneLinks": {
+        "type": "object",
+        "description": "Which stones link to which.",
+        "required": [
+          "slab_sources",
+          "slab_dependents",
+          "image_sources"
+        ],
+        "properties": {
+          "slab_sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoneRef"
+            },
+            "description": "Stones this stone draws slabs from (their slabs count as its own)."
+          },
+          "slab_dependents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoneRef"
+            },
+            "description": "Stones that draw slabs from this one."
+          },
+          "image_sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoneRef"
+            },
+            "description": "Stones whose installed photos this stone shows."
+          }
+        }
+      },
       "StoneRef": {
         "type": "object",
         "description": "A stone, by id and name.",
@@ -3524,23 +5600,177 @@
           }
         }
       },
-      "UpdateSlab": {
+      "StoneType": {
         "type": "object",
-        "description": "Body of `PATCH /v1/slabs/{id}`.",
+        "description": "A stone type (material) of the company, e.g. \"granite\".",
         "required": [
-          "length",
-          "width"
+          "id",
+          "name"
         ],
         "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Stone type id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Type name as entered; stones store it in their `type`."
+          }
+        }
+      },
+      "StoneTypeInUse": {
+        "type": "object",
+        "description": "409 body of `DELETE /v1/stone-types/{id}`: the type is still used.",
+        "required": [
+          "error",
+          "stones"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "\"This type is used by undeleted stones and cannot be deleted.\""
+          },
+          "stones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoneUsingType"
+            },
+            "description": "Live stones of that type, by name; delete or retype them first."
+          }
+        }
+      },
+      "StoneTypeInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/stone-types` and `PATCH /v1/stone-types/{id}`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "1 to 255 characters; unique per company, ignoring case."
+          }
+        },
+        "additionalProperties": false
+      },
+      "StoneUsingType": {
+        "type": "object",
+        "description": "A stone that uses a type.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stone id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stone name."
+          }
+        }
+      },
+      "Supplier": {
+        "type": "object",
+        "description": "A supplier the company buys from.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Supplier id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Supplier name."
+          }
+        }
+      },
+      "UpdateSlab": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/slabs/{id}`: the fields to change. Length and width\ngo together.",
+        "properties": {
           "length": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "double",
             "description": "New length in inches; a positive number, decimals allowed."
           },
           "width": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "double",
             "description": "New width in inches; a positive number, decimals allowed."
+          },
+          "bundle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New bundle label (the slab number); not empty."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Upload": {
+        "type": "object",
+        "description": "Where to upload, and the URL to give the record afterwards.",
+        "required": [
+          "upload_url",
+          "url"
+        ],
+        "properties": {
+          "upload_url": {
+            "type": "string",
+            "description": "`PUT` the file body here (valid 15 minutes) with the `Content-Type`\ngiven in the request."
+          },
+          "url": {
+            "type": "string",
+            "description": "Public URL of the file once uploaded; pass it to the record's route."
+          }
+        }
+      },
+      "UploadFolder": {
+        "type": "string",
+        "description": "Where an upload goes; each record type takes files of its own folder.",
+        "enum": [
+          "stones",
+          "sinks",
+          "faucets"
+        ]
+      },
+      "UploadRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/uploads`.",
+        "required": [
+          "folder",
+          "file_name",
+          "content_type"
+        ],
+        "properties": {
+          "folder": {
+            "$ref": "#/components/schemas/UploadFolder",
+            "description": "Folder of the record the file is for."
+          },
+          "file_name": {
+            "type": "string",
+            "description": "Original file name; only its extension is kept."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`. Send the same value as the\n`Content-Type` header of the `PUT`."
           }
         },
         "additionalProperties": false
@@ -3592,6 +5822,14 @@
     {
       "name": "stones",
       "description": "Stones (slab materials) and their slab inventory"
+    },
+    {
+      "name": "catalog",
+      "description": "Suppliers, colors and stone types the inventory forms pick from"
+    },
+    {
+      "name": "uploads",
+      "description": "Presigned uploads of images to storage"
     },
     {
       "name": "sales",

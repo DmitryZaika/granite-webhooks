@@ -245,3 +245,10 @@ INSERT INTO stone_types (id, name, company_id) VALUES
   (102, 'marble',    100),
   (103, 'quartzite', 100),
   (104, 'granite',   101);
+
+-- ---- Installed (project) photos of stones (admin stone images tab). Ids 100+.
+INSERT INTO installed_stones (id, url, stone_id) VALUES
+  (100, 'https://img.example/installed-black-1.jpg', 3000),
+  (101, 'https://img.example/installed-black-2.jpg', 3000),
+  (102, 'https://img.example/installed-zebra-1.jpg', 3008),
+  (103, 'https://img.example/installed-other-1.jpg', 4000);

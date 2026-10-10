@@ -28,6 +28,9 @@ tower-http = { version = "0.6", features = ["cors"] }
 utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "preserve_order", "preserve_path_order"] }
 utoipa-axum = "0.3.0"
 serde_html_form = "0.4.1"
+aws-sdk-s3 = { version = "1.127", features = ["behavior-version-latest"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 axum-test = "19"

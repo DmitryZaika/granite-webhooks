@@ -5,6 +5,7 @@
 use api::app;
 use api::auth::cookie::{SessionData, encode_session};
 use api::state::AppState;
+use api::storage::Storage;
 use axum_test::{TestRequest, TestServer};
 use sqlx::MySqlPool;
 
@@ -26,6 +27,23 @@ pub mod sessions {
 
 pub fn server(pool: MySqlPool) -> TestServer {
     TestServer::new(app(AppState::new(pool, SECRET, ALLOWED_ORIGIN)))
+}
+
+/// A server whose uploads go to an in-memory bucket the test can inspect.
+pub fn server_with_storage(pool: MySqlPool) -> (TestServer, Storage) {
+    let storage = Storage::memory();
+    let state = AppState::new(pool, SECRET, ALLOWED_ORIGIN).with_storage(storage.clone());
+    (TestServer::new(app(state)), storage)
+}
+
+/// A PNG of the given size, as a browser would upload it.
+pub fn png(width: u32, height: u32) -> Vec<u8> {
+    let image = image::DynamicImage::new_rgb8(width, height);
+    let mut out = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut out, image::ImageFormat::Png)
+        .expect("encode png");
+    out.into_inner()
 }
 
 /// `Cookie` header value exactly as the Remix app would have set it.

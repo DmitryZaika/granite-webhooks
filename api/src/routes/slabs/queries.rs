@@ -2,17 +2,11 @@ use super::schemas::SlabSummary;
 use crate::sql::push_in;
 use sqlx::{MySql, MySqlPool, QueryBuilder};
 
-/// Remix: the `updateSize` intent of `employee.stones.slabs.$stone.tsx`.
-///
-/// Sizes are stored as text the way JavaScript prints numbers (`130`,
-/// `65.5`). Only slabs of the company's stones are touched; returns whether
-/// the slab exists.
-pub async fn update_slab_size(
+/// Whether a live slab of the company's stones has this id.
+pub async fn slab_in_company(
     pool: &MySqlPool,
     company_id: i32,
     slab_id: i64,
-    length: f64,
-    width: f64,
 ) -> Result<bool, sqlx::Error> {
     let exists: Option<i64> = sqlx::query_scalar(
         "SELECT CAST(slab.id AS SIGNED) FROM slab_inventory slab
@@ -23,16 +17,44 @@ pub async fn update_slab_size(
     .bind(company_id)
     .fetch_optional(pool)
     .await?;
-    if exists.is_none() {
-        return Ok(false);
+    Ok(exists.is_some())
+}
+
+/// Remix: the `updateSize` intent of `employee.stones.slabs.$stone.tsx` and
+/// the bundle rename of `admin.stones.edit.$stone.slabs.tsx`.
+///
+/// Sizes are stored as text the way JavaScript prints numbers (`130`, `65.5`).
+pub async fn update_slab(
+    pool: &MySqlPool,
+    slab_id: i64,
+    size: Option<(f64, f64)>,
+    bundle: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    if let Some((length, width)) = size {
+        sqlx::query("UPDATE slab_inventory SET length = ?, width = ? WHERE id = ?")
+            .bind(length.to_string())
+            .bind(width.to_string())
+            .bind(slab_id)
+            .execute(pool)
+            .await?;
     }
-    sqlx::query("UPDATE slab_inventory SET length = ?, width = ? WHERE id = ?")
-        .bind(length.to_string())
-        .bind(width.to_string())
+    if let Some(bundle) = bundle {
+        sqlx::query("UPDATE slab_inventory SET bundle = ? WHERE id = ?")
+            .bind(bundle)
+            .bind(slab_id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Soft delete (`deleted_at`), like Remix.
+pub async fn delete_slab(pool: &MySqlPool, slab_id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE slab_inventory SET deleted_at = NOW() WHERE id = ?")
         .bind(slab_id)
         .execute(pool)
         .await?;
-    Ok(true)
+    Ok(())
 }
 
 /// Remix: `api.slabNames.tsx` and `api.stoneInfo.$slabId.ts`. Slabs of the

@@ -1,14 +1,20 @@
 use serde::Deserialize;
 use utoipa::ToSchema;
 
-/// Body of `PATCH /v1/slabs/{id}`.
-#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+/// Body of `PATCH /v1/slabs/{id}`: the fields to change. Length and width
+/// go together.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateSlab {
     /// New length in inches; a positive number, decimals allowed.
-    pub length: f64,
+    #[serde(default)]
+    pub length: Option<f64>,
     /// New width in inches; a positive number, decimals allowed.
-    pub width: f64,
+    #[serde(default)]
+    pub width: Option<f64>,
+    /// New bundle label (the slab number); not empty.
+    #[serde(default)]
+    pub bundle: Option<String>,
 }
 
 /// Query string of `GET /v1/slabs`.

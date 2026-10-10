@@ -22,6 +22,8 @@ pub mod routes;
 pub mod serde_helpers;
 pub mod sql;
 pub mod state;
+pub mod storage;
+pub mod thumbnails;
 
 use axum::http::header::CONTENT_TYPE;
 use axum::{Router, routing::get};

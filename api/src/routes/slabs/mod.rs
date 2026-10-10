@@ -1,7 +1,8 @@
 //! Slabs (`slab_inventory`): single slabs and remnants of a stone.
 //!
 //! - `GET /v1/slabs?id=..` → slabs by id with their stone
-//! - `PATCH /v1/slabs/{id}` → change a slab's length and width
+//! - `PATCH /v1/slabs/{id}` → change a slab's size and/or bundle label
+//! - `DELETE /v1/slabs/{id}` → remove a slab from the yard
 //!
 //! Listing slabs lives under the stone: `GET /v1/stones/{id}/slabs`.
 
@@ -15,5 +16,5 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(handlers::list))
-        .routes(routes!(handlers::update))
+        .routes(routes!(handlers::update, handlers::delete))
 }

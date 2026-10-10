@@ -18,8 +18,13 @@ pub enum ApiError {
     NotFound,
     #[error("{0}")]
     BadRequest(String),
+    /// The request conflicts with the data, e.g. deleting something in use.
+    #[error("{0}")]
+    Conflict(String),
     #[error("database error")]
     Database(#[from] sqlx::Error),
+    #[error(transparent)]
+    Storage(#[from] crate::storage::StorageError),
 }
 
 impl IntoResponse for ApiError {
@@ -29,6 +34,14 @@ impl IntoResponse for ApiError {
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::Storage(crate::storage::StorageError::Disabled) => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+            Self::Storage(err) => {
+                tracing::error!(?err, "storage error");
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             Self::Database(err) => {
                 tracing::error!(?err, "database error");
                 StatusCode::INTERNAL_SERVER_ERROR
