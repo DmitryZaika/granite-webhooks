@@ -237,3 +237,11 @@ INSERT INTO sinks (id, sink_type_id, is_deleted, slab_id) VALUES
   (6109, 3102, 0, 6071),
   (6110, 3102, 0, 6071),
   (6111, 3107, 0, 6071);
+
+-- ---- Stone types (quick-add stone, stone forms). Ids 100+.
+INSERT INTO stone_types (id, name, company_id) VALUES
+  (100, 'granite',   100),
+  (101, 'quartz',    100),
+  (102, 'marble',    100),
+  (103, 'quartzite', 100),
+  (104, 'granite',   101);

@@ -2,6 +2,8 @@
 //!
 //! - `GET /v1/stones` → displayed stones with slab counts (`type`, `supplier_id`,
 //!   `color_id`, `level`, `finishing`, `include_sold_out` query params)
+//! - `GET /v1/stones/search` → stones by name, best match first
+//! - `POST /v1/stones/quick` → add a stone with its first slabs
 //! - `GET /v1/stones/{id}` → one stone with its color ids
 //! - `GET /v1/stones/{id}/slabs` → its slabs (own + linked) with sale details
 //!
@@ -18,6 +20,8 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(handlers::list))
+        .routes(routes!(handlers::search))
+        .routes(routes!(handlers::quick_add))
         .routes(routes!(handlers::get))
         .routes(routes!(handlers::slabs))
 }

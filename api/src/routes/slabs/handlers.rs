@@ -1,9 +1,10 @@
-use super::queries::update_slab_size;
-use super::schemas::UpdateSlab;
+use super::queries::{slabs_by_ids, update_slab_size};
+use super::schemas::{ListSlabsQuery, SlabSummary, UpdateSlab};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
-use crate::extract::JsonBody;
+use crate::extract::{JsonBody, MultiQuery};
 use crate::state::AppState;
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 
@@ -47,4 +48,34 @@ pub async fn update(
     } else {
         Err(ApiError::NotFound)
     }
+}
+
+/// Get slabs by id
+///
+/// Returns the slabs of the caller's company among the given ids (others are
+/// left out), each with its bundle label and its stone (id, name, type).
+/// Use it to label slabs already chosen on a sale.
+#[utoipa::path(
+    get,
+    path = "/v1/slabs",
+    operation_id = "list_slabs_by_id",
+    tag = "slabs",
+    params(ListSlabsQuery),
+    responses(
+        (status = 200, description = "Slabs by id", body = Vec<SlabSummary>),
+        (status = 400, description = "An id is not a number", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn list(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    MultiQuery(query): MultiQuery<ListSlabsQuery>,
+) -> ApiResult<Json<Vec<SlabSummary>>> {
+    Ok(Json(
+        slabs_by_ids(&state.pool, user.company_id, &query.ids).await?,
+    ))
 }

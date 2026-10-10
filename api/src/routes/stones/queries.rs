@@ -1,24 +1,16 @@
 use super::schemas::{
-    ListStonesQuery, SlabParentSale, SlabSale, Stone, StoneDetail, StoneRef, StoneSlab,
+    ListStonesQuery, QuickStoneInput, SearchStonesQuery, SlabParentSale, SlabSale, Stone,
+    StoneDetail, StoneRef, StoneSlab,
 };
 use crate::sql::push_in;
 use chrono::{DateTime, Utc};
 use sqlx::FromRow;
 use sqlx::{MySql, MySqlPool, QueryBuilder};
 
-/// Remix: `stoneQueryBuilder` in `app/utils/queries.server.ts` as the employee
-/// stones page called it (displayed stones only, remnant-only stones kept).
-///
-/// Each stone draws slabs from itself plus any linked source stones. Joining
-/// through that small pair list (`slab_sources`) keeps the slab join indexed;
-/// an OR with a correlated IN made MySQL compare every stone with every slab.
-/// The join already drops cut and deleted slabs, so the counts only split the
-/// rest by sale and by whole slab vs remnant (`parent_id`).
-pub async fn list_stones(
-    pool: &MySqlPool,
-    company_id: i32,
-    filter: &ListStonesQuery,
-) -> Result<Vec<Stone>, sqlx::Error> {
+/// `SELECT <Stone columns> FROM stones ... WHERE` live stones of the company,
+/// joined to their slabs for the counts. Callers add filters, then
+/// `GROUP BY stones.id`.
+fn stones_with_slab_counts(company_id: i32) -> QueryBuilder<MySql> {
     let mut query = QueryBuilder::<MySql>::new(
         "SELECT
             stones.id, stones.name, stones.type, stones.url, stones.supplier_id,
@@ -46,9 +38,125 @@ pub async fn list_stones(
          ) slab_sources ON slab_sources.stone_id = stones.id
          LEFT JOIN slab_inventory slab ON slab.stone_id = slab_sources.source_stone_id
            AND slab.cut_date IS NULL AND slab.deleted_at IS NULL
-         WHERE stones.deleted_at IS NULL AND stones.is_display = 1 AND stones.company_id = ",
+         WHERE stones.deleted_at IS NULL AND stones.company_id = ",
     );
     query.push_bind(company_id);
+    query
+}
+
+/// Remix: `api.stones.search.$companyId.tsx` for signed-in staff. Name
+/// matches first (prefix, then whole word, then anywhere), then by name.
+pub async fn search_stones(
+    pool: &MySqlPool,
+    company_id: i32,
+    filter: &SearchStonesQuery,
+) -> Result<Vec<Stone>, sqlx::Error> {
+    let term = filter.name.trim();
+    if term.is_empty() {
+        return Ok(Vec::new());
+    }
+    let escaped = escape_like(term);
+    let mut query = stones_with_slab_counts(company_id);
+    query
+        .push(" AND stones.name LIKE ")
+        .push_bind(format!("%{escaped}%"));
+    if !filter.include_hidden {
+        query.push(" AND stones.is_display = 1");
+    }
+    query.push(" GROUP BY stones.id");
+    if !filter.include_sold_out {
+        query.push(" HAVING (slabs_available > 0 OR regular_stock = 1) AND (regular_stock = 1 OR slabs_whole_available > 0)");
+    }
+    query
+        .push(" ORDER BY CASE WHEN stones.name LIKE ")
+        .push_bind(format!("{escaped}%"))
+        .push(" THEN 0 WHEN stones.name LIKE ")
+        .push_bind(format!("% {escaped} %"))
+        .push(" THEN 1 ELSE 2 END, stones.name ASC, stones.id ASC LIMIT ")
+        .push_bind(filter.limit.unwrap_or(25).clamp(1, 50));
+    query.build_query_as::<Stone>().fetch_all(pool).await
+}
+
+/// `%` and `_` typed by the user match themselves.
+fn escape_like(term: &str) -> String {
+    term.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+/// Remix: `api.stones.quick-add.tsx`. A displayed stone plus its first slabs.
+pub async fn quick_add_stone(
+    pool: &MySqlPool,
+    company_id: i32,
+    input: &QuickStoneInput,
+    bundles: &[String],
+) -> Result<(i32, Vec<i64>), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let length = input.length.unwrap_or(0.0);
+    let width = input.width.unwrap_or(0.0);
+    let stone = sqlx::query(
+        "INSERT INTO stones (name, type, retail_price, width, length, company_id, is_display)
+         VALUES (?, ?, ?, ?, ?, ?, 1)",
+    )
+    .bind(input.name.trim())
+    .bind(&input.kind)
+    .bind(input.retail_price)
+    .bind(width)
+    .bind(length)
+    .bind(company_id)
+    .execute(&mut *tx)
+    .await?;
+    let stone_id = i32::try_from(stone.last_insert_id()).unwrap_or(i32::MAX);
+    let mut slab_ids = Vec::with_capacity(bundles.len());
+    for bundle in bundles {
+        let slab = sqlx::query(
+            "INSERT INTO slab_inventory (bundle, stone_id, width, length, is_leftover, url)
+             VALUES (?, ?, ?, ?, ?, NULL)",
+        )
+        .bind(bundle)
+        .bind(stone_id)
+        .bind(width.to_string())
+        .bind(length.to_string())
+        .bind(input.leftover)
+        .execute(&mut *tx)
+        .await?;
+        slab_ids.push(i64::try_from(slab.last_insert_id()).unwrap_or(i64::MAX));
+    }
+    tx.commit().await?;
+    Ok((stone_id, slab_ids))
+}
+
+/// Whether the company has this stone type (case-insensitive).
+pub async fn company_has_stone_type(
+    pool: &MySqlPool,
+    company_id: i32,
+    name: &str,
+) -> Result<bool, sqlx::Error> {
+    let found: Option<i64> = sqlx::query_scalar(
+        "SELECT CAST(id AS SIGNED) FROM stone_types WHERE company_id = ? AND LOWER(name) = LOWER(?) LIMIT 1",
+    )
+    .bind(company_id)
+    .bind(name)
+    .fetch_optional(pool)
+    .await?;
+    Ok(found.is_some())
+}
+
+/// Remix: `stoneQueryBuilder` in `app/utils/queries.server.ts` as the employee
+/// stones page called it (displayed stones only, remnant-only stones kept).
+///
+/// Each stone draws slabs from itself plus any linked source stones. Joining
+/// through that small pair list (`slab_sources`) keeps the slab join indexed;
+/// an OR with a correlated IN made MySQL compare every stone with every slab.
+/// The join already drops cut and deleted slabs, so the counts only split the
+/// rest by sale and by whole slab vs remnant (`parent_id`).
+pub async fn list_stones(
+    pool: &MySqlPool,
+    company_id: i32,
+    filter: &ListStonesQuery,
+) -> Result<Vec<Stone>, sqlx::Error> {
+    let mut query = stones_with_slab_counts(company_id);
+    query.push(" AND stones.is_display = 1");
 
     push_in(&mut query, "stones.type", &filter.types);
     if let Some(supplier_id) = filter.supplier_id {
@@ -121,6 +229,7 @@ struct SlabRow {
     width: Option<String>,
     parent_id: Option<i64>,
     is_leftover: bool,
+    child_count: i64,
     stone_id: i32,
     stone_name: Option<String>,
     sale_id: Option<i32>,
@@ -160,6 +269,8 @@ pub async fn list_stone_slabs(
             CAST(slab.id AS SIGNED) AS id, slab.bundle, slab.url, slab.length, slab.width,
             CAST(slab.parent_id AS SIGNED) AS parent_id,
             COALESCE(slab.is_leftover, 0) AS is_leftover,
+            (SELECT COUNT(*) FROM slab_inventory child
+              WHERE child.parent_id = slab.id AND child.deleted_at IS NULL) AS child_count,
             source.id AS stone_id, source.name AS stone_name,
             slab.sale_id, sale.id AS found_sale_id, sale.sale_date,
             customer.name AS customer_name, seller.name AS seller_name,
@@ -232,6 +343,7 @@ pub async fn list_stone_slabs(
                 width: row.width,
                 parent_id: row.parent_id,
                 is_leftover: row.is_leftover,
+                child_count: row.child_count,
                 source_stone: (row.stone_id != stone_id).then_some(StoneRef {
                     id: row.stone_id,
                     name: row.stone_name,

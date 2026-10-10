@@ -122,6 +122,8 @@ async fn sold_slab_has_its_sale(pool: MySqlPool) {
             "width": "64",
             "parent_id": null,
             "is_leftover": false,
+            // Two remnants were cut from it (6072, 6073).
+            "child_count": 2,
             "source_stone": null,
             "sale_id": 7010,
             "sale": {

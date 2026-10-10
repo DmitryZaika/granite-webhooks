@@ -298,6 +298,191 @@
         ]
       }
     },
+    "/v1/customers/search": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Search the company's customers",
+        "description": "Returns up to 15 live customers matching `term` by name (typos\ntolerated, also matches the company name), phone digits, any email, or\ncompany name. Customers with a live deal of the caller come first, then\nthe caller's own customers, then the best text matches. Each row carries\nevery email and the customer's latest deal. Fetch one in full with\n`GET /v1/customers/{id}`.",
+        "operationId": "search_customers",
+        "parameters": [
+          {
+            "name": "term",
+            "in": "query",
+            "description": "What the user typed. Required (may be empty for phone search).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "by",
+            "in": "query",
+            "description": "Which field to match: `name` (default), `phone`, `email`, `company`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "How `GET /v1/customers/search` matches `term`.",
+              "enum": [
+                "name",
+                "phone",
+                "email",
+                "company"
+              ]
+            }
+          },
+          {
+            "name": "own_only",
+            "in": "query",
+            "description": "`true` returns only customers assigned to the caller or unassigned.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching customers, best first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CustomerSearchRow"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing `term` or unknown `by`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/customers/{id}": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Get one customer",
+        "description": "Returns a live customer of the caller's company with contact details,\nevery email address (primary first) and the assigned sales rep. 404 for\ndeleted customers and other companies' customers.",
+        "operationId": "get_customer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/users/sales-reps": {
       "get": {
         "tags": [
@@ -453,6 +638,193 @@
           },
           "400": {
             "description": "A filter has the wrong type, e.g. `supplier_id=abc`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stones/search": {
+      "get": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Search the company's stones by name",
+        "description": "Returns up to `limit` stones whose name contains `name`, best matches\nfirst (name starts with it, then contains it as a word), each with the\nsame fields and slab counts as `GET /v1/stones`. By default only\ndisplayed stones that are regular stock or have an available whole slab;\nsee `include_sold_out` and `include_hidden`.",
+        "operationId": "search_stones",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Part of the stone name, case-insensitive. Empty returns no stones.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_sold_out",
+            "in": "query",
+            "description": "`true` also returns sold out stones. By default a stone is listed\nwhen it is regular stock or has an available whole slab.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "include_hidden",
+            "in": "query",
+            "description": "`true` also returns stones hidden from the catalog (`is_display`\nfalse). Default `false`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Most stones to return, 1 to 50. Default 25.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching stones, best first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Stone"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter has the wrong type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stones/quick": {
+      "post": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Add a stone with its slabs in one step",
+        "description": "Creates a displayed stone and either one leftover slab (bundle\n`LO-YYYYMMDD-XXXX`) or one slab per bundle label, all with the given\nsize. Used while selling a slab that is not in the system yet. Returns\nthe stone and the new slab ids, ready to put on a sale.",
+        "operationId": "quick_add_stone",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuickStoneInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Stone and slabs created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuickStone"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, non-positive price, negative size, unknown stone type, or no bundles",
             "content": {
               "application/json": {
                 "schema": {
@@ -699,6 +1071,15 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "available_only",
+            "in": "query",
+            "description": "`true` returns only models with at least one free unit, even regular\nstock ones without units (what can be installed on a sale right now).\nOverrides `include_sold_out`. Default `false`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -802,6 +1183,15 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "available_only",
+            "in": "query",
+            "description": "`true` returns only models with at least one free unit, even regular\nstock ones without units (what can be installed on a sale right now).\nOverrides `include_sold_out`. Default `false`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -820,6 +1210,91 @@
           },
           "400": {
             "description": "A filter has the wrong type, e.g. `supplier_id=abc`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/slabs": {
+      "get": {
+        "tags": [
+          "slabs"
+        ],
+        "summary": "Get slabs by id",
+        "description": "Returns the slabs of the caller's company among the given ids (others are\nleft out), each with its bundle label and its stone (id, name, type).\nUse it to label slabs already chosen on a sale.",
+        "operationId": "list_slabs_by_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "description": "Slab ids to return; repeat the parameter (`?id=1&id=2`). Required:\nwithout ids the list is empty.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Slabs by id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SlabSummary"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An id is not a number",
             "content": {
               "application/json": {
                 "schema": {
@@ -957,6 +1432,324 @@
           }
         ]
       }
+    },
+    "/v1/sales/{id}": {
+      "get": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Get a sale for editing",
+        "description": "Returns the sale's customer, seller, notes, price and its rooms, each with\nthe slabs used (`is_full` false when only part of a slab was sold), the\nsinks and faucets installed, and the room options. 404 when the sale is\nnot the company's or no slab is left on it. Save changes with\n`PUT /v1/sales/{id}`.",
+        "operationId": "get_sale",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sale",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaleContract"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such sale with slabs in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Save an edited sale",
+        "description": "Replaces the sale's customer, notes, price, rooms, slabs, sinks and\nfaucets with the body (the seller only when `seller_id` is given). Slabs\nmay be ones the sale already has or available ones; slabs left out are\nfreed, with their sinks and faucets. All or nothing.",
+        "operationId": "update_sale",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Sale saved"
+          },
+          "400": {
+            "description": "Invalid body (see `create_sale`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such sale in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sales": {
+      "post": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Sell slabs to a customer",
+        "description": "Creates a pending sale dated now. Each room needs square feet and at least\none available slab of the company; a slab sold partially\n(`is_full: false`) leaves a remnant in the yard, and a slab used in\nseveral rooms gets a piece cut from it for each later room. Sinks and\nfaucets take one free unit of each model, installed on the room's first\nslab. A customer without a sales rep gets the seller. All or nothing: any\nerror leaves the data unchanged.",
+        "operationId": "create_sale",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Sale created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedSale"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body: no rooms, a room without slabs or square feet, unknown customer/slab/model, a slab already sold, or no free unit of a sink/faucet model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sales/{id}/unsell": {
+      "post": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Cancel a sale",
+        "description": "Marks the sale cancelled, frees its slabs and the sinks and faucets on\nthem, and removes the free remnants its partial slabs left. Remnants that\nanother sale bought are kept. Returns no body.",
+        "operationId": "unsell_sale",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Sale cancelled"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such sale in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -988,6 +1781,120 @@
           }
         ],
         "description": "A customer row of the `companies` view, with totals over its own sales\nand those of its child customers."
+      },
+      "CreatedSale": {
+        "type": "object",
+        "description": "Response of `POST /v1/sales`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Id of the new sale."
+          }
+        }
+      },
+      "CustomerDetail": {
+        "type": "object",
+        "description": "One customer with contact details, as the customer picker shows it.",
+        "required": [
+          "id",
+          "emails"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contact person's name."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Billing address."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Main phone number."
+          },
+          "phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Second phone number."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Primary email address; null when the customer has none."
+          },
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every email address, primary first."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company name for business customers; null or empty for private ones."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the lead came from, e.g. `leads`, `check-in`, `other`."
+          },
+          "referral_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Referral source, free text."
+          },
+          "your_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Message the customer left when signing up."
+          },
+          "sales_rep": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Assigned sales rep (user id); null when unassigned."
+          },
+          "sales_rep_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the assigned sales rep; null when unassigned or deleted."
+          }
+        }
       },
       "CustomerRow": {
         "type": "object",
@@ -1105,6 +2012,94 @@
           }
         }
       },
+      "CustomerSearchRow": {
+        "type": "object",
+        "description": "A customer matching a search, with their latest deal.",
+        "required": [
+          "id",
+          "emails"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contact person's name."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Billing address."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Main phone number."
+          },
+          "phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Second phone number."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Primary email address."
+          },
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every email address, primary first."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company name for business customers."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The customer's most recent live deal; null when none."
+          },
+          "deal_is_won": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "That deal's outcome: 1 won, 0 lost, null open or no deal."
+          },
+          "deal_group_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Board group of that deal's list; null when there is no deal."
+          }
+        }
+      },
       "EmailsBatchRequest": {
         "type": "object",
         "description": "Body of `POST /v1/customers/emails/batch`.",
@@ -1202,6 +2197,26 @@
           }
         }
       },
+      "FixtureInput": {
+        "type": "object",
+        "description": "A sink or faucet model to install, with the price charged.",
+        "required": [
+          "type_id"
+        ],
+        "properties": {
+          "type_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Model id (`sink_type.id` / `faucet_type.id`)."
+          },
+          "price": {
+            "type": "number",
+            "format": "double",
+            "description": "Price charged in dollars."
+          }
+        },
+        "additionalProperties": false
+      },
       "ListResponse": {
         "oneOf": [
           {
@@ -1230,6 +2245,476 @@
             "type": "integer",
             "format": "int32",
             "description": "`positions.id`, e.g. 1 = sales rep, 9 = super admin."
+          }
+        }
+      },
+      "QuickStone": {
+        "type": "object",
+        "description": "Response of `POST /v1/stones/quick`.",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "retail_price",
+          "slab_ids"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "New stone id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Stone name."
+          },
+          "type": {
+            "type": "string",
+            "description": "Material type."
+          },
+          "retail_price": {
+            "type": "number",
+            "format": "double",
+            "description": "Retail price per square foot."
+          },
+          "slab_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Ids of the slabs added, in order."
+          }
+        }
+      },
+      "QuickStoneInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/stones/quick`.",
+        "required": [
+          "name",
+          "type",
+          "retail_price",
+          "leftover"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Stone name."
+          },
+          "type": {
+            "type": "string",
+            "description": "Material type; must be one of the company's stone types."
+          },
+          "retail_price": {
+            "type": "number",
+            "format": "double",
+            "description": "Retail price per square foot in dollars; must be positive."
+          },
+          "length": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Slab length in inches; 0 when unknown."
+          },
+          "width": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Slab width in inches; 0 when unknown."
+          },
+          "leftover": {
+            "type": "boolean",
+            "description": "`true` adds one leftover slab with a generated bundle (`LO-YYYYMMDD-XXXX`);\n`false` adds one slab per entry of `bundles`."
+          },
+          "bundles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Bundle labels of the slabs to add when `leftover` is false."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RoomInput": {
+        "type": "object",
+        "description": "One room of a sale being saved.",
+        "required": [
+          "room_id",
+          "room",
+          "backsplash",
+          "tear_out",
+          "stove",
+          "waterfall",
+          "seam",
+          "slabs"
+        ],
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "description": "Room UUID (any version), shared by its slabs."
+          },
+          "room": {
+            "type": "string",
+            "description": "Room name, e.g. `kitchen`."
+          },
+          "backsplash": {
+            "type": "string",
+            "description": "Backsplash option."
+          },
+          "square_feet": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Square feet of the room; must be positive."
+          },
+          "retail_price": {
+            "type": "number",
+            "format": "double",
+            "description": "Price per square foot in dollars."
+          },
+          "tear_out": {
+            "type": "string",
+            "description": "Tear-out option."
+          },
+          "stove": {
+            "type": "string",
+            "description": "Stove option."
+          },
+          "waterfall": {
+            "type": "string",
+            "description": "Waterfall option."
+          },
+          "corbels": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of corbels."
+          },
+          "seam": {
+            "type": "string",
+            "description": "Seam option."
+          },
+          "ten_year_sealer": {
+            "type": "boolean",
+            "description": "Ten year sealer included."
+          },
+          "extras": {
+            "type": "object",
+            "description": "Room extras, stored as given."
+          },
+          "slabs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SaleSlab"
+            },
+            "description": "Slabs used in the room. The same slab may appear in several rooms:\neach later room gets its own piece cut from it."
+          },
+          "sinks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FixtureInput"
+            },
+            "description": "Sinks to install: one free unit of each model is taken."
+          },
+          "faucets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FixtureInput"
+            },
+            "description": "Faucets to install: one free unit of each model is taken."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SaleContract": {
+        "type": "object",
+        "description": "A sale as the sell / edit form shows it: who bought, who sold, and the\nrooms with their slabs, sinks and faucets.",
+        "required": [
+          "id",
+          "customer_id",
+          "rooms"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sale id."
+          },
+          "customer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer who bought."
+          },
+          "seller_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "User credited with the sale; null if unknown."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address of the job; null or empty means the customer's address."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes on the whole sale."
+          },
+          "price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Total price, decimal string (e.g. \"4200.00\"); null if not set."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's company name; null for private customers."
+          },
+          "extras": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Extra line items of the whole sale (`[{\"adjustment\": \"...\", \"price\": 0}]`),\nas saved; null when none were saved."
+          },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SaleRoom"
+            },
+            "description": "Rooms in the order their first slab was added."
+          }
+        }
+      },
+      "SaleFixture": {
+        "type": "object",
+        "description": "A sink or faucet unit on a sale.",
+        "required": [
+          "id",
+          "type_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Unit id (`sinks.id` / `faucets.id`)."
+          },
+          "type_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Model id (`sink_type.id` / `faucet_type.id`)."
+          },
+          "price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Price charged for the unit, decimal string; null if not set."
+          }
+        }
+      },
+      "SaleInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/sales` and `PUT /v1/sales/{id}`.",
+        "required": [
+          "customer_id",
+          "rooms"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer who buys; must be a live customer of the company."
+          },
+          "seller_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "User credited with the sale. Defaults to the caller when selling;\nleft unchanged when editing."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address of the job. Empty or missing uses the customer's address."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes on the whole sale; empty clears them."
+          },
+          "price": {
+            "type": "number",
+            "format": "double",
+            "description": "Total price in dollars."
+          },
+          "extras": {
+            "type": "object",
+            "description": "Extra line items of the whole sale, stored as given."
+          },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoomInput"
+            },
+            "description": "At least one room, each with at least one slab."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SaleRoom": {
+        "type": "object",
+        "description": "One room of a sale. Room fields are stored on each of its slabs; these\ncome from the room's first slab. Nulls mean \"not set\" (the form uses its\ndefaults).",
+        "required": [
+          "ten_year_sealer",
+          "slabs",
+          "sinks",
+          "faucets"
+        ],
+        "properties": {
+          "room_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Room UUID shared by its slabs; null for old sales saved without one."
+          },
+          "room": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Room name, e.g. `kitchen`, `bathroom`, or free text."
+          },
+          "backsplash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Backsplash: `no`, `4 inch`, `full height`, or free text."
+          },
+          "square_feet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Square feet of the room, decimal string."
+          },
+          "retail_price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Price per square foot, decimal string."
+          },
+          "tear_out": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Tear-out option."
+          },
+          "stove": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stove option."
+          },
+          "waterfall": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Waterfall option."
+          },
+          "corbels": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Number of corbels."
+          },
+          "seam": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Seam option."
+          },
+          "ten_year_sealer": {
+            "type": "boolean",
+            "description": "Ten year sealer included."
+          },
+          "extras": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Room extras (edge, tear-out, stove... prices) as saved."
+          },
+          "slabs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SaleSlab"
+            },
+            "description": "Slabs used in the room."
+          },
+          "sinks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SaleFixture"
+            },
+            "description": "Sinks installed on the room's first slab."
+          },
+          "faucets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SaleFixture"
+            },
+            "description": "Faucets installed on the room's first slab."
+          }
+        }
+      },
+      "SaleSlab": {
+        "type": "object",
+        "description": "A slab used in a room.",
+        "required": [
+          "id",
+          "is_full"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Slab id."
+          },
+          "is_full": {
+            "type": "boolean",
+            "description": "`true` when the whole slab is sold. `false` when only part of it is:\nselling then leaves a remnant (a child slab) in the yard."
           }
         }
       },
@@ -1540,6 +3025,65 @@
               "type": "string"
             },
             "description": "Names of the sinks installed on any slab of this sale, one entry per\nsink (repeated names mean several units), in installation order."
+          }
+        }
+      },
+      "SlabStone": {
+        "type": "object",
+        "description": "The stone a slab belongs to.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stone id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stone name."
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Material type, e.g. `granite`."
+          }
+        }
+      },
+      "SlabSummary": {
+        "type": "object",
+        "description": "A slab by id, with the stone it belongs to.",
+        "required": [
+          "id",
+          "is_leftover",
+          "stone"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Slab id."
+          },
+          "bundle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bundle label, e.g. \"B-12-1\"."
+          },
+          "is_leftover": {
+            "type": "boolean",
+            "description": "Marked as a leftover piece."
+          },
+          "stone": {
+            "$ref": "#/components/schemas/SlabStone",
+            "description": "The slab's stone."
           }
         }
       },
@@ -1883,7 +3427,8 @@
         "description": "A slab or remnant of a stone, as the slabs dialog lists it.",
         "required": [
           "id",
-          "is_leftover"
+          "is_leftover",
+          "child_count"
         ],
         "properties": {
           "id": {
@@ -1930,6 +3475,11 @@
           "is_leftover": {
             "type": "boolean",
             "description": "Marked as a leftover piece."
+          },
+          "child_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Remnants cut from this slab that are not deleted (sold, free or cut).\nA slab with remnants can only be sold partially."
           },
           "source_stone": {
             "oneOf": [
@@ -2042,6 +3592,10 @@
     {
       "name": "stones",
       "description": "Stones (slab materials) and their slab inventory"
+    },
+    {
+      "name": "sales",
+      "description": "Sales of slabs, sinks and faucets to customers"
     },
     {
       "name": "slabs",

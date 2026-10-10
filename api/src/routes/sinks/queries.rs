@@ -31,7 +31,9 @@ pub async fn list_sinks(
             .push_bind(supplier_id);
     }
     query.push(" GROUP BY sink_type.id");
-    if !filter.include_sold_out {
+    if filter.available_only {
+        query.push(" HAVING available > 0");
+    } else if !filter.include_sold_out {
         query.push(" HAVING available > 0 OR regular_stock = 1");
     }
     query.push(" ORDER BY sink_type.name ASC, sink_type.id ASC");

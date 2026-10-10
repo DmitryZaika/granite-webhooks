@@ -17,6 +17,11 @@ pub struct ListSinksQuery {
     /// stock. Default `false`.
     #[serde(default)]
     pub include_sold_out: bool,
+    /// `true` returns only models with at least one free unit, even regular
+    /// stock ones without units (what can be installed on a sale right now).
+    /// Overrides `include_sold_out`. Default `false`.
+    #[serde(default)]
+    pub available_only: bool,
 }
 
 /// A sink model the company sells, with how many units are free to sell.

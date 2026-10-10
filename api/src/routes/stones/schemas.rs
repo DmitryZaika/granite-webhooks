@@ -172,6 +172,9 @@ pub struct StoneSlab {
     pub parent_id: Option<i64>,
     /// Marked as a leftover piece.
     pub is_leftover: bool,
+    /// Remnants cut from this slab that are not deleted (sold, free or cut).
+    /// A slab with remnants can only be sold partially.
+    pub child_count: i64,
     /// Set when the slab belongs to a stone this stone draws from (linked
     /// stones): that stone's id and name. Null for the stone's own slabs.
     pub source_stone: Option<StoneRef>,
@@ -230,4 +233,66 @@ pub struct SlabParentSale {
     pub customer_name: Option<String>,
     /// Seller name; null when unknown.
     pub seller_name: Option<String>,
+}
+
+/// Query string of `GET /v1/stones/search`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SearchStonesQuery {
+    /// Part of the stone name, case-insensitive. Empty returns no stones.
+    #[serde(default)]
+    pub name: String,
+    /// `true` also returns sold out stones. By default a stone is listed
+    /// when it is regular stock or has an available whole slab.
+    #[serde(default)]
+    pub include_sold_out: bool,
+    /// `true` also returns stones hidden from the catalog (`is_display`
+    /// false). Default `false`.
+    #[serde(default)]
+    pub include_hidden: bool,
+    /// Most stones to return, 1 to 50. Default 25.
+    pub limit: Option<u32>,
+}
+
+/// Body of `POST /v1/stones/quick`.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuickStoneInput {
+    /// Stone name.
+    pub name: String,
+    /// Material type; must be one of the company's stone types.
+    #[serde(rename = "type")]
+    #[schema(rename = "type")]
+    pub kind: String,
+    /// Retail price per square foot in dollars; must be positive.
+    pub retail_price: f64,
+    /// Slab length in inches; 0 when unknown.
+    #[serde(default)]
+    pub length: Option<f64>,
+    /// Slab width in inches; 0 when unknown.
+    #[serde(default)]
+    pub width: Option<f64>,
+    /// `true` adds one leftover slab with a generated bundle (`LO-YYYYMMDD-XXXX`);
+    /// `false` adds one slab per entry of `bundles`.
+    pub leftover: bool,
+    /// Bundle labels of the slabs to add when `leftover` is false.
+    #[serde(default)]
+    pub bundles: Vec<String>,
+}
+
+/// Response of `POST /v1/stones/quick`.
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+pub struct QuickStone {
+    /// New stone id.
+    pub id: i32,
+    /// Stone name.
+    pub name: String,
+    /// Material type.
+    #[serde(rename = "type")]
+    #[schema(rename = "type")]
+    pub kind: String,
+    /// Retail price per square foot.
+    pub retail_price: f64,
+    /// Ids of the slabs added, in order.
+    pub slab_ids: Vec<i64>,
 }
