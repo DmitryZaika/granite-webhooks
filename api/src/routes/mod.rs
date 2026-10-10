@@ -10,6 +10,7 @@ pub mod customers;
 pub mod faucets;
 pub mod fixtures;
 pub mod me;
+pub mod public;
 pub mod sales;
 pub mod sinks;
 pub mod slabs;
@@ -32,4 +33,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(sales::router())
         .merge(catalog::router())
         .merge(uploads::router())
+        .merge(public::router())
 }

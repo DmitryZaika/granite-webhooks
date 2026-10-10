@@ -68,6 +68,8 @@ fn every_operation_is_documented() {
         for method in METHODS {
             let Some(op) = item.get(method) else { continue };
             let at = format!("{} {path}", method.to_uppercase());
+            // The showroom is public: no session, so no security and no 401.
+            let public = path.starts_with("/v1/public/");
 
             match op["operationId"].as_str() {
                 // The default is the handler's name (`list`); tools need `list_customers`.
@@ -91,7 +93,11 @@ fn every_operation_is_documented() {
             if op["tags"].as_array().is_none_or(Vec::is_empty) {
                 problems.push(format!("{at}: missing `tag`"));
             }
-            if op["security"].as_array().is_none_or(Vec::is_empty) {
+            if public {
+                if op["security"].as_array().is_some_and(|s| !s.is_empty()) {
+                    problems.push(format!("{at}: public routes take no session"));
+                }
+            } else if op["security"].as_array().is_none_or(Vec::is_empty) {
                 problems.push(format!(
                     "{at}: missing `security((\"session_cookie\" = []))`"
                 ));
@@ -108,7 +114,7 @@ fn every_operation_is_documented() {
             if !responses.is_some_and(|r| r.keys().any(|code| code.starts_with('2'))) {
                 problems.push(format!("{at}: no success response"));
             }
-            if !responses.is_some_and(|r| r.contains_key("401")) {
+            if !public && !responses.is_some_and(|r| r.contains_key("401")) {
                 problems.push(format!("{at}: no 401 response"));
             }
         }

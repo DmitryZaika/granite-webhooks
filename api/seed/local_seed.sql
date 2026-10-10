@@ -260,3 +260,7 @@ INSERT INTO installed_sinks (id, url, sink_id) VALUES
 INSERT INTO installed_faucets (id, url, faucet_id) VALUES
   (100, 'https://img.example/installed-faucet-1.jpg', 3200),
   (101, 'https://img.example/installed-faucet-other.jpg', 3205);
+
+-- ---- Public showroom: company 100 answers on the "acme" subdomain
+-- (/customer/stones redirects to /customer/100/stones).
+UPDATE company SET subdomain = 'acme' WHERE id = 100;

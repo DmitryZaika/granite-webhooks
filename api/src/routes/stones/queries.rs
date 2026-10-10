@@ -10,7 +10,7 @@ use sqlx::{MySql, MySqlPool, QueryBuilder};
 /// `SELECT <Stone columns> FROM stones ... WHERE` live stones of the company,
 /// joined to their slabs for the counts. Callers add filters, then
 /// `GROUP BY stones.id`.
-fn stones_with_slab_counts(company_id: i32) -> QueryBuilder<MySql> {
+pub(crate) fn stones_with_slab_counts(company_id: i32) -> QueryBuilder<MySql> {
     let mut query = QueryBuilder::<MySql>::new(
         "SELECT
             stones.id, stones.name, stones.type, stones.url, stones.supplier_id,
@@ -78,7 +78,7 @@ pub async fn search_stones(
 }
 
 /// `%` and `_` typed by the user match themselves.
-fn escape_like(term: &str) -> String {
+pub(crate) fn escape_like(term: &str) -> String {
     term.replace('\\', "\\\\")
         .replace('%', "\\%")
         .replace('_', "\\_")
