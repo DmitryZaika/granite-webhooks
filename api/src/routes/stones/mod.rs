@@ -2,6 +2,8 @@
 //!
 //! - `GET /v1/stones` → displayed stones with slab counts (`type`, `supplier_id`,
 //!   `color_id`, `level`, `finishing`, `include_sold_out` query params)
+//! - `GET /v1/stones/{id}` → one stone with its color ids
+//! - `GET /v1/stones/{id}/slabs` → its slabs (own + linked) with sale details
 //!
 //! Replaces the loader of the Remix `employee.stones.tsx` route
 //! (`stoneQueryBuilder` in `app/utils/queries.server.ts`).
@@ -14,5 +16,8 @@ use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(handlers::list))
+    OpenApiRouter::new()
+        .routes(routes!(handlers::list))
+        .routes(routes!(handlers::get))
+        .routes(routes!(handlers::slabs))
 }

@@ -130,10 +130,19 @@ fn every_schema_field_is_documented() {
 }
 
 /// Every property needs a description, except `$ref`s, whose target schema
-/// carries its own.
+/// carries its own. A nullable object (`Option<T>`) is a `oneOf` of the
+/// `$ref` and `null`, and utoipa puts the field's doc on the `$ref` member.
 fn check_properties(name: &str, schema: &Value, problems: &mut Vec<String>) {
     for (field, property) in schema["properties"].as_object().into_iter().flatten() {
-        if property.get("$ref").is_none() && !has_text(property.get("description")) {
+        let nullable_ref_documented = property["oneOf"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|member| member.get("$ref").is_some() && has_text(member.get("description")));
+        if property.get("$ref").is_none()
+            && !nullable_ref_documented
+            && !has_text(property.get("description"))
+        {
             problems.push(format!(
                 "schema `{name}`: field `{field}` has no doc comment"
             ));

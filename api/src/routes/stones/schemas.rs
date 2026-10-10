@@ -102,3 +102,132 @@ pub struct SlabCounts {
     #[sqlx(rename = "slabs_whole_available")]
     pub whole_available: i64,
 }
+
+/// One stone with everything an edit form shows.
+#[derive(Debug, Clone, PartialEq, Serialize, FromRow, ToSchema)]
+pub struct StoneDetail {
+    /// Stone id.
+    pub id: i32,
+    /// Display name, e.g. "Absolute Black".
+    pub name: Option<String>,
+    /// Material type, lowercase: `granite`, `quartz`, `marble`, `quartzite`...
+    #[sqlx(rename = "type")]
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    /// Image URL; null when the stone has no picture.
+    pub url: Option<String>,
+    /// Supplier id; null if unknown.
+    pub supplier_id: Option<i32>,
+    /// Shown in the employee and customer catalogs.
+    pub is_display: bool,
+    /// Marked as on sale.
+    pub on_sale: bool,
+    /// Always orderable from the supplier, so never sold out even without slabs.
+    pub regular_stock: bool,
+    /// Typical slab length in inches; null if not set.
+    pub length: Option<f32>,
+    /// Typical slab width in inches; null if not set.
+    pub width: Option<f32>,
+    /// Retail price in whole dollars. 0 means the stone is sold by the slab.
+    pub retail_price: Option<i32>,
+    /// Cost per square foot in whole dollars.
+    pub cost_per_sqft: Option<i32>,
+    /// Price level, 1 (cheapest) to 7; null if not set.
+    pub level: Option<i32>,
+    /// Surface finish: `polished`, `leathered` or `honed`; null if not set.
+    pub finishing: Option<String>,
+    /// Number of samples on hand.
+    pub samples_amount: Option<i32>,
+    /// How important it is to keep samples in stock; null if not set.
+    pub samples_importance: Option<i32>,
+    /// Supplier bundle number, free text.
+    pub bundle_number: Option<String>,
+    /// Where the bundle is stored in the yard, free text.
+    pub bundle_location: Option<String>,
+    /// Expected delivery date, `YYYY-MM-DD`; null if not set.
+    pub delivery_date: Option<String>,
+    /// When the stone was added.
+    #[serde(serialize_with = "js_date")]
+    pub created_date: Option<DateTime<Utc>>,
+    /// Ids of the colors the stone is tagged with, ascending.
+    #[sqlx(skip)]
+    pub color_ids: Vec<i32>,
+}
+
+/// A slab or remnant of a stone, as the slabs dialog lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct StoneSlab {
+    /// Slab id.
+    pub id: i64,
+    /// Bundle label written on the slab, e.g. "B-12-1" or "Slab 2". Remnants
+    /// keep the label of the slab they were cut from.
+    pub bundle: Option<String>,
+    /// Photo of this slab; null when it has none (show the stone image).
+    pub url: Option<String>,
+    /// Length in inches as entered, e.g. "126.5".
+    pub length: Option<String>,
+    /// Width in inches as entered, e.g. "63".
+    pub width: Option<String>,
+    /// The slab this remnant was cut from; null for a whole slab.
+    pub parent_id: Option<i64>,
+    /// Marked as a leftover piece.
+    pub is_leftover: bool,
+    /// Set when the slab belongs to a stone this stone draws from (linked
+    /// stones): that stone's id and name. Null for the stone's own slabs.
+    pub source_stone: Option<StoneRef>,
+    /// Id of the sale the slab is part of; null while it is available. Set
+    /// even when the sale row itself is missing (then `sale` is null).
+    pub sale_id: Option<i32>,
+    /// The sale the slab is part of; null while it is available.
+    pub sale: Option<SlabSale>,
+    /// The sale of the slab this remnant was cut from; null for whole slabs
+    /// and for remnants of unsold slabs.
+    pub parent_sale: Option<SlabParentSale>,
+}
+
+/// A stone, by id and name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct StoneRef {
+    /// Stone id.
+    pub id: i32,
+    /// Stone name.
+    pub name: Option<String>,
+}
+
+/// The sale a slab belongs to, as shown when hovering a sold slab.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct SlabSale {
+    /// Sale id; open it with the sale routes.
+    pub id: i32,
+    /// When the sale was made; null for old sales without a date.
+    #[serde(serialize_with = "js_date")]
+    pub sale_date: Option<DateTime<Utc>>,
+    /// Customer name; null when the sale has no customer.
+    pub customer_name: Option<String>,
+    /// Name of the user who sold it; null when unknown.
+    pub seller_name: Option<String>,
+    /// Notes on the whole sale.
+    pub notes: Option<String>,
+    /// Total square feet of the sale, decimal string (e.g. "55.50").
+    pub square_feet: Option<String>,
+    /// Notes on this slab.
+    pub slab_notes: Option<String>,
+    /// Room this slab is used in, e.g. "Kitchen".
+    pub room: Option<String>,
+    /// Square feet of this slab used in the room, decimal string.
+    pub slab_square_feet: Option<String>,
+    /// Names of the sinks installed on any slab of this sale, one entry per
+    /// sink (repeated names mean several units), in installation order.
+    pub sink_names: Vec<String>,
+}
+
+/// Who bought and sold the slab a remnant was cut from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct SlabParentSale {
+    /// Sale id of the parent slab.
+    pub id: i32,
+    /// Customer name; null when the sale has no customer.
+    pub customer_name: Option<String>,
+    /// Seller name; null when unknown.
+    pub seller_name: Option<String>,
+}

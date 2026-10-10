@@ -1,5 +1,9 @@
-use super::schemas::{ListStonesQuery, Stone};
+use super::schemas::{
+    ListStonesQuery, SlabParentSale, SlabSale, Stone, StoneDetail, StoneRef, StoneSlab,
+};
 use crate::sql::push_in;
+use chrono::{DateTime, Utc};
+use sqlx::FromRow;
 use sqlx::{MySql, MySqlPool, QueryBuilder};
 
 /// Remix: `stoneQueryBuilder` in `app/utils/queries.server.ts` as the employee
@@ -73,4 +77,173 @@ pub async fn list_stones(
     query.push(" ORDER BY stones.name ASC, stones.id ASC");
 
     query.build_query_as::<Stone>().fetch_all(pool).await
+}
+
+/// A non-deleted stone of the company, with its color ids.
+pub async fn find_stone(
+    pool: &MySqlPool,
+    company_id: i32,
+    stone_id: i32,
+) -> Result<Option<StoneDetail>, sqlx::Error> {
+    let stone = sqlx::query_as::<_, StoneDetail>(
+        "SELECT id, name, type, url, supplier_id,
+            COALESCE(is_display, 0) AS is_display,
+            COALESCE(on_sale, 0) AS on_sale,
+            COALESCE(regular_stock, 0) AS regular_stock,
+            length, width, retail_price, cost_per_sqft, level, finishing,
+            samples_amount, samples_importance, bundle_number, bundle_location,
+            DATE_FORMAT(delivery_date, '%Y-%m-%d') AS delivery_date, created_date
+         FROM stones
+         WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(stone_id)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(mut stone) = stone else {
+        return Ok(None);
+    };
+    stone.color_ids = sqlx::query_scalar(
+        "SELECT color_id FROM stone_colors WHERE stone_id = ? ORDER BY color_id",
+    )
+    .bind(stone_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(Some(stone))
+}
+
+#[derive(FromRow)]
+struct SlabRow {
+    id: i64,
+    bundle: Option<String>,
+    url: Option<String>,
+    length: Option<String>,
+    width: Option<String>,
+    parent_id: Option<i64>,
+    is_leftover: bool,
+    stone_id: i32,
+    stone_name: Option<String>,
+    sale_id: Option<i32>,
+    found_sale_id: Option<i32>,
+    sale_date: Option<DateTime<Utc>>,
+    customer_name: Option<String>,
+    seller_name: Option<String>,
+    sale_notes: Option<String>,
+    sale_square_feet: Option<String>,
+    slab_notes: Option<String>,
+    room: Option<String>,
+    slab_square_feet: Option<String>,
+    parent_sale_id: Option<i32>,
+    parent_customer_name: Option<String>,
+    parent_seller_name: Option<String>,
+}
+
+#[derive(FromRow)]
+struct SinkRow {
+    sale_id: i32,
+    name: String,
+}
+
+/// Remix: the loader of `employee.stones.slabs.$stone.tsx` (and its admin copy).
+///
+/// Slabs of the stone and of the stones it draws from
+/// (`stone_slab_links`), excluding cut and deleted ones, each with its sale
+/// and the sale of the slab it was cut from. The caller has already checked
+/// that `stone_id` belongs to `company_id`; linked stones are scoped too.
+pub async fn list_stone_slabs(
+    pool: &MySqlPool,
+    company_id: i32,
+    stone_id: i32,
+) -> Result<Vec<StoneSlab>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, SlabRow>(
+        "SELECT
+            CAST(slab.id AS SIGNED) AS id, slab.bundle, slab.url, slab.length, slab.width,
+            CAST(slab.parent_id AS SIGNED) AS parent_id,
+            COALESCE(slab.is_leftover, 0) AS is_leftover,
+            source.id AS stone_id, source.name AS stone_name,
+            slab.sale_id, sale.id AS found_sale_id, sale.sale_date,
+            customer.name AS customer_name, seller.name AS seller_name,
+            sale.notes AS sale_notes, CAST(sale.square_feet AS CHAR) AS sale_square_feet,
+            slab.notes AS slab_notes, slab.room,
+            CAST(slab.square_feet AS CHAR) AS slab_square_feet,
+            parent_sale.id AS parent_sale_id,
+            parent_customer.name AS parent_customer_name,
+            parent_seller.name AS parent_seller_name
+         FROM slab_inventory slab
+         JOIN stones source ON source.id = slab.stone_id AND source.company_id = ?
+         LEFT JOIN sales sale ON sale.id = slab.sale_id
+         LEFT JOIN customers customer ON customer.id = sale.customer_id
+         LEFT JOIN users seller ON seller.id = sale.seller_id
+         LEFT JOIN slab_inventory parent ON parent.id = slab.parent_id
+         LEFT JOIN sales parent_sale ON parent_sale.id = parent.sale_id
+         LEFT JOIN customers parent_customer ON parent_customer.id = parent_sale.customer_id
+         LEFT JOIN users parent_seller ON parent_seller.id = parent_sale.seller_id
+         WHERE slab.cut_date IS NULL AND slab.deleted_at IS NULL
+           AND (slab.stone_id = ? OR slab.stone_id IN (
+                SELECT source_stone_id FROM stone_slab_links WHERE stone_id = ?))
+         ORDER BY slab.id",
+    )
+    .bind(company_id)
+    .bind(stone_id)
+    .bind(stone_id)
+    .fetch_all(pool)
+    .await?;
+
+    let sale_ids: Vec<i32> = rows.iter().filter_map(|row| row.found_sale_id).collect();
+    let sinks: Vec<SinkRow> = if sale_ids.is_empty() {
+        Vec::new()
+    } else {
+        let mut query = QueryBuilder::<MySql>::new(
+            "SELECT slab.sale_id, sink_type.name
+             FROM sinks
+             JOIN sink_type ON sink_type.id = sinks.sink_type_id
+             JOIN slab_inventory slab ON slab.id = sinks.slab_id
+             WHERE 1 = 1",
+        );
+        push_in(&mut query, "slab.sale_id", &sale_ids);
+        query.push(" ORDER BY sinks.id");
+        query.build_query_as::<SinkRow>().fetch_all(pool).await?
+    };
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let sale = row.found_sale_id.map(|id| SlabSale {
+                id,
+                sale_date: row.sale_date,
+                customer_name: row.customer_name,
+                seller_name: row.seller_name,
+                notes: row.sale_notes,
+                square_feet: row.sale_square_feet,
+                slab_notes: row.slab_notes,
+                room: row.room,
+                slab_square_feet: row.slab_square_feet,
+                sink_names: sinks
+                    .iter()
+                    .filter(|sink| sink.sale_id == id)
+                    .map(|sink| sink.name.clone())
+                    .collect(),
+            });
+            StoneSlab {
+                id: row.id,
+                bundle: row.bundle,
+                url: row.url,
+                length: row.length,
+                width: row.width,
+                parent_id: row.parent_id,
+                is_leftover: row.is_leftover,
+                source_stone: (row.stone_id != stone_id).then_some(StoneRef {
+                    id: row.stone_id,
+                    name: row.stone_name,
+                }),
+                sale_id: row.sale_id,
+                sale,
+                parent_sale: row.parent_sale_id.map(|id| SlabParentSale {
+                    id,
+                    customer_name: row.parent_customer_name,
+                    seller_name: row.parent_seller_name,
+                }),
+            }
+        })
+        .collect())
 }

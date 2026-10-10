@@ -13,6 +13,9 @@ pub enum ApiError {
     /// Valid session, but the user lacks the permission the route needs.
     #[error("forbidden")]
     Forbidden,
+    /// The resource does not exist, or belongs to another company.
+    #[error("not found")]
+    NotFound,
     #[error("{0}")]
     BadRequest(String),
     #[error("database error")]
@@ -24,6 +27,7 @@ impl IntoResponse for ApiError {
         let status = match &self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::NotFound => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Database(err) => {
                 tracing::error!(?err, "database error");
@@ -40,7 +44,7 @@ impl IntoResponse for ApiError {
 /// Body of every error response.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorBody {
-    /// Short reason: `unauthorized`, `forbidden`, `database error`, or the
+    /// Short reason: `unauthorized`, `forbidden`, `not found`, `database error`, or the
     /// bad-request message (e.g. `invalid sales_rep: abc`).
     pub error: String,
 }

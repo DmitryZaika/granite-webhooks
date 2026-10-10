@@ -205,3 +205,35 @@ INSERT INTO faucets (id, faucet_type_id, is_deleted, slab_id) VALUES
   (6204, 3202, 0, NULL),
   (6205, 3204, 0, NULL),
   (6206, 3205, 0, NULL);
+
+-- ---- Stone slabs dialog (GET /v1/stones/{id}/slabs, PATCH /v1/slabs/{id})
+-- Stone 3010 is hidden from the catalogs (is_display = 0) so the list pages
+-- above keep their rows; the dialog opens by URL. Bundles sort naturally
+-- (Slab 1, Slab 2, Slab 10) and remnants follow their parent slab.
+INSERT INTO stones (id, name, type, url, company_id, supplier_id, is_display, on_sale, regular_stock, length, width, retail_price, cost_per_sqft, level, finishing, samples_amount, bundle_number, bundle_location, created_date) VALUES
+  (3010, 'Taj Mahal', 'quartzite', 'https://img.example/taj-mahal.jpg', 100, 300, 0, 0, 0, 125, 64, 120, 80, 6, 'polished', 0, 'TM-7', 'Rack 9', '2026-03-01 09:30:00');
+
+-- Sale 7010: Alice, sold by Rita, every detail the tooltip shows.
+-- Sale 7011: Zoë, sold by Mark, from a remnant of 7010's slab; no details.
+-- Sale 7012: no customer row and no seller: shown as sold with no details.
+INSERT INTO sales (id, customer_id, seller_id, company_id, price, status, project_address, sale_date, notes, square_feet) VALUES
+  (7010, 1000, 100, 100, 4200.00, 'pending', '1 Main St',  '2026-04-15 15:00:00', 'Deliver after 5pm', 55.50),
+  (7011, 1010, 101, 100, 900.00,  'pending', 'Straße 7',   '2026-04-20 10:00:00', NULL,                0.00),
+  (7012, NULL, NULL, 100, 100.00, 'pending', 'Nowhere',    '2026-04-21 10:00:00', NULL,                NULL);
+
+INSERT INTO slab_inventory (id, stone_id, bundle, url, length, width, sale_id, parent_id, cut_date, deleted_at, notes, room, square_feet) VALUES
+  (6070, 3010, 'Slab 10', 'https://img.example/tm-10.jpg', '126', '63', NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+  (6071, 3010, 'Slab 2',  'https://img.example/tm-2.jpg',  '125', '64', 7010, NULL, NULL, NULL, 'Edge polished', 'Kitchen', 30.25),
+  (6072, 3010, 'Slab 2',  'https://img.example/tm-2.jpg',  '60',  '30', NULL, 6071, NULL, NULL, NULL, NULL, NULL),
+  (6073, 3010, 'Slab 2',  'https://img.example/tm-2.jpg',  '40',  '20', 7011, 6071, NULL, NULL, NULL, 'Bath', 0),
+  (6074, 3010, 'Slab 1',  NULL,                            '124', '62', NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+  (6075, 3010, 'Slab 3',  'https://img.example/tm-3.jpg',  '125', '64', NULL, NULL, '2026-04-01 10:00:00', NULL, NULL, NULL, NULL),
+  (6076, 3010, 'Slab 4',  'https://img.example/tm-4.jpg',  '125', '64', NULL, NULL, NULL, '2026-04-02 10:00:00', NULL, NULL, NULL),
+  (6077, 3010, 'Slab 5',  'https://img.example/tm-5.jpg',  '125', '64', 7012, NULL, NULL, NULL, NULL, NULL, NULL);
+
+-- Sinks installed on sale 7010's slab: 2 x Composite Black, 1 x Bar Prep Sink
+-- (Composite Black is not on display, Bar Prep keeps its one free unit).
+INSERT INTO sinks (id, sink_type_id, is_deleted, slab_id) VALUES
+  (6109, 3102, 0, 6071),
+  (6110, 3102, 0, 6071),
+  (6111, 3107, 0, 6071);

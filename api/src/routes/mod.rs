@@ -9,6 +9,7 @@ pub mod customers;
 pub mod faucets;
 pub mod me;
 pub mod sinks;
+pub mod slabs;
 pub mod stones;
 pub mod users;
 
@@ -23,4 +24,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(stones::router())
         .merge(sinks::router())
         .merge(faucets::router())
+        .merge(slabs::router())
 }

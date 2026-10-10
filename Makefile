@@ -63,7 +63,7 @@ api-db-up:
 api-db-reset: api-db-up
 	docker exec granite-local-mysql mysql -uroot -pgranite -e "DROP DATABASE IF EXISTS granite_local; CREATE DATABASE granite_local;"
 	DATABASE_URL=$(LOCAL_DB_URL) cargo sqlx migrate run --source migrations
-	docker exec -i granite-local-mysql mysql -uroot -pgranite granite_local < api/seed/local_seed.sql
+	docker exec -i granite-local-mysql mysql --default-character-set=utf8mb4 -uroot -pgranite granite_local < api/seed/local_seed.sql
 
 .PHONY: api-test
 api-test: api-db-up

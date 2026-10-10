@@ -499,6 +499,167 @@
         ]
       }
     },
+    "/v1/stones/{id}": {
+      "get": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Get one stone",
+        "description": "Returns every field of a stone of the caller's company, including hidden\n(not displayed) stones, plus the ids of its colors. Deleted stones and\nstones of other companies are 404. List its slabs with\n`GET /v1/stones/{id}/slabs`.",
+        "operationId": "get_stone",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoneDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stones/{id}/slabs": {
+      "get": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "List a stone's slabs",
+        "description": "Returns the slabs and remnants in the yard for a stone: its own plus\nthose of the stones it draws from (linked stones, marked with\n`source_stone`). Cut and deleted slabs are left out. Sold slabs carry\ntheir sale (customer, seller, date, notes, room, sinks); remnants carry\nthe sale of the slab they were cut from. Ordered by slab id; group by\n`bundle` for display. Sell an available slab with the sales routes,\nresize one with `PATCH /v1/slabs/{id}`.",
+        "operationId": "list_stone_slabs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Slabs by id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StoneSlab"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/sinks": {
       "get": {
         "tags": [
@@ -704,6 +865,98 @@
           }
         ]
       }
+    },
+    "/v1/slabs/{id}": {
+      "patch": {
+        "tags": [
+          "slabs"
+        ],
+        "summary": "Change a slab's size",
+        "description": "Sets the length and width (inches) of one slab or remnant of the\ncaller's company. Both must be positive numbers. Returns no body; reload\nthe stone's slabs (`GET /v1/stones/{id}/slabs`) to see the change.",
+        "operationId": "update_slab_size",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Slab id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSlab"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Size saved"
+          },
+          "400": {
+            "description": "Missing, non-numeric or non-positive size",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such slab in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -878,7 +1131,7 @@
         "properties": {
           "error": {
             "type": "string",
-            "description": "Short reason: `unauthorized`, `forbidden`, `database error`, or the\nbad-request message (e.g. `invalid sales_rep: abc`)."
+            "description": "Short reason: `unauthorized`, `forbidden`, `not found`, `database error`, or the\nbad-request message (e.g. `invalid sales_rep: abc`)."
           }
         }
       },
@@ -1183,6 +1436,113 @@
           }
         }
       },
+      "SlabParentSale": {
+        "type": "object",
+        "description": "Who bought and sold the slab a remnant was cut from.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sale id of the parent slab."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Customer name; null when the sale has no customer."
+          },
+          "seller_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Seller name; null when unknown."
+          }
+        }
+      },
+      "SlabSale": {
+        "type": "object",
+        "description": "The sale a slab belongs to, as shown when hovering a sold slab.",
+        "required": [
+          "id",
+          "sink_names"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sale id; open it with the sale routes."
+          },
+          "sale_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the sale was made; null for old sales without a date."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Customer name; null when the sale has no customer."
+          },
+          "seller_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the user who sold it; null when unknown."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes on the whole sale."
+          },
+          "square_feet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Total square feet of the sale, decimal string (e.g. \"55.50\")."
+          },
+          "slab_notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes on this slab."
+          },
+          "room": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Room this slab is used in, e.g. \"Kitchen\"."
+          },
+          "slab_square_feet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Square feet of this slab used in the room, decimal string."
+          },
+          "sink_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of the sinks installed on any slab of this sale, one entry per\nsink (repeated names mean several units), in installation order."
+          }
+        }
+      },
       "Stone": {
         "type": "object",
         "description": "A stone (a color/material the company sells) with its slab inventory.",
@@ -1338,6 +1698,303 @@
           }
         }
       },
+      "StoneDetail": {
+        "type": "object",
+        "description": "One stone with everything an edit form shows.",
+        "required": [
+          "id",
+          "is_display",
+          "on_sale",
+          "regular_stock",
+          "color_ids"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stone id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name, e.g. \"Absolute Black\"."
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Material type, lowercase: `granite`, `quartz`, `marble`, `quartzite`..."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Image URL; null when the stone has no picture."
+          },
+          "supplier_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Supplier id; null if unknown."
+          },
+          "is_display": {
+            "type": "boolean",
+            "description": "Shown in the employee and customer catalogs."
+          },
+          "on_sale": {
+            "type": "boolean",
+            "description": "Marked as on sale."
+          },
+          "regular_stock": {
+            "type": "boolean",
+            "description": "Always orderable from the supplier, so never sold out even without slabs."
+          },
+          "length": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Typical slab length in inches; null if not set."
+          },
+          "width": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Typical slab width in inches; null if not set."
+          },
+          "retail_price": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Retail price in whole dollars. 0 means the stone is sold by the slab."
+          },
+          "cost_per_sqft": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Cost per square foot in whole dollars."
+          },
+          "level": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Price level, 1 (cheapest) to 7; null if not set."
+          },
+          "finishing": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Surface finish: `polished`, `leathered` or `honed`; null if not set."
+          },
+          "samples_amount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Number of samples on hand."
+          },
+          "samples_importance": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How important it is to keep samples in stock; null if not set."
+          },
+          "bundle_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Supplier bundle number, free text."
+          },
+          "bundle_location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the bundle is stored in the yard, free text."
+          },
+          "delivery_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expected delivery date, `YYYY-MM-DD`; null if not set."
+          },
+          "created_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the stone was added."
+          },
+          "color_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Ids of the colors the stone is tagged with, ascending."
+          }
+        }
+      },
+      "StoneRef": {
+        "type": "object",
+        "description": "A stone, by id and name.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stone id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stone name."
+          }
+        }
+      },
+      "StoneSlab": {
+        "type": "object",
+        "description": "A slab or remnant of a stone, as the slabs dialog lists it.",
+        "required": [
+          "id",
+          "is_leftover"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Slab id."
+          },
+          "bundle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bundle label written on the slab, e.g. \"B-12-1\" or \"Slab 2\". Remnants\nkeep the label of the slab they were cut from."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Photo of this slab; null when it has none (show the stone image)."
+          },
+          "length": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Length in inches as entered, e.g. \"126.5\"."
+          },
+          "width": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Width in inches as entered, e.g. \"63\"."
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The slab this remnant was cut from; null for a whole slab."
+          },
+          "is_leftover": {
+            "type": "boolean",
+            "description": "Marked as a leftover piece."
+          },
+          "source_stone": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StoneRef",
+                "description": "Set when the slab belongs to a stone this stone draws from (linked\nstones): that stone's id and name. Null for the stone's own slabs."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sale_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Id of the sale the slab is part of; null while it is available. Set\neven when the sale row itself is missing (then `sale` is null)."
+          },
+          "sale": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SlabSale",
+                "description": "The sale the slab is part of; null while it is available."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parent_sale": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SlabParentSale",
+                "description": "The sale of the slab this remnant was cut from; null for whole slabs\nand for remnants of unsold slabs."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "UpdateSlab": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/slabs/{id}`.",
+        "required": [
+          "length",
+          "width"
+        ],
+        "properties": {
+          "length": {
+            "type": "number",
+            "format": "double",
+            "description": "New length in inches; a positive number, decimals allowed."
+          },
+          "width": {
+            "type": "number",
+            "format": "double",
+            "description": "New width in inches; a positive number, decimals allowed."
+          }
+        },
+        "additionalProperties": false
+      },
       "UserNameRow": {
         "type": "object",
         "description": "A user's id and display name.",
@@ -1385,6 +2042,10 @@
     {
       "name": "stones",
       "description": "Stones (slab materials) and their slab inventory"
+    },
+    {
+      "name": "slabs",
+      "description": "Single slabs and remnants of a stone"
     },
     {
       "name": "sinks",
