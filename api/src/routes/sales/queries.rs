@@ -196,31 +196,7 @@ pub async fn validate(
     input: &SaleInput,
     sale_id: Option<i32>,
 ) -> Result<(), ApiError> {
-    if input.rooms.is_empty() {
-        return Err(ApiError::BadRequest("at least one room is required".into()));
-    }
-    for (index, room) in input.rooms.iter().enumerate() {
-        let number = index + 1;
-        if room.slabs.is_empty() {
-            return Err(ApiError::BadRequest(format!(
-                "At least one slab is required in each room (room {number})"
-            )));
-        }
-        if !room
-            .square_feet
-            .is_some_and(|sqft| sqft.is_finite() && sqft > 0.0)
-        {
-            return Err(ApiError::BadRequest(format!(
-                "Square feet is required (room {number})"
-            )));
-        }
-        if !is_uuid(&room.room_id) {
-            return Err(ApiError::BadRequest(format!(
-                "invalid room_id in room {number}: {}",
-                room.room_id
-            )));
-        }
-    }
+    validate_rooms(&input.rooms)?;
 
     let customer: Option<i32> = sqlx::query_scalar(
         "SELECT id FROM customers WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
@@ -300,6 +276,36 @@ pub async fn validate(
         if let Some(missing) = ids.iter().find(|id| !found.contains(id)) {
             return Err(ApiError::BadRequest(format!(
                 "{column} model {missing} not found"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Shape checks that need no database: rooms, slabs, square feet, room ids.
+fn validate_rooms(rooms: &[RoomInput]) -> Result<(), ApiError> {
+    if rooms.is_empty() {
+        return Err(ApiError::BadRequest("at least one room is required".into()));
+    }
+    for (index, room) in rooms.iter().enumerate() {
+        let number = index + 1;
+        if room.slabs.is_empty() {
+            return Err(ApiError::BadRequest(format!(
+                "At least one slab is required in each room (room {number})"
+            )));
+        }
+        if !room
+            .square_feet
+            .is_some_and(|sqft| sqft.is_finite() && sqft > 0.0)
+        {
+            return Err(ApiError::BadRequest(format!(
+                "Square feet is required (room {number})"
+            )));
+        }
+        if !is_uuid(&room.room_id) {
+            return Err(ApiError::BadRequest(format!(
+                "invalid room_id in room {number}: {}",
+                room.room_id
             )));
         }
     }
