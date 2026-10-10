@@ -357,6 +357,353 @@
           }
         ]
       }
+    },
+    "/v1/stones": {
+      "get": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "List the company's stones with slab availability",
+        "description": "Returns the stones of the caller's company that are on display, sorted by\nname, each with counts of its slabs in the yard (`slabs`). Sold out stones\n(no available slab and not regular stock) are hidden unless\n`include_sold_out=true`; hidden and deleted stones are never returned.\nFilters combine with AND; list filters take the parameter repeated and\nmatch any value. Color ids come from the colors list, supplier ids from\nthe suppliers list.",
+        "operationId": "list_stones",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "description": "Only stones of these types, e.g. `granite`, `quartz`, `marble`.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "supplier_id",
+            "in": "query",
+            "description": "Only stones bought from this supplier (a supplier id).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "color_id",
+            "in": "query",
+            "description": "Only stones tagged with at least one of these colors (color ids).",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          {
+            "name": "level",
+            "in": "query",
+            "description": "Only stones of these price levels (1 = cheapest ... 7).",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          {
+            "name": "finishing",
+            "in": "query",
+            "description": "Only stones with these surface finishes: `polished`, `leathered`, `honed`.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "include_sold_out",
+            "in": "query",
+            "description": "`true` also returns sold out stones: no available slab and not regular\nstock. Default `false`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stones sorted by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Stone"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A filter has the wrong type, e.g. `supplier_id=abc`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sinks": {
+      "get": {
+        "tags": [
+          "sinks"
+        ],
+        "summary": "List the company's sink models with free units",
+        "description": "Returns the non-deleted sink models of the caller's company, sorted by\nname, each with the number of units free to sell (`available`). Models\nnot on display are included (`is_display`). Sold out models (no free unit\nand not regular stock) are hidden unless `include_sold_out=true`. Filters\ncombine with AND; `type` takes the parameter repeated and matches any value.",
+        "operationId": "list_sinks",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "description": "Only sink models of these types: `stainless 18 gauge`, `stainless 16 gauge`,\n`composite`, `ceramic`, `farm house`. Repeat the parameter for several.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "supplier_id",
+            "in": "query",
+            "description": "Only sink models bought from this supplier (a supplier id).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "include_sold_out",
+            "in": "query",
+            "description": "`true` also returns sold out models: no free unit and not regular\nstock. Default `false`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sink models sorted by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Sink"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A filter has the wrong type, e.g. `supplier_id=abc`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/faucets": {
+      "get": {
+        "tags": [
+          "faucets"
+        ],
+        "summary": "List the company's faucet models with free units",
+        "description": "Returns the non-deleted faucet models of the caller's company, sorted by\nname, each with the number of units free to sell (`available`). Models\nnot on display are included (`is_display`). Sold out models (no free unit\nand not regular stock) are hidden unless `include_sold_out=true`. Filters\ncombine with AND; `type` takes the parameter repeated and matches any value.",
+        "operationId": "list_faucets",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "description": "Only faucet models of these types: `single handle`, `double handle`.\nRepeat the parameter for several.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "supplier_id",
+            "in": "query",
+            "description": "Only faucet models bought from this supplier (a supplier id).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "include_sold_out",
+            "in": "query",
+            "description": "`true` also returns sold out models: no free unit and not regular\nstock. Default `false`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Faucet models sorted by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Faucet"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A filter has the wrong type, e.g. `supplier_id=abc`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -535,6 +882,73 @@
           }
         }
       },
+      "Faucet": {
+        "type": "object",
+        "description": "A faucet model the company sells, with how many units are free to sell.",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "url",
+          "is_display",
+          "regular_stock",
+          "available"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Faucet model id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Model name, e.g. \"Pull-Down Chrome\"."
+          },
+          "type": {
+            "type": "string",
+            "description": "Faucet type, e.g. `single handle` or `double handle`."
+          },
+          "url": {
+            "type": "string",
+            "description": "Image URL; may be empty."
+          },
+          "supplier_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Supplier id; null if unknown."
+          },
+          "is_display": {
+            "type": "boolean",
+            "description": "Shown to customers in the showroom catalog."
+          },
+          "regular_stock": {
+            "type": "boolean",
+            "description": "Always orderable from the supplier, so never sold out even with no units."
+          },
+          "retail_price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Retail price as a decimal string, e.g. `\"129.99\"`; null if not set."
+          },
+          "cost": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Purchase cost as a decimal string; null if not set."
+          },
+          "available": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Units in stock that are not installed on a sold slab."
+          }
+        }
+      },
       "ListResponse": {
         "oneOf": [
           {
@@ -658,6 +1072,272 @@
           }
         }
       },
+      "Sink": {
+        "type": "object",
+        "description": "A sink model the company sells, with how many units are free to sell.",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "url",
+          "is_display",
+          "regular_stock",
+          "length",
+          "width",
+          "available"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sink model id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Model name, e.g. \"Undermount 3219\"."
+          },
+          "type": {
+            "type": "string",
+            "description": "Sink type, e.g. `stainless 18 gauge` or `farm house`."
+          },
+          "url": {
+            "type": "string",
+            "description": "Image URL; may be empty."
+          },
+          "supplier_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Supplier id; null if unknown."
+          },
+          "is_display": {
+            "type": "boolean",
+            "description": "Shown to customers in the showroom catalog."
+          },
+          "regular_stock": {
+            "type": "boolean",
+            "description": "Always orderable from the supplier, so never sold out even with no units."
+          },
+          "length": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Length in inches; 0 if not set."
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Width in inches; 0 if not set."
+          },
+          "retail_price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Retail price as a decimal string, e.g. `\"199.00\"`; null if not set."
+          },
+          "cost": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Purchase cost as a decimal string; null if not set."
+          },
+          "available": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Units in stock that are not installed on a sold slab."
+          }
+        }
+      },
+      "SlabCounts": {
+        "type": "object",
+        "description": "Slab counts of a stone. Counts the stone's own slabs plus those of the\nstones it draws from (linked stones). Cut and deleted slabs are never\ncounted.",
+        "required": [
+          "total",
+          "available",
+          "whole_total",
+          "whole_available"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Slabs and remnants in the yard, sold or not."
+          },
+          "available": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Slabs and remnants not tied to a sale."
+          },
+          "whole_total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Whole slabs (not remnants) in the yard, sold or not."
+          },
+          "whole_available": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Whole slabs (not remnants) not tied to a sale."
+          }
+        }
+      },
+      "Stone": {
+        "type": "object",
+        "description": "A stone (a color/material the company sells) with its slab inventory.",
+        "required": [
+          "id",
+          "is_display",
+          "on_sale",
+          "regular_stock",
+          "slabs"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stone id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name, e.g. \"Absolute Black\"."
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Material type, lowercase: `granite`, `quartz`, `marble`, `quartzite`..."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Image URL; null when the stone has no picture."
+          },
+          "supplier_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Supplier id; null if unknown."
+          },
+          "is_display": {
+            "type": "boolean",
+            "description": "Shown in catalogs. This route only returns displayed stones, so always true."
+          },
+          "on_sale": {
+            "type": "boolean",
+            "description": "Marked as on sale."
+          },
+          "regular_stock": {
+            "type": "boolean",
+            "description": "Always orderable from the supplier, so never sold out even without slabs."
+          },
+          "length": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Typical slab length in inches; null if not set."
+          },
+          "width": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Typical slab width in inches; null if not set."
+          },
+          "retail_price": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Retail price in whole dollars. 0 means the stone is sold by the slab\nat `cost_per_sqft`."
+          },
+          "cost_per_sqft": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Cost per square foot in whole dollars."
+          },
+          "level": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Price level, 1 (cheapest) to 7; null if not set."
+          },
+          "finishing": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Surface finish: `polished`, `leathered` or `honed`; null if not set."
+          },
+          "samples_amount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Number of samples on hand."
+          },
+          "samples_importance": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How important it is to keep samples in stock; null if not set."
+          },
+          "bundle_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Supplier bundle number, free text."
+          },
+          "bundle_location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the bundle is stored in the yard, free text."
+          },
+          "delivery_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expected delivery date, `YYYY-MM-DD`; null if not set."
+          },
+          "created_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the stone was added."
+          },
+          "slabs": {
+            "$ref": "#/components/schemas/SlabCounts",
+            "description": "Slabs on hand."
+          }
+        }
+      },
       "UserNameRow": {
         "type": "object",
         "description": "A user's id and display name.",
@@ -701,6 +1381,18 @@
     {
       "name": "users",
       "description": "Other users of the company"
+    },
+    {
+      "name": "stones",
+      "description": "Stones (slab materials) and their slab inventory"
+    },
+    {
+      "name": "sinks",
+      "description": "Sink models and their stock"
+    },
+    {
+      "name": "faucets",
+      "description": "Faucet models and their stock"
     }
   ]
 }
