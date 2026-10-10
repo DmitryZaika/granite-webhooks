@@ -30,6 +30,9 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         (name = "me", description = "The signed-in user"),
         (name = "customers", description = "Customers and leads of the company"),
         (name = "users", description = "Other users of the company"),
+        (name = "stones", description = "Stones (slab materials) and their slab inventory"),
+        (name = "sinks", description = "Sink models and their stock"),
+        (name = "faucets", description = "Faucet models and their stock"),
     )
 )]
 struct ApiDoc;
