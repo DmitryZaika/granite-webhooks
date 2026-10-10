@@ -15,8 +15,8 @@ use axum::http::StatusCode;
 
 /// List the company's stones with slab availability
 ///
-/// Returns the stones of the caller's company that are on display, sorted by
-/// name, each with counts of its slabs in the yard (`slabs`). Sold out stones
+/// Returns the stones of the caller's company that are on display (admins may
+/// add hidden ones with `include_hidden=true`), sorted by name, each with counts of its slabs in the yard (`slabs`). Sold out stones
 /// (no available slab and not regular stock) are hidden unless
 /// `include_sold_out=true`; hidden and deleted stones are never returned.
 /// Filters combine with AND; list filters take the parameter repeated and
@@ -32,7 +32,7 @@ use axum::http::StatusCode;
         (status = 200, description = "Stones sorted by name", body = Vec<Stone>),
         (status = 400, description = "A filter has the wrong type, e.g. `supplier_id=abc`", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or asks for hidden stones without being an admin", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -42,6 +42,9 @@ pub async fn list(
     EmployeeUser(user): EmployeeUser,
     MultiQuery(query): MultiQuery<ListStonesQuery>,
 ) -> ApiResult<Json<Vec<Stone>>> {
+    if query.include_hidden && !(user.is_admin || user.is_superuser) {
+        return Err(ApiError::Forbidden);
+    }
     Ok(Json(
         list_stones(&state.pool, user.company_id, &query).await?,
     ))

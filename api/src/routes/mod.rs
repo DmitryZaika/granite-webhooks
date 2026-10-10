@@ -8,6 +8,7 @@
 pub mod catalog;
 pub mod customers;
 pub mod faucets;
+pub mod fixtures;
 pub mod me;
 pub mod sales;
 pub mod sinks;

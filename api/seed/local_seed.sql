@@ -252,3 +252,11 @@ INSERT INTO installed_stones (id, url, stone_id) VALUES
   (101, 'https://img.example/installed-black-2.jpg', 3000),
   (102, 'https://img.example/installed-zebra-1.jpg', 3008),
   (103, 'https://img.example/installed-other-1.jpg', 4000);
+
+-- ---- Installed photos of sink and faucet models. Ids 100+.
+INSERT INTO installed_sinks (id, url, sink_id) VALUES
+  (100, 'https://img.example/installed-sink-1.jpg', 3100),
+  (101, 'https://img.example/installed-sink-other.jpg', 3106);
+INSERT INTO installed_faucets (id, url, faucet_id) VALUES
+  (100, 'https://img.example/installed-faucet-1.jpg', 3200),
+  (101, 'https://img.example/installed-faucet-other.jpg', 3205);

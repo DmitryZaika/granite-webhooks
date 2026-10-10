@@ -156,7 +156,9 @@ pub async fn list_stones(
     filter: &ListStonesQuery,
 ) -> Result<Vec<Stone>, sqlx::Error> {
     let mut query = stones_with_slab_counts(company_id);
-    query.push(" AND stones.is_display = 1");
+    if !filter.include_hidden {
+        query.push(" AND stones.is_display = 1");
+    }
 
     push_in(&mut query, "stones.type", &filter.types);
     if let Some(supplier_id) = filter.supplier_id {

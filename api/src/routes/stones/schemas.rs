@@ -30,6 +30,10 @@ pub struct ListStonesQuery {
     /// stock. Default `false`.
     #[serde(default)]
     pub include_sold_out: bool,
+    /// `true` also returns stones hidden from the catalogs (`is_display`
+    /// false). Admins only (403 otherwise). Default `false`.
+    #[serde(default)]
+    pub include_hidden: bool,
 }
 
 /// A stone (a color/material the company sells) with its slab inventory.
@@ -47,7 +51,7 @@ pub struct Stone {
     pub url: Option<String>,
     /// Supplier id; null if unknown.
     pub supplier_id: Option<i32>,
-    /// Shown in catalogs. This route only returns displayed stones, so always true.
+    /// Shown in catalogs. Always true unless `include_hidden` was asked for.
     pub is_display: bool,
     /// Marked as on sale.
     pub on_sale: bool,
