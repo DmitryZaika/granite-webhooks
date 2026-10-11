@@ -103,6 +103,195 @@
         ]
       }
     },
+    "/v1/me/sales-goal": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Get my monthly sales goal",
+        "description": "Returns the amount the signed-in user aims to sell each month, or null\nwhen they have not set one. Set it with `PUT /v1/me/sales-goal`.",
+        "operationId": "get_my_sales_goal",
+        "responses": {
+          "200": {
+            "description": "The goal, null when not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesGoal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Set my monthly sales goal",
+        "description": "Saves the amount the signed-in user aims to sell each month (USD, above 0,\nrounded to cents) and returns it as saved.",
+        "operationId": "set_my_sales_goal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSalesGoal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The goal as saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesGoal"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The amount is not above 0 or too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/telegram": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Get my Telegram link status",
+        "description": "Returns whether the signed-in user's Telegram is linked to the lead alerts\nbot and to the notifications bot, and the bots' ids for the Telegram login\nwidget. When a bot is configured, the saved link is checked with Telegram\nfirst; a link Telegram rejects (bot blocked, chat gone) is removed and\nreported as not linked, so the user is asked to connect again.",
+        "operationId": "get_my_telegram_status",
+        "responses": {
+          "200": {
+            "description": "Link status per bot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/customers": {
       "get": {
         "tags": [
@@ -5292,6 +5481,649 @@
           }
         }
       }
+    },
+    "/v1/company/features": {
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Get the company's features",
+        "description": "Returns which features the company the request acts in has switched on\n(QuickBooks, guided tours, the points leaderboard) and which integrations\nit has set up (QuickBooks connection, e-signatures, inbound email,\nCloudTalk, RingCentral). Use it to decide what to offer before calling the\nroutes behind those features.",
+        "operationId": "get_company_features",
+        "responses": {
+          "200": {
+            "description": "The company's features",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyFeatures"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/stats/sales": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Get my sales this month",
+        "description": "Returns the signed-in user's deals this month so far (from the 1st through\ntoday, UTC): how many were won and lost and the amount won, how many were\ncreated, and the open pipeline (count and amount, whenever created). Only\ndeals assigned to the user, of live customers of the company and in live\ndeal lists, count.",
+        "operationId": "get_my_sales_stats",
+        "responses": {
+          "200": {
+            "description": "This month's deal numbers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesStats"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/stats/deal-conversion": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Get my deal conversion",
+        "description": "Returns how many of the signed-in user's deals were won out of all of\nthem, overall and by how the customer came in (leads, walk-in, call-in).\nAll time; deals of deleted customers or in deleted lists are left out.",
+        "operationId": "get_my_deal_conversion",
+        "responses": {
+          "200": {
+            "description": "Won and total deals by customer source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DealConversion"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/stats/top-stones": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "List the stones I sold most this month",
+        "description": "Returns up to 3 stones the signed-in user sold the most full slabs of this\nmonth so far (sales not cancelled; remnants not counted), most slabs first,\nthen most square feet. Empty when they sold none.",
+        "operationId": "list_my_top_sold_stones",
+        "responses": {
+          "200": {
+            "description": "Top stones, best first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TopSoldStone"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/stats/sent-emails": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "List my sent emails per month",
+        "description": "Returns how many emails the signed-in user sent in each of the current\nmonth and the two before it (UTC), oldest first. Months without emails are\nleft out. Counts emails of the company and ones with no company.",
+        "operationId": "list_my_sent_emails_per_month",
+        "responses": {
+          "200": {
+            "description": "Emails sent per month",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MonthlyCount"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/stats/sent-sms": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "List my sent texts per month",
+        "description": "Returns the company's SMS provider (RingCentral when both RingCentral and\nCloudTalk are set up) and how many texts the signed-in user sent through\nit in each of the current month and the two before it (UTC), oldest first.\nCounts sent outbound texts sent by the user or through their CloudTalk\nagent / RingCentral extension. Months without texts are left out; with no\nprovider, `provider` is null and `months` empty.",
+        "operationId": "list_my_sent_sms_per_month",
+        "responses": {
+          "200": {
+            "description": "The provider and texts sent per month",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SentSms"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/dashboard/widgets": {
+      "get": {
+        "tags": [
+          "dashboard"
+        ],
+        "summary": "Get my dashboard layout",
+        "description": "Returns the widgets the signed-in user keeps on their employee dashboard in\nthe company the request acts in, in screen order. An empty list means no\nlayout is saved (or every widget was removed). Save it with\n`PUT /v1/me/dashboard/widgets`.",
+        "operationId": "get_my_dashboard_layout",
+        "responses": {
+          "200": {
+            "description": "The saved layout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardLayout"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "dashboard"
+        ],
+        "summary": "Save my dashboard layout",
+        "description": "Replaces the signed-in user's dashboard layout with the whole list sent\n(always the full list, never a change), in screen order; a widget listed\ntwice keeps its first place. Each widget added or removed compared with the\nsaved layout is recorded for analytics. Returns the layout as saved.",
+        "operationId": "save_my_dashboard_layout",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DashboardLayout"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The layout as saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardLayout"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a list of known widget ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/dashboard/widget-events": {
+      "post": {
+        "tags": [
+          "dashboard"
+        ],
+        "summary": "Record a dashboard widget use",
+        "description": "Stores one use of a dashboard widget (a click, a changed value, an add or\nremove) for product analytics. Returns no body.",
+        "operationId": "record_dashboard_widget_event",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WidgetEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded"
+          },
+          "400": {
+            "description": "Unknown widget or action, or an empty or too long target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/points-leaderboard": {
+      "get": {
+        "tags": [
+          "leaderboard"
+        ],
+        "summary": "Get the points leaderboard",
+        "description": "Ranks the Sales Reps of the company the request acts in by the points they\nearned: deals won, deals moved forward, calls, hand-sent texts and emails,\nand guided tours (only while the company's tours are on). `period=all`\n(default) counts everything since each source started counting,\n`period=month` this month so far. When the signed-in user is not a Sales\nRep, `viewer` holds their own unranked row. Answers 404 while the\ncompany's leaderboard is switched off (see `GET /v1/company/features`).",
+        "operationId": "get_points_leaderboard",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "description": "`all` (default) or `month`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Which points count.",
+              "enum": [
+                "all",
+                "month"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reps ranked by points",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsLeaderboard"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown period",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The company's leaderboard is switched off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -5354,6 +6186,54 @@
           }
         }
       },
+      "CompanyFeatures": {
+        "type": "object",
+        "description": "What the company the request acts in has switched on or set up. Pages use\nit to decide which features, widgets and links to offer.",
+        "required": [
+          "quickbooks_enabled",
+          "quickbooks_connected",
+          "onboarding",
+          "leaderboard",
+          "e_signature",
+          "inbound_email",
+          "cloudtalk",
+          "ringcentral"
+        ],
+        "properties": {
+          "quickbooks_enabled": {
+            "type": "boolean",
+            "description": "The QuickBooks feature is switched on for the company (on unless a\nplatform admin turned it off)."
+          },
+          "quickbooks_connected": {
+            "type": "boolean",
+            "description": "The company has connected a QuickBooks account (OAuth tokens saved).\nQuickBooks data is only usable when both this and `quickbooks_enabled`\nare true."
+          },
+          "onboarding": {
+            "type": "boolean",
+            "description": "Guided tours and their points (the company's own switch, else the\nplatform-wide default)."
+          },
+          "leaderboard": {
+            "type": "boolean",
+            "description": "The points leaderboard (the company's own switch, else the\nplatform-wide default). See `GET /v1/points-leaderboard`."
+          },
+          "e_signature": {
+            "type": "boolean",
+            "description": "E-signatures: the company has a SignWell API key. Each user still needs\ntheir own `is_signature_available` flag."
+          },
+          "inbound_email": {
+            "type": "boolean",
+            "description": "Inbound email is set up (the company has a mail domain): the Emails\ninbox and email widgets are offered."
+          },
+          "cloudtalk": {
+            "type": "boolean",
+            "description": "The company has CloudTalk credentials (calls and texts)."
+          },
+          "ringcentral": {
+            "type": "boolean",
+            "description": "The company is connected to RingCentral (OAuth, or JWT credentials).\nWhen both are set up, texts go through RingCentral."
+          }
+        }
+      },
       "CompanyRow": {
         "allOf": [
           {
@@ -5381,6 +6261,26 @@
           }
         ],
         "description": "A customer row of the `companies` view, with totals over its own sales\nand those of its child customers."
+      },
+      "ConversionCount": {
+        "type": "object",
+        "description": "Won deals out of all deals of one group.",
+        "required": [
+          "won",
+          "created"
+        ],
+        "properties": {
+          "won": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deals marked won."
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "All deals, whatever their state."
+          }
+        }
       },
       "CreatedModel": {
         "type": "object",
@@ -5764,6 +6664,68 @@
           }
         }
       },
+      "DashboardLayout": {
+        "type": "object",
+        "description": "The signed-in user's dashboard layout in the company the request acts in.",
+        "required": [
+          "widget_ids"
+        ],
+        "properties": {
+          "widget_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardWidget"
+            },
+            "description": "Widgets in screen order. Empty when the user never saved a layout in\nthis company (show the default widgets) or removed every widget."
+          }
+        }
+      },
+      "DashboardWidget": {
+        "type": "string",
+        "description": "A widget of the employee dashboard. Must match `EmployeeDashboardWidgetId`\nin the frontend (`app/utils/employeeDashboardWidgets.ts`).",
+        "enum": [
+          "unread-messages",
+          "leaderboard",
+          "call-coaching",
+          "qbo-sales",
+          "won-deals",
+          "my-sales",
+          "conversion-metrics",
+          "quick-links",
+          "onboarding",
+          "top-sold-colors",
+          "emails-per-month",
+          "sms-per-month"
+        ]
+      },
+      "DealConversion": {
+        "type": "object",
+        "description": "How many of the signed-in user's deals were won, overall and by how the\ncustomer came in. All time; deals of deleted customers or in deleted lists\nare left out.",
+        "required": [
+          "total",
+          "leads",
+          "walk_in",
+          "call_in"
+        ],
+        "properties": {
+          "total": {
+            "$ref": "#/components/schemas/ConversionCount",
+            "description": "Every deal."
+          },
+          "leads": {
+            "$ref": "#/components/schemas/ConversionCount",
+            "description": "Customers from leads (`source = leads`)."
+          },
+          "walk_in": {
+            "$ref": "#/components/schemas/ConversionCount",
+            "description": "Walk-in customers (`source = check-in`)."
+          },
+          "call_in": {
+            "$ref": "#/components/schemas/ConversionCount",
+            "description": "Customers who called in (`source = call-in`)."
+          }
+        }
+      },
       "EmailsBatchRequest": {
         "type": "object",
         "description": "Body of `POST /v1/customers/emails/batch`.",
@@ -6053,6 +7015,95 @@
           }
         }
       },
+      "LeaderboardActivity": {
+        "type": "object",
+        "description": "Counts behind the call, text and email points, after the daily caps.",
+        "required": [
+          "conversations",
+          "voicemails",
+          "attempts",
+          "sms",
+          "emails"
+        ],
+        "properties": {
+          "conversations": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls that were a real conversation (over 30 s)."
+          },
+          "voicemails": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls that left a voicemail (at most one per number per day scores)."
+          },
+          "attempts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Short calls (at most one per number per day scores)."
+          },
+          "sms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Texts sent by hand (at most three per number per day score)."
+          },
+          "emails": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Emails sent by hand."
+          }
+        }
+      },
+      "LeaderboardEntry": {
+        "type": "object",
+        "description": "One person's points.",
+        "required": [
+          "user_id",
+          "name",
+          "points",
+          "breakdown",
+          "activity"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "User id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name: the user's name, else their email, else \"Colleague\"."
+          },
+          "points": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total points."
+          },
+          "rank": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Rank among the reps (ties share a rank, 1 is the top); null for the\n`viewer` row."
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/PointsBreakdown",
+            "description": "Points per source."
+          },
+          "activity": {
+            "$ref": "#/components/schemas/LeaderboardActivity",
+            "description": "What the call, text and email points were earned with."
+          }
+        }
+      },
+      "LeaderboardPeriod": {
+        "type": "string",
+        "description": "Which points count.",
+        "enum": [
+          "all",
+          "month"
+        ]
+      },
       "LinkInput": {
         "type": "object",
         "description": "Body of the link routes.",
@@ -6084,6 +7135,25 @@
           }
         ],
         "description": "`GET /v1/customers` returns `CustomerRow`s, or `CompanyRow`s when `view=companies`."
+      },
+      "MonthlyCount": {
+        "type": "object",
+        "description": "How many messages were sent in one calendar month.",
+        "required": [
+          "month",
+          "count"
+        ],
+        "properties": {
+          "month": {
+            "type": "string",
+            "description": "Month, `YYYY-MM`."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Messages sent that month."
+          }
+        }
       },
       "NewSlab": {
         "type": "object",
@@ -6121,6 +7191,87 @@
           }
         },
         "additionalProperties": false
+      },
+      "PointsBreakdown": {
+        "type": "object",
+        "description": "Points per source. Each source counts only from its own start date.",
+        "required": [
+          "tours",
+          "deals",
+          "progress",
+          "calls",
+          "sms",
+          "emails"
+        ],
+        "properties": {
+          "tours": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Guided tours finished (each task's points net of resets, never below 0)."
+          },
+          "deals": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deals marked won (25 each)."
+          },
+          "progress": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deals moved to another stage (3 per stage entered; creating a deal scores nothing)."
+          },
+          "calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls: 10 per conversation, 5 per voicemail left, 2 per attempt."
+          },
+          "sms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Texts sent by hand (1 each)."
+          },
+          "emails": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Emails sent by hand (1 each)."
+          }
+        }
+      },
+      "PointsLeaderboard": {
+        "type": "object",
+        "description": "The company's points leaderboard for one period.",
+        "required": [
+          "period",
+          "includes_tours",
+          "entries"
+        ],
+        "properties": {
+          "period": {
+            "$ref": "#/components/schemas/LeaderboardPeriod",
+            "description": "The period counted."
+          },
+          "includes_tours": {
+            "type": "boolean",
+            "description": "Whether guided tour points count (only while the company's guided\ntours are on; otherwise `breakdown.tours` is always 0)."
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LeaderboardEntry"
+            },
+            "description": "The company's Sales Reps, most points first (then by name), ranked\namong themselves; reps with no points are listed with 0."
+          },
+          "viewer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LeaderboardEntry",
+                "description": "The signed-in user's own row, scored the same way but not ranked, when\nthey are not one of the Sales Reps (e.g. a manager); null otherwise.\nOnly they see it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       },
       "PositionRow": {
         "type": "object",
@@ -6858,6 +8009,98 @@
           }
         }
       },
+      "SalesGoal": {
+        "type": "object",
+        "description": "The signed-in user's monthly sales goal.",
+        "properties": {
+          "monthly_sales_goal": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Goal for each month, decimal string in USD (e.g. \"50000.00\"); null\nwhen the user has not set one (the dashboard then assumes $50,000)."
+          }
+        }
+      },
+      "SalesStats": {
+        "type": "object",
+        "description": "The signed-in user's deals this month so far, from the 1st through today\n(UTC). Only deals assigned to the user, of live customers of the company,\nin a live deal list, count.",
+        "required": [
+          "start_date",
+          "end_date",
+          "won_count",
+          "lost_count",
+          "won_amount",
+          "active_deals_count",
+          "pipeline_amount",
+          "new_deals_count"
+        ],
+        "properties": {
+          "start_date": {
+            "type": "string",
+            "description": "First day counted, `YYYY-MM-DD`."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "Last day counted (today), `YYYY-MM-DD`."
+          },
+          "won_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deals marked won this month (dated by their last change)."
+          },
+          "lost_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deals marked lost this month."
+          },
+          "won_amount": {
+            "type": "string",
+            "description": "Total amount of the deals won this month, decimal string in USD\n(e.g. \"2200.00\"); \"0.00\" when none."
+          },
+          "active_deals_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Open deals (neither won nor lost), whenever they were created."
+          },
+          "pipeline_amount": {
+            "type": "string",
+            "description": "Total amount of the open deals, decimal string in USD; deals without an\namount add nothing."
+          },
+          "new_deals_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deals created this month."
+          }
+        }
+      },
+      "SentSms": {
+        "type": "object",
+        "description": "Texts the signed-in user sent through the company's SMS provider.",
+        "required": [
+          "months"
+        ],
+        "properties": {
+          "provider": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SmsProvider",
+                "description": "The provider counted; null when the company has none, and then\n`months` is empty."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "months": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MonthlyCount"
+            },
+            "description": "Months with at least one text, oldest first, over the current month and\nthe two before it. Months without texts are left out."
+          }
+        }
+      },
       "SessionUser": {
         "type": "object",
         "description": "The signed-in user, after the super-admin rule is applied.",
@@ -7226,6 +8469,14 @@
             "description": "The slab's stone."
           }
         }
+      },
+      "SmsProvider": {
+        "type": "string",
+        "description": "The SMS provider a company texts through.",
+        "enum": [
+          "cloudtalk",
+          "ringcentral"
+        ]
       },
       "Stone": {
         "type": "object",
@@ -7942,6 +9193,84 @@
           }
         }
       },
+      "TelegramStatus": {
+        "type": "object",
+        "description": "Whether the signed-in user's Telegram is linked to each of the two bots.",
+        "required": [
+          "leads_linked",
+          "notifications_linked"
+        ],
+        "properties": {
+          "leads_linked": {
+            "type": "boolean",
+            "description": "Linked to the lead alerts bot."
+          },
+          "notifications_linked": {
+            "type": "boolean",
+            "description": "Linked to the CRM notifications bot."
+          },
+          "leads_bot_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Telegram user id of the lead alerts bot, for the Telegram login\nwidget; null when the bot is not configured."
+          },
+          "notifications_bot_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Telegram user id of the notifications bot; null when not configured."
+          }
+        }
+      },
+      "TopSoldStone": {
+        "type": "object",
+        "description": "A stone the signed-in user sold slabs of this month.",
+        "required": [
+          "stone_id",
+          "stone_name",
+          "slabs_sold",
+          "square_feet"
+        ],
+        "properties": {
+          "stone_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stone id."
+          },
+          "stone_name": {
+            "type": "string",
+            "description": "Stone name, e.g. \"Absolute Black\"."
+          },
+          "slabs_sold": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Full slabs sold (remnants cut from them are not counted again)."
+          },
+          "square_feet": {
+            "type": "string",
+            "description": "Square feet of those slabs, decimal string; \"0.00\" when no slab has a size."
+          }
+        }
+      },
+      "UpdateSalesGoal": {
+        "type": "object",
+        "description": "A new monthly sales goal.",
+        "required": [
+          "monthly_sales_goal"
+        ],
+        "properties": {
+          "monthly_sales_goal": {
+            "type": "number",
+            "format": "double",
+            "description": "Goal for each month in USD, above 0 and below 10 billion; rounded to\ncents."
+          }
+        }
+      },
       "UpdateSlab": {
         "type": "object",
         "description": "Body of `PATCH /v1/slabs/{id}`: the fields to change. Length and width\ngo together.",
@@ -8043,6 +9372,39 @@
             "description": "Display name."
           }
         }
+      },
+      "WidgetAction": {
+        "type": "string",
+        "description": "What a user did with a widget.",
+        "enum": [
+          "click",
+          "change",
+          "add",
+          "remove"
+        ]
+      },
+      "WidgetEvent": {
+        "type": "object",
+        "description": "One use of a dashboard widget, for product analytics.",
+        "required": [
+          "widget_id",
+          "action",
+          "target"
+        ],
+        "properties": {
+          "widget_id": {
+            "$ref": "#/components/schemas/DashboardWidget",
+            "description": "The widget used."
+          },
+          "action": {
+            "$ref": "#/components/schemas/WidgetAction",
+            "description": "What was done."
+          },
+          "target": {
+            "type": "string",
+            "description": "What in the widget was used, e.g. `quick-links` or `sales-goal`;\n1 to 64 characters after trimming."
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -8098,6 +9460,22 @@
     {
       "name": "faucets",
       "description": "Faucet models and their stock"
+    },
+    {
+      "name": "company",
+      "description": "The company the request acts in"
+    },
+    {
+      "name": "stats",
+      "description": "The signed-in user's own sales and messaging numbers"
+    },
+    {
+      "name": "dashboard",
+      "description": "The signed-in user's employee dashboard layout"
+    },
+    {
+      "name": "leaderboard",
+      "description": "The company's points leaderboard"
     }
   ]
 }

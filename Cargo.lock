@@ -52,6 +52,7 @@ dependencies = [
  "image",
  "lambda_http",
  "percent-encoding",
+ "reqwest",
  "serde",
  "serde_html_form",
  "serde_json",

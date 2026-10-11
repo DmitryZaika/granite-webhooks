@@ -176,7 +176,9 @@ pub async fn search_customers(
     let mut sql = QueryBuilder::<MySql>::new(
         "SELECT c.id, c.name, c.address, c.phone, c.phone_2, primary_email.email AS email,
             c.company_name,
-            (SELECT d.id FROM deals d WHERE d.customer_id = c.id AND d.deleted_at IS NULL
+            -- deals.id is BIGINT UNSIGNED, which decodes only as u64.
+            (SELECT CAST(d.id AS SIGNED) FROM deals d
+              WHERE d.customer_id = c.id AND d.deleted_at IS NULL
               ORDER BY d.id DESC LIMIT 1) AS deal_id,
             (SELECT d.is_won FROM deals d WHERE d.customer_id = c.id AND d.deleted_at IS NULL
               ORDER BY d.id DESC LIMIT 1) AS deal_is_won,
