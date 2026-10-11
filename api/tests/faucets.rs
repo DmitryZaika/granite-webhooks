@@ -147,3 +147,12 @@ async fn requires_an_employee_or_admin(pool: MySqlPool) {
         .await
         .assert_status_ok();
 }
+
+#[sqlx::test(
+    migrations = "../migrations",
+    fixtures(path = "../seed", scripts("local_seed"))
+)]
+async fn available_only_lists_models_with_free_units(pool: MySqlPool) {
+    let rows = list(pool, "?available_only=true&include_sold_out=true").await;
+    assert_eq!(ids(&rows), vec![3202, 3200]);
+}

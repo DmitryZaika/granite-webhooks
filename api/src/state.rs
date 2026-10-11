@@ -1,3 +1,4 @@
+use crate::storage::Storage;
 use axum::http::{Method, header};
 use sqlx::MySqlPool;
 use std::sync::Arc;
@@ -13,6 +14,8 @@ pub struct AppState {
     /// Same value as the Remix app's `SESSION_SECRET`; signs the `__session` cookie.
     pub session_secret: Arc<str>,
     pub allowed_origins: Arc<[String]>,
+    /// Bucket for uploaded images.
+    pub storage: Storage,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -25,14 +28,21 @@ impl AppState {
             pool,
             session_secret: Arc::from(session_secret),
             allowed_origins: parse_origins(allowed_origins).into(),
+            storage: Storage::Disabled,
         }
+    }
+
+    #[must_use]
+    pub fn with_storage(mut self, storage: Storage) -> Self {
+        self.storage = storage;
+        self
     }
 
     pub fn from_env(pool: MySqlPool) -> Result<Self, MissingSessionSecret> {
         let secret = std::env::var("SESSION_SECRET").map_err(|_| MissingSessionSecret)?;
         let origins = std::env::var("API_ALLOWED_ORIGINS")
             .unwrap_or_else(|_| DEFAULT_ALLOWED_ORIGINS.to_string());
-        Ok(Self::new(pool, &secret, &origins))
+        Ok(Self::new(pool, &secret, &origins).with_storage(Storage::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the

@@ -158,3 +158,21 @@ async fn requires_an_employee_or_admin(pool: MySqlPool) {
         .await
         .assert_status_ok();
 }
+
+#[sqlx::test(
+    migrations = "../migrations",
+    fixtures(path = "../seed", scripts("local_seed"))
+)]
+async fn available_only_lists_models_with_free_units(pool: MySqlPool) {
+    // Farmhouse 33 is regular stock without units: not installable now. It
+    // wins over include_sold_out.
+    for query in [
+        "?available_only=true",
+        "?available_only=true&include_sold_out=true",
+    ] {
+        let rows = list(pool.clone(), query).await;
+        assert_eq!(ids(&rows), vec![3107, 3102, 3105, 3100], "{query}");
+    }
+    let rows = list(pool, "?available_only=true").await;
+    assert_eq!(row(&rows, 3107)["available"], 1);
+}

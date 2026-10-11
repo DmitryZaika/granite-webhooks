@@ -30,7 +30,9 @@ pub async fn list_faucets(
             .push_bind(supplier_id);
     }
     query.push(" GROUP BY faucet_type.id");
-    if !filter.include_sold_out {
+    if filter.available_only {
+        query.push(" HAVING available > 0");
+    } else if !filter.include_sold_out {
         query.push(" HAVING available > 0 OR regular_stock = 1");
     }
     query.push(" ORDER BY faucet_type.name ASC, faucet_type.id ASC");

@@ -5,11 +5,17 @@
 //! (`/v1/<domain>/...`) lives in the handler's `#[utoipa::path]`, so every
 //! route is still greppable from its URL.
 
+pub mod catalog;
 pub mod customers;
 pub mod faucets;
+pub mod fixtures;
 pub mod me;
+pub mod public;
+pub mod sales;
 pub mod sinks;
+pub mod slabs;
 pub mod stones;
+pub mod uploads;
 pub mod users;
 
 use crate::state::AppState;
@@ -23,4 +29,9 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(stones::router())
         .merge(sinks::router())
         .merge(faucets::router())
+        .merge(slabs::router())
+        .merge(sales::router())
+        .merge(catalog::router())
+        .merge(uploads::router())
+        .merge(public::router())
 }

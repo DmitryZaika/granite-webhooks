@@ -142,3 +142,93 @@ pub struct EmailsBatchRequest {
 /// `{ "<customer_id>": ["primary@x.com", "other@x.com"] }`. Customers with no
 /// email rows are absent.
 pub type EmailsByCustomer = BTreeMap<i32, Vec<String>>;
+
+/// One customer with contact details, as the customer picker shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
+pub struct CustomerDetail {
+    /// Customer id.
+    pub id: i32,
+    /// Contact person's name.
+    pub name: Option<String>,
+    /// Billing address.
+    pub address: Option<String>,
+    /// Main phone number.
+    pub phone: Option<String>,
+    /// Second phone number.
+    pub phone_2: Option<String>,
+    /// Primary email address; null when the customer has none.
+    pub email: Option<String>,
+    /// Every email address, primary first.
+    #[sqlx(skip)]
+    pub emails: Vec<String>,
+    /// Company name for business customers; null or empty for private ones.
+    pub company_name: Option<String>,
+    /// Where the lead came from, e.g. `leads`, `check-in`, `other`.
+    pub source: Option<String>,
+    /// Referral source, free text.
+    pub referral_source: Option<String>,
+    /// Message the customer left when signing up.
+    pub your_message: Option<String>,
+    /// Assigned sales rep (user id); null when unassigned.
+    pub sales_rep: Option<i32>,
+    /// Name of the assigned sales rep; null when unassigned or deleted.
+    pub sales_rep_name: Option<String>,
+}
+
+/// How `GET /v1/customers/search` matches `term`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CustomerSearchBy {
+    /// Person or company name, tolerating typos.
+    #[default]
+    Name,
+    /// Phone or second phone, by digits (formatting ignored).
+    Phone,
+    /// Any of the customer's email addresses.
+    Email,
+    /// Company name, tolerating typos.
+    Company,
+}
+
+/// Query string of `GET /v1/customers/search`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct CustomerSearchQuery {
+    /// What the user typed. Required (may be empty for phone search).
+    pub term: String,
+    /// Which field to match: `name` (default), `phone`, `email`, `company`.
+    #[serde(default)]
+    #[param(inline)]
+    pub by: CustomerSearchBy,
+    /// `true` returns only customers assigned to the caller or unassigned.
+    #[serde(default)]
+    pub own_only: bool,
+}
+
+/// A customer matching a search, with their latest deal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
+pub struct CustomerSearchRow {
+    /// Customer id.
+    pub id: i32,
+    /// Contact person's name.
+    pub name: Option<String>,
+    /// Billing address.
+    pub address: Option<String>,
+    /// Main phone number.
+    pub phone: Option<String>,
+    /// Second phone number.
+    pub phone_2: Option<String>,
+    /// Primary email address.
+    pub email: Option<String>,
+    /// Every email address, primary first.
+    #[sqlx(skip)]
+    pub emails: Vec<String>,
+    /// Company name for business customers.
+    pub company_name: Option<String>,
+    /// The customer's most recent live deal; null when none.
+    pub deal_id: Option<i64>,
+    /// That deal's outcome: 1 won, 0 lost, null open or no deal.
+    pub deal_is_won: Option<i32>,
+    /// Board group of that deal's list; null when there is no deal.
+    pub deal_group_id: Option<i32>,
+}

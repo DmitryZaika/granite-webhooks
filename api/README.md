@@ -54,8 +54,36 @@ the Remix page that uses it. Pick the folder by the main table the query reads:
 | `schedule`      | `/v1/events/...`          | `events`, calendars                            |
 | `emails` / `sms`| `/v1/emails/...`          | message tables                                 |
 
-`me`, `customers`, `users`, `stones`, `sinks` and `faucets` exist so far; create
-the others as their first route is migrated, following the same four files.
+Exist so far: `me`, `customers`, `users`, `stones`, `slabs`, `sinks`, `faucets`
+(sinks and faucets share `routes/fixtures.rs`), `sales`, `catalog` (suppliers,
+colors, stone types), `uploads` and `public` (the showroom, no session).
+Create the others as their first route is migrated, following the same files.
+
+### Public routes
+
+`/v1/public/...` take no session (no extractor): `tests/openapi.rs` exempts
+them from `security` and 401. They must never return costs, hidden items or
+other companies' data; `tests/public.rs` checks that.
+
+### Uploads and storage
+
+Images go straight from the browser to the bucket with a presigned PUT
+(`POST /v1/uploads`); routes that take an image URL call
+`routes::uploads::attach` (checks the file is in the folder, stores the
+`-icon` thumbnail) and `remove` when replacing or deleting. `Storage` is
+S3 (`STORAGE_BUCKET`, `STORAGE_REGION`, `STORAGE_ACCESS_KEY`,
+`STORAGE_SECRET`, optional `STORAGE_ENDPOINT` / `STORAGE_PUBLIC_URL`),
+`Storage::memory()` in tests (`common::server_with_storage`), or disabled
+(upload routes answer 503). Locally `docker-compose.local.yml` runs
+`adobe/s3mock` on :9090. Production needs bucket CORS allowing `PUT` from
+`https://*.granite-manager.com`.
+
+### Writes
+
+Multi-statement writes run in one transaction (`state.pool.begin()`), so a
+failure leaves nothing half saved. Validate everything that can be checked
+before the first write, scope every id the client sends by company, and
+answer 400 with a message the page can show.
 
 ## Rules for every migrated endpoint
 
@@ -142,7 +170,10 @@ tests (`e2e/` in general_datebase, which reset the docker DB with
 | 3200-3205   | faucet types (3205 = company 101)                           |
 | 5000+       | customer emails                                             |
 | 6000+       | slabs; 6100+ sink units; 6200+ faucet units                 |
-| 7000-7003   | sales                                                       |
+| 7000-7003, 7010-7012 | sales (7010-7012 for the slabs dialog / sale forms)  |
+| 3010, 6070-6077 | stone Taj Mahal (hidden) and its slabs                  |
+| 6109-6111   | sink units installed on slab 6071                           |
+| 100-104     | stone types; installed photos of stones, sinks and faucets  |
 
 Changing an existing row breaks assertions in both repos; add a new row.
 

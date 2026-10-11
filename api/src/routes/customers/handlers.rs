@@ -1,13 +1,16 @@
-use super::queries::{emails_by_customer_ids, list_companies, list_customers};
+use super::queries::{
+    emails_by_customer_ids, find_customer, list_companies, list_customers, search_customers,
+};
 use super::schemas::{
-    CustomersView, EmailsBatchRequest, EmailsByCustomer, ListFilter, ListQuery, ListResponse,
-    MAX_BATCH_IDS,
+    CustomerDetail, CustomerSearchQuery, CustomerSearchRow, CustomersView, EmailsBatchRequest,
+    EmailsByCustomer, ListFilter, ListQuery, ListResponse, MAX_BATCH_IDS,
 };
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::extract::MultiQuery;
 use crate::state::AppState;
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 
 /// List the company's customers
 ///
@@ -80,4 +83,68 @@ pub async fn emails_batch(
     }
     let emails = emails_by_customer_ids(&state.pool, user.company_id, &body.customer_ids).await?;
     Ok(Json(emails))
+}
+
+/// Get one customer
+///
+/// Returns a live customer of the caller's company with contact details,
+/// every email address (primary first) and the assigned sales rep. 404 for
+/// deleted customers and other companies' customers.
+#[utoipa::path(
+    get,
+    path = "/v1/customers/{id}",
+    operation_id = "get_customer",
+    tag = "customers",
+    params(("id" = i32, Path, description = "Customer id")),
+    responses(
+        (status = 200, description = "The customer", body = CustomerDetail),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 404, description = "No such customer in the caller's company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn get(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+) -> ApiResult<Json<CustomerDetail>> {
+    find_customer(&state.pool, user.company_id, id)
+        .await?
+        .map(Json)
+        .ok_or(ApiError::NotFound)
+}
+
+/// Search the company's customers
+///
+/// Returns up to 15 live customers matching `term` by name (typos
+/// tolerated, also matches the company name), phone digits, any email, or
+/// company name. Customers with a live deal of the caller come first, then
+/// the caller's own customers, then the best text matches. Each row carries
+/// every email and the customer's latest deal. Fetch one in full with
+/// `GET /v1/customers/{id}`.
+#[utoipa::path(
+    get,
+    path = "/v1/customers/search",
+    operation_id = "search_customers",
+    tag = "customers",
+    params(CustomerSearchQuery),
+    responses(
+        (status = 200, description = "Matching customers, best first", body = Vec<CustomerSearchRow>),
+        (status = 400, description = "Missing `term` or unknown `by`", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn search(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    MultiQuery(query): MultiQuery<CustomerSearchQuery>,
+) -> ApiResult<Json<Vec<CustomerSearchRow>>> {
+    Ok(Json(
+        search_customers(&state.pool, user.company_id, user.id, &query).await?,
+    ))
 }

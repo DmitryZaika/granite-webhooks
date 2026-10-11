@@ -20,5 +20,19 @@ services:
     volumes:
       - granite_local_mysql:/var/lib/mysql
 
+  # S3-compatible storage for uploads (stone, sink and faucet images): the
+  # API presigns uploads to it with STORAGE_ENDPOINT=http://localhost:9090.
+  # S3Mock skips signature checks, answers CORS preflights and serves objects
+  # without auth, like the public-read production bucket. Data is in memory:
+  # a restart empties it.
+  s3:
+    image: adobe/s3mock:5.2.2
+    container_name: granite-local-s3
+    restart: unless-stopped
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: granite-local
+    ports:
+      - "9090:9090"
+
 volumes:
   granite_local_mysql:

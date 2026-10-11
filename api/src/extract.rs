@@ -27,3 +27,22 @@ where
         std::future::ready(parsed)
     }
 }
+
+/// JSON body parser that rejects malformed or mistyped bodies with the API's
+/// JSON 400 (`invalid body: ...`) instead of axum's plain-text 4xx.
+pub struct JsonBody<T>(pub T);
+
+impl<T, S> axum::extract::FromRequest<S> for JsonBody<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, ApiError> {
+        axum::Json::<T>::from_request(req, state)
+            .await
+            .map(|axum::Json(value)| Self(value))
+            .map_err(|err| ApiError::BadRequest(format!("invalid body: {}", err.body_text())))
+    }
+}
