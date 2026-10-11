@@ -265,6 +265,105 @@ INSERT INTO installed_faucets (id, url, faucet_id) VALUES
 -- (/customer/stones redirects to /customer/100/stones).
 UPDATE company SET subdomain = 'acme' WHERE id = 100;
 
+-- ---- Employee dashboard (/employee): sales stats, conversion, leaderboard,
+-- sales goal, widget layout, Telegram. Dates are relative to the current month
+-- so "this month" widgets always have rows: @m0 is the 1st at 00:00 (every
+-- "this month" row is on the 1st, so it is never in the future), @prev a day
+-- of last month. Ids: groups/lists 100+, deals 8000+, stage history 8100+,
+-- calls 8200+, SMS 8300+, emails 8400+, points ledger 8500+.
+SET @m0 = CAST(DATE_FORMAT(CURRENT_DATE, '%Y-%m-01') AS DATETIME);
+SET @prev = @m0 - INTERVAL 1 MONTH + INTERVAL 4 DAY;
+
+-- Every points source counts from 2026-01-01 (the migrations date some at the
+-- moment they ran, which would hide the seeded activity).
+UPDATE activity_points_sources SET counts_from = '2026-01-01 00:00:00';
+
+-- Company 100 shows the leaderboard; its Onboarding switch stays off (tour
+-- points are not counted). Company 101 has inbound email and CloudTalk (fake
+-- credentials), so its dashboard offers the Sent emails and Sent SMS widgets.
+UPDATE company SET leaderboard_enabled = 1 WHERE id = 100;
+UPDATE company SET domain = 'other.test', cloudtalk_access_key = 'seed-key',
+                   cloudtalk_access_secret = 'seed-secret' WHERE id = 101;
+
+-- Rita (100) has no goal (default $50,000) and no Telegram; Mark (101) has
+-- both bots linked and a $75,000 goal.
+UPDATE users SET monthly_sales_goal = 75000, telegram_id = 900101,
+                 notifications_telegram_id = 910101 WHERE id = 101;
+
+INSERT INTO groups_list (id, name, company_id, is_default) VALUES
+  (100, 'Sales', 100, 1),
+  (101, 'Other Sales', 101, 1);
+
+INSERT INTO deals_list (id, name, position, group_id, deleted_at) VALUES
+  (100, 'New',      0, 100, NULL),
+  (101, 'Quoted',   1, 100, NULL),
+  (102, 'Archived', 2, 100, '2026-01-01 00:00:00'),
+  (103, 'New',      0, 101, NULL);
+
+-- Rita's deals. Counted this month: won 8000 + 8010 ($2,200), lost 8001,
+-- created 8001 + 8002; open: 8002 + 8003 ($2,500.50). All time (conversion):
+-- 8000, 8001, 8002, 8003, 8004, 8010. Never counted: 8005 (deleted), 8006
+-- (deleted customer), 8007 (deleted list). 8008 is Mark's, 8009 company 101's.
+INSERT INTO deals (id, customer_id, amount, title, list_id, position, user_id, is_won, created_at, updated_at, deleted_at) VALUES
+  (8000, 1000, 1000.00, 'Alice kitchen',   101, 0, 100, 1,    @prev,                  @m0 + INTERVAL 9 HOUR,  NULL),
+  (8001, 1001,  500.00, 'Bob vanity',      100, 0, 100, 0,    @m0 + INTERVAL 1 HOUR,  @m0 + INTERVAL 8 HOUR,  NULL),
+  (8002, 1004, 2500.50, 'Erin countertops',101, 1, 100, NULL, @m0 + INTERVAL 2 HOUR,  @m0 + INTERVAL 3 HOUR,  NULL),
+  (8003, 1008,    NULL, 'Ivy island',      100, 1, 100, NULL, @prev,                  @prev,                  NULL),
+  (8004, 1000, 9999.00, 'Alice bathroom',  101, 2, 100, 1,    @prev,                  @prev,                  NULL),
+  (8005, 1000, 4000.00, 'Deleted deal',    101, 3, 100, 1,    @m0 + INTERVAL 1 HOUR,  @m0 + INTERVAL 1 HOUR,  @m0 + INTERVAL 2 HOUR),
+  (8006, 1003, 4000.00, 'Deleted customer',101, 4, 100, 1,    @m0 + INTERVAL 1 HOUR,  @m0 + INTERVAL 1 HOUR,  NULL),
+  (8007, 1000,  777.00, 'Archived list',   102, 0, 100, NULL, @m0 + INTERVAL 1 HOUR,  @m0 + INTERVAL 1 HOUR,  NULL),
+  (8008, 1010, 3000.00, 'Zoe kitchen',     101, 5, 101, 1,    @prev,                  @m0 + INTERVAL 5 HOUR,  NULL),
+  (8009, 2000, 8000.00, 'Other company',   103, 0, 106, 1,    @prev,                  @m0 + INTERVAL 5 HOUR,  NULL),
+  (8010, 1004, 1200.00, 'Erin backsplash', 101, 6, 100, 1,    @prev,                  @m0 + INTERVAL 10 HOUR, NULL);
+
+-- Stage moves: a deal's first row is its creation and never scores. 8002
+-- advanced this month, 8000 last month (3 points each).
+INSERT INTO deal_stage_history (id, deal_id, list_id, entered_at) VALUES
+  (8100, 8002, 100, @m0 + INTERVAL 2 HOUR),
+  (8101, 8002, 101, @m0 + INTERVAL 3 HOUR),
+  (8102, 8000, 100, @prev),
+  (8103, 8000, 101, @prev + INTERVAL 1 HOUR);
+
+-- Rita's calls: a conversation (10) and two attempts to one number on one
+-- day (only the first scores, 2) this month; a voicemail (5) last month; a
+-- pending call scores nothing.
+INSERT INTO phone_call_points (id, company_id, provider, provider_call_id, user_id, customer_digits, started_at, talk_seconds, outcome) VALUES
+  (8200, 100, 'cloudtalk', 'seed-8200', 100, '3175550100', @m0 + INTERVAL 1 HOUR, 300, 'conversation'),
+  (8201, 100, 'cloudtalk', 'seed-8201', 100, '3175550102', @m0 + INTERVAL 2 HOUR,  10, 'attempt'),
+  (8202, 100, 'cloudtalk', 'seed-8202', 100, '3175550102', @m0 + INTERVAL 3 HOUR,  12, 'attempt'),
+  (8203, 100, 'cloudtalk', 'seed-8203', 100, '3175550105', @prev,                  45, 'voicemail'),
+  (8204, 100, 'cloudtalk', 'seed-8204', 100, '3175550100', @m0 + INTERVAL 4 HOUR,  60, 'pending');
+
+-- Rita's hand-sent texts: four to one number on one day (three score) and an
+-- automated one (never scores). Olga's two texts feed company 101's Sent SMS.
+INSERT INTO cloudtalk_sms (id, recipient, text, direction, status, sender_user_id, company_id, recipient10, created_date, is_automated) VALUES
+  (8300, 3175550100, 'Hi Alice',  'outbound', 'sent', 100, 100, '3175550100', @m0 + INTERVAL 1 HOUR, 0),
+  (8301, 3175550100, 'Quote',     'outbound', 'sent', 100, 100, '3175550100', @m0 + INTERVAL 2 HOUR, 0),
+  (8302, 3175550100, 'Reminder',  'outbound', 'sent', 100, 100, '3175550100', @m0 + INTERVAL 3 HOUR, 0),
+  (8303, 3175550100, 'Fourth',    'outbound', 'sent', 100, 100, '3175550100', @m0 + INTERVAL 4 HOUR, 0),
+  (8304, 3175550100, 'Flow text', 'outbound', 'sent', 100, 100, '3175550100', @m0 + INTERVAL 5 HOUR, 1),
+  (8305, 4635550200, 'Hello',     'outbound', 'sent', 106, 101, '4635550200', @m0 + INTERVAL 1 HOUR, 0),
+  (8306, 4635550200, 'Again',     'outbound', 'sent', 106, 101, '4635550200', @prev,                 0);
+
+-- Emails: Rita's two sent this month and one last month score; a draft and
+-- one never sent (no message id) do not. Olga's feed company 101's Sent emails
+-- (3 this month, 1 last month).
+INSERT INTO emails (id, subject, body, sent_at, message_id, sender_user_id, company_id, is_draft) VALUES
+  (8400, 'Quote',     'b', @m0 + INTERVAL 1 HOUR, '<seed-8400@acme.test>', 100, 100, 0),
+  (8401, 'Follow up', 'b', @m0 + INTERVAL 2 HOUR, '<seed-8401@acme.test>', 100, 100, 0),
+  (8402, 'Old',       'b', @prev,                 '<seed-8402@acme.test>', 100, 100, 0),
+  (8403, 'Draft',     'b', @m0 + INTERVAL 3 HOUR, NULL,                    100, 100, 1),
+  (8404, 'Unsent',    'b', @m0 + INTERVAL 4 HOUR, NULL,                    100, 100, 0),
+  (8405, 'Hi',        'b', @m0 + INTERVAL 1 HOUR, '<seed-8405@other.test>', 106, 101, 0),
+  (8406, 'Hi again',  'b', @m0 + INTERVAL 2 HOUR, '<seed-8406@other.test>', 106, 101, 0),
+  (8407, 'Third',     'b', @m0 + INTERVAL 3 HOUR, '<seed-8407@other.test>', 106, 101, 0),
+  (8408, 'Older',     'b', @prev,                 '<seed-8408@other.test>', 106, 101, 0);
+
+-- Tour points: only counted while the company's Onboarding switch is on.
+INSERT INTO user_points_ledger (id, user_id, company_id, task_id, points, reason, awarded_at) VALUES
+  (8500, 100, 100, 'dashboard-overview', 40, 'completed', @m0 + INTERVAL 1 HOUR);
+
 -- ---- Post-installation checklists (GET /v1/checklists). Ids 9000+.
 -- Newest first, ties by id: 9003 and 9001 share a timestamp, 02:00 UTC (the
 -- previous day in Indianapolis). 9001 has no installer.

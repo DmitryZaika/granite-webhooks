@@ -1,4 +1,5 @@
 use crate::storage::Storage;
+use crate::telegram::TelegramBots;
 use axum::http::{Method, header};
 use sqlx::MySqlPool;
 use std::sync::Arc;
@@ -16,6 +17,9 @@ pub struct AppState {
     pub allowed_origins: Arc<[String]>,
     /// Bucket for uploaded images.
     pub storage: Storage,
+    /// The two Telegram bots (lead alerts, notifications), to check a user's
+    /// link still works.
+    pub telegram: TelegramBots,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -29,6 +33,7 @@ impl AppState {
             session_secret: Arc::from(session_secret),
             allowed_origins: parse_origins(allowed_origins).into(),
             storage: Storage::Disabled,
+            telegram: TelegramBots::disabled(),
         }
     }
 
@@ -38,11 +43,19 @@ impl AppState {
         self
     }
 
+    #[must_use]
+    pub fn with_telegram(mut self, telegram: TelegramBots) -> Self {
+        self.telegram = telegram;
+        self
+    }
+
     pub fn from_env(pool: MySqlPool) -> Result<Self, MissingSessionSecret> {
         let secret = std::env::var("SESSION_SECRET").map_err(|_| MissingSessionSecret)?;
         let origins = std::env::var("API_ALLOWED_ORIGINS")
             .unwrap_or_else(|_| DEFAULT_ALLOWED_ORIGINS.to_string());
-        Ok(Self::new(pool, &secret, &origins).with_storage(Storage::from_env()))
+        Ok(Self::new(pool, &secret, &origins)
+            .with_storage(Storage::from_env())
+            .with_telegram(TelegramBots::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the
