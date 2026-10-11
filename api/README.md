@@ -56,7 +56,8 @@ the Remix page that uses it. Pick the folder by the main table the query reads:
 
 Exist so far: `me`, `customers`, `users`, `stones`, `slabs`, `sinks`, `faucets`
 (sinks and faucets share `routes/fixtures.rs`), `sales`, `catalog` (suppliers,
-colors, stone types), `uploads` and `public` (the showroom, no session).
+colors, stone types), `checklists` (post-installation checklists), `uploads`
+and `public` (the showroom, no session).
 Create the others as their first route is migrated, following the same files.
 
 ### Public routes
@@ -174,6 +175,7 @@ tests (`e2e/` in general_datebase, which reset the docker DB with
 | 3010, 6070-6077 | stone Taj Mahal (hidden) and its slabs                  |
 | 6109-6111   | sink units installed on slab 6071                           |
 | 100-104     | stone types; installed photos of stones, sinks and faucets  |
+| 9000-9006   | post-installation checklists (9006 = company 101)           |
 
 Changing an existing row breaks assertions in both repos; add a new row.
 

@@ -6,6 +6,7 @@
 //! route is still greppable from its URL.
 
 pub mod catalog;
+pub mod checklists;
 pub mod customers;
 pub mod faucets;
 pub mod fixtures;
@@ -32,6 +33,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(slabs::router())
         .merge(sales::router())
         .merge(catalog::router())
+        .merge(checklists::router())
         .merge(uploads::router())
         .merge(public::router())
 }

@@ -264,3 +264,18 @@ INSERT INTO installed_faucets (id, url, faucet_id) VALUES
 -- ---- Public showroom: company 100 answers on the "acme" subdomain
 -- (/customer/stones redirects to /customer/100/stones).
 UPDATE company SET subdomain = 'acme' WHERE id = 100;
+
+-- ---- Post-installation checklists (GET /v1/checklists). Ids 9000+.
+-- Newest first, ties by id: 9003 and 9001 share a timestamp, 02:00 UTC (the
+-- previous day in Indianapolis). 9001 has no installer.
+-- 9002's installer is a deleted user (still named), its comment is empty.
+-- 9004 is a real row named like the onboarding sample (the page hides it).
+-- 9005 has no company and 9006 is company 101's: never listed for 100.
+INSERT INTO checklists (id, customer_id, installer_id, company_id, customer_name, installation_address, email, material_correct, seams_satisfaction, appliances_fit, backsplashes_correct, edges_correct, holes_drilled, cleanup_completed, comments, signature, created_at) VALUES
+  (9000, 1000, 100, 100, 'Alice Lead',     '1 Main St, Indianapolis, IN', 'alice@example.test', 1, 1, 1, 1, 1, 1, 1, 'Great job, very clean.', 'data:image/png;base64,c2ln', '2026-05-10 14:00:00'),
+  (9001, NULL, NULL, 100, 'Bob Walk-in',    '22 Side Rd, Carmel, IN',      NULL,                 1, 0, 1, 0, 1, 0, 0, NULL,                     'data:image/png;base64,c2ln', '2026-05-12 02:00:00'),
+  (9002, 1004, 105, 100, 'Erin Builder',   '5 Oak Ave',                   NULL,                 0, 1, 0, 1, 0, 1, 1, '',                       'data:image/png;base64,c2ln', '2026-05-11 14:00:00'),
+  (9003, 1010, 101, 100, 'Zoë Ünicode-Łukasz', 'Straße 7',                'zoe@example.test',   0, 0, 0, 0, 0, 0, 0, 'Seam visible near sink; customer wants a callback.', 'data:image/png;base64,c2ln', '2026-05-12 02:00:00'),
+  (9004, NULL, 100, 100, 'Onboarding Sample Checklist Customer', '456 Install Avenue, Indianapolis, IN 46202', NULL, 1, 1, 1, 1, 1, 1, 1, NULL, 'data:image/png;base64,c2ln', '2026-05-09 14:00:00'),
+  (9005, NULL, 100, NULL, 'No Company',    '9 Nowhere',                   NULL,                 1, 1, 1, 1, 1, 1, 1, NULL,                     'data:image/png;base64,c2ln', '2026-05-13 14:00:00'),
+  (9006, 2000, 106, 101, 'Other Co Customer', '1 Other St',               NULL,                 1, 1, 1, 1, 1, 1, 1, 'Other company',        'data:image/png;base64,c2ln', '2026-05-13 14:00:00');
