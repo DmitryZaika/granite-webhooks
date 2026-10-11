@@ -45,6 +45,7 @@ dependencies = [
  "lambda_http",
  "percent-encoding",
  "serde",
+ "serde_html_form",
  "serde_json",
  "sha2 0.11.0",
  "sqlx",
@@ -3544,6 +3545,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
+]
+
+[[package]]
+name = "serde_html_form"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f0346d7a342ab90f405cfc08f25d15075f944f42fcabbc5eac923829fa6d228"
+dependencies = [
+ "form_urlencoded",
+ "indexmap 2.14.2",
+ "itoa",
+ "serde_core",
+ "zmij",
 ]
 
 [[package]]

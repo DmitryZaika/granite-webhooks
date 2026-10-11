@@ -16,9 +16,11 @@
 
 pub mod auth;
 pub mod error;
+pub mod extract;
 pub mod openapi;
 pub mod routes;
 pub mod serde_helpers;
+pub mod sql;
 pub mod state;
 
 use axum::http::header::CONTENT_TYPE;
