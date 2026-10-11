@@ -20,6 +20,7 @@ pub mod sessions {
     pub const VIEWER: &str = "aaaaaaaa-0000-4000-8000-000000000104";
     pub const DELETED_USER: &str = "aaaaaaaa-0000-4000-8000-000000000105";
     pub const OTHER_COMPANY_REP: &str = "aaaaaaaa-0000-4000-8000-000000000106";
+    pub const DEALER: &str = "aaaaaaaa-0000-4000-8000-000000000107";
     pub const EXPIRED: &str = "bbbbbbbb-0000-4000-8000-0000000e0100";
     pub const LOGGED_OUT: &str = "bbbbbbbb-0000-4000-8000-0000000d0100";
     pub const TOO_OLD: &str = "bbbbbbbb-0000-4000-8000-0000000a0100";

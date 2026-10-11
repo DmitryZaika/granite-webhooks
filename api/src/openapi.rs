@@ -43,6 +43,7 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         (name = "stats", description = "The signed-in user's own sales and messaging numbers"),
         (name = "dashboard", description = "The signed-in user's employee dashboard layout"),
         (name = "leaderboard", description = "The company's points leaderboard"),
+        (name = "deals", description = "The sales pipeline: deals, their stages, activities and notes"),
     )
 )]
 struct ApiDoc;

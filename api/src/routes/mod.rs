@@ -8,8 +8,10 @@
 pub mod catalog;
 pub mod checklists;
 pub mod company;
+pub mod created;
 pub mod customers;
 pub mod dashboard;
+pub mod deals;
 pub mod faucets;
 pub mod fixtures;
 pub mod leaderboard;
@@ -44,4 +46,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(stats::router())
         .merge(dashboard::router())
         .merge(leaderboard::router())
+        .merge(deals::router())
 }

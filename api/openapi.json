@@ -6184,10 +6184,2204 @@
           }
         ]
       }
+    },
+    "/v1/deal-groups": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "List the deal pipelines (groups) of the board",
+        "description": "Returns the company's displayed groups plus the shared default group, in\nid order. `has_overdue_activity` flags groups where one of the caller's\ndeals with the given `status` has an unfinished activity whose deadline\nday has passed. Fetch the stages with `GET /v1/deal-lists?group_id=` and\nthe cards with `GET /v1/deals?group_id=`.",
+        "operationId": "list_deal_groups",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Which of the caller's deals `has_overdue_activity` looks at. Default `open`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DealStatus"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Groups in id order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DealGroup"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown `status`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deal-lists": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "List deal stages",
+        "description": "With `group_id`: the live stages (board columns) of that group in board\norder. Without it: every live stage of every displayed group the company\ncan use, ordered by group name then position (for pickers such as the bulk\nemail \"send to a stage\" list).",
+        "operationId": "list_deal_lists",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "query",
+            "description": "Only the stages of this group, in board order. Without it: every stage\nof every displayed group, ordered by group name then position.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DealList"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`group_id` is not an integer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deal-lists/{id}/recipients": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "List the email recipients of a stage",
+        "description": "Email addresses of the caller's customers (they are the sales rep) with a\nlive open deal in stage `id`; won and lost deals count when asked. Each\naddress once, lowercased, sorted.",
+        "operationId": "list_deal_list_recipients",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stage id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "include_won",
+            "in": "query",
+            "description": "Also customers whose deal in the stage is won.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "include_lost",
+            "in": "query",
+            "description": "Also customers whose deal in the stage is lost.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recipients",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Recipient"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed params",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "List the caller's deals on a board",
+        "description": "Returns the caller's live deals in the live stages of `group_id` with the\ngiven `status` (default `open`), ordered by stage, then position. Each card\ncarries its customer (null when deleted), whether it has photos, emails\nand notes, its unfinished activities (count, earliest deadline, the one\ndue first) and the phone of a running SMS follow-up flow.",
+        "operationId": "list_board_deals",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "query",
+            "description": "Group whose stages make the board (see `GET /v1/deal-groups`).",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Default `open`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DealStatus"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deal cards",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BoardDeal"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or malformed `group_id`, unknown `status`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Create a deal",
+        "description": "Puts the customer in `list_id`. When the customer already has an open\ndeal, that deal is updated and moved instead (`created: false`). The deal\nbelongs to the customer's sales rep, or the caller when there is none; a\ncaller who is a sales rep becomes the rep of a customer without one. Drip\nemails and SMS of the stage are scheduled for lead customers.",
+        "operationId": "create_deal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DealCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Deal created or reused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DealCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown stage or customer, malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/reorder": {
+      "post": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Save the order of the board after a drag",
+        "description": "Sets stage and position of every card sent. Cards that changed stage get\nthe same treatment as `PATCH /v1/deals/{id}` with `list_id` (history,\ndrips, reopening a closed deal). Every deal and stage must belong to the\ncompany, otherwise nothing is saved.",
+        "operationId": "reorder_deals",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Empty list, unknown stage, malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A deal is not a live deal of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/by-customer": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "List a customer's deals",
+        "description": "Live deals of a customer of the company, found by `customer_id`, or by\nany of their email addresses or their exact name. The caller's own deals\ncome first, then newest. Each deal carries up to two notes and two\nactivities as a preview.",
+        "operationId": "list_customer_deals",
+        "parameters": [
+          {
+            "name": "customer_id",
+            "in": "query",
+            "description": "Customer id; wins over the other two.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "customer_email",
+            "in": "query",
+            "description": "Any email address of the customer (case-insensitive).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customer_name",
+            "in": "query",
+            "description": "Exact customer name (case-insensitive).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The customer's deals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CustomerDeal"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "None of `customer_id`, `customer_email`, `customer_name`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Get one deal",
+        "description": "Returns a live deal of the company: stage, group, outcome, amounts, the\ncustomer and how many deals they have, and how many files are attached.\nRelated reads: `/stage-history`, `/activities`, `/notes`.",
+        "operationId": "get_deal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DealDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Delete a deal",
+        "description": "Soft-deletes the deal and records who deleted it in the customer's history.",
+        "operationId": "delete_deal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Update a deal",
+        "description": "Changes only the fields sent. Moving a deal to another stage records the\nstage history, schedules that stage's drip emails and SMS, and reopens it\nwhen it was won or lost. Changing `customer_id` gives the deal to another\ncustomer of the company.",
+        "operationId": "update_deal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DealPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Updated"
+          },
+          "400": {
+            "description": "Unknown stage or customer, bad date, malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/outcome": {
+      "put": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Close or reopen a deal",
+        "description": "`won` and `lost` close the deal (clearing the expected close date; `lost`\nstores `lost_reason`). `open` reopens a closed deal in its stage (or its\nlast live stage) and schedules the stage's drips again.",
+        "operationId": "set_deal_outcome",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutcomeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/stage-history": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Get the stage history of a deal",
+        "description": "Every stage the deal entered, oldest first; `exited_at` is null for the\ncurrent stay. The last entry of a closed deal tells when it was closed.",
+        "operationId": "get_deal_stage_history",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stage visits, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StageVisit"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/activities": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "List a deal's activities",
+        "description": "Live activities of the deal, newest first.",
+        "operationId": "list_deal_activities",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Activities, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Activity"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Add an activity to a deal",
+        "description": "Creates a to-do. The deal owner and the customer's sales rep are notified\n(in the app and on Telegram), and a deadline with a time schedules a\nreminder for the owner at that time.",
+        "operationId": "create_deal_activity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivityInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or too long name, bad deadline, malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/activities/{activity_id}": {
+      "delete": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Delete an activity",
+        "description": "Soft-deletes it, drops its reminder and notifies the deal's people.",
+        "operationId": "delete_deal_activity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "activity_id",
+            "in": "path",
+            "description": "Activity id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such activity on a live deal of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Update an activity",
+        "description": "Changes the fields sent. Editing name, deadline or priority notifies the\ndeal's people and reschedules the reminder; `is_completed: true` marks it\ndone (and drops its reminder), `false` reopens it.",
+        "operationId": "update_deal_activity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "activity_id",
+            "in": "path",
+            "description": "Activity id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivityPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Updated"
+          },
+          "400": {
+            "description": "Empty or too long name, bad deadline, malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such activity on a live deal of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deal-activities/suggestions": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "List the caller's frequent activity names",
+        "description": "Up to 50 names of live activities the caller created, most used first,\nthen most recently used; for the activity name input's suggestions.",
+        "operationId": "list_activity_suggestions",
+        "responses": {
+          "200": {
+            "description": "Suggestions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActivitySuggestion"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/notes": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "List a deal's notes",
+        "description": "Live notes, newest first, each with its live comments oldest first.",
+        "operationId": "list_deal_notes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Notes, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Note"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Add a note to a deal",
+        "description": "Up to 5000 characters. Notifies the deal's people.",
+        "operationId": "create_deal_note",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or too long, malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/notes/{note_id}": {
+      "delete": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Delete a note",
+        "description": "Soft-deletes it. When an admin deletes it, the deal's people are notified.",
+        "operationId": "delete_deal_note",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "note_id",
+            "in": "path",
+            "description": "Note id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such note on a live deal of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Edit or pin a note",
+        "description": "Changes the text (notifying the deal's people) and/or pins it.",
+        "operationId": "update_deal_note",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "note_id",
+            "in": "path",
+            "description": "Note id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Updated"
+          },
+          "400": {
+            "description": "Empty or too long, malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such note on a live deal of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/notes/{note_id}/comments": {
+      "post": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Comment on a note",
+        "description": "Up to 2000 characters. Only admins' comments carry their name, and only\nthose notify the deal's people.",
+        "operationId": "create_deal_note_comment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "note_id",
+            "in": "path",
+            "description": "Note id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or too long, malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such note on a live deal of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/notes/{note_id}/comments/{comment_id}": {
+      "delete": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Delete a comment",
+        "description": "Soft-deletes it. When an admin deletes it, the deal's people are notified.",
+        "operationId": "delete_deal_note_comment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "note_id",
+            "in": "path",
+            "description": "Note id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "comment_id",
+            "in": "path",
+            "description": "Comment id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such comment on a live note of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
     "schemas": {
+      "Activity": {
+        "type": "object",
+        "description": "A to-do on a deal.",
+        "required": [
+          "id",
+          "deal_id",
+          "name",
+          "priority",
+          "is_completed"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Activity id."
+          },
+          "deal_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal it belongs to."
+          },
+          "name": {
+            "type": "string",
+            "description": "What to do."
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Store wall time `YYYY-MM-DDTHH:MM:SS` (midnight means a whole day), or null."
+          },
+          "priority": {
+            "type": "string",
+            "description": "`low`, `medium` or `high`."
+          },
+          "is_completed": {
+            "type": "boolean",
+            "description": "Done."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was marked done."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was created."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the user who created it."
+          }
+        }
+      },
+      "ActivityInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/deals/{id}/activities`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "What to do, at most 255 characters."
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`YYYY-MM-DD` (whole day), or a store wall time\n`YYYY-MM-DDTHH:MM:SS` / `YYYY-MM-DD HH:MM:SS`. A time sends the deal\nowner a reminder then."
+          },
+          "priority": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Priority",
+                "description": "Default `medium`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ActivityPatch": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/deals/{id}/activities/{activity_id}`.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New name."
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New deadline (same formats as when creating); null clears it."
+          },
+          "priority": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Priority",
+                "description": "New priority."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "is_completed": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Mark done or not done."
+          }
+        }
+      },
+      "ActivityPreview": {
+        "type": "object",
+        "description": "An activity preview on a customer's deal.",
+        "required": [
+          "id",
+          "name",
+          "priority",
+          "is_completed"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Activity id."
+          },
+          "name": {
+            "type": "string",
+            "description": "What to do."
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Store wall time, or null."
+          },
+          "priority": {
+            "type": "string",
+            "description": "`low`, `medium` or `high`."
+          },
+          "is_completed": {
+            "type": "boolean",
+            "description": "Done."
+          }
+        }
+      },
+      "ActivitySuggestion": {
+        "type": "object",
+        "description": "An activity name the caller used before.",
+        "required": [
+          "name",
+          "uses"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name, trimmed."
+          },
+          "uses": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many live activities the caller created with it."
+          }
+        }
+      },
       "AddImages": {
         "type": "object",
         "description": "Body of `POST /v1/stones/{id}/images`.",
@@ -6221,6 +8415,129 @@
           }
         },
         "additionalProperties": false
+      },
+      "BoardDeal": {
+        "type": "object",
+        "description": "A deal card of the board.",
+        "required": [
+          "id",
+          "list_id",
+          "position",
+          "outcome",
+          "has_images",
+          "has_emails",
+          "has_notes",
+          "open_activity_count"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal id."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Short name of the job."
+          },
+          "amount": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expected value in dollars, a decimal string (`\"2500.50\"`), or null."
+          },
+          "list_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stage the deal is in."
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Order inside the stage, ascending."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stage name when the deal last moved (legacy label)."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/DealStatus",
+            "description": "`open`, `won` or `lost`."
+          },
+          "lost_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a lost deal was lost."
+          },
+          "due_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expected close date `YYYY-MM-DD`, or null."
+          },
+          "customer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DealCustomer",
+                "description": "The customer; null when the customer was deleted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "has_images": {
+            "type": "boolean",
+            "description": "Photos were attached to the deal."
+          },
+          "has_emails": {
+            "type": "boolean",
+            "description": "Emails were exchanged on the deal or with its customer."
+          },
+          "has_notes": {
+            "type": "boolean",
+            "description": "The deal has notes."
+          },
+          "open_activity_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unfinished activities."
+          },
+          "earliest_activity_deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Earliest deadline among the unfinished activities (store wall time), or null."
+          },
+          "next_activity": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NextActivity",
+                "description": "The unfinished activity due first (activities without a deadline come last)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sms_flow_phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone digits of an active or paused SMS follow-up flow for the customer."
+          }
+        }
       },
       "Checklist": {
         "type": "object",
@@ -6439,6 +8756,19 @@
         ],
         "description": "A customer row of the `companies` view, with totals over its own sales\nand those of its child customers."
       },
+      "ContentInput": {
+        "type": "object",
+        "description": "Body creating a note or a comment.",
+        "required": [
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Text (notes up to 5000 characters, comments up to 2000)."
+          }
+        }
+      },
       "ConversionCount": {
         "type": "object",
         "description": "Won deals out of all deals of one group.",
@@ -6456,6 +8786,20 @@
             "type": "integer",
             "format": "int64",
             "description": "All deals, whatever their state."
+          }
+        }
+      },
+      "CreatedId": {
+        "type": "object",
+        "description": "The id of the row just created.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Id of the new row."
           }
         }
       },
@@ -6534,6 +8878,64 @@
             "type": "integer",
             "format": "int32",
             "description": "Id of the new stone."
+          }
+        }
+      },
+      "CustomerDeal": {
+        "type": "object",
+        "description": "A deal of a customer, with a preview of its notes and activities.",
+        "required": [
+          "id",
+          "notes",
+          "activities"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal id."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Short name of the job."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stage name when the deal last moved."
+          },
+          "amount": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expected value, a decimal string."
+          },
+          "list_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the deal's current stage."
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotePreview"
+            },
+            "description": "Up to two notes, pinned first, then newest."
+          },
+          "activities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityPreview"
+            },
+            "description": "Up to two activities, unfinished first, then by deadline."
           }
         }
       },
@@ -6902,6 +9304,341 @@
             "description": "Customers who called in (`source = call-in`)."
           }
         }
+      },
+      "DealCreate": {
+        "type": "object",
+        "description": "Body of `POST /v1/deals`.",
+        "required": [
+          "customer_id",
+          "list_id"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer the deal is for."
+          },
+          "list_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stage to put it in."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Short name of the job."
+          },
+          "amount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Expected value in dollars."
+          },
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Order inside the stage. Default 1."
+          },
+          "outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DealStatus",
+                "description": "Create it already closed: `won` or `lost`. Default `open`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "DealCreated": {
+        "type": "object",
+        "description": "Result of `POST /v1/deals`.",
+        "required": [
+          "id",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The new deal, or the customer's open deal that was updated instead."
+          },
+          "created": {
+            "type": "boolean",
+            "description": "False when an open deal of the customer was reused."
+          }
+        }
+      },
+      "DealCustomer": {
+        "type": "object",
+        "description": "The customer a deal is for, as the board card shows it.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contact name."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company of the contact, when it is a business."
+          },
+          "temperature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lead temperature: `hot`, `medium`, `cold`, or null when unrated."
+          }
+        }
+      },
+      "DealDetail": {
+        "type": "object",
+        "description": "One deal in full.",
+        "required": [
+          "id",
+          "list_id",
+          "group_id",
+          "position",
+          "outcome",
+          "customer_id",
+          "customer_deal_count",
+          "files_count"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal id."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Short name of the job."
+          },
+          "amount": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expected value in dollars, a decimal string, or null."
+          },
+          "list_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Current stage."
+          },
+          "group_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Group of the current stage (the deal's pipeline)."
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Order inside the stage."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/DealStatus",
+            "description": "`open`, `won` or `lost`."
+          },
+          "lost_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a lost deal was lost."
+          },
+          "due_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expected close date `YYYY-MM-DD`."
+          },
+          "user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Owner (a user id)."
+          },
+          "customer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Customer name."
+          },
+          "customer_deal_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Live deals of the same customer, this one included."
+          },
+          "files_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Photos plus documents attached to the deal."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the deal was created."
+          }
+        }
+      },
+      "DealGroup": {
+        "type": "object",
+        "description": "A pipeline (a set of stages) on the deals board.",
+        "required": [
+          "id",
+          "name",
+          "has_overdue_activity"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Group id; pass it as `group_id` to `GET /v1/deals` and `GET /v1/deal-lists`."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "has_overdue_activity": {
+            "type": "boolean",
+            "description": "One of the caller's deals in this group (with the requested status)\nhas an unfinished activity whose deadline day has passed."
+          }
+        }
+      },
+      "DealList": {
+        "type": "object",
+        "description": "A stage (board column) of a group.",
+        "required": [
+          "id",
+          "name",
+          "position",
+          "group_id",
+          "group_name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stage id (`list_id` of a deal)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Column title."
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Order inside the group, ascending."
+          },
+          "group_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Group the stage belongs to."
+          },
+          "group_name": {
+            "type": "string",
+            "description": "Name of that group."
+          }
+        }
+      },
+      "DealPatch": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/deals/{id}`; only the fields sent change.",
+        "properties": {
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New title; null clears it."
+          },
+          "amount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "New amount in dollars; null clears it."
+          },
+          "due_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expected close date `YYYY-MM-DD`; null clears it."
+          },
+          "list_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Move to this stage. A closed deal moved to another stage is reopened."
+          },
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Order inside the stage."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Give the deal to another customer of the company."
+          }
+        }
+      },
+      "DealStatus": {
+        "type": "string",
+        "description": "Where a deal is in its life: still being worked (`open`), `won` or `lost`.",
+        "enum": [
+          "open",
+          "won",
+          "lost"
+        ]
       },
       "EmailsBatchRequest": {
         "type": "object",
@@ -7369,6 +10106,197 @@
         },
         "additionalProperties": false
       },
+      "NextActivity": {
+        "type": "object",
+        "description": "The unfinished activity due first on a deal.",
+        "required": [
+          "id",
+          "name",
+          "priority"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Activity id."
+          },
+          "name": {
+            "type": "string",
+            "description": "What to do."
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Store wall time `YYYY-MM-DDTHH:MM:SS` (midnight means a whole day), or null."
+          },
+          "priority": {
+            "type": "string",
+            "description": "`low`, `medium` or `high`."
+          }
+        }
+      },
+      "Note": {
+        "type": "object",
+        "description": "A note on a deal with its comments, oldest comment first.",
+        "required": [
+          "id",
+          "deal_id",
+          "content",
+          "is_pinned",
+          "comments"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Note id."
+          },
+          "deal_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal it belongs to."
+          },
+          "content": {
+            "type": "string",
+            "description": "Text."
+          },
+          "is_pinned": {
+            "type": "boolean",
+            "description": "Pinned to the top."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was written."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Author name."
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NoteComment"
+            },
+            "description": "Comments, oldest first."
+          }
+        }
+      },
+      "NoteComment": {
+        "type": "object",
+        "description": "A comment under a note.",
+        "required": [
+          "id",
+          "note_id",
+          "content"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Comment id."
+          },
+          "note_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Note it belongs to."
+          },
+          "content": {
+            "type": "string",
+            "description": "Text."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was written."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Author name; null for comments by non-admins."
+          }
+        }
+      },
+      "NotePatch": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/deals/{id}/notes/{note_id}`.",
+        "properties": {
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New text, up to 5000 characters."
+          },
+          "is_pinned": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Pin or unpin."
+          }
+        }
+      },
+      "NotePreview": {
+        "type": "object",
+        "description": "A note preview on a customer's deal.",
+        "required": [
+          "id",
+          "content"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Note id."
+          },
+          "content": {
+            "type": "string",
+            "description": "Text."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was written."
+          }
+        }
+      },
+      "OutcomeBody": {
+        "type": "object",
+        "description": "Body of `PUT /v1/deals/{id}/outcome`.",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/DealStatus",
+            "description": "`won`, `lost`, or `open` to reopen a closed deal."
+          },
+          "lost_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it was lost; only with `lost`."
+          }
+        }
+      },
       "PointsBreakdown": {
         "type": "object",
         "description": "Points per source. Each source counts only from its own start date.",
@@ -7463,6 +10391,15 @@
             "description": "`positions.id`, e.g. 1 = sales rep, 9 = super admin."
           }
         }
+      },
+      "Priority": {
+        "type": "string",
+        "description": "Activity priority.",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ]
       },
       "PublicCompany": {
         "type": "object",
@@ -7807,6 +10744,68 @@
           }
         },
         "additionalProperties": false
+      },
+      "Recipient": {
+        "type": "object",
+        "description": "An email address to send a bulk email to.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Lowercased, trimmed address."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Customer name, or null."
+          }
+        }
+      },
+      "ReorderBody": {
+        "type": "object",
+        "description": "Body of `POST /v1/deals/reorder`.",
+        "required": [
+          "updates"
+        ],
+        "properties": {
+          "updates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReorderItem"
+            },
+            "description": "Every card whose stage or position changed."
+          }
+        }
+      },
+      "ReorderItem": {
+        "type": "object",
+        "description": "One card move of `POST /v1/deals/reorder`.",
+        "required": [
+          "id",
+          "list_id",
+          "position"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal id."
+          },
+          "list_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stage it is now in."
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Order inside that stage."
+          }
+        }
       },
       "RoomInput": {
         "type": "object",
@@ -8654,6 +11653,36 @@
           "cloudtalk",
           "ringcentral"
         ]
+      },
+      "StageVisit": {
+        "type": "object",
+        "description": "A stay of a deal in a stage.",
+        "required": [
+          "list_id"
+        ],
+        "properties": {
+          "list_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stage id."
+          },
+          "entered_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the deal entered the stage."
+          },
+          "exited_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it left; null for the current stage."
+          }
+        }
       },
       "Stone": {
         "type": "object",
@@ -9657,6 +12686,10 @@
     {
       "name": "leaderboard",
       "description": "The company's points leaderboard"
+    },
+    {
+      "name": "deals",
+      "description": "The sales pipeline: deals, their stages, activities and notes"
     }
   ]
 }

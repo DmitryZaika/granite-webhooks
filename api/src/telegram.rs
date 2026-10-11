@@ -80,6 +80,42 @@ impl TelegramBots {
         (id > 0).then_some(id)
     }
 
+    /// Sends `text` with one button opening `url`. Failures (no token,
+    /// blocked bot, network) are logged and swallowed: notifications are best
+    /// effort.
+    pub async fn send_with_button(
+        &self,
+        bot: Bot,
+        chat_id: i64,
+        text: &str,
+        label: &str,
+        url: &str,
+    ) {
+        let Some(token) = self.token(bot) else {
+            return;
+        };
+        let body = serde_json::json!({
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": { "inline_keyboard": [[{ "text": label, "url": url }]] },
+        });
+        let result = self
+            .http
+            .post(format!("{}/bot{token}/sendMessage", self.api_base))
+            .json(&body)
+            .send()
+            .await;
+        match result {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) => {
+                tracing::warn!(?bot, status = %response.status(), "telegram sendMessage refused");
+            }
+            Err(err) => {
+                tracing::warn!(?bot, error = %err.without_url(), "telegram sendMessage failed");
+            }
+        }
+    }
+
     /// Whether `bot` can message `chat_id`: Some(true) yes, Some(false) no
     /// (blocked, chat gone), None when it could not be checked (no token,
     /// network error, unexpected answer).

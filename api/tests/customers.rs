@@ -39,6 +39,7 @@ async fn default_view_lists_valid_live_customers_of_own_company(pool: MySqlPool)
             1009,
             1010,
             1011,
+            8695,
             990_000_021
         ]
     );
@@ -115,6 +116,7 @@ async fn show_invalid_includes_invalid_leads(pool: MySqlPool) {
             1009,
             1010,
             1011,
+            8695,
             990_000_021
         ]
     );
@@ -141,7 +143,7 @@ async fn sales_rep_filter(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .json();
-    assert_eq!(sorted(ids(&rows)), vec![1000, 1008, 1011]);
+    assert_eq!(sorted(ids(&rows)), vec![1000, 1008, 1011, 8695]);
 
     let rows: Value = server
         .get("/v1/customers")
@@ -150,7 +152,7 @@ async fn sales_rep_filter(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .json();
-    assert_eq!(sorted(ids(&rows)), vec![1000, 1002, 1008, 1011]);
+    assert_eq!(sorted(ids(&rows)), vec![1000, 1002, 1008, 1011, 8695]);
 
     // Empty value means "no filter", like the Remix `if (salesRepFilter)`.
     let rows: Value = server
@@ -159,7 +161,7 @@ async fn sales_rep_filter(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .json();
-    assert_eq!(ids(&rows).len(), 10);
+    assert_eq!(ids(&rows).len(), 11);
 }
 
 #[test_db::test(seed)]
@@ -181,7 +183,7 @@ async fn unknown_view_falls_back_to_customers(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .json();
-    assert_eq!(ids(&rows).len(), 10);
+    assert_eq!(ids(&rows).len(), 11);
 }
 
 #[test_db::test(seed)]

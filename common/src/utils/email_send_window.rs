@@ -111,6 +111,47 @@ pub fn clamp_automated_email_send_at(when: DateTime<Utc>) -> DateTime<Utc> {
     cursor
 }
 
+/// Automated SMS go out 9:00 AM to before 6:00 PM store time (end
+/// exclusive), skipping the same holidays as email. Port of
+/// `scheduledAutomatedSmsSendAt` in the Remix app (`smsFlowSendWindow.ts`).
+pub fn clamp_automated_sms_send_at(when: DateTime<Utc>) -> DateTime<Utc> {
+    const SMS_START: (u32, u32) = (9, 0);
+    const SMS_END: (u32, u32) = (18, 0);
+    let bounds = |at: DateTime<Utc>| {
+        let local = at.with_timezone(&Indianapolis);
+        let wall = |(hour, minute): (u32, u32)| {
+            store_wall_to_utc(local.year(), local.month(), local.day(), hour, minute)
+        };
+        (wall(SMS_START), wall(SMS_END))
+    };
+    let next_morning = |at: DateTime<Utc>| {
+        let next = at.with_timezone(&Indianapolis).date_naive() + Duration::days(1);
+        store_wall_to_utc(
+            next.year(),
+            next.month(),
+            next.day(),
+            SMS_START.0,
+            SMS_START.1,
+        )
+    };
+    let mut cursor = when;
+    for _ in 0..10 {
+        let (start, end) = bounds(cursor);
+        let candidate = if cursor >= start && cursor < end {
+            cursor
+        } else if cursor < start {
+            start
+        } else {
+            next_morning(cursor)
+        };
+        if !is_major_holiday_store_day(candidate) {
+            return candidate;
+        }
+        cursor = next_morning(candidate);
+    }
+    cursor
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +197,25 @@ mod tests {
         assert_eq!(
             clamp_automated_email_send_at(utc("2026-07-27T23:01:00Z")),
             utc("2026-07-28T12:30:00Z")
+        );
+    }
+
+    #[test]
+    fn sms_window_is_nine_to_before_six() {
+        assert_eq!(
+            clamp_automated_sms_send_at(utc("2026-07-28T12:30:00Z")),
+            utc("2026-07-28T13:00:00Z")
+        );
+        let at = utc("2026-07-28T21:59:00Z");
+        assert_eq!(clamp_automated_sms_send_at(at), at);
+        assert_eq!(
+            clamp_automated_sms_send_at(utc("2026-07-28T22:00:00Z")),
+            utc("2026-07-29T13:00:00Z")
+        );
+        // July 4th is skipped.
+        assert_eq!(
+            clamp_automated_sms_send_at(utc("2026-07-03T22:30:00Z")),
+            utc("2026-07-05T13:00:00Z")
         );
     }
 }
