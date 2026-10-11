@@ -360,9 +360,10 @@ fn parse_due_date(raw: &str) -> ApiResult<NaiveDate> {
 
 /// Update a deal
 ///
-/// Changes only the fields sent. Moving a deal to another stage records the
-/// stage history, schedules that stage's drip emails and SMS, and reopens it
-/// when it was won or lost. Changing `customer_id` gives the deal to another
+/// Changes only the fields sent. Moving a deal to another stage (`list_id`,
+/// or `group_id` for the first stage of another pipeline) records the stage
+/// history, schedules that stage's drip emails and SMS, and reopens it when
+/// it was won or lost. Changing `customer_id` gives the deal to another
 /// customer of the company.
 #[utoipa::path(
     patch,
@@ -435,7 +436,16 @@ pub async fn update(
             .push_bind_unseparated(customer_id);
         sets.push("customer_id");
     }
-    let moved = match patch.list_id {
+    let target_list = match (patch.list_id, patch.group_id) {
+        (Some(list_id), _) => Some(list_id),
+        (None, Some(group_id)) if group_id != deal.group_id => Some(
+            queries::first_list_of_group(&state.pool, user.company_id, group_id)
+                .await?
+                .ok_or_else(|| ApiError::BadRequest(format!("group {group_id} has no stages")))?,
+        ),
+        _ => None,
+    };
+    let moved = match target_list {
         Some(list_id) if list_id != deal.list_id => {
             let name = queries::list_is_visible(&state.pool, user.company_id, list_id)
                 .await?

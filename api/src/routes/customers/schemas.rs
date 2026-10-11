@@ -173,6 +173,59 @@ pub struct CustomerDetail {
     pub sales_rep: Option<i32>,
     /// Name of the assigned sales rep; null when unassigned or deleted.
     pub sales_rep_name: Option<String>,
+    /// City of the address.
+    pub city: Option<String>,
+    /// State of the address.
+    pub state: Option<String>,
+    /// ZIP code.
+    pub postal_code: Option<String>,
+    /// Lead temperature: `hot`, `medium`, `cold`, or null.
+    pub customer_temperature: Option<String>,
+    /// Internal notes about the customer.
+    pub notes: Option<String>,
+    /// QuickBooks customer id when linked.
+    pub qbo_id: Option<i32>,
+    /// File the lead attached to the web form (URL).
+    pub attached_file: Option<String>,
+    /// When the customer was created.
+    #[serde(serialize_with = "js_date")]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub created_date: Option<DateTime<Utc>>,
+    /// Lead form answers, as the lead sources send them (free text).
+    #[sqlx(flatten)]
+    pub lead: LeadAnswers,
+}
+
+/// What a lead answered on the ad or web form; every field free text, null
+/// when not asked.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, FromRow, ToSchema)]
+pub struct LeadAnswers {
+    /// Kind of remodel (kitchen, bath...).
+    pub remodal_type: Option<String>,
+    /// Project size.
+    pub project_size: Option<String>,
+    /// Best time to call.
+    pub contact_time: Option<String>,
+    /// Whether old countertops must be torn out and disposed of.
+    pub remove_and_dispose: Option<String>,
+    /// Asked for a better offer (1 yes, 0 no).
+    pub improve_offer: Option<i8>,
+    /// Sink wanted.
+    pub sink: Option<String>,
+    /// When the project should start.
+    pub when_start: Option<String>,
+    /// Project details.
+    pub details: Option<String>,
+    /// Ad campaign name.
+    pub compaign_name: Option<String>,
+    /// Ad set name.
+    pub adset_name: Option<String>,
+    /// Ad name.
+    pub ad_name: Option<String>,
+    /// Backsplash wanted.
+    pub backsplash: Option<String>,
+    /// Stove type.
+    pub kitchen_stove: Option<String>,
 }
 
 /// How `GET /v1/customers/search` matches `term`.

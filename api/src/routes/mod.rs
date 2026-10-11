@@ -5,6 +5,7 @@
 //! (`/v1/<domain>/...`) lives in the handler's `#[utoipa::path]`, so every
 //! route is still greppable from its URL.
 
+pub mod calendars;
 pub mod catalog;
 pub mod checklists;
 pub mod company;
@@ -47,4 +48,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(dashboard::router())
         .merge(leaderboard::router())
         .merge(deals::router())
+        .merge(calendars::router())
 }

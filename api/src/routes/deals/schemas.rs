@@ -137,6 +137,8 @@ pub struct BoardDeal {
     pub lost_reason: Option<String>,
     /// Expected close date `YYYY-MM-DD`, or null.
     pub due_date: Option<String>,
+    /// Customer id (also when the customer was deleted).
+    pub customer_id: i32,
     /// The customer; null when the customer was deleted.
     pub customer: Option<DealCustomer>,
     /// Photos were attached to the deal.
@@ -253,6 +255,9 @@ pub struct DealPatch {
     pub due_date: Option<Option<String>>,
     /// Move to this stage. A closed deal moved to another stage is reopened.
     pub list_id: Option<i32>,
+    /// Move to the first stage of this group (ignored when the deal is
+    /// already in it, or when `list_id` is sent).
+    pub group_id: Option<i32>,
     /// Order inside the stage.
     pub position: Option<i32>,
     /// Give the deal to another customer of the company.

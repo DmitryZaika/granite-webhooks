@@ -4852,8 +4852,8 @@
         "tags": [
           "uploads"
         ],
-        "summary": "Start an image upload",
-        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`) or\n`POST /v1/stones/{id}/images`; that route also makes the thumbnail.",
+        "summary": "Start an upload",
+        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`),\n`POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route\nalso makes the thumbnail. Inventory folders are for admins; `deals` for\nany employee and also takes documents.",
         "operationId": "create_upload",
         "requestBody": {
           "content": {
@@ -4877,7 +4877,7 @@
             }
           },
           "400": {
-            "description": "Not an image content type, or a malformed body",
+            "description": "Content type not allowed for the folder, or a malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -4897,7 +4897,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an employee, or not an admin for an inventory folder",
             "content": {
               "application/json": {
                 "schema": {
@@ -6947,7 +6947,7 @@
           "deals"
         ],
         "summary": "Update a deal",
-        "description": "Changes only the fields sent. Moving a deal to another stage records the\nstage history, schedules that stage's drip emails and SMS, and reopens it\nwhen it was won or lost. Changing `customer_id` gives the deal to another\ncustomer of the company.",
+        "description": "Changes only the fields sent. Moving a deal to another stage (`list_id`,\nor `group_id` for the first stage of another pipeline) records the stage\nhistory, schedules that stage's drip emails and SMS, and reopens it when\nit was won or lost. Changing `customer_id` gives the deal to another\ncustomer of the company.",
         "operationId": "update_deal",
         "parameters": [
           {
@@ -8189,6 +8189,455 @@
           }
         ]
       }
+    },
+    "/v1/deals/{id}/files": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "List a deal's photos and documents",
+        "description": "Newest first. Private files come with a link valid for an hour.",
+        "operationId": "list_deal_files",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Photos and documents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DealFiles"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Attach uploaded files to a deal",
+        "description": "Each URL must be a file uploaded to the `deals` folder. PDFs, Word, Excel,\nCSV and text files become documents (named after `name`, without the\nupload id prefix), anything else a photo.",
+        "operationId": "attach_deal_files",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewFiles"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachedCounts"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No files, or a URL that is not an uploaded deal file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Uploads are not configured on this server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/documents/{document_id}": {
+      "patch": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Rename a deal document",
+        "description": "Sets the display name of a document row (`source` `documents` in\n`GET /v1/deals/{id}/files`); older documents stored with the photos\ncannot be renamed.",
+        "operationId": "rename_deal_document",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "description": "Document id (source `documents`)",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentRename"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Renamed"
+          },
+          "400": {
+            "description": "Empty or longer than 255 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document on a live deal of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/files/{source}/{file_id}": {
+      "delete": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Delete a deal file",
+        "description": "Removes the row (`source` from the file listing) and the stored file.",
+        "operationId": "delete_deal_file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "source",
+            "in": "path",
+            "description": "`images` or `documents`",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileSource"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "description": "Row id within `source`",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "Unknown source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such file on a live deal of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/calendars": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "List the calendars on the caller's schedule",
+        "description": "The company's live calendars except those hidden for everyone or from\nthe caller in Admin > Schedule. The built-in Templates, Installations and\nEstimates calendars come first and are created on the fly when a company\nlacks them (so every company has them).",
+        "operationId": "list_calendars",
+        "responses": {
+          "200": {
+            "description": "Calendars",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Calendar"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -8416,6 +8865,26 @@
         },
         "additionalProperties": false
       },
+      "AttachedCounts": {
+        "type": "object",
+        "description": "How many of each kind were attached.",
+        "required": [
+          "images",
+          "documents"
+        ],
+        "properties": {
+          "images": {
+            "type": "integer",
+            "description": "Photos attached.",
+            "minimum": 0
+          },
+          "documents": {
+            "type": "integer",
+            "description": "Documents attached.",
+            "minimum": 0
+          }
+        }
+      },
       "BoardDeal": {
         "type": "object",
         "description": "A deal card of the board.",
@@ -8424,6 +8893,7 @@
           "list_id",
           "position",
           "outcome",
+          "customer_id",
           "has_images",
           "has_emails",
           "has_notes",
@@ -8484,6 +8954,11 @@
             ],
             "description": "Expected close date `YYYY-MM-DD`, or null."
           },
+          "customer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id (also when the customer was deleted)."
+          },
           "customer": {
             "oneOf": [
               {
@@ -8536,6 +9011,42 @@
               "null"
             ],
             "description": "Phone digits of an active or paused SMS follow-up flow for the customer."
+          }
+        }
+      },
+      "Calendar": {
+        "type": "object",
+        "description": "A calendar of the company's schedule.",
+        "required": [
+          "id",
+          "name",
+          "color",
+          "is_system"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Calendar id; events reference it."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "color": {
+            "type": "string",
+            "description": "Color name used on the schedule (e.g. `blue`)."
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`templates`, `installations` or `estimates` for the built-in\ncalendars every company has; null for calendars the company added."
+          },
+          "is_system": {
+            "type": "boolean",
+            "description": "A built-in calendar (it cannot be renamed or deleted)."
           }
         }
       },
@@ -8944,7 +9455,8 @@
         "description": "One customer with contact details, as the customer picker shows it.",
         "required": [
           "id",
-          "emails"
+          "emails",
+          "lead"
         ],
         "properties": {
           "id": {
@@ -9036,6 +9548,68 @@
               "null"
             ],
             "description": "Name of the assigned sales rep; null when unassigned or deleted."
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "City of the address."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "State of the address."
+          },
+          "postal_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ZIP code."
+          },
+          "customer_temperature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lead temperature: `hot`, `medium`, `cold`, or null."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Internal notes about the customer."
+          },
+          "qbo_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "QuickBooks customer id when linked."
+          },
+          "attached_file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File the lead attached to the web form (URL)."
+          },
+          "created_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the customer was created."
+          },
+          "lead": {
+            "$ref": "#/components/schemas/LeadAnswers",
+            "description": "Lead form answers, as the lead sources send them (free text)."
           }
         }
       },
@@ -9519,6 +10093,75 @@
           }
         }
       },
+      "DealDocument": {
+        "type": "object",
+        "description": "A document of a deal.",
+        "required": [
+          "id",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Row id within `source`."
+          },
+          "url": {
+            "type": "string",
+            "description": "URL the browser can open (presigned for private files)."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was attached."
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FileSource",
+                "description": "Where the row lives."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name; null for older documents (show the file name)."
+          }
+        }
+      },
+      "DealFiles": {
+        "type": "object",
+        "description": "Photos and documents of a deal, newest first.",
+        "required": [
+          "images",
+          "documents"
+        ],
+        "properties": {
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DealImage"
+            },
+            "description": "Photos."
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DealDocument"
+            },
+            "description": "Documents."
+          }
+        }
+      },
       "DealGroup": {
         "type": "object",
         "description": "A pipeline (a set of stages) on the deals board.",
@@ -9540,6 +10183,33 @@
           "has_overdue_activity": {
             "type": "boolean",
             "description": "One of the caller's deals in this group (with the requested status)\nhas an unfinished activity whose deadline day has passed."
+          }
+        }
+      },
+      "DealImage": {
+        "type": "object",
+        "description": "A photo of a deal.",
+        "required": [
+          "id",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Row id (in `images`)."
+          },
+          "url": {
+            "type": "string",
+            "description": "URL the browser can show (presigned for private files)."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was attached."
           }
         }
       },
@@ -9613,6 +10283,14 @@
             "format": "int32",
             "description": "Move to this stage. A closed deal moved to another stage is reopened."
           },
+          "group_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Move to the first stage of this group (ignored when the deal is\nalready in it, or when `list_id` is sent)."
+          },
           "position": {
             "type": [
               "integer",
@@ -9639,6 +10317,19 @@
           "won",
           "lost"
         ]
+      },
+      "DocumentRename": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/deals/{id}/documents/{document_id}`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "New display name, 1 to 255 characters."
+          }
+        }
       },
       "EmailsBatchRequest": {
         "type": "object",
@@ -9736,6 +10427,14 @@
             "description": "Units in stock that are not installed on a sold slab."
           }
         }
+      },
+      "FileSource": {
+        "type": "string",
+        "description": "Where a file row lives; pass it back when deleting.",
+        "enum": [
+          "images",
+          "documents"
+        ]
       },
       "FixtureInput": {
         "type": "object",
@@ -9929,6 +10628,104 @@
           }
         }
       },
+      "LeadAnswers": {
+        "type": "object",
+        "description": "What a lead answered on the ad or web form; every field free text, null\nwhen not asked.",
+        "properties": {
+          "remodal_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Kind of remodel (kitchen, bath...)."
+          },
+          "project_size": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Project size."
+          },
+          "contact_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Best time to call."
+          },
+          "remove_and_dispose": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Whether old countertops must be torn out and disposed of."
+          },
+          "improve_offer": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Asked for a better offer (1 yes, 0 no)."
+          },
+          "sink": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sink wanted."
+          },
+          "when_start": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the project should start."
+          },
+          "details": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Project details."
+          },
+          "compaign_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ad campaign name."
+          },
+          "adset_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ad set name."
+          },
+          "ad_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ad name."
+          },
+          "backsplash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Backsplash wanted."
+          },
+          "kitchen_stove": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stove type."
+          }
+        }
+      },
       "LeaderboardActivity": {
         "type": "object",
         "description": "Counts behind the call, text and email points, after the daily caps.",
@@ -10066,6 +10863,42 @@
             "type": "integer",
             "format": "int64",
             "description": "Messages sent that month."
+          }
+        }
+      },
+      "NewFile": {
+        "type": "object",
+        "description": "One uploaded file to attach.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Public URL from `POST /v1/uploads` (folder `deals`)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Original file name; documents keep it as their name."
+          }
+        }
+      },
+      "NewFiles": {
+        "type": "object",
+        "description": "Body of `POST /v1/deals/{id}/files`.",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewFile"
+            },
+            "description": "Files already uploaded with `POST /v1/uploads`."
           }
         }
       },
@@ -12531,7 +13364,8 @@
         "enum": [
           "stones",
           "sinks",
-          "faucets"
+          "faucets",
+          "deals"
         ]
       },
       "UploadRequest": {
@@ -12553,7 +13387,7 @@
           },
           "content_type": {
             "type": "string",
-            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`. Send the same value as the\n`Content-Type` header of the `PUT`."
+            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`; for `deals` also PDF, Word,\nExcel, CSV and plain text. Send the same value as the `Content-Type`\nheader of the `PUT`."
           }
         },
         "additionalProperties": false
@@ -12686,6 +13520,10 @@
     {
       "name": "leaderboard",
       "description": "The company's points leaderboard"
+    },
+    {
+      "name": "schedule",
+      "description": "Calendars and events of the company schedule"
     },
     {
       "name": "deals",

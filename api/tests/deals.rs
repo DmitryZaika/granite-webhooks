@@ -149,6 +149,7 @@ async fn board_lists_the_callers_open_deals_of_the_group(pool: MySqlPool) {
             "outcome": "open",
             "lost_reason": null,
             "due_date": "2026-09-30",
+            "customer_id": 8695,
             "customer": { "id": 8695, "name": "Nina Lead", "company_name": null, "temperature": "hot" },
             "has_images": true,
             "has_emails": true,
@@ -173,6 +174,7 @@ async fn board_lists_the_callers_open_deals_of_the_group(pool: MySqlPool) {
             "outcome": "open",
             "lost_reason": null,
             "due_date": null,
+            "customer_id": 1004,
             "customer": { "id": 1004, "name": "Erin Builder", "company_name": "Erin Builders LLC", "temperature": "medium" },
             "has_images": false,
             "has_emails": false,
@@ -1137,5 +1139,141 @@ async fn stage_recipients_are_the_callers_customers(pool: MySqlPool) {
         )
         .await,
         json!([{ "email": "jack@example.com", "name": "Jack Mismatched Email" }])
+    );
+}
+
+// ---- group move, files -----------------------------------------------------
+
+#[test_db::test(seed)]
+async fn patch_group_moves_to_its_first_stage(pool: MySqlPool) {
+    let app = server(pool.clone());
+    // Same group: nothing moves (a remounted select resends it).
+    app.patch("/v1/deals/8603")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "group_id": 100 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        rows(
+            &pool,
+            "SELECT CAST(list_id AS CHAR), CAST(is_won AS CHAR) FROM deals WHERE id = 8603"
+        )
+        .await,
+        vec![vec!["101", "1"]]
+    );
+    // Won deal to Remodel: first stage, reopened.
+    app.patch("/v1/deals/8603")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "group_id": 104 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        rows(
+            &pool,
+            "SELECT CAST(list_id AS CHAR), CAST(is_won AS CHAR), status FROM deals WHERE id = 8603"
+        )
+        .await,
+        vec![vec!["104", "NULL", "Measure"]]
+    );
+    for group in [105, 101] {
+        app.patch("/v1/deals/8603")
+            .with_session(sessions::DEALER)
+            .json(&json!({ "group_id": group }))
+            .await
+            .assert_status_bad_request();
+    }
+}
+
+#[test_db::test(seed)]
+async fn deal_files_attach_list_rename_delete(pool: MySqlPool) {
+    let (app, storage) = common::server_with_storage(pool.clone());
+    // Upload two files to the deals folder like the browser would.
+    let mut urls = Vec::new();
+    for (name, content_type, bytes) in [
+        ("kitchen.png", "image/png", common::png(20, 10)),
+        ("Quote.pdf", "application/pdf", b"%PDF-1.4".to_vec()),
+    ] {
+        let res = app
+            .post("/v1/uploads")
+            .with_session(sessions::DEALER)
+            .json(&json!({ "folder": "deals", "file_name": name, "content_type": content_type }))
+            .await;
+        res.assert_status(StatusCode::CREATED);
+        let url = res.json::<Value>()["url"].as_str().unwrap().to_string();
+        let key = storage.key_for_url(&url).unwrap();
+        storage.put(&key, bytes, content_type).await.unwrap();
+        urls.push((url, name));
+    }
+    let res = app
+        .post("/v1/deals/8601/files")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "files": urls.iter().map(|(url, name)| json!({ "url": url, "name": name })).collect::<Vec<_>>() }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    assert_eq!(res.json::<Value>(), json!({ "images": 1, "documents": 1 }));
+
+    let files: Value = app
+        .get("/v1/deals/8601/files")
+        .with_session(sessions::DEALER)
+        .await
+        .json();
+    assert_eq!(files["images"].as_array().unwrap().len(), 1);
+    assert_eq!(files["images"][0]["url"], urls[0].0.as_str());
+    assert_eq!(files["documents"][0]["name"], "Quote.pdf");
+    assert_eq!(files["documents"][0]["source"], "documents");
+    let doc_id = files["documents"][0]["id"].as_i64().unwrap();
+
+    app.patch(&format!("/v1/deals/8601/documents/{doc_id}"))
+        .with_session(sessions::DEALER)
+        .json(&json!({ "name": "Final quote" }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    // Not this deal's document.
+    app.patch(&format!("/v1/deals/8600/documents/{doc_id}"))
+        .with_session(sessions::DEALER)
+        .json(&json!({ "name": "x" }))
+        .await
+        .assert_status_not_found();
+    app.delete(&format!("/v1/deals/8601/files/documents/{doc_id}"))
+        .with_session(sessions::DEALER)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(!storage.memory_keys().iter().any(|k| k.ends_with(".pdf")));
+    let files: Value = app
+        .get("/v1/deals/8601/files")
+        .with_session(sessions::DEALER)
+        .await
+        .json();
+    assert_eq!(files["documents"], json!([]));
+
+    // A URL that was never uploaded, a foreign deal, a bad source.
+    app.post("/v1/deals/8601/files")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "files": [{ "url": "https://evil.test/x.png" }] }))
+        .await
+        .assert_status_bad_request();
+    app.get("/v1/deals/8009/files")
+        .with_session(sessions::DEALER)
+        .await
+        .assert_status_not_found();
+    app.delete("/v1/deals/8601/files/other/1")
+        .with_session(sessions::DEALER)
+        .await
+        .assert_status_bad_request();
+}
+
+#[test_db::test(seed)]
+async fn seeded_photo_and_documents_kept_in_images(pool: MySqlPool) {
+    sqlx::query("INSERT INTO deals_images (id, deal_id, image_url, created_at) VALUES (8651, 8600, 'https://example.test/old-quote.PDF?x=1', '2026-04-02 10:00:00')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let files = get(&pool, "/v1/deals/8600/files", sessions::DEALER).await;
+    assert_eq!(
+        files,
+        json!({
+            "images": [{ "id": 8650, "url": "https://example.test/deal-8600.jpg", "created_at": "2026-04-01T10:00:00.000Z" }],
+            "documents": [{ "id": 8651, "url": "https://example.test/old-quote.PDF?x=1", "created_at": "2026-04-02T10:00:00.000Z", "source": "images", "name": null }]
+        })
     );
 }

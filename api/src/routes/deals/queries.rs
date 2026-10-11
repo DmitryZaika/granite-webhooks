@@ -103,6 +103,7 @@ struct BoardRow {
     is_won: Option<i32>,
     lost_reason: Option<String>,
     due_date: Option<String>,
+    owner_id: i32,
     customer_id: Option<i32>,
     customer_name: Option<String>,
     company_name: Option<String>,
@@ -131,7 +132,7 @@ pub async fn board(
         "SELECT CAST(d.id AS SIGNED) AS id, d.title, CAST(d.amount AS CHAR) AS amount, d.list_id,
                 d.position, d.status, d.is_won, d.lost_reason,
                 DATE_FORMAT(d.due_date, '%Y-%m-%d') AS due_date,
-                c.id AS customer_id, c.name AS customer_name, c.company_name,
+                owner.id AS owner_id, c.id AS customer_id, c.name AS customer_name, c.company_name,
                 CAST(c.customer_temperature AS CHAR) AS temperature
          FROM deals d
          JOIN deals_list dl ON dl.id = d.list_id AND dl.deleted_at IS NULL
@@ -243,6 +244,7 @@ pub async fn board(
             outcome: DealStatus::from_is_won(row.is_won),
             lost_reason: row.lost_reason,
             due_date: row.due_date,
+            customer_id: row.owner_id,
             customer: row.customer_id.map(|id| DealCustomer {
                 id,
                 name: row.customer_name,
@@ -608,4 +610,21 @@ pub async fn list_recipients(
             Some(Recipient { email, name })
         })
         .collect())
+}
+
+/// First live stage of a displayed group the company can use.
+pub async fn first_list_of_group(
+    pool: &MySqlPool,
+    company_id: i32,
+    group_id: i32,
+) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT dl.id FROM deals_list dl JOIN groups_list gl ON gl.id = dl.group_id
+         WHERE dl.group_id = ? AND dl.deleted_at IS NULL AND gl.is_displayed = 1 AND {GROUP_VISIBLE}
+         ORDER BY dl.position, dl.id LIMIT 1"
+    )))
+    .bind(group_id)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await
 }

@@ -1,5 +1,6 @@
+use super::schemas::UploadFolder;
 use super::schemas::{Upload, UploadRequest};
-use crate::auth::AdminUser;
+use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::state::AppState;
@@ -8,12 +9,14 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 
-/// Start an image upload
+/// Start an upload
 ///
 /// Returns a presigned URL to `PUT` the file to (straight to storage, any
 /// size) and the public URL the file will have. Then pass `url` to the
-/// record's route, e.g. `PUT /v1/stones/{id}` (`image_url`) or
-/// `POST /v1/stones/{id}/images`; that route also makes the thumbnail.
+/// record's route, e.g. `PUT /v1/stones/{id}` (`image_url`),
+/// `POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route
+/// also makes the thumbnail. Inventory folders are for admins; `deals` for
+/// any employee and also takes documents.
 #[utoipa::path(
     post,
     path = "/v1/uploads",
@@ -22,9 +25,9 @@ use axum::http::StatusCode;
     request_body = UploadRequest,
     responses(
         (status = 201, description = "Upload URL and public URL", body = Upload),
-        (status = 400, description = "Not an image content type, or a malformed body", body = ErrorBody),
+        (status = 400, description = "Content type not allowed for the folder, or a malformed body", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, or not an admin for an inventory folder", body = ErrorBody),
         (status = 500, description = "Storage error", body = ErrorBody),
         (status = 503, description = "Uploads are not configured on this server", body = ErrorBody),
     ),
@@ -32,11 +35,17 @@ use axum::http::StatusCode;
 )]
 pub async fn create(
     State(state): State<AppState>,
-    AdminUser(_user): AdminUser,
+    EmployeeUser(user): EmployeeUser,
     JsonBody(request): JsonBody<UploadRequest>,
 ) -> ApiResult<(StatusCode, Json<Upload>)> {
+    let is_deal = request.folder == UploadFolder::Deals;
+    if !(is_deal || user.is_admin || user.is_superuser) {
+        return Err(ApiError::Forbidden);
+    }
     let content_type = request.content_type.trim().to_lowercase();
-    if !IMAGE_CONTENT_TYPES.contains(&content_type.as_str()) {
+    let allowed = IMAGE_CONTENT_TYPES.contains(&content_type.as_str())
+        || (is_deal && DOCUMENT_CONTENT_TYPES.contains(&content_type.as_str()));
+    if !allowed {
         return Err(ApiError::BadRequest(format!(
             "unsupported content type: {content_type}"
         )));
@@ -51,6 +60,17 @@ pub async fn create(
     let url = state.storage.public_url(&key)?;
     Ok((StatusCode::CREATED, Json(Upload { upload_url, url })))
 }
+
+/// Document types a deal may hold besides images.
+pub const DOCUMENT_CONTENT_TYPES: &[&str] = &[
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
+    "text/plain",
+];
 
 /// `.jpg` from `photo.JPG`, else from the content type.
 fn extension(file_name: &str, content_type: &str) -> String {
@@ -67,7 +87,11 @@ fn extension(file_name: &str, content_type: &str) -> String {
             "image/webp" => "webp",
             "image/gif" => "gif",
             "image/heic" => "heic",
-            _ => "heif",
+            "image/heif" => "heif",
+            "application/pdf" => "pdf",
+            "text/csv" => "csv",
+            "text/plain" => "txt",
+            _ => "bin",
         }
         .to_string()
     });

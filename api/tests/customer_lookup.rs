@@ -42,9 +42,47 @@ async fn get_returns_contact_details_and_every_email(pool: MySqlPool) {
             "referral_source": null,
             "your_message": null,
             "sales_rep": 100,
-            "sales_rep_name": "Rita Rep"
+            "sales_rep_name": "Rita Rep",
+            "city": null,
+            "state": null,
+            "postal_code": null,
+            "customer_temperature": "hot",
+            "notes": null,
+            "qbo_id": null,
+            "attached_file": null,
+            "created_date": "2026-01-15T10:00:00.000Z",
+            "lead": {
+                "remodal_type": null, "project_size": null, "contact_time": null,
+                "remove_and_dispose": null, "improve_offer": null, "sink": null,
+                "when_start": null, "details": null, "compaign_name": null,
+                "adset_name": null, "ad_name": null, "backsplash": null, "kitchen_stove": null
+            }
         })
     );
+}
+
+#[test_db::test(seed)]
+async fn get_returns_the_lead_form_answers(pool: MySqlPool) {
+    sqlx::query(
+        "UPDATE customers SET city = 'Carmel', state = 'IN', postal_code = '46032',
+           remodal_type = 'Kitchen', improve_offer = 1, ad_name = 'Spring', attached_file = 'https://x.test/a.jpg'
+         WHERE id = 1004",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let res = server(pool)
+        .get("/v1/customers/1004")
+        .with_session(sessions::REP)
+        .await;
+    let body: Value = res.json();
+    assert_eq!(body["city"], "Carmel");
+    assert_eq!(body["postal_code"], "46032");
+    assert_eq!(body["attached_file"], "https://x.test/a.jpg");
+    assert_eq!(body["customer_temperature"], "medium");
+    assert_eq!(body["lead"]["remodal_type"], "Kitchen");
+    assert_eq!(body["lead"]["improve_offer"], 1);
+    assert_eq!(body["lead"]["ad_name"], "Spring");
 }
 
 #[test_db::test(seed)]

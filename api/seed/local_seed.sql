@@ -390,8 +390,8 @@ INSERT INTO checklists (id, customer_id, installer_id, company_id, customer_name
 -- 8600 has an overdue + a future activity, a note with two comments and a
 -- deleted comment, photos, an email; 8601 has one undated activity, a deleted
 -- and a completed one; 8602 has a deleted note.
-INSERT INTO users (id, email, password, name, is_employee, is_admin, is_superuser, is_deleted, company_id, notifications_telegram_id, telegram_activity_notifications) VALUES
-  (107, 'dealer@acme.test', '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Dina Dealer', 1, 0, 0, 0, 100, 555107, 1);
+INSERT INTO users (id, email, password, name, is_employee, is_admin, is_superuser, is_deleted, company_id) VALUES
+  (107, 'dealer@acme.test', '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Dina Dealer', 1, 0, 0, 0, 100);
 
 INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VALUES
   ('aaaaaaaa-0000-4000-8000-000000000107', 107, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);

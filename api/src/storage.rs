@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// How long a presigned download link works.
+const DOWNLOAD_URL_TTL: Duration = Duration::from_secs(3600);
 /// How long a presigned upload URL stays valid.
 pub const UPLOAD_URL_TTL: Duration = Duration::from_mins(15);
 
@@ -135,6 +137,35 @@ impl Storage {
             Self::Memory(_) => Ok(format!("{MEMORY_PUBLIC_BASE}/{key}?upload")),
             Self::Disabled => Err(StorageError::Disabled),
         }
+    }
+
+    /// A browser-readable URL for a stored file URL. Old records keep private
+    /// `s3://bucket/key` URIs: those get a presigned `GET` valid an hour
+    /// (shown inline, with `content_type` when given). Any other URL, or a
+    /// URI that cannot be signed here, is returned as it is.
+    pub async fn readable_url(&self, url: &str, content_type: Option<&str>) -> String {
+        let Self::S3(s3) = self else {
+            return url.to_string();
+        };
+        let Some((bucket, key)) = url
+            .strip_prefix("s3://")
+            .and_then(|rest| rest.split_once('/'))
+        else {
+            return url.to_string();
+        };
+        let Ok(config) = PresigningConfig::expires_in(DOWNLOAD_URL_TTL) else {
+            return url.to_string();
+        };
+        let request = s3
+            .client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .response_content_disposition("inline")
+            .set_response_content_type(content_type.map(str::to_string))
+            .presigned(config)
+            .await;
+        request.map_or_else(|_| url.to_string(), |request| request.uri().to_string())
     }
 
     pub async fn get(&self, key: &str) -> Result<Option<StoredObject>, StorageError> {
