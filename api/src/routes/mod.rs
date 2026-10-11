@@ -6,7 +6,10 @@
 //! route is still greppable from its URL.
 
 pub mod customers;
+pub mod faucets;
 pub mod me;
+pub mod sinks;
+pub mod stones;
 pub mod users;
 
 use crate::state::AppState;
@@ -17,4 +20,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(me::router())
         .merge(customers::router())
         .merge(users::router())
+        .merge(stones::router())
+        .merge(sinks::router())
+        .merge(faucets::router())
 }
