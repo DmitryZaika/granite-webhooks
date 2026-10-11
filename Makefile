@@ -68,7 +68,10 @@ test:
 	cargo test
 
 # --- API (frontend-facing Lambda, see api/README.md) ---
-LOCAL_DB_URL := mysql://root:granite@127.0.0.1:3307/granite_local
+# Override LOCAL_DB_NAME to keep a second seeded database next to granite_local
+# (e.g. E2E runs of another worktree): `make api-db-reset LOCAL_DB_NAME=x`.
+LOCAL_DB_NAME ?= granite_local
+LOCAL_DB_URL := mysql://root:granite@127.0.0.1:3307/$(LOCAL_DB_NAME)
 
 .PHONY: api-db-up
 api-db-up:
@@ -77,9 +80,9 @@ api-db-up:
 # Drop, re-migrate and re-seed the local database.
 .PHONY: api-db-reset
 api-db-reset: api-db-up
-	docker exec granite-local-mysql mysql -uroot -pgranite -e "DROP DATABASE IF EXISTS granite_local; CREATE DATABASE granite_local;"
+	docker exec granite-local-mysql mysql -uroot -pgranite -e "DROP DATABASE IF EXISTS $(LOCAL_DB_NAME); CREATE DATABASE $(LOCAL_DB_NAME);"
 	DATABASE_URL=$(LOCAL_DB_URL) cargo sqlx migrate run --source migrations
-	docker exec -i granite-local-mysql mysql --default-character-set=utf8mb4 -uroot -pgranite granite_local < api/seed/local_seed.sql
+	docker exec -i granite-local-mysql mysql --default-character-set=utf8mb4 -uroot -pgranite $(LOCAL_DB_NAME) < api/seed/local_seed.sql
 
 .PHONY: api-test
 api-test: api-db-up

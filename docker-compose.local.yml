@@ -1,6 +1,10 @@
 # Local MySQL for the `api` Lambda: integration tests (sqlx::test creates a
 # throwaway database per test) and `make api-local` against seeded data.
 # Port 3307 so it never collides with another MySQL already on 3306.
+# A fixed project name, so every worktree of this repo shares these
+# containers instead of clashing over their names.
+name: granite-webhooks
+
 services:
   mysql:
     image: mysql:8.0
