@@ -109,9 +109,10 @@ async fn name_search_tolerates_typos_after_three_letters(pool: MySqlPool) {
             "email": "alice@example.com",
             "emails": ["alice@example.com", "alice.work@example.com", "alice.old@example.com"],
             "company_name": null,
-            "deal_id": null,
+            // Her newest deal (dashboard seed): 8007, open, in group 100.
+            "deal_id": 8007,
             "deal_is_won": null,
-            "deal_group_id": null
+            "deal_group_id": 100
         })
     );
 }
