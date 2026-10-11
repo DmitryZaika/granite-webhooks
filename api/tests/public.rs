@@ -14,10 +14,7 @@ async fn get(pool: MySqlPool, path: &str) -> Value {
     res.json()
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn lists_displayed_stones_with_a_whole_slab_or_regular_stock(pool: MySqlPool) {
     let rows = get(pool.clone(), "/v1/public/companies/100/stones").await;
     // No Calacatta (remnants only), Sold Out Marble, hidden or deleted stones.
@@ -42,10 +39,7 @@ async fn lists_displayed_stones_with_a_whole_slab_or_regular_stock(pool: MySqlPo
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn slab_price_only_for_stones_priced_by_slab(pool: MySqlPool) {
     sqlx::query("INSERT INTO slab_inventory (id, stone_id, bundle) VALUES (6090, 3001, 'CG-2')")
         .execute(&pool)
@@ -62,10 +56,7 @@ async fn slab_price_only_for_stones_priced_by_slab(pool: MySqlPool) {
     assert_eq!(calacatta["slab_price_per_sqft"], 55);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn filters_and_search(pool: MySqlPool) {
     for (path, expected) in [
         ("/v1/public/companies/100/stones?type=quartz", vec![3008]),
@@ -96,10 +87,7 @@ async fn filters_and_search(pool: MySqlPool) {
         .assert_status(StatusCode::BAD_REQUEST);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn stone_slabs_and_photos(pool: MySqlPool) {
     let stone = get(pool.clone(), "/v1/public/companies/100/stones/3002").await;
     // Sold out stones still open.
@@ -136,10 +124,7 @@ async fn stone_slabs_and_photos(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sinks_faucets_colors_and_subdomains(pool: MySqlPool) {
     let sinks = get(pool.clone(), "/v1/public/companies/100/sinks").await;
     // Displayed, in stock or regular stock; hidden Composite Black and

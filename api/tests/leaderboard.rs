@@ -50,10 +50,7 @@ fn names_and_points(board: &Value) -> Vec<(String, i64, Option<i64>)> {
         .collect()
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn all_time_board_scores_every_source(pool: MySqlPool) {
     assert_eq!(
         board(pool, "", sessions::REP).await,
@@ -73,10 +70,7 @@ async fn all_time_board_scores_every_source(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn month_board_starts_at_the_first(pool: MySqlPool) {
     let month = board(pool, "?period=month", sessions::REP).await;
     assert_eq!(month["period"], "month");
@@ -93,10 +87,7 @@ async fn month_board_starts_at_the_first(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn a_viewer_who_is_not_a_rep_gets_an_unranked_row(pool: MySqlPool) {
     let manager = board(pool, "", sessions::MANAGER).await;
     assert_eq!(
@@ -116,10 +107,7 @@ async fn a_viewer_who_is_not_a_rep_gets_an_unranked_row(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn tour_points_count_while_tours_are_on(pool: MySqlPool) {
     // A task reset after it was finished nets out, never below 0.
     run(
@@ -138,10 +126,7 @@ async fn tour_points_count_while_tours_are_on(pool: MySqlPool) {
     assert_eq!(all["entries"][0]["points"], 144);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn reps_are_ranked_with_ties_and_name_fallbacks(pool: MySqlPool) {
     // Nina ties Rita (both rank 1, name order); a rep with a blank name is
     // shown by email, with 0 points and the next rank after the tie. A
@@ -177,10 +162,7 @@ async fn reps_are_ranked_with_ties_and_name_fallbacks(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sources_without_a_start_date_score_nothing(pool: MySqlPool) {
     run(
         &pool,
@@ -193,10 +175,7 @@ async fn sources_without_a_start_date_score_nothing(pool: MySqlPool) {
     assert_eq!(all["entries"][0]["points"], 12);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn the_board_follows_the_company_switch_and_validates_the_period(pool: MySqlPool) {
     let server = server(pool);
     // Company 101 has the leaderboard off.

@@ -57,10 +57,7 @@ async fn units(pool: &MySqlPool, model: i64) -> (i64, i64) {
     .unwrap()
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sink_model_has_every_field_and_unit_counts(pool: MySqlPool) {
     let res = server(pool)
         .get("/v1/sinks/3100")
@@ -78,10 +75,7 @@ async fn sink_model_has_every_field_and_unit_counts(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn faucet_model_has_no_size(pool: MySqlPool) {
     let faucet: Value = server(pool)
         .get("/v1/faucets/3200")
@@ -94,10 +88,7 @@ async fn faucet_model_has_no_size(pool: MySqlPool) {
     assert_eq!(faucet["retail_price"], "129.99");
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn models_are_scoped_to_the_company(pool: MySqlPool) {
     let server = server(pool);
     for path in [
@@ -125,10 +116,7 @@ async fn models_are_scoped_to_the_company(pool: MySqlPool) {
         .assert_status(StatusCode::NOT_FOUND);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn editing_units_adds_and_removes_only_free_ones(pool: MySqlPool) {
     let server = server(pool.clone());
     let put = |body: Value| {
@@ -176,10 +164,7 @@ async fn editing_units_adds_and_removes_only_free_ones(pool: MySqlPool) {
     assert_eq!(model["url"], "https://img.example/undermount.jpg");
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn creates_models_with_image_and_units(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool.clone());
     let url = upload(&server, &storage, "sinks").await;
@@ -218,10 +203,7 @@ async fn creates_models_with_image_and_units(pool: MySqlPool) {
     res.assert_status(StatusCode::CREATED);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn model_writes_validate(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool);
     let url = upload(&server, &storage, "sinks").await;
@@ -270,10 +252,7 @@ async fn model_writes_validate(pool: MySqlPool) {
     res.assert_status(StatusCode::BAD_REQUEST);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn deleting_a_model_keeps_installed_units(pool: MySqlPool) {
     let server = server(pool.clone());
     server
@@ -300,10 +279,7 @@ async fn deleting_a_model_keeps_installed_units(pool: MySqlPool) {
     assert!(!ids(&list).contains(&3100));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn model_photos(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool);
     let list = || {
@@ -346,10 +322,7 @@ async fn model_photos(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn hidden_stones_are_for_admins(pool: MySqlPool) {
     let server = server(pool);
     let admin: Value = server

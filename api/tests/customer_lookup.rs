@@ -20,10 +20,7 @@ async fn search(pool: MySqlPool, query: &str) -> Value {
     res.json()
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn get_returns_contact_details_and_every_email(pool: MySqlPool) {
     let res = server(pool)
         .get("/v1/customers/1000")
@@ -50,10 +47,7 @@ async fn get_returns_contact_details_and_every_email(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn get_hides_deleted_reps_and_foreign_or_deleted_customers(pool: MySqlPool) {
     let server = server(pool);
     let gina: Value = server
@@ -77,10 +71,7 @@ async fn get_hides_deleted_reps_and_foreign_or_deleted_customers(pool: MySqlPool
         .assert_status_unauthorized();
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn name_search_tolerates_typos_after_three_letters(pool: MySqlPool) {
     for (query, expected) in [
         ("?term=Alice", vec![1000]),
@@ -117,10 +108,7 @@ async fn name_search_tolerates_typos_after_three_letters(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn own_customers_come_first(pool: MySqlPool) {
     // "er": Erin Builder (rep 101) and Rita's... none; use "a" for a wide match.
     let rows = search(pool.clone(), "?term=a").await;
@@ -147,10 +135,7 @@ async fn own_customers_come_first(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn phone_email_and_company_search(pool: MySqlPool) {
     for (query, expected) in [
         ("?by=phone&term=(317)%20555-0105", vec![1004]),
@@ -167,10 +152,7 @@ async fn phone_email_and_company_search(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn search_validates_and_authenticates(pool: MySqlPool) {
     let server = server(pool);
     for query in ["", "?term=a&by=fax"] {

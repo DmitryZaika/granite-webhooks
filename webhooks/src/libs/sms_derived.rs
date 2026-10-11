@@ -716,7 +716,7 @@ mod tests {
             .expect("stored texts")
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn a_reused_provider_id_keeps_the_second_message(pool: MySqlPool) {
         let mut first = row(
             SmsDirection::Inbound,
@@ -768,7 +768,7 @@ mod tests {
         assert_eq!(stored_texts(&pool, SmsProvider::Cloudtalk).await.len(), 2);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_row_stores_normalized_phones(pool: MySqlPool) {
         insert_sms(
             &pool,
@@ -795,7 +795,7 @@ mod tests {
         assert_eq!(rows[0].is_echo, 0);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn agent_is_trimmed_and_blank_agents_become_null(pool: MySqlPool) {
         insert_sms(
             &pool,
@@ -834,7 +834,7 @@ mod tests {
         assert_eq!(rows[1].agent, None, "a blank agent must be stored as NULL");
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn forward_echo_inside_the_window_is_hidden(pool: MySqlPool) {
         insert_sms(
             &pool,
@@ -873,7 +873,7 @@ mod tests {
         assert_eq!(rows[1].echo_of_sms_id, Some(rows[0].id));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn forward_echo_outside_the_window_is_kept(pool: MySqlPool) {
         insert_sms(
             &pool,
@@ -911,7 +911,7 @@ mod tests {
         assert_eq!(rows[1].echo_of_sms_id, None);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn empty_text_never_echoes(pool: MySqlPool) {
         insert_sms(
             &pool,
@@ -951,7 +951,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn reverse_echo_hides_an_inbound_that_arrived_first(pool: MySqlPool) {
         insert_sms(
             &pool,
@@ -994,7 +994,7 @@ mod tests {
         assert_eq!(rows[1].is_echo, 0, "outbound rows are never echoes");
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn company_line_flip_rekeys_earlier_inbound_rows(pool: MySqlPool) {
         // Nothing proves the line yet, so this row threads under the line itself.
         insert_sms(

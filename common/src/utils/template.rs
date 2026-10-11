@@ -26,11 +26,7 @@ fn inventory_subdomain_slug(raw: &str) -> Option<String> {
         .unwrap_or("")
         .trim()
         .to_lowercase();
-    if slug.is_empty() {
-        None
-    } else {
-        Some(slug)
-    }
+    if slug.is_empty() { None } else { Some(slug) }
 }
 
 fn company_subdomain_slug(company: Option<&InfoVariableData>) -> Option<String> {
@@ -39,7 +35,10 @@ fn company_subdomain_slug(company: Option<&InfoVariableData>) -> Option<String> 
         .subdomain
         .as_ref()
         .filter(|value| !value.trim().is_empty())
-        .or(company.domain.as_ref().filter(|value| !value.trim().is_empty()))?;
+        .or(company
+            .domain
+            .as_ref()
+            .filter(|value| !value.trim().is_empty()))?;
     inventory_subdomain_slug(raw)
 }
 
@@ -69,10 +68,7 @@ fn build_variable_map(data: &TemplateVariableData) -> HashMap<&'static str, Stri
         ("customer.name", customer.and_then(|c| c.name.clone())),
         ("customer.first_name", customer_name),
         ("customer.address", customer.and_then(|c| c.address.clone())),
-        (
-            "customer.inventory_link",
-            customer_inventory_link(company),
-        ),
+        ("customer.inventory_link", customer_inventory_link(company)),
         ("company.name", company.and_then(|c| c.name.clone())),
         ("company.address", company.and_then(|c| c.address.clone())),
         ("company.subdomain", company_subdomain_slug(company)),
@@ -167,9 +163,7 @@ mod tests {
 
         assert!(result.contains("Hi Jordan,"));
         assert!(result.contains("My name is Alice,"));
-        assert!(result.contains(
-            "https://example.granite-manager.com/customer/1/stones"
-        ));
+        assert!(result.contains("https://example.granite-manager.com/customer/1/stones"));
         assert!(!result.contains("{{customer.first_name}}"));
         assert!(!result.contains("{{user.first_name}}"));
         assert!(!result.contains("{{customer.inventory_link}}"));
@@ -254,10 +248,7 @@ mod tests {
 
     #[test]
     fn replaces_customer_inventory_link_from_company_subdomain_and_id() {
-        let result = replace_template_variables(
-            "{{customer.inventory_link}}",
-            &make_full_data(),
-        );
+        let result = replace_template_variables("{{customer.inventory_link}}", &make_full_data());
         assert_eq!(
             result,
             "https://example.granite-manager.com/customer/1/stones"

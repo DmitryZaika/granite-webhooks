@@ -30,10 +30,7 @@ fn slab(rows: &Value, id: i64) -> &Value {
         .unwrap_or_else(|| panic!("slab {id} missing"))
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn stone_has_every_field_and_its_colors(pool: MySqlPool) {
     let stone = get(pool, "/v1/stones/3008").await;
     assert_eq!(
@@ -64,10 +61,7 @@ async fn stone_has_every_field_and_its_colors(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn hidden_stones_are_returned_deleted_and_foreign_are_404(pool: MySqlPool) {
     let server = server(pool);
     let hidden = server
@@ -97,19 +91,13 @@ async fn hidden_stones_are_returned_deleted_and_foreign_are_404(pool: MySqlPool)
         .assert_status_ok();
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn slabs_leave_out_cut_and_deleted(pool: MySqlPool) {
     let rows = get(pool, "/v1/stones/3010/slabs").await;
     assert_eq!(slab_ids(&rows), vec![6070, 6071, 6072, 6073, 6074, 6077]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sold_slab_has_its_sale(pool: MySqlPool) {
     let rows = get(pool, "/v1/stones/3010/slabs").await;
     assert_eq!(
@@ -143,10 +131,7 @@ async fn sold_slab_has_its_sale(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn remnants_carry_the_parent_sale(pool: MySqlPool) {
     let rows = get(pool, "/v1/stones/3010/slabs").await;
     let free_remnant = slab(&rows, 6072);
@@ -182,10 +167,7 @@ async fn remnants_carry_the_parent_sale(pool: MySqlPool) {
     assert_eq!(free["parent_sale"], Value::Null);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sale_without_customer_or_seller(pool: MySqlPool) {
     let rows = get(pool, "/v1/stones/3010/slabs").await;
     let sale = &slab(&rows, 6077)["sale"];
@@ -195,10 +177,7 @@ async fn sale_without_customer_or_seller(pool: MySqlPool) {
     assert_eq!(sale["square_feet"], Value::Null);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn linked_stone_lists_the_source_slabs(pool: MySqlPool) {
     let rows = get(pool, "/v1/stones/3007/slabs").await;
     // 3000's slabs without the cut (6004) and deleted (6005) ones.
@@ -214,10 +193,7 @@ async fn linked_stone_lists_the_source_slabs(pool: MySqlPool) {
     assert_eq!(sold["sale"]["customer_name"], "Erin Builder");
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn own_slabs_have_no_source_stone(pool: MySqlPool) {
     let rows = get(pool, "/v1/stones/3000/slabs").await;
     assert_eq!(slab_ids(&rows), vec![6000, 6001, 6002, 6003]);
@@ -229,10 +205,7 @@ async fn own_slabs_have_no_source_stone(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn links_to_another_company_are_ignored(pool: MySqlPool) {
     sqlx::query("INSERT INTO stone_slab_links (stone_id, source_stone_id) VALUES (3010, 4000)")
         .execute(&pool)
@@ -242,10 +215,7 @@ async fn links_to_another_company_are_ignored(pool: MySqlPool) {
     assert!(!slab_ids(&rows).contains(&6060));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn require_an_employee_or_admin(pool: MySqlPool) {
     let server = server(pool);
     for path in ["/v1/stones/3010", "/v1/stones/3010/slabs"] {
@@ -273,10 +243,7 @@ async fn slab_size(pool: &MySqlPool, id: i64) -> (Option<String>, Option<String>
         .unwrap()
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn resizes_a_slab(pool: MySqlPool) {
     let res = server(pool.clone())
         .patch("/v1/slabs/6074")
@@ -301,10 +268,7 @@ async fn resizes_a_slab(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn resize_rejects_bad_sizes(pool: MySqlPool) {
     let server = server(pool.clone());
     for (body, error) in [
@@ -343,10 +307,7 @@ async fn resize_rejects_bad_sizes(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn resize_is_scoped_to_the_company(pool: MySqlPool) {
     let server = server(pool.clone());
     for id in [6060, 6076, 999_999] {

@@ -4,5 +4,7 @@ members = [
     "webhooks",
     "time-triggered",
     "api",
+    "test-db",
+    "test-db/macros",
 ]
 resolver = "2"

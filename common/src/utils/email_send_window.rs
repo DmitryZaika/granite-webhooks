@@ -13,9 +13,7 @@ fn store_wall_to_utc(year: i32, month: u32, day: u32, hour: u32, minute: u32) ->
     match Indianapolis.from_local_datetime(&naive) {
         chrono::LocalResult::Single(local) => local.with_timezone(&Utc),
         chrono::LocalResult::Ambiguous(earliest, _) => earliest.with_timezone(&Utc),
-        chrono::LocalResult::None => Indianapolis
-            .from_utc_datetime(&naive)
-            .with_timezone(&Utc),
+        chrono::LocalResult::None => Indianapolis.from_utc_datetime(&naive).with_timezone(&Utc),
     }
 }
 
@@ -90,13 +88,18 @@ pub fn clamp_automated_email_send_at(when: DateTime<Utc>) -> DateTime<Utc> {
             start
         } else {
             let next = cursor.with_timezone(&Indianapolis).date_naive() + Duration::days(1);
-            store_wall_to_utc(next.year(), next.month(), next.day(), START_HOUR, START_MINUTE)
+            store_wall_to_utc(
+                next.year(),
+                next.month(),
+                next.day(),
+                START_HOUR,
+                START_MINUTE,
+            )
         };
         if !is_major_holiday_store_day(candidate) {
             return candidate;
         }
-        let after_holiday =
-            candidate.with_timezone(&Indianapolis).date_naive() + Duration::days(1);
+        let after_holiday = candidate.with_timezone(&Indianapolis).date_naive() + Duration::days(1);
         cursor = store_wall_to_utc(
             after_holiday.year(),
             after_holiday.month(),

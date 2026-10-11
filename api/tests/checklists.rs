@@ -17,10 +17,7 @@ async fn list(pool: MySqlPool, session: &str) -> Value {
     res.json()
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn lists_company_checklists_newest_first(pool: MySqlPool) {
     let rows = list(pool, sessions::REP).await;
     // 9003 and 9001 share a timestamp: the higher id first. 9004 is named
@@ -28,10 +25,7 @@ async fn lists_company_checklists_newest_first(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![9003, 9001, 9002, 9000, 9004]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn checklist_has_every_field(pool: MySqlPool) {
     let rows = list(pool, sessions::REP).await;
     assert_eq!(
@@ -83,10 +77,7 @@ async fn checklist_has_every_field(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn deleted_installers_keep_their_name(pool: MySqlPool) {
     let rows = list(pool, sessions::REP).await;
     assert_eq!(rows[2]["id"], 9002);
@@ -95,10 +86,7 @@ async fn deleted_installers_keep_their_name(pool: MySqlPool) {
     assert_eq!(rows[2]["comments"], "");
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn never_returns_the_signature(pool: MySqlPool) {
     let rows = list(pool, sessions::REP).await;
     for row in rows.as_array().unwrap() {
@@ -106,10 +94,7 @@ async fn never_returns_the_signature(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn tenants_are_isolated(pool: MySqlPool) {
     let rows = list(pool.clone(), sessions::OTHER_COMPANY_REP).await;
     assert_eq!(ids(&rows), vec![9006]);
@@ -119,10 +104,7 @@ async fn tenants_are_isolated(pool: MySqlPool) {
     assert!(!ids(&rows).contains(&9005));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn super_admin_sees_the_company_they_switched_to(pool: MySqlPool) {
     // Sam Super belongs to company 101 and is super admin in 100.
     let rows = list(pool.clone(), sessions::SUPER_ADMIN).await;
@@ -139,10 +121,7 @@ async fn super_admin_sees_the_company_they_switched_to(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![9003, 9001, 9002, 9000, 9004]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn requires_an_employee_or_admin(pool: MySqlPool) {
     let server = server(pool);
     server

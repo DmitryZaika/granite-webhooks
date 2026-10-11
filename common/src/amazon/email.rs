@@ -139,10 +139,7 @@ mod tests {
 
     #[test]
     fn format_sender_from_returns_bare_address_without_name() {
-        assert_eq!(
-            format_sender_from(None, "alex@acme.com"),
-            "alex@acme.com"
-        );
+        assert_eq!(format_sender_from(None, "alex@acme.com"), "alex@acme.com");
         assert_eq!(
             format_sender_from(Some("  "), "alex@acme.com"),
             "alex@acme.com"

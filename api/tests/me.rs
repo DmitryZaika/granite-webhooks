@@ -14,10 +14,7 @@ use serde_json::{Value, json};
 use sqlx::MySqlPool;
 use std::sync::{Arc, Mutex};
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn me_returns_session_user(pool: MySqlPool) {
     let res = server(pool).get("/v1/me").with_session(sessions::REP).await;
     res.assert_status_ok();
@@ -39,10 +36,7 @@ async fn me_returns_session_user(pool: MySqlPool) {
     }));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn positions_are_scoped_to_the_acting_company(pool: MySqlPool) {
     let server = server(pool);
 
@@ -70,10 +64,7 @@ async fn positions_are_scoped_to_the_acting_company(pool: MySqlPool) {
         .assert_json(&json!([{ "position_id": 9 }]));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn positions_require_a_session(pool: MySqlPool) {
     server(pool)
         .get("/v1/me/positions")
@@ -83,10 +74,7 @@ async fn positions_require_a_session(pool: MySqlPool) {
 
 // ---- GET/PUT /v1/me/sales-goal ----------------------------------------------
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sales_goal_reads_and_saves(pool: MySqlPool) {
     let server = server(pool);
     let goal = |session| server.get("/v1/me/sales-goal").with_session(session);
@@ -132,10 +120,7 @@ async fn sales_goal_reads_and_saves(pool: MySqlPool) {
     assert_eq!(goal(sessions::REP).await.json::<Value>(), saved);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sales_goal_needs_an_employee(pool: MySqlPool) {
     let server = server(pool);
     server
@@ -186,10 +171,7 @@ async fn telegram_ids(pool: &MySqlPool, user_id: i32) -> (Option<i64>, Option<i6
         .unwrap()
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn telegram_status_without_bots_trusts_the_saved_links(pool: MySqlPool) {
     let server = server(pool);
     let status = |session| server.get("/v1/me/telegram").with_session(session);
@@ -213,10 +195,7 @@ async fn telegram_status_without_bots_trusts_the_saved_links(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn telegram_links_the_bot_cannot_reach_are_removed(pool: MySqlPool) {
     // Mark's leads chat (900101) still works; his notifications chat (910101)
     // blocked the bot.
@@ -256,10 +235,7 @@ async fn telegram_links_the_bot_cannot_reach_are_removed(pool: MySqlPool) {
     assert!(calls.lock().unwrap().is_empty());
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn telegram_links_stay_when_telegram_cannot_be_reached(pool: MySqlPool) {
     // Nothing listens there: the check fails, which is not a "no".
     let bots = TelegramBots::new(Some("111:leads"), Some("222:notes"), "http://127.0.0.1:9");

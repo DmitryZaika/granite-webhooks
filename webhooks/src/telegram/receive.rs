@@ -491,7 +491,7 @@ mod local_tests {
         return (response, bot);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     fn test_message_invalid_option(pool: MySqlPool) {
         let message = generate_message(1, "Leeeroy Jenkins");
         let mock_bot = MockTelegram::new();
@@ -538,7 +538,7 @@ mod local_tests {
     // handle_start_command
     // -----------------------------
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_start_already_registered(pool: MySqlPool) {
         let bot = MockTelegram::new();
         let user_id = create_default_user(&pool, "test@example.com")
@@ -558,7 +558,7 @@ mod local_tests {
         assert!(sent[0].1.contains("already"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_start_db_error(pool: MySqlPool) {
         // force DB error: use nonexistent table or corrupted state
         let bot = MockTelegram::new();
@@ -579,7 +579,7 @@ mod local_tests {
             .unwrap();
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_start_sets_code_and_sends_email(pool: MySqlPool) {
         let bot = MockTelegram::new();
 
@@ -611,7 +611,7 @@ mod local_tests {
     // handle_telegram_code
     // -----------------------------
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_code_user_already_registered(pool: MySqlPool) {
         let bot = MockTelegram::new();
 
@@ -629,7 +629,7 @@ mod local_tests {
         assert_eq!(sent[0].1, "You are already registered");
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_code_no_token(pool: MySqlPool) {
         let bot = MockTelegram::new();
 
@@ -638,7 +638,7 @@ mod local_tests {
         assert_eq!(res.0, StatusCode::FORBIDDEN);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_code_incorrect(pool: MySqlPool) {
         let bot = MockTelegram::new();
 
@@ -660,7 +660,7 @@ mod local_tests {
         assert!(sent[0].1.contains("Invalid code"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_code_success(pool: MySqlPool) {
         let bot = MockTelegram::new();
 
@@ -692,7 +692,7 @@ mod local_tests {
     // handle_message
     // -----------------------------
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_message_start(pool: MySqlPool) {
         let bot = MockTelegram::new();
 
@@ -705,7 +705,7 @@ mod local_tests {
         assert!(sent[0].1.contains("Welcome"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_message_email_valid(pool: MySqlPool) {
         let bot = MockTelegram::new();
         insert_user(&pool, "x@y.com", None).await.unwrap();
@@ -717,7 +717,7 @@ mod local_tests {
         assert_eq!(take_sent_emails().len(), 1, "the code email is sent once");
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_message_email_invalid(pool: MySqlPool) {
         let bot = MockTelegram::new();
         let msg = generate_message(1, "/email x@y.com".into());
@@ -727,7 +727,7 @@ mod local_tests {
         assert_eq!(res.0, StatusCode::FORBIDDEN);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_message_invalid(pool: MySqlPool) {
         let bot = MockTelegram::new();
         let msg = generate_message(1, "whatever invalid".into());
@@ -744,7 +744,7 @@ mod local_tests {
     // handle_callback
     // -----------------------------
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_callback_no_data(pool: MySqlPool) {
         let bot = MockTelegram::new();
         let cb = CallbackQuery {
@@ -762,7 +762,7 @@ mod local_tests {
         assert_eq!(res.0, StatusCode::OK);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_callback_one_user(pool: MySqlPool) {
         // Send a real lead
         let sales_id = positioned_user(&pool, 1, 1, 123).await;
@@ -813,7 +813,7 @@ mod local_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_callback_twice_creates_one_deal(pool: MySqlPool) {
         let sales_id = positioned_user(&pool, 1, 1, 123).await;
         positioned_user(&pool, 1, 2, 789).await;
@@ -860,7 +860,7 @@ mod local_tests {
         assert_eq!(deals[0].user_id, Some(sales_id));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_callback_updates_only_identified_manager_messages(pool: MySqlPool) {
         use crate::crud::telegram_messages::insert_telegram_lead_message;
 
@@ -921,7 +921,7 @@ mod local_tests {
         assert!(!edited_chats.contains(&999));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_callback_broadcasts_assignment_to_all_manager_messages(pool: MySqlPool) {
         use crate::crud::telegram_messages::list_active_manager_telegram_lead_messages;
 
@@ -1003,7 +1003,7 @@ mod local_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_callback_continues_when_one_manager_edit_fails(pool: MySqlPool) {
         let sales_id = positioned_user(&pool, 1, 1, 123).await;
         positioned_user(&pool, 1, 2, 789).await;
@@ -1042,7 +1042,7 @@ mod local_tests {
         assert!(edited[0].2.contains("Lead assigned to"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_callback_one_user_non_default_list(pool: MySqlPool) {
         // Send a real lead
         let company_id = create_company(&pool).await.unwrap();
@@ -1090,7 +1090,7 @@ mod local_tests {
         assert_eq!(deals[0].position, 0);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_callback_one_user_non_default_list_scheduled(pool: MySqlPool) {
         // Send a real lead
         let company_id = create_company(&pool).await.unwrap();

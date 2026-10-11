@@ -126,10 +126,7 @@ async fn sale_count(pool: &MySqlPool) -> i64 {
 
 // ---- POST /v1/sales
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sells_part_of_a_slab_and_leaves_a_remnant(pool: MySqlPool) {
     let server = server(pool.clone());
     let id = create(
@@ -207,10 +204,7 @@ async fn sells_part_of_a_slab_and_leaves_a_remnant(pool: MySqlPool) {
     assert_eq!(history, 0);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn a_customer_without_a_rep_gets_the_seller(pool: MySqlPool) {
     let server = server(pool.clone());
     let mut body = sale(
@@ -247,10 +241,7 @@ async fn a_customer_without_a_rep_gets_the_seller(pool: MySqlPool) {
     assert_eq!((seller, address.as_str()), (Some(101), "9 Job Site Rd"));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn whole_slab_with_sink_and_faucet(pool: MySqlPool) {
     let server = server(pool.clone());
     let mut kitchen = room(ROOM_A, json!([{ "id": 6070, "is_full": true }]), 45.0);
@@ -271,10 +262,7 @@ async fn whole_slab_with_sink_and_faucet(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn a_slab_in_two_rooms_is_cut_for_the_second(pool: MySqlPool) {
     let server = server(pool.clone());
     let mut second = room(ROOM_B, json!([{ "id": 6072, "is_full": false }]), 6.0);
@@ -311,10 +299,7 @@ async fn a_slab_in_two_rooms_is_cut_for_the_second(pool: MySqlPool) {
     assert_eq!(unit_slab(&pool, "sinks", 6106).await.0, Some(piece.id));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn invalid_sales_are_rejected_before_any_write(pool: MySqlPool) {
     let server = server(pool.clone());
     let free = || json!([{ "id": 6074, "is_full": false }]);
@@ -403,10 +388,7 @@ async fn invalid_sales_are_rejected_before_any_write(pool: MySqlPool) {
     assert_eq!(slab(&pool, 6074).await.unwrap().sale_id, None);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn no_free_unit_rolls_the_whole_sale_back(pool: MySqlPool) {
     let server = server(pool.clone());
     let before = sale_count(&pool).await;
@@ -446,10 +428,7 @@ async fn no_free_unit_rolls_the_whole_sale_back(pool: MySqlPool) {
 
 // ---- GET /v1/sales/{id}
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn get_returns_the_sale_as_the_form_shows_it(pool: MySqlPool) {
     let res = server(pool)
         .get("/v1/sales/7010")
@@ -493,10 +472,7 @@ async fn get_returns_the_sale_as_the_form_shows_it(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn a_saved_sale_reads_back_room_by_room(pool: MySqlPool) {
     let server = server(pool);
     let mut kitchen = room(
@@ -544,10 +520,7 @@ async fn a_saved_sale_reads_back_room_by_room(pool: MySqlPool) {
     assert_eq!(rooms[1]["slabs"], json!([{ "id": 6072, "is_full": true }]));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn get_is_404_outside_the_company_or_without_slabs(pool: MySqlPool) {
     let server = server(pool);
     // 7003: company 101's customer. 7002: no slabs. 999999: no sale.
@@ -571,10 +544,7 @@ async fn get_is_404_outside_the_company_or_without_slabs(pool: MySqlPool) {
 
 // ---- PUT /v1/sales/{id}
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn edit_saves_the_sale_and_reinstalls_fixtures(pool: MySqlPool) {
     let server = server(pool.clone());
     let mut kitchen = room(ROOM_A, json!([{ "id": 6071, "is_full": false }]), 31.0);
@@ -614,10 +584,7 @@ async fn edit_saves_the_sale_and_reinstalls_fixtures(pool: MySqlPool) {
     assert_eq!(children(&pool, 6071).await.len(), 2);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn edit_frees_slabs_left_out_with_their_fixtures(pool: MySqlPool) {
     let server = server(pool.clone());
     let mut kitchen = room(
@@ -651,10 +618,7 @@ async fn edit_frees_slabs_left_out_with_their_fixtures(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn edit_to_whole_slab_keeps_remnants_other_sales_bought(pool: MySqlPool) {
     let server = server(pool.clone());
     server
@@ -671,10 +635,7 @@ async fn edit_to_whole_slab_keeps_remnants_other_sales_bought(pool: MySqlPool) {
     assert_eq!(slab(&pool, 6073).await.unwrap().sale_id, Some(7011));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn edit_checks_the_sale_and_the_body(pool: MySqlPool) {
     let server = server(pool.clone());
     let body = sale(
@@ -711,10 +672,7 @@ async fn edit_checks_the_sale_and_the_body(pool: MySqlPool) {
 
 // ---- POST /v1/sales/{id}/unsell
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn unsell_cancels_and_frees_everything(pool: MySqlPool) {
     let server = server(pool.clone());
     server
@@ -742,10 +700,7 @@ async fn unsell_cancels_and_frees_everything(pool: MySqlPool) {
     assert_eq!(slab(&pool, 6073).await.unwrap().sale_id, Some(7011));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn unsell_removes_every_piece_the_sale_cut(pool: MySqlPool) {
     let server = server(pool.clone());
     let id = create(
@@ -774,10 +729,7 @@ async fn unsell_removes_every_piece_the_sale_cut(pool: MySqlPool) {
     assert_eq!(leftovers, 0);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn unsell_is_scoped_and_authenticated(pool: MySqlPool) {
     let server = server(pool.clone());
     server

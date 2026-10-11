@@ -12,10 +12,7 @@ fn sorted(mut v: Vec<i64>) -> Vec<i64> {
 
 // ---- GET /v1/users/sales-reps ----------------------------------------------
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sales_reps_have_the_remix_shape(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/users/sales-reps")
@@ -33,10 +30,7 @@ async fn sales_reps_have_the_remix_shape(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sales_reps_skip_deleted_users_and_other_companies(pool: MySqlPool) {
     let server = server(pool);
 
@@ -57,10 +51,7 @@ async fn sales_reps_skip_deleted_users_and_other_companies(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![106]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sales_reps_follow_the_super_admin_company_switch(pool: MySqlPool) {
     let server = server(pool);
     let super_in = |company_id| {
@@ -85,10 +76,7 @@ async fn sales_reps_follow_the_super_admin_company_switch(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![106]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sales_reps_require_an_employee(pool: MySqlPool) {
     let server = server(pool);
     server

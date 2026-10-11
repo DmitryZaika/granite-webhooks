@@ -60,9 +60,19 @@ pub struct TelegramBot {
 impl Default for TelegramBot {
     fn default() -> Self {
         Self {
-            bot: teloxide::Bot::from_env(),
+            bot: bot_from_env(),
         }
     }
+}
+
+/// `teloxide::Bot::from_env()`, except that tests (which never load `.env`)
+/// get a placeholder token instead of panicking.
+fn bot_from_env() -> teloxide::Bot {
+    #[cfg(test)]
+    if std::env::var("TELOXIDE_TOKEN").is_err() {
+        return teloxide::Bot::new("test-token");
+    }
+    teloxide::Bot::from_env()
 }
 
 impl Telegram for TelegramBot {
@@ -174,10 +184,13 @@ pub struct NotificationsTelegramBot {
 impl Default for NotificationsTelegramBot {
     fn default() -> Self {
         let token = std::env::var("TELOXIDE_NOTIFICATIONS_TOKEN")
-            .or_else(|_| std::env::var("TELEGRAM_NOTIFICATIONS_BOT_TOKEN"))
-            .unwrap_or_else(|error| {
-                panic!("TELOXIDE_NOTIFICATIONS_TOKEN must be set: {error}");
-            });
+            .or_else(|_| std::env::var("TELEGRAM_NOTIFICATIONS_BOT_TOKEN"));
+        // Tests never load `.env`, so they never get (or use) the real token.
+        #[cfg(test)]
+        let token = token.or_else(|_| Ok::<_, std::env::VarError>("test-token".to_string()));
+        let token = token.unwrap_or_else(|error| {
+            panic!("TELOXIDE_NOTIFICATIONS_TOKEN must be set: {error}");
+        });
         Self {
             bot: teloxide::Bot::new(token),
         }
@@ -307,7 +320,7 @@ where
             return Err(FORBIDDEN_RESPONSE);
         }
         Ok(Self {
-            bot: teloxide::Bot::from_env(),
+            bot: bot_from_env(),
         })
     }
 }

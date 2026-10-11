@@ -4,9 +4,7 @@ use common::crud::notifications::{
     get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
     unmark_deadline_reminder_telegram_sent,
 };
-use common::crud::outbound_email::{
-    OutboundScheduledEmail, record_outbound_scheduled_email,
-};
+use common::crud::outbound_email::{record_outbound_scheduled_email, OutboundScheduledEmail};
 use common::crud::scheduled_emails::{
     cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
     get_ready_scheduled_emails, mark_scheduled_email_as_sent,
@@ -195,12 +193,8 @@ async fn send_and_record_scheduled_email(
     email: &ScheduledEmail,
 ) -> Result<(), Error> {
     let Some(cleaned_email) = scheduled_email_recipient(email.email.as_deref()) else {
-        mark_scheduled_email_failed_with_reason(
-            pool,
-            email.id,
-            "Customer has no email address",
-        )
-        .await?;
+        mark_scheduled_email_failed_with_reason(pool, email.id, "Customer has no email address")
+            .await?;
         tracing::warn!(
             customer_id = email.customer_id,
             scheduled_email_id = email.id,
@@ -361,7 +355,9 @@ mod tests {
             .expect("next function");
         let body = &source[fn_start..fn_end];
         assert!(
-            body.contains("Telegram notifications token is not set; skipping activity deadline reminders"),
+            body.contains(
+                "Telegram notifications token is not set; skipping activity deadline reminders"
+            ),
             "Missing Telegram token must skip reminders instead of failing the tick"
         );
         assert!(
@@ -369,7 +365,8 @@ mod tests {
             "Missing Telegram token must not convert into a handler error"
         );
         assert!(
-            source.contains("Failed to send activity deadline reminders; continuing scheduled work"),
+            source
+                .contains("Failed to send activity deadline reminders; continuing scheduled work"),
             "Reminder failures must not abort SMS follow-ups"
         );
     }
@@ -427,7 +424,7 @@ mod tests {
         assert!(source.contains("checklist surveys"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_generic_handler(pool: MySqlPool) {
         // Mocking the data we saw in the logs
         let incoming = EventBridgeEvent {

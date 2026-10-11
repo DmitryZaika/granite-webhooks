@@ -24,10 +24,7 @@ fn row(rows: &Value, id: i64) -> &Value {
         .unwrap_or_else(|| panic!("faucet {id} missing"))
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn lists_in_stock_faucets_sorted_by_name(pool: MySqlPool) {
     let rows = list(pool, "").await;
     // Bridge Brass (regular stock, no units), Hidden Faucet (not displayed,
@@ -35,10 +32,7 @@ async fn lists_in_stock_faucets_sorted_by_name(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![3201, 3202, 3200]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn faucet_has_every_field(pool: MySqlPool) {
     let rows = list(pool, "?include_sold_out=true").await;
     // 4 units: 2 free, 1 on a slab, 1 deleted.
@@ -65,10 +59,7 @@ async fn faucet_has_every_field(pool: MySqlPool) {
     assert_eq!(row(&rows, 3203)["retail_price"], Value::Null);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn filters(pool: MySqlPool) {
     let server = server(pool);
     let cases: &[(&str, &[i64])] = &[
@@ -93,10 +84,7 @@ async fn filters(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn never_returns_deleted_or_foreign_faucets(pool: MySqlPool) {
     let rows = list(pool, "?include_sold_out=true").await;
     let ids = ids(&rows);
@@ -104,10 +92,7 @@ async fn never_returns_deleted_or_foreign_faucets(pool: MySqlPool) {
     assert!(!ids.contains(&3205));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn malformed_filters_are_400(pool: MySqlPool) {
     server(pool)
         .get("/v1/faucets?include_sold_out=1")
@@ -116,10 +101,7 @@ async fn malformed_filters_are_400(pool: MySqlPool) {
         .assert_status(StatusCode::BAD_REQUEST);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn tenants_are_isolated(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/faucets?include_sold_out=true")
@@ -129,10 +111,7 @@ async fn tenants_are_isolated(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![3205]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn requires_an_employee_or_admin(pool: MySqlPool) {
     let server = server(pool);
     server.get("/v1/faucets").await.assert_status_unauthorized();
@@ -148,10 +127,7 @@ async fn requires_an_employee_or_admin(pool: MySqlPool) {
         .assert_status_ok();
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn available_only_lists_models_with_free_units(pool: MySqlPool) {
     let rows = list(pool, "?available_only=true&include_sold_out=true").await;
     assert_eq!(ids(&rows), vec![3202, 3200]);

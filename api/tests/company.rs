@@ -22,10 +22,7 @@ async fn run(pool: &MySqlPool, sql: &str) {
         .unwrap();
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn features_of_each_company(pool: MySqlPool) {
     assert_eq!(
         features(pool.clone(), sessions::REP).await,
@@ -55,10 +52,7 @@ async fn features_of_each_company(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn rollout_switches_fall_back_to_the_platform_default(pool: MySqlPool) {
     // Company 100: leaderboard explicitly on, onboarding unset.
     run(
@@ -81,10 +75,7 @@ async fn rollout_switches_fall_back_to_the_platform_default(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn integrations_count_once_set_up(pool: MySqlPool) {
     run(
         &pool,
@@ -140,10 +131,7 @@ async fn integrations_count_once_set_up(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn features_need_an_employee(pool: MySqlPool) {
     let server = server(pool);
     server

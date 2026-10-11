@@ -305,7 +305,7 @@ mod local_tests {
         .await
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn open_event_success(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
@@ -330,7 +330,7 @@ mod local_tests {
         assert_eq!(result.ip_address.unwrap(), expected_ip);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn open_event_unknown_message_is_ok(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
         let response = app
@@ -340,7 +340,7 @@ mod local_tests {
         assert_eq!(response.status_code(), StatusCode::OK);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_success(pool: MySqlPool) {
         let message_id =
             "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000@us-east-2.amazonses.com";
@@ -373,7 +373,7 @@ mod local_tests {
 
     /// The whole point of `email_participants`: an inbound message must land
     /// with a `from` row, every `To:` and every `Cc:` — not just one receiver.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_writes_all_participants(pool: MySqlPool) {
         const CLIENT_EMAIL: &str = "colin.delahunty@granite-manager.com";
         insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
@@ -423,7 +423,7 @@ mod local_tests {
 
     /// The resolved receiver's company must be stamped on the row, so tenancy
     /// no longer depends on address matching at query time.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_stamps_company_id(pool: MySqlPool) {
         const CLIENT_EMAIL: &str = "colin.delahunty@granite-manager.com";
         insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
@@ -448,7 +448,7 @@ mod local_tests {
         assert_eq!(company_id, expected);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_reply_invalid_message_id(pool: MySqlPool) {
         const CLIENT_EMAIL: &str = "colin.delahunty@granite-manager.com";
         insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
@@ -474,7 +474,7 @@ mod local_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_success_backwards_compatible(pool: MySqlPool) {
         let message_id = "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000";
 
@@ -505,7 +505,7 @@ mod local_tests {
     }
 
     /// Customer is the first To. Employees later on the same header still receive it.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_when_customer_is_first_to(pool: MySqlPool) {
         const LIZA: &str = "liza@granitedepotindy.com";
         const MASHA: &str = "masha@granitedepotindy.com";
@@ -540,7 +540,7 @@ mod local_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_no_start_email(pool: MySqlPool) {
         let mock_client = MockClient::new("src/tests/data/external1.eml");
         let data: S3Event = ses_received_json();
@@ -552,7 +552,7 @@ mod local_tests {
         assert_eq!(result.len(), 0);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_first(pool: MySqlPool) {
         const CLIENT_EMAIL: &str = "info@granitedepotindy.com";
         let user_id = insert_user(&pool, CLIENT_EMAIL, Some(456)).await.unwrap();
@@ -568,7 +568,7 @@ mod local_tests {
         assert_eq!(result[0].receiver_email, Some(CLIENT_EMAIL.to_string()));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_first_forward_to_user_only(pool: MySqlPool) {
         const CLIENT_EMAIL: &str = "dema.gdindy@gmail.com";
         let user_id = insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
@@ -585,7 +585,7 @@ mod local_tests {
         assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_first_forward_forward_user_only(pool: MySqlPool) {
         const CLIENT_EMAIL: &str = "dema@granitedepotindy.com";
         let user_id = insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
@@ -601,7 +601,7 @@ mod local_tests {
         assert_eq!(result[0].receiver_email, Some(CLIENT_EMAIL.to_string()));
         assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
     }
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_first_forward_both_users(pool: MySqlPool) {
         const CLIENT_EMAIL: &str = "dema.gdindy@gmail.com";
         const CLIENT_EMAIL2: &str = "dema@granitedepotindy.com";
@@ -620,7 +620,7 @@ mod local_tests {
         assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_first_forward_from_user(pool: MySqlPool) {
         const CLIENT_EMAIL: &str = "dema@granitedepotindy.com";
         let user_id = insert_user(&pool, CLIENT_EMAIL, None).await.unwrap();
@@ -635,7 +635,7 @@ mod local_tests {
         assert_eq!(result[0].bucket.as_deref(), BUCKET_NAME);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_not_a_reply_user(pool: MySqlPool) {
         let message_id = "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000";
 
@@ -658,7 +658,7 @@ mod local_tests {
         assert_eq!(result[1].bucket.as_deref(), BUCKET_NAME);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn received_not_a_reply_no_user(pool: MySqlPool) {
         let message_id = "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000";
 
@@ -674,7 +674,7 @@ mod local_tests {
         let result = get_emails(&pool).await.unwrap();
         assert_eq!(result.len(), 1);
     }
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn dima_no_receiver_found(pool: MySqlPool) {
         let mock_client = MockClient::new("src/tests/data/failed_1.eml");
         const CLIENT_EMAIL: &str = "dema@granitedepotindy.com";
@@ -695,7 +695,7 @@ mod local_tests {
         assert_eq!(result[1].receiver_user_id, Some(user_id));
         assert_eq!(result[1].bucket.as_deref(), BUCKET_NAME);
     }
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn dima_attachment_no_body(pool: MySqlPool) {
         let mock_client = MockClient::new("src/tests/data/image_only.eml");
         const CLIENT_EMAIL: &str = "dema@granitedepotindy.com";
@@ -718,7 +718,7 @@ mod local_tests {
     /// An email that still cannot be parsed (no recipient in any header or in
     /// the SES envelope) is answered 200, so `EventBridge` does not retry what
     /// no retry can fix, and reported once as `inbound_email_unprocessed`.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn unparseable_email_is_reported_and_not_retried(pool: MySqlPool) {
         let mock_client = MockClient::new("src/tests/data/no_recipient_anywhere.eml");
         let reporter = MockUnprocessedReporter::default();
@@ -741,7 +741,7 @@ mod local_tests {
     }
 
     /// A transient S3 read error is still a 500: a retry can fix it.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn s3_read_error_is_still_retried(pool: MySqlPool) {
         let mock_client = MockClient::new("src/tests/data/does_not_exist.eml");
         let reporter = MockUnprocessedReporter::default();
@@ -777,7 +777,7 @@ mod local_tests {
     /// The overlapping delivery of an email another invocation is still
     /// processing gets 429 (`EventBridge` retries later) and does no
     /// attachment work. Once that claim expires, a retry takes over.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn overlapping_delivery_is_told_to_retry_later(pool: MySqlPool) {
         insert_user(&pool, "dema@granitedepotindy.com", None)
             .await
@@ -844,7 +844,7 @@ mod local_tests {
     /// Another run stores the email between our `email_exists` check and our
     /// claim (simulated by a trigger on the claims table). The second check
     /// after the claim catches it: 200, no upload, claim released.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn email_stored_while_claiming_is_not_processed_again(pool: MySqlPool) {
         insert_user(&pool, "dema@granitedepotindy.com", None)
             .await
@@ -870,7 +870,7 @@ mod local_tests {
 
     /// Every finished run releases its claim, so a later redelivery is
     /// answered by the `email_exists` check, not held off by a stale claim.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn finished_run_releases_its_claim(pool: MySqlPool) {
         let data: S3Event = ses_received_json();
         let mock_client = MockClient::new("src/tests/data/image_only.eml");
@@ -891,7 +891,7 @@ mod local_tests {
     }
 
     /// Lambda deployed before the migration: emails are processed as before.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn missing_claims_table_still_stores_the_email(pool: MySqlPool) {
         sqlx::query("DROP TABLE email_processing_claims")
             .execute(&pool)
@@ -919,7 +919,7 @@ mod local_tests {
     /// `EventBridge` redelivers an email whose first run took over 5 s. The
     /// redelivery must not upload the attachments again (each upload used to
     /// leave an orphan copy in `gd-email-attachments`) or store a second row.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn redelivered_email_uploads_nothing(pool: MySqlPool) {
         insert_user(&pool, "dema@granitedepotindy.com", None)
             .await
@@ -943,7 +943,7 @@ mod local_tests {
     }
 
     /// Same for a reply that joins a thread: a redelivery uploads nothing.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn redelivered_reply_uploads_nothing(pool: MySqlPool) {
         let parent_id = "CAG6QthaOtf0GWH6Ba9eOfRkfbviRi-RJw_vVnRc4U5cW_9GPmA@mail.gmail.com";
         insert_email(&pool, parent_id).await.unwrap();
@@ -967,7 +967,7 @@ mod local_tests {
 
     /// An email nobody in the CRM receives is not stored, so its attachments
     /// must not reach S3 either.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn unknown_receiver_uploads_nothing(pool: MySqlPool) {
         let mock_client = MockClient::new("src/tests/data/image_only.eml");
         let data: S3Event = ses_received_json();
@@ -980,7 +980,7 @@ mod local_tests {
 
     /// Our employee was BCC'd: the only `To:` is an outside address and no
     /// `Bcc:` header is left. SES's top `Received` still names the employee.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn bcc_employee_found_through_the_ses_envelope(pool: MySqlPool) {
         let user_id = insert_user(&pool, "rep@granitedepotcolumbus.com", None)
             .await
@@ -1000,7 +1000,7 @@ mod local_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn envelope_that_is_not_a_user_is_still_dropped(pool: MySqlPool) {
         let mock_client = MockClient::new("src/tests/data/customer_to_envelope_user.eml");
         let data: S3Event = ses_received_json();
@@ -1012,7 +1012,7 @@ mod local_tests {
 
     /// `To: undisclosed-recipients:;` used to fail parsing (500, lost after
     /// three tries). It is now stored for the SES envelope recipient.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn undisclosed_recipients_forward_is_stored(pool: MySqlPool) {
         let user_id = insert_user(&pool, "sales@granitedepotcolumbus.com", None)
             .await
@@ -1032,7 +1032,7 @@ mod local_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn response_to_received_success(pool: MySqlPool) {
         let message_id =
             "010f019b278e838b-4026f591-7b73-451a-a540-7e70c8bd5c84-000000@us-east-2.amazonses.com";
@@ -1061,7 +1061,7 @@ mod local_tests {
         assert_eq!(result[1].bucket.as_deref(), BUCKET_NAME);
         assert_eq!(result[2].bucket.as_deref(), BUCKET_NAME);
     }
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn four_attachments(pool: MySqlPool) {
         let message_id = "CAG6QthaOtf0GWH6Ba9eOfRkfbviRi-RJw_vVnRc4U5cW_9GPmA@mail.gmail.com";
 
@@ -1102,7 +1102,7 @@ mod local_tests {
         }
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn yahoo_thank_you_reply_joins_truncated_ses_message_id(pool: MySqlPool) {
         insert_user(&pool, "dema@granitedepotindy.com", None)
             .await
@@ -1129,7 +1129,7 @@ mod local_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn yahoo_thank_you_reply_joins_uuid_backfilled_drip(pool: MySqlPool) {
         let user_id = insert_user(&pool, "dema@granitedepotindy.com", None)
             .await
@@ -1168,7 +1168,7 @@ mod local_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn yahoo_reply_without_parent_keeps_quoted_original(pool: MySqlPool) {
         insert_user(&pool, "dema@granitedepotindy.com", None)
             .await

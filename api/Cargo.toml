@@ -34,4 +34,5 @@ uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
 [dev-dependencies]
+test-db = { path = "../test-db" }
 axum-test = "19"

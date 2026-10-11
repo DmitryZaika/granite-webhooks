@@ -122,7 +122,7 @@ mod tests {
         .unwrap()
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn persists_manager_messages_for_new_lead(pool: MySqlPool) {
         use crate::telegram::send::send_telegram_manager_assign;
 
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(bot.sent.lock().unwrap().len(), 2);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn cleanup_deletes_all_tracked_messages(pool: MySqlPool) {
         let company_id = 1;
         let customer_id = insert_customer(&pool, company_id).await;
@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(deleted, vec![(111, 10), (222, 20), (333, 30)]);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn cleanup_is_company_scoped(pool: MySqlPool) {
         let company_id = 1;
         let other_company_id = 2;
@@ -200,7 +200,7 @@ mod tests {
         assert!(bot.deleted.lock().unwrap().is_empty());
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn cleanup_succeeds_when_telegram_delete_fails(pool: MySqlPool) {
         let company_id = 1;
         let customer_id = insert_customer(&pool, company_id).await;
@@ -221,7 +221,7 @@ mod tests {
         assert!(bot.deleted.lock().unwrap().is_empty());
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn sent_manager_notifications_are_deleted_on_cleanup(pool: MySqlPool) {
         use crate::crud::telegram_messages::list_active_telegram_lead_messages;
         use crate::telegram::send::send_telegram_manager_assign;
@@ -275,7 +275,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn sent_manager_and_sales_notifications_are_deleted_on_cleanup(pool: MySqlPool) {
         use crate::crud::telegram_messages::list_active_telegram_lead_messages;
         use crate::libs::constants::SALES_WORKER;
@@ -343,7 +343,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn cleanup_does_not_delete_other_customer_notifications(pool: MySqlPool) {
         use crate::telegram::send::send_telegram_manager_assign;
 
@@ -397,7 +397,7 @@ mod tests {
         assert_eq!(bot.deleted.lock().unwrap().len(), 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn cleanup_works_after_customer_soft_delete(pool: MySqlPool) {
         let company_id = 1;
         let customer_id = insert_customer(&pool, company_id).await;

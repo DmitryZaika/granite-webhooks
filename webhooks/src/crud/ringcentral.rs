@@ -482,7 +482,7 @@ mod tests {
     }
 
     // Regression: column list and bind list must match for both inserts.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_inbound_insert_succeeds_and_stores_derived_columns(pool: MySqlPool) {
         // A real customer message: untagged, from the customer to the line.
         let payload = serde_json::json!({
@@ -516,7 +516,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_outbound_insert_succeeds_and_stores_derived_columns(pool: MySqlPool) {
         let sms = echo_fixture(3_300_000_002, "outbound body");
         insert_outbound_sms(&pool, &sms, 42)
@@ -537,7 +537,7 @@ mod tests {
         assert!(rows[0].created_date.is_some());
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sms_attachments_cascade_delete(pool: MySqlPool) {
         let parent = sqlx::query(
             "INSERT INTO ringcentral_sms \
@@ -646,7 +646,7 @@ mod tests {
 
     // (b) Image-only fallback: empty caption means the fallback body is the bare "Photo 1:
     // <url>" line (buildAttachmentLinkSmsBody's empty-caption branch); with an attachment, must merge.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_merges_image_only_fallback_echo(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -664,7 +664,7 @@ mod tests {
 
     // (c) Caption fallback: body is "<caption>\nPhoto 1: <url>" (buildAttachmentLinkSmsBody's
     // non-empty-caption image branch); with an attachment present, must merge.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_merges_caption_fallback_echo(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "cap", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -681,7 +681,7 @@ mod tests {
     }
 
     // (c2) PDF/file caption fallback: body is "<caption>\nFile 1: <name>\n<url>".
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_merges_file_caption_fallback_echo(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "cap", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -698,7 +698,7 @@ mod tests {
     }
 
     // (c3) File-only (empty caption): body starts with "File 1:".
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_merges_file_only_fallback_echo(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -716,7 +716,7 @@ mod tests {
 
     // (d) An unrelated echo to the same recipient must never be absorbed by an image-only
     // row just because its text is empty; that was the BLOCKER data-loss bug this redesign fixes.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_does_not_merge_unrelated_echo_into_image_only_row(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -738,7 +738,7 @@ mod tests {
 
     // (e) Prefix collision: a plain-text send of "Hi" must not absorb an
     // unrelated echo that merely starts with "Hi" ("Hi there!").
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_does_not_merge_prefix_collision(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "Hi", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -756,7 +756,7 @@ mod tests {
 
     // (f) A text-only send (no attachment rows) must never tier-2 merge, even against an
     // echo with the exact fallback shape; tier 2 exists solely for attachment-link fallbacks.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_never_merges_row_without_attachment(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "", "sent").await;
         // Deliberately no insert_attachment_for(&pool, row_id) call.
@@ -774,7 +774,7 @@ mod tests {
 
     // (g1) A literal '%' inside the caption must be treated as an ordinary
     // character (equality, not LIKE), so its real fallback echo still merges.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_merges_fallback_with_percent_in_caption(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "save 50% now", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -787,7 +787,7 @@ mod tests {
 
     // (g2) An unrelated echo starting with "save 50" must not merge, even though the old
     // `LIKE CONCAT(text, '%')` tier-2 let the caption's own '%' act as a SQL wildcard.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_does_not_merge_unrelated_echo_with_percent_caption(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "save 50% now", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -804,7 +804,7 @@ mod tests {
 
     // FIFO: echoes arrive in send order, so the oldest unclaimed candidate
     // row must absorb first, not the newest.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_merge_picks_oldest_unclaimed_row_first(pool: MySqlPool) {
         let older_id = insert_pending_outbound(&pool, "hello", "pending").await;
         let newer_id = insert_pending_outbound(&pool, "hello", "pending").await;

@@ -371,7 +371,7 @@ mod local_tests {
     // sync_customer_to_cloud_talk Tests
     // -----------------------------------------------------------------
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sync_customer_not_found(pool: MySqlPool) {
         let client = setup_mock_client();
 
@@ -382,7 +382,7 @@ mod local_tests {
         assert_eq!(res.0, StatusCode::NOT_FOUND);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sync_customer_missing_company(pool: MySqlPool) {
         let client = setup_mock_client();
 
@@ -397,7 +397,7 @@ mod local_tests {
         assert!(res.1.contains("The given user does not have a company"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sync_company_missing_cloud_talk_credentials(pool: MySqlPool) {
         let client = setup_mock_client();
 
@@ -423,7 +423,7 @@ mod local_tests {
         assert!(res.1.contains("Cloudtalk not configured for this company"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sync_customer_no_usable_phone_fails_payload_build(pool: MySqlPool) {
         let client = setup_mock_client();
 
@@ -447,7 +447,7 @@ mod local_tests {
         assert!(res.1.contains("no usable phone number"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sync_customer_success_path(pool: MySqlPool) {
         let client = setup_mock_client();
 
@@ -508,7 +508,7 @@ mod local_tests {
         assert_eq!(mapped, 9001);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sync_customer_with_existing_mapping_reuses_id(pool: MySqlPool) {
         let client = setup_mock_client();
 

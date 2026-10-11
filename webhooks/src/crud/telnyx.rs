@@ -418,7 +418,7 @@ mod tests {
         assert_eq!(last10_digits(""), "");
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn unknown_number_creates_unreviewed_follow_up(pool: MySqlPool) {
         let call_id = insert_telnyx_call(&pool, "call-unknown", "+15551234567").await;
 
@@ -435,7 +435,7 @@ mod tests {
         assert!(follow_up.marked_at.is_none());
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn known_number_adds_note_to_most_recent_deal(pool: MySqlPool) {
         let company_id = insert_company(&pool).await;
         let customer_id = insert_customer(&pool, company_id, Some("+13173161456")).await;
@@ -464,7 +464,7 @@ mod tests {
         assert_eq!(count_follow_ups(&pool).await, 0);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn known_number_without_deal_creates_follow_up(pool: MySqlPool) {
         let company_id = insert_company(&pool).await;
         insert_customer(&pool, company_id, Some("+13173161456")).await;
@@ -479,7 +479,7 @@ mod tests {
         assert_eq!(count_telnyx_notes(&pool).await, 0);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn repeated_events_do_not_duplicate_follow_up(pool: MySqlPool) {
         insert_telnyx_call(&pool, "call-retry", "+15551234567").await;
         let event = event_for("call-retry", "+15551234567");
@@ -494,7 +494,7 @@ mod tests {
         assert_eq!(count_follow_ups(&pool).await, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn repeated_events_do_not_duplicate_note(pool: MySqlPool) {
         let company_id = insert_company(&pool).await;
         let customer_id = insert_customer(&pool, company_id, Some("+13173161456")).await;
@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(count_telnyx_notes(&pool).await, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn marking_follow_up_sets_marked_at(pool: MySqlPool) {
         let call_id = insert_telnyx_call(&pool, "call-mark", "+15551234567").await;
         record_inbound_follow_up(

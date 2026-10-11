@@ -30,10 +30,7 @@ async fn get(pool: MySqlPool, path: &str, session: &str) -> Value {
 
 // ---- GET /v1/me/stats/sales -------------------------------------------------
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sales_count_this_months_deals_of_the_user(pool: MySqlPool) {
     let start = month_start_back(today(), 0).to_string();
     let end = today().to_string();
@@ -72,10 +69,7 @@ async fn sales_count_this_months_deals_of_the_user(pool: MySqlPool) {
     assert_eq!(other["won_amount"], "8000.00");
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sales_of_a_user_with_no_deals_are_zero(pool: MySqlPool) {
     let stats = get(pool, "/v1/me/stats/sales", sessions::ADMIN).await;
     assert_eq!(stats["won_count"], 0);
@@ -85,10 +79,7 @@ async fn sales_of_a_user_with_no_deals_are_zero(pool: MySqlPool) {
 
 // ---- GET /v1/me/stats/deal-conversion ---------------------------------------
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn deal_conversion_counts_every_live_deal_by_source(pool: MySqlPool) {
     assert_eq!(
         get(pool.clone(), "/v1/me/stats/deal-conversion", sessions::REP).await,
@@ -112,10 +103,7 @@ async fn deal_conversion_counts_every_live_deal_by_source(pool: MySqlPool) {
 
 // ---- GET /v1/me/stats/top-stones --------------------------------------------
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn top_stones_rank_this_months_full_slabs(pool: MySqlPool) {
     assert_eq!(
         get(pool.clone(), "/v1/me/stats/top-stones", sessions::REP).await,
@@ -167,10 +155,7 @@ async fn top_stones_rank_this_months_full_slabs(pool: MySqlPool) {
 
 // ---- GET /v1/me/stats/sent-emails -------------------------------------------
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sent_emails_count_the_last_three_months(pool: MySqlPool) {
     // Olga: 8405-8407 this month, 8408 last month.
     assert_eq!(
@@ -206,10 +191,7 @@ async fn sent_emails_count_the_last_three_months(pool: MySqlPool) {
 
 // ---- GET /v1/me/stats/sent-sms ----------------------------------------------
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sent_sms_follow_the_company_provider(pool: MySqlPool) {
     // Company 100 has no provider, whatever its tables hold.
     assert_eq!(
@@ -258,10 +240,7 @@ async fn sent_sms_follow_the_company_provider(pool: MySqlPool) {
 
 // ---- auth -------------------------------------------------------------------
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn stats_need_an_employee(pool: MySqlPool) {
     let server = server(pool);
     for path in ROUTES {

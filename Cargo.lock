@@ -58,6 +58,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "sqlx",
+ "test-db",
  "thiserror",
  "tokio",
  "tower-http",
@@ -990,6 +991,7 @@ dependencies = [
  "chrono-tz",
  "serde",
  "sqlx",
+ "test-db",
  "tokio",
  "uuid",
 ]
@@ -4305,6 +4307,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-db"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+ "sqlx",
+ "test-db-macros",
+ "tokio",
+]
+
+[[package]]
+name = "test-db-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "thiserror"
 version = "2.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4375,6 +4396,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "teloxide",
+ "test-db",
  "tokio",
 ]
 
@@ -4981,6 +5003,7 @@ dependencies = [
  "sha2 0.11.0",
  "sqlx",
  "teloxide",
+ "test-db",
  "thiserror",
  "tokio",
  "tower-http",

@@ -69,10 +69,7 @@ async fn expect_error(res: axum_test::TestResponse, status: StatusCode, starts_w
 
 // ---- POST /v1/uploads
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn uploads_are_presigned_into_the_folder(pool: MySqlPool) {
     let (server, _) = server_with_storage(pool);
     let res = server
@@ -113,10 +110,7 @@ async fn uploads_are_presigned_into_the_folder(pool: MySqlPool) {
         .assert_status(StatusCode::FORBIDDEN);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn uploads_need_configured_storage(pool: MySqlPool) {
     expect_error(
         server(pool)
@@ -132,10 +126,7 @@ async fn uploads_need_configured_storage(pool: MySqlPool) {
 
 // ---- Catalog
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn suppliers_colors_and_types_of_the_company(pool: MySqlPool) {
     let server = server(pool);
     let get = |path: &'static str| server.get(path).with_session(sessions::REP);
@@ -170,10 +161,7 @@ async fn suppliers_colors_and_types_of_the_company(pool: MySqlPool) {
         .assert_status_unauthorized();
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn stone_types_are_created_renamed_and_deleted(pool: MySqlPool) {
     let server = server(pool.clone());
     let created = server
@@ -283,10 +271,7 @@ async fn stone_types_are_created_renamed_and_deleted(pool: MySqlPool) {
 
 // ---- Stones
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn creates_a_stone_with_its_image_and_colors(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool);
     let url = upload(&server, &storage, "stones").await;
@@ -319,10 +304,7 @@ async fn creates_a_stone_with_its_image_and_colors(pool: MySqlPool) {
     assert_eq!(stone["color_ids"], json!([3, 13]));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn stone_writes_validate_everything(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool.clone());
     let url = upload(&server, &storage, "stones").await;
@@ -390,10 +372,7 @@ async fn stone_writes_validate_everything(pool: MySqlPool) {
         .assert_status(StatusCode::FORBIDDEN);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn editing_keeps_or_replaces_the_image(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool);
     let first = upload(&server, &storage, "stones").await;
@@ -467,10 +446,7 @@ async fn editing_keeps_or_replaces_the_image(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn deleting_a_stone_with_slabs_needs_confirmation(pool: MySqlPool) {
     let server = server(pool.clone());
     expect_error(
@@ -522,10 +498,7 @@ async fn deleting_a_stone_with_slabs_needs_confirmation(pool: MySqlPool) {
 
 // ---- Installed photos
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn photos_are_listed_added_linked_and_deleted(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool.clone());
     let list = |id: i64| {
@@ -596,10 +569,7 @@ async fn photos_are_listed_added_linked_and_deleted(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn photo_routes_are_scoped_and_validated(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool);
     server
@@ -653,10 +623,7 @@ async fn photo_routes_are_scoped_and_validated(pool: MySqlPool) {
         .assert_status(StatusCode::NOT_FOUND);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn stone_names_for_linking(pool: MySqlPool) {
     let server = server(pool);
     let names = |query: &'static str| {
@@ -679,10 +646,7 @@ async fn stone_names_for_linking(pool: MySqlPool) {
 
 // ---- Slab links and slabs
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn slab_links_add_the_source_slabs(pool: MySqlPool) {
     let server = server(pool);
     server
@@ -741,10 +705,7 @@ async fn slab_links_add_the_source_slabs(pool: MySqlPool) {
     assert!(!common::ids(&slabs).contains(&6040));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn slabs_are_added_renamed_and_deleted(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool.clone());
     // No size: the stone's (Zebra Quartz is 118 x 56).

@@ -24,10 +24,7 @@ fn row(rows: &Value, id: i64) -> &Value {
         .unwrap_or_else(|| panic!("stone {id} missing"))
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn lists_displayed_in_stock_stones_sorted_by_name(pool: MySqlPool) {
     let rows = list(pool, "").await;
     // Absolute Black, Calacatta Gold, Linked Black Remnants, No Image Granite,
@@ -35,10 +32,7 @@ async fn lists_displayed_in_stock_stones_sorted_by_name(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![3000, 3001, 3007, 3006, 3009, 3003, 3008]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn stone_has_every_field(pool: MySqlPool) {
     let rows = list(pool, "").await;
     assert_eq!(
@@ -70,10 +64,7 @@ async fn stone_has_every_field(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn slab_counts_split_remnants_links_and_regular_stock(pool: MySqlPool) {
     let rows = list(pool, "").await;
     // Whole slab sold, the remnant cut from it free.
@@ -96,10 +87,7 @@ async fn slab_counts_split_remnants_links_and_regular_stock(pool: MySqlPool) {
     assert_eq!(row(&rows, 3006)["url"], Value::Null);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn include_sold_out_adds_stones_without_free_slabs(pool: MySqlPool) {
     let rows = list(pool, "?include_sold_out=true").await;
     assert_eq!(
@@ -113,10 +101,7 @@ async fn include_sold_out_adds_stones_without_free_slabs(pool: MySqlPool) {
     assert_eq!(sold_out["slabs"]["available"], 0);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn never_returns_hidden_deleted_or_foreign_stones(pool: MySqlPool) {
     let rows = list(pool, "?include_sold_out=true").await;
     let ids = ids(&rows);
@@ -125,10 +110,7 @@ async fn never_returns_hidden_deleted_or_foreign_stones(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn filters(pool: MySqlPool) {
     let server = server(pool);
     let cases: &[(&str, &[i64])] = &[
@@ -162,10 +144,7 @@ async fn filters(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn malformed_filters_are_400(pool: MySqlPool) {
     let server = server(pool);
     for query in ["?supplier_id=abc", "?level=high", "?include_sold_out=yes"] {
@@ -182,10 +161,7 @@ async fn malformed_filters_are_400(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn tenants_are_isolated(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/stones?include_sold_out=true")
@@ -195,10 +171,7 @@ async fn tenants_are_isolated(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![4000]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn requires_an_employee_or_admin(pool: MySqlPool) {
     let server = server(pool);
     server.get("/v1/stones").await.assert_status_unauthorized();
