@@ -7685,6 +7685,81 @@
             "session_cookie": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "checklists"
+        ],
+        "summary": "Save a post-installation checklist",
+        "description": "An installer records the customer's sign-off. Offline installers queue\nthese and send them when back online.",
+        "operationId": "create_checklist",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewChecklist"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedChecklist"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, address or signature, or a bad email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an installer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/uploads": {
@@ -21016,6 +21091,21 @@
           }
         }
       },
+      "CreatedChecklist": {
+        "type": "object",
+        "description": "`POST /v1/checklists`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The new checklist.",
+            "minimum": 0
+          }
+        }
+      },
       "CreatedCustomer": {
         "type": "object",
         "description": "Result of `POST /v1/customers`.",
@@ -25184,6 +25274,100 @@
           }
         },
         "additionalProperties": false
+      },
+      "NewChecklist": {
+        "type": "object",
+        "description": "Body of `POST /v1/checklists`: the customer's post-installation sign-off.",
+        "required": [
+          "customer_name",
+          "installation_address",
+          "signature"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer, when known."
+          },
+          "customer_name": {
+            "type": "string",
+            "description": "Customer name; required."
+          },
+          "installation_address": {
+            "type": "string",
+            "description": "Where the job was; required."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to send the copy."
+          },
+          "material_correct": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Each check is `on` when ticked."
+          },
+          "seams_satisfaction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "See `material_correct`."
+          },
+          "appliances_fit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "See `material_correct`."
+          },
+          "backsplashes_correct": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "See `material_correct`."
+          },
+          "edges_correct": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "See `material_correct`."
+          },
+          "holes_drilled": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "See `material_correct`."
+          },
+          "cleanup_completed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "See `material_correct`."
+          },
+          "comments": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Customer comments."
+          },
+          "signature": {
+            "type": "string",
+            "description": "The customer's signature (image data URL); required."
+          }
+        }
       },
       "NewFile": {
         "type": "object",

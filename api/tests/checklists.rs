@@ -144,3 +144,48 @@ async fn requires_an_employee_or_admin(pool: MySqlPool) {
         .await
         .assert_status_ok();
 }
+
+#[test_db::test(seed)]
+async fn an_installer_saves_a_checklist(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let body = serde_json::json!({
+        "customer_name": "Alice Lead", "installation_address": "1 Main St",
+        "material_correct": "on", "edges_correct": "", "signature": "data:image/png;base64,AAAA",
+        "email": "alice@example.com", "customer_id": 1000,
+    });
+    server
+        .post("/v1/checklists")
+        .with_session(sessions::REP)
+        .json(&body)
+        .await
+        .assert_status(axum::http::StatusCode::FORBIDDEN);
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (100, 6, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let res = server
+        .post("/v1/checklists")
+        .with_session(sessions::REP)
+        .json(&body)
+        .await;
+    res.assert_status(axum::http::StatusCode::CREATED);
+    let id = res.json::<serde_json::Value>()["id"].as_u64().unwrap();
+    let saved: (i32, bool, bool, i32) = sqlx::query_as(
+        "SELECT installer_id, material_correct <> 0, edges_correct <> 0, company_id FROM checklists WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(saved, (100, true, false, 100));
+    let mut unsigned = body.clone();
+    unsigned["signature"] = "".into();
+    server
+        .post("/v1/checklists")
+        .with_session(sessions::REP)
+        .json(&unsigned)
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+}

@@ -6,6 +6,7 @@
 //! | `CurrentUser`  | `requireLoggedInUser`*      | any valid session                        |
 //! | `EmployeeUser` | `getEmployeeUser`           | `is_employee \|\| is_admin \|\| is_superuser` |
 //! | `AdminUser`    | `getAdminUser`              | `is_admin \|\| is_superuser`              |
+//! | `InstallerUser` | `getInstallerUser` | an installer of the company |
 //! | `ShopOrEmployeeUser` | `getShopOrEmployeeUser` | an employee, or a shop manager / worker of the company |
 //!
 //! *`CurrentUser` also applies the super-admin elevation and company switch, so
@@ -90,6 +91,28 @@ impl FromRequestParts<AppState> for ShopOrEmployeeUser {
             row.company_id == user.company_id && SHOP_POSITIONS.contains(&row.position_id)
         });
         if user.is_employee || user.is_admin || user.is_superuser || shop {
+            Ok(Self(user))
+        } else {
+            Err(ApiError::Forbidden)
+        }
+    }
+}
+
+/// `positions.id` of an installer.
+const INSTALLER_POSITION: i32 = 6;
+
+/// An installer of the company the request acts in (the installer portal).
+pub struct InstallerUser(pub SessionUser);
+
+impl FromRequestParts<AppState> for InstallerUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        let (user, positions) = authenticate_with_positions(parts, state).await?;
+        let installer = positions
+            .iter()
+            .any(|row| row.company_id == user.company_id && row.position_id == INSTALLER_POSITION);
+        if installer {
             Ok(Self(user))
         } else {
             Err(ApiError::Forbidden)
