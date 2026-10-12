@@ -44,8 +44,11 @@ async fn miles_come_from_the_route_matrix(pool: MySqlPool) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let state = AppState::new(pool, SECRET, ALLOWED_ORIGIN)
-        .with_maps(Maps::new(Some("key"), &format!("http://{address}/matrix")));
+    let state = AppState::new(pool, SECRET, ALLOWED_ORIGIN).with_maps(Maps::new(
+        Some("key"),
+        &format!("http://{address}/matrix"),
+        &format!("http://{address}"),
+    ));
     let server = TestServer::new(app(state));
     let miles = |to: &str| {
         let request = server

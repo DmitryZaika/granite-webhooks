@@ -18199,6 +18199,164 @@
           }
         ]
       }
+    },
+    "/v1/schedule/day-map": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Map a day's stops",
+        "description": "A map with the company address and the stops numbered in order, joined by\na line. Null image without Google Maps or when no address is found.",
+        "operationId": "get_schedule_day_map",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "The day's stops in order (repeat the parameter; at most 20 drawn).",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Map",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DayMap"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/optimize-route": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Optimize a day's route",
+        "description": "Orders the events by the shortest drive from the company address and\nhands the day's existing start times out in that order (each event keeps\nits length). All-day and repeating events are ordered but keep their\ntimes. Moved events get a history line and re-timed reminders.",
+        "operationId": "optimize_schedule_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizedRoute"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Fewer than 2 or more than 20 events, events without an address, or no company address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Google Maps could not build the route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -20228,6 +20386,26 @@
           "emails-per-month",
           "sms-per-month"
         ]
+      },
+      "DayMap": {
+        "type": "object",
+        "description": "`GET /v1/schedule/day-map`.",
+        "properties": {
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "PNG as a `data:` URL; null when nothing could be placed."
+          },
+          "home_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The company address the route starts from."
+          }
+        }
       },
       "DealConversion": {
         "type": "object",
@@ -23640,6 +23818,35 @@
           }
         }
       },
+      "OptimizedRoute": {
+        "type": "object",
+        "description": "`POST /v1/schedule/optimize-route`.",
+        "required": [
+          "order",
+          "changed",
+          "stops"
+        ],
+        "properties": {
+          "order": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Event ids in driving order from the company."
+          },
+          "changed": {
+            "type": "integer",
+            "description": "Events that got a new time.",
+            "minimum": 0
+          },
+          "stops": {
+            "type": "integer",
+            "description": "Events on the route.",
+            "minimum": 0
+          }
+        }
+      },
       "OrderingMode": {
         "type": "string",
         "description": "How a picker sorts.",
@@ -24815,6 +25022,23 @@
           }
         },
         "additionalProperties": false
+      },
+      "RouteInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/schedule/optimize-route`.",
+        "required": [
+          "event_ids"
+        ],
+        "properties": {
+          "event_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The day's events with an address, 2 to 20."
+          }
+        }
       },
       "SaleContract": {
         "type": "object",
