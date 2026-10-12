@@ -36,6 +36,7 @@ pub struct Chat<'a> {
     /// Ask for a JSON object reply.
     pub json: bool,
     pub reasoning_effort: Option<&'a str>,
+    pub max_completion_tokens: Option<u32>,
     pub timeout: Duration,
 }
 
@@ -46,8 +47,15 @@ impl<'a> Chat<'a> {
             messages: Vec::new(),
             json: false,
             reasoning_effort: None,
+            max_completion_tokens: None,
             timeout: Duration::from_secs(60),
         }
+    }
+
+    #[must_use]
+    pub const fn max_tokens(mut self, max: Option<u32>) -> Self {
+        self.max_completion_tokens = max;
+        self
     }
 
     #[must_use]
@@ -136,6 +144,9 @@ impl Ai {
         let mut body = json!({ "model": chat.model, "messages": chat.messages });
         if chat.json {
             body["response_format"] = json!({ "type": "json_object" });
+        }
+        if let Some(max) = chat.max_completion_tokens {
+            body["max_completion_tokens"] = json!(max);
         }
         if let Some(effort) = chat.reasoning_effort {
             body["reasoning_effort"] = json!(effort);

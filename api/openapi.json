@@ -20011,6 +20011,93 @@
           }
         ]
       }
+    },
+    "/v1/ai/call-note": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Summarize a call",
+        "description": "A CRM note of the job facts in a sales call (or a short voicemail note).",
+        "operationId": "summarize_call_note",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallNoteInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Note",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallNote"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty transcript",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Nothing work-related in the transcript",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -20822,6 +20909,36 @@
           "phone_digits": {
             "type": "string",
             "description": "10 to 15 digits."
+          }
+        }
+      },
+      "CallNote": {
+        "type": "object",
+        "description": "`POST /v1/ai/call-note`.",
+        "required": [
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "\"- **Label:** details\" bullets."
+          }
+        }
+      },
+      "CallNoteInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/call-note`.",
+        "required": [
+          "transcript"
+        ],
+        "properties": {
+          "transcript": {
+            "type": "string",
+            "description": "The call's transcript."
+          },
+          "voicemail": {
+            "type": "boolean",
+            "description": "It was a voicemail (a shorter note)."
           }
         }
       },

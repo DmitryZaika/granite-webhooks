@@ -82,3 +82,32 @@ async fn a_draft_is_improved_and_billed(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::BAD_REQUEST);
 }
+
+#[test_db::test(seed)]
+async fn a_voicemail_note_is_short(pool: MySqlPool) {
+    let (server, seen) = server(&pool).await;
+    let res = server
+        .post("/v1/ai/call-note")
+        .with_session(sessions::REP)
+        .json(&json!({ "transcript": "Hi, this is Rita calling back about your quote.", "voicemail": true }))
+        .await;
+    res.assert_status_ok();
+    assert_eq!(
+        res.json::<Value>()["content"],
+        "Hi Alice, thanks for your patience."
+    );
+    let sent = seen.lock().unwrap().clone();
+    assert_eq!(sent[0]["max_completion_tokens"], 180);
+    assert!(
+        sent[0]["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("Summarize this outbound sales voicemail")
+    );
+    server
+        .post("/v1/ai/call-note")
+        .with_session(sessions::REP)
+        .json(&json!({ "transcript": "  " }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
