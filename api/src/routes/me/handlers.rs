@@ -507,3 +507,65 @@ pub async fn link_notifications_telegram(
 ) -> ApiResult<axum::http::StatusCode> {
     link_telegram(&state, &user, Bot::Notifications, &input).await
 }
+
+/// Body of `POST /v1/me/onboarding-feedback`.
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct OnboardingFeedback {
+    /// 1 to 5 stars.
+    pub rating: i32,
+    /// Up to 2000 characters.
+    #[serde(default)]
+    pub feedback_text: Option<String>,
+}
+
+/// Rate the onboarding
+///
+/// Saves the signed-in user's rating of the guided tours; once per user.
+#[utoipa::path(
+    post,
+    path = "/v1/me/onboarding-feedback",
+    operation_id = "send_onboarding_feedback",
+    tag = "me",
+    request_body = OnboardingFeedback,
+    responses(
+        (status = 201, description = "Saved"),
+        (status = 400, description = "Rating not 1-5 or text too long", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 409, description = "Feedback already submitted", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn onboarding_feedback(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    JsonBody(input): JsonBody<OnboardingFeedback>,
+) -> ApiResult<axum::http::StatusCode> {
+    let text = input
+        .feedback_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    if !(1..=5).contains(&input.rating) || text.is_some_and(|text| text.chars().count() > 2000) {
+        return Err(ApiError::BadRequest("Invalid request".into()));
+    }
+    let given: Option<i32> =
+        sqlx::query_scalar("SELECT id FROM onboarding_feedback WHERE user_id = ? LIMIT 1")
+            .bind(user.id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if given.is_some() {
+        return Err(ApiError::Conflict("Feedback already submitted".into()));
+    }
+    sqlx::query(
+        "INSERT INTO onboarding_feedback (user_id, company_id, rating, feedback_text) VALUES (?, ?, ?, ?)",
+    )
+    .bind(user.id)
+    .bind(user.company_id)
+    .bind(input.rating)
+    .bind(text)
+    .execute(&state.pool)
+    .await?;
+    Ok(axum::http::StatusCode::CREATED)
+}

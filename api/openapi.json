@@ -492,6 +492,86 @@
         ]
       }
     },
+    "/v1/me/onboarding-feedback": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Rate the onboarding",
+        "description": "Saves the signed-in user's rating of the guided tours; once per user.",
+        "operationId": "send_onboarding_feedback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardingFeedback"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Rating not 1-5 or text too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Feedback already submitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/notification-preferences": {
       "get": {
         "tags": [
@@ -24393,6 +24473,27 @@
           "telegram_activity_notifications": {
             "type": "boolean",
             "description": "Deal activities and other CRM alerts."
+          }
+        }
+      },
+      "OnboardingFeedback": {
+        "type": "object",
+        "description": "Body of `POST /v1/me/onboarding-feedback`.",
+        "required": [
+          "rating"
+        ],
+        "properties": {
+          "rating": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 to 5 stars."
+          },
+          "feedback_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Up to 2000 characters."
           }
         }
       },

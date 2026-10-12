@@ -386,3 +386,24 @@ async fn telegram_logins_link_the_bots(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 }
+
+#[test_db::test(seed)]
+async fn onboarding_is_rated_once(pool: MySqlPool) {
+    let server = common::server(pool);
+    let rate = |body: Value| {
+        let request = server
+            .post("/v1/me/onboarding-feedback")
+            .with_session(sessions::REP)
+            .json(&body);
+        async move { request.await }
+    };
+    rate(json!({ "rating": 6 }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    rate(json!({ "rating": 4, "feedback_text": " Nice tours " }))
+        .await
+        .assert_status(StatusCode::CREATED);
+    rate(json!({ "rating": 5 }))
+        .await
+        .assert_status(StatusCode::CONFLICT);
+}

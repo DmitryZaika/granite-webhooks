@@ -6,6 +6,7 @@
 //! - `POST /v1/me/telegram/leads|notifications` → link a bot (Telegram login widget)
 //! - `GET /v1/me/telegram`   → Telegram link status per bot (checked with Telegram)
 //! - `GET`/`PUT /v1/me/notification-preferences` → Telegram alert settings
+//! - `POST /v1/me/onboarding-feedback` → rate the guided tours (once)
 //! - `PUT /v1/me/sidebar-pin` → keep the desktop sidebar open
 //! - `GET /v1/me/marketing-companies` → companies the user markets for
 //! - `/v1/me/todos`, `/v1/me/todo-order` → the to-do list (see [`todos`])
@@ -27,6 +28,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::link_leads_telegram))
         .routes(routes!(handlers::link_notifications_telegram))
         .routes(routes!(handlers::set_sidebar_pin))
+        .routes(routes!(handlers::onboarding_feedback))
         .routes(routes!(
             handlers::notification_preferences,
             handlers::set_notification_preferences
