@@ -13,12 +13,14 @@
 //! - `/v1/deals/{id}/activities[/{activity_id}]`  → to-dos (GET, POST, PATCH, DELETE)
 //! - `/v1/deals/{id}/files`, `/documents/{id}`, `/files/{source}/{id}` → photos and documents
 //! - `GET    /v1/deal-activities/suggestions`     → the caller's frequent activity names
+//! - `/v1/deal-pipelines[/{id}[/stages|/stage-order]]`, `DELETE /v1/deal-stages/{id}` → admin pipeline setup
 //! - `/v1/deals/{id}/notes[/{note_id}[/comments[/{comment_id}]]]` → notes and comments
 //!
 //! Replaces the Remix `employee.deals*` loaders/actions and `api.deal*` routes.
 
 mod files;
 mod handlers;
+mod pipelines;
 pub mod queries;
 pub mod schemas;
 pub mod service;
@@ -53,4 +55,9 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(files::list, files::attach_files))
         .routes(routes!(files::rename_document))
         .routes(routes!(files::delete_file))
+        .routes(routes!(pipelines::list, pipelines::create))
+        .routes(routes!(pipelines::update, pipelines::delete))
+        .routes(routes!(pipelines::create_stage))
+        .routes(routes!(pipelines::order_stages))
+        .routes(routes!(pipelines::delete_stage))
 }
