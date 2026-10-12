@@ -324,3 +324,35 @@ async fn admins_list_reps_who_text(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 }
+
+#[test_db::test(seed)]
+async fn a_late_cloudtalk_webhook_sits_between_its_neighbours(pool: MySqlPool) {
+    seed(&pool).await;
+    // 9302 (provider id 302) arrived at 10:30 but was sent between 301 and 303.
+    sqlx::raw_sql(
+        "INSERT INTO cloudtalk_sms (id, cloudtalk_id, sender, recipient, text, direction, status, agent,
+                                    company_id, created_date, sender10, recipient10, phone_digits) VALUES
+           (9301, 301, 3175550999, 3175550555, 'first',  'outbound', 'sent', '5001', 100, '2025-07-01 10:00:00', '3175550999', '3175550555', '3175550555'),
+           (9302, 302, 3175550999, 3175550555, 'late',   'outbound', 'sent', '5001', 100, '2025-07-01 10:30:00', '3175550999', '3175550555', '3175550555'),
+           (9303, 303, 3175550999, 3175550555, 'third',  'outbound', 'sent', '5001', 100, '2025-07-01 10:10:00', '3175550999', '3175550555', '3175550555');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let thread = get(&pool, &format!("{THREADS}/3175550555"), sessions::REP).await;
+    let texts: Vec<&str> = thread["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts, ["first", "late", "third"]);
+    assert_eq!(thread["messages"][1]["created_at"], "2025-07-01T10:05:00Z");
+}
+
+#[test_db::test(seed)]
+async fn search_finds_names_in_any_word_order(pool: MySqlPool) {
+    seed(&pool).await;
+    let found = get(&pool, &format!("{THREADS}?search=Lead%20Alic"), sessions::REP).await;
+    assert_eq!(phones(&found), ["3175550100"]);
+}

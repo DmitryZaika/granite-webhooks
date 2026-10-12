@@ -534,3 +534,39 @@ pub async fn sales_reps(
     .await?;
     Ok(Json(reps))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Attachment, attachment_label};
+
+    fn files(types: &[&str]) -> Vec<Attachment> {
+        types
+            .iter()
+            .map(|content_type| Attachment {
+                id: 1,
+                sms_id: 1,
+                url: String::new(),
+                content_type: (*content_type).to_string(),
+                filename: String::new(),
+                width: None,
+                height: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn labels_what_a_textless_message_sent() {
+        assert_eq!(attachment_label(&files(&["image/png"])), "📷 Photo");
+        assert_eq!(attachment_label(&files(&["image/png"; 7])), "📷 7 photos");
+        assert_eq!(attachment_label(&files(&["application/pdf"])), "📎 File");
+        assert_eq!(
+            attachment_label(&files(&["application/pdf", "text/plain"])),
+            "📎 2 files"
+        );
+        assert_eq!(
+            attachment_label(&files(&["image/png", "image/jpeg", "application/pdf"])),
+            "📷 2 photos, 📎 1 file"
+        );
+        assert_eq!(attachment_label(&[]), "");
+    }
+}

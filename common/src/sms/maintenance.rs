@@ -244,7 +244,13 @@ async fn reconcile(
 
 #[cfg(test)]
 mod tests {
-    use super::{EchoPair, closest_outbound};
+    use super::{EchoPair, closest_outbound, run};
+    use crate::sms::derived::SmsProvider;
+    use sqlx::MySqlPool;
+
+    const COMPANY: i32 = 42;
+    const CUSTOMER: &str = "3173161456";
+    const LINE: &str = "6468956758";
 
     #[test]
     fn the_closest_outbound_then_the_lowest_id_wins() {
@@ -261,5 +267,163 @@ mod tests {
         ]);
         assert_eq!(chosen[&1], 9);
         assert_eq!(chosen[&2], 12);
+    }
+
+    /// A `cloudtalk_sms` row `seconds_ago` old, with its derived columns:
+    /// outbound without a sender, inbound with one.
+    async fn row(
+        pool: &MySqlPool,
+        status: &str,
+        sender10: Option<&str>,
+        recipient10: &str,
+        phone_digits: &str,
+        text: &str,
+        seconds_ago: i64,
+    ) -> i32 {
+        let result = sqlx::query(
+            "INSERT INTO cloudtalk_sms (company_id, sender, recipient, text, direction, status, created_date,
+                                        sender10, recipient10, phone_digits)
+             VALUES (?, ?, ?, ?, ?, ?, NOW() - INTERVAL ? SECOND, ?, ?, ?)",
+        )
+        .bind(COMPANY)
+        .bind(sender10)
+        .bind(recipient10)
+        .bind(text)
+        .bind(if sender10.is_some() { "inbound" } else { "outbound" })
+        .bind(status)
+        .bind(seconds_ago)
+        .bind(sender10)
+        .bind(recipient10)
+        .bind(phone_digits)
+        .execute(pool)
+        .await
+        .unwrap();
+        i32::try_from(result.last_insert_id()).unwrap()
+    }
+
+    async fn echo_of(pool: &MySqlPool, id: i32) -> (i8, Option<i32>, String) {
+        sqlx::query_as(
+            "SELECT is_echo, echo_of_sms_id, phone_digits FROM cloudtalk_sms WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[test_db::test]
+    async fn marks_an_echo_both_writers_raced_past(pool: MySqlPool) {
+        let outbound = row(&pool, "sent", None, CUSTOMER, CUSTOMER, "Raced", 60).await;
+        let inbound = row(
+            &pool,
+            "received",
+            Some(LINE),
+            CUSTOMER,
+            CUSTOMER,
+            "Raced",
+            55,
+        )
+        .await;
+        run(&pool, SmsProvider::Cloudtalk, COMPANY).await.unwrap();
+        let (is_echo, of, _) = echo_of(&pool, inbound).await;
+        assert_eq!((is_echo, of), (1, Some(outbound)));
+    }
+
+    #[test_db::test]
+    async fn marks_an_echo_up_to_an_hour_old_against_the_closest_send(pool: MySqlPool) {
+        let text = "Missed by the old window";
+        row(&pool, "sent", None, CUSTOMER, CUSTOMER, text, 3000).await;
+        let near = row(&pool, "sent", None, CUSTOMER, CUSTOMER, text, 2900).await;
+        let inbound = row(
+            &pool,
+            "received",
+            Some(LINE),
+            CUSTOMER,
+            CUSTOMER,
+            text,
+            2890,
+        )
+        .await;
+        run(&pool, SmsProvider::Cloudtalk, COMPANY).await.unwrap();
+        assert_eq!(echo_of(&pool, inbound).await.1, Some(near));
+    }
+
+    #[test_db::test]
+    async fn un_hides_the_echo_of_a_failed_send(pool: MySqlPool) {
+        let outbound = row(&pool, "failed", None, CUSTOMER, CUSTOMER, "Expired", 400).await;
+        let inbound = row(
+            &pool,
+            "received",
+            Some(LINE),
+            CUSTOMER,
+            CUSTOMER,
+            "Expired",
+            395,
+        )
+        .await;
+        sqlx::query("UPDATE cloudtalk_sms SET is_echo = 1, echo_of_sms_id = ? WHERE id = ?")
+            .bind(outbound)
+            .bind(inbound)
+            .execute(&pool)
+            .await
+            .unwrap();
+        run(&pool, SmsProvider::Cloudtalk, COMPANY).await.unwrap();
+        let (is_echo, of, _) = echo_of(&pool, inbound).await;
+        assert_eq!((is_echo, of), (0, None));
+    }
+
+    #[test_db::test]
+    async fn fails_a_stuck_send_and_shows_its_echo(pool: MySqlPool) {
+        let outbound = row(&pool, "pending", None, CUSTOMER, CUSTOMER, "Stuck", 600).await;
+        let inbound = row(
+            &pool,
+            "received",
+            Some(LINE),
+            CUSTOMER,
+            CUSTOMER,
+            "Stuck",
+            598,
+        )
+        .await;
+        sqlx::query("UPDATE cloudtalk_sms SET is_echo = 1, echo_of_sms_id = ? WHERE id = ?")
+            .bind(outbound)
+            .bind(inbound)
+            .execute(&pool)
+            .await
+            .unwrap();
+        run(&pool, SmsProvider::Cloudtalk, COMPANY).await.unwrap();
+        let status: String =
+            sqlx::query_scalar("SELECT CAST(status AS CHAR) FROM cloudtalk_sms WHERE id = ?")
+                .bind(outbound)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, "failed");
+        assert_eq!(echo_of(&pool, inbound).await.0, 0);
+    }
+
+    #[test_db::test]
+    async fn rekeys_a_row_left_under_a_company_line(pool: MySqlPool) {
+        sqlx::query(
+            "INSERT INTO sms_company_phones (provider, company_id, phone10, agent_sender, inbound_recipient)
+             VALUES ('cloudtalk', ?, ?, 1, 1)",
+        )
+        .bind(COMPANY)
+        .bind(LINE)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let stale = row(
+            &pool,
+            "received",
+            Some(LINE),
+            CUSTOMER,
+            LINE,
+            "provider echo",
+            100,
+        )
+        .await;
+        run(&pool, SmsProvider::Cloudtalk, COMPANY).await.unwrap();
+        assert_eq!(echo_of(&pool, stale).await.2, CUSTOMER);
     }
 }
