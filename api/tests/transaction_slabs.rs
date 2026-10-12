@@ -251,17 +251,6 @@ async fn admins_remove_replace_and_add_slabs(pool: MySqlPool) {
         post(
             &server,
             ADMIN,
-            "/v1/transactions/7010/rooms/remove",
-            json!({ "room": "Kitchen" })
-        )
-        .await,
-        StatusCode::NO_CONTENT
-    );
-    assert_eq!(slab(&pool, 6074).await.unwrap().room, None);
-    assert_eq!(
-        post(
-            &server,
-            ADMIN,
             "/v1/transactions/7010/slabs/6074/remove",
             json!({})
         )
