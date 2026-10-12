@@ -14865,6 +14865,85 @@
         ]
       }
     },
+    "/v1/emails/{id}/conversation": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Get an email's conversation",
+        "description": "The email and the other messages of its thread (the latest 50), with\ntheir files, for an email of the caller's company.",
+        "operationId": "get_email_conversation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Email id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such email in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/emails/drafts/{id}": {
       "get": {
         "tags": [
@@ -20764,6 +20843,141 @@
           "content": {
             "type": "string",
             "description": "Text (notes up to 5000 characters, comments up to 2000)."
+          }
+        }
+      },
+      "Conversation": {
+        "type": "object",
+        "description": "`GET /v1/emails/{id}/conversation`.",
+        "required": [
+          "messages",
+          "truncated"
+        ],
+        "properties": {
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The thread."
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationMessage"
+            },
+            "description": "Oldest first, the latest 50."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Older messages were left out."
+          }
+        }
+      },
+      "ConversationFile": {
+        "type": "object",
+        "description": "A file of the message.",
+        "required": [
+          "id",
+          "filename",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The attachment."
+          },
+          "filename": {
+            "type": "string",
+            "description": "File name."
+          },
+          "url": {
+            "type": "string",
+            "description": "A link that opens it (presigned for stored mail)."
+          }
+        }
+      },
+      "ConversationMessage": {
+        "type": "object",
+        "description": "One message of the conversation.",
+        "required": [
+          "id",
+          "body",
+          "is_from_customer",
+          "attachments"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The email."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subject."
+          },
+          "body": {
+            "type": "string",
+            "description": "Body as stored (HTML or text)."
+          },
+          "signature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sending employee's signature."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sent."
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sender address."
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Recipient address."
+          },
+          "sender_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sending employee's name."
+          },
+          "is_from_customer": {
+            "type": "boolean",
+            "description": "Sent by the customer, not an employee."
+          },
+          "opened_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "First time the customer opened it."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationFile"
+            },
+            "description": "Its files."
           }
         }
       },

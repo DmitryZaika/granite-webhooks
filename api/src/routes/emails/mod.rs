@@ -19,6 +19,7 @@
 
 pub mod attachment_token;
 mod attachments;
+mod conversation;
 pub mod deal_history;
 mod drafts;
 mod handlers;
@@ -51,6 +52,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(attachments::add_to_deal))
         .routes(routes!(attachments::deal_file_urls))
         .routes(routes!(attachments::email_images))
+        .routes(routes!(conversation::conversation))
         .routes(routes!(
             drafts::get_draft,
             drafts::update_draft,
