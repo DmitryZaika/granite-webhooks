@@ -302,7 +302,7 @@ async fn a_password_is_reset_by_email(pool: MySqlPool) {
         .assert_status_bad_request();
     server
         .post(&format!("/v1/auth/password-reset/{token}"))
-        .json(&json!({ "password": "a-new-password" }))
+        .json(&json!({ "password": "  a-new-password " }))
         .await
         .assert_status(StatusCode::NO_CONTENT);
     // Every session of the user ended; the link is spent.

@@ -731,7 +731,9 @@ pub async fn reset_password(
     Path(token): Path<String>,
     JsonBody(input): JsonBody<NewPassword>,
 ) -> ApiResult<StatusCode> {
-    if input.password.chars().count() < MIN_PASSWORD || input.password.len() > 200 {
+    // Trimmed like sign-in does, so the new password always signs in.
+    let password = input.password.trim().to_string();
+    if password.chars().count() < MIN_PASSWORD || password.len() > 200 {
         return Err(ApiError::BadRequest(
             "Password must be at least 8 characters long.".into(),
         ));
@@ -739,7 +741,6 @@ pub async fn reset_password(
     let user_id = reset_user(&state.pool, &token)
         .await?
         .ok_or(ApiError::NotFound)?;
-    let password = input.password;
     let hash = tokio::task::spawn_blocking(move || bcrypt::hash(password, BCRYPT_COST))
         .await
         .map_err(|err| ApiError::Internal(err.to_string()))?
