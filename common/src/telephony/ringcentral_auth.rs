@@ -53,7 +53,7 @@ pub fn server_url(company_override: Option<&str>) -> String {
 }
 
 /// The 256-bit key from `AES_KEY` (64 hex digits).
-fn env_key() -> Option<[u8; 32]> {
+pub fn env_key() -> Option<[u8; 32]> {
     parse_hex_key(std::env::var("AES_KEY").ok()?.trim())
 }
 

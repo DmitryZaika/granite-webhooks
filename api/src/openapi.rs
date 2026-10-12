@@ -56,6 +56,7 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         (name = "deals", description = "The sales pipeline: deals, their stages, activities and notes"),
         (name = "sms", description = "SMS conversations through CloudTalk or RingCentral"),
         (name = "notifications", description = "The notification bell"),
+        (name = "quickbooks", description = "QuickBooks Online invoices and customers"),
     )
 )]
 struct ApiDoc;

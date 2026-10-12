@@ -1,5 +1,6 @@
 use crate::ai::Ai;
 use crate::maps::Maps;
+use crate::qbo::Qbo;
 use crate::storage::Storage;
 use crate::telegram::TelegramBots;
 use crate::transcribe::Transcriber;
@@ -46,6 +47,8 @@ pub struct AppState {
     pub signwell_base: Arc<str>,
     /// `AssemblyAI`, for call transcripts.
     pub transcriber: Transcriber,
+    /// `QuickBooks` Online.
+    pub qbo: Qbo,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -70,6 +73,7 @@ impl AppState {
             ai: Ai::disabled(),
             signwell_base: Arc::from("https://www.signwell.com/api/v1"),
             transcriber: Transcriber::disabled(),
+            qbo: Qbo::disabled(),
         }
     }
 
@@ -110,6 +114,12 @@ impl AppState {
     }
 
     #[must_use]
+    pub fn with_qbo(mut self, qbo: Qbo) -> Self {
+        self.qbo = qbo;
+        self
+    }
+
+    #[must_use]
     pub fn with_maps(mut self, maps: Maps) -> Self {
         self.maps = maps;
         self
@@ -131,7 +141,8 @@ impl AppState {
             .with_webhooks(WebhooksClient::from_env())
             .with_maps(Maps::from_env())
             .with_ai(Ai::from_env())
-            .with_transcriber(Transcriber::from_env()))
+            .with_transcriber(Transcriber::from_env())
+            .with_qbo(Qbo::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the

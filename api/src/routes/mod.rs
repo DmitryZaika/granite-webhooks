@@ -30,6 +30,7 @@ pub mod notifications;
 pub mod places;
 pub mod public;
 pub mod questionnaires;
+pub mod quickbooks;
 pub mod quotes;
 pub mod sales;
 pub mod schedule;
@@ -81,4 +82,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(ai_usage::router())
         .merge(ai::router())
         .merge(notifications::router())
+        .merge(quickbooks::router())
 }

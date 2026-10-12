@@ -21,6 +21,7 @@ pub mod extract;
 pub mod maps;
 pub mod openapi;
 pub mod period;
+pub mod qbo;
 pub mod routes;
 pub mod serde_helpers;
 pub mod sql;

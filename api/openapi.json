@@ -20598,6 +20598,602 @@
           }
         ]
       }
+    },
+    "/v1/customers/{id}/qbo-invoices": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "List a customer's QuickBooks invoices",
+        "description": "The invoices of the customer's `QuickBooks` customer, newest first. A\ncustomer not linked yet is matched by email, then by name, and linked.\n`status` says why there are none when `QuickBooks` is not connected or\nhas no matching customer.",
+        "operationId": "list_customer_qbo_invoices",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invoices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerInvoices"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/customers/{id}/qbo-invoices/{invoice_id}": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Get a customer's QuickBooks invoice",
+        "description": "One invoice of the customer, for the invoice editor.",
+        "operationId": "get_customer_qbo_invoice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "invoice_id",
+            "in": "path",
+            "description": "QuickBooks invoice id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditableInvoice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid invoice id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an invoice of this customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer, or it is not linked to QuickBooks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "QuickBooks is not connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "QuickBooks failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Save a customer's QuickBooks invoice",
+        "description": "Writes the editor's lines, dates, notes and addresses to the invoice.\nLines the editor removed are deleted; discounts and tax stay. When\n`QuickBooks` refuses a stale version the update is retried once on the\ncurrent one.",
+        "operationId": "update_customer_qbo_invoice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "invoice_id",
+            "in": "path",
+            "description": "QuickBooks invoice id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The saved invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditableInvoice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid invoice, or a sales line without an item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an invoice of this customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer, or it is not linked to QuickBooks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "QuickBooks is not connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "QuickBooks failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/customers/{id}/qbo-invoices/{invoice_id}/pdf": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Get a customer's QuickBooks invoice as a PDF",
+        "description": "The invoice's PDF, once it is known to be this customer's.",
+        "operationId": "get_customer_qbo_invoice_pdf",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "invoice_id",
+            "in": "path",
+            "description": "QuickBooks invoice id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid invoice id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an invoice of this customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer, or it is not linked to QuickBooks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "QuickBooks is not connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "QuickBooks failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/qbo/invoices/{invoice_id}/pdf": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Get a QuickBooks invoice as a PDF",
+        "description": "Any invoice of the company's `QuickBooks`, for the rep's sales panel and\nschedule events.",
+        "operationId": "get_qbo_invoice_pdf",
+        "parameters": [
+          {
+            "name": "invoice_id",
+            "in": "path",
+            "description": "QuickBooks invoice id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid invoice id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "QuickBooks is not connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "QuickBooks failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/qbo/customers": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Find QuickBooks customers",
+        "description": "`QuickBooks` customers whose display name contains `name` (up to 25), or\nwhose primary email is `email`.",
+        "operationId": "search_qbo_customers",
+        "parameters": [
+          {
+            "name": "email",
+            "in": "query",
+            "description": "Exact primary email.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Part of the display name (wins over `email`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QboCustomers"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Neither email nor name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "QuickBooks failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -20910,6 +21506,54 @@
           }
         },
         "additionalProperties": false
+      },
+      "Address": {
+        "type": "object",
+        "description": "An address of an invoice.",
+        "properties": {
+          "line1": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First street line."
+          },
+          "line2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Second line."
+          },
+          "line3": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Third line."
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "City."
+          },
+          "country_sub_division_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "State code."
+          },
+          "postal_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ZIP code."
+          }
+        }
       },
       "AnswerInput": {
         "type": "object",
@@ -22663,6 +23307,33 @@
         },
         "additionalProperties": false
       },
+      "CustomerInvoices": {
+        "type": "object",
+        "description": "`GET /v1/customers/{id}/qbo-invoices`.",
+        "required": [
+          "status",
+          "invoices"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/InvoicesStatus"
+          },
+          "invoices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceSummary"
+            },
+            "description": "Newest first."
+          },
+          "qbo_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `QuickBooks` customer id."
+          }
+        }
+      },
       "CustomerProjects": {
         "type": "object",
         "description": "The projects of a customer's family.",
@@ -23883,6 +24554,112 @@
             "type": "string",
             "format": "date-time",
             "description": "When to send it: in the future, within 90 days."
+          }
+        }
+      },
+      "EditableInvoice": {
+        "type": "object",
+        "description": "An invoice as the editor shows it.",
+        "required": [
+          "id",
+          "sync_token",
+          "lines"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`QuickBooks` invoice id."
+          },
+          "sync_token": {
+            "type": "string",
+            "description": "`QuickBooks`' version; an update must send the current one."
+          },
+          "doc_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Invoice number."
+          },
+          "txn_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Invoice date (`YYYY-MM-DD`)."
+          },
+          "due_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Due date (`YYYY-MM-DD`)."
+          },
+          "total_amt": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Total."
+          },
+          "balance": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Still owed."
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Currency code."
+          },
+          "customer_memo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Message shown on the invoice."
+          },
+          "private_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Internal note."
+          },
+          "bill_addr": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Address",
+                "description": "Billing address."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ship_addr": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Address",
+                "description": "Shipping (project) address."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "description": "The lines, in order."
           }
         }
       },
@@ -25953,6 +26730,100 @@
           }
         }
       },
+      "InvoiceSummary": {
+        "type": "object",
+        "description": "An invoice in a list.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`QuickBooks` invoice id."
+          },
+          "doc_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Invoice number."
+          },
+          "txn_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Invoice date (`YYYY-MM-DD`)."
+          },
+          "due_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Due date (`YYYY-MM-DD`)."
+          },
+          "total_amt": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Total."
+          },
+          "balance": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Still owed."
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Currency code."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The shipping address, on one line."
+          },
+          "last_updated": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When `QuickBooks` last changed it (a paid invoice: about when it was paid)."
+          }
+        }
+      },
+      "InvoiceUpdate": {
+        "type": "object",
+        "description": "Body of `PUT /v1/customers/{id}/qbo-invoices/{invoice_id}`.",
+        "required": [
+          "invoice"
+        ],
+        "properties": {
+          "invoice": {
+            "$ref": "#/components/schemas/EditableInvoice",
+            "description": "The invoice as the editor left it."
+          }
+        }
+      },
+      "InvoicesStatus": {
+        "type": "string",
+        "description": "`ok`, or why there are no invoices.",
+        "enum": [
+          "ok",
+          "not_connected",
+          "missing_qbo_id",
+          "error"
+        ]
+      },
       "LeadAnswers": {
         "type": "object",
         "description": "What a lead answered on the ad or web form; every field free text, null\nwhen not asked.",
@@ -26165,6 +27036,84 @@
               "null"
             ],
             "description": "Where it is stored."
+          }
+        }
+      },
+      "Line": {
+        "type": "object",
+        "description": "One line of an invoice.",
+        "required": [
+          "detail_type",
+          "editable"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`QuickBooks` line id; `new:<anything>` for a line the editor added."
+          },
+          "line_num": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Position."
+          },
+          "detail_type": {
+            "type": "string",
+            "description": "`SalesItemLineDetail`, `DescriptionOnly`, `SubTotalLineDetail`, ..."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Line text."
+          },
+          "amount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Line amount."
+          },
+          "qty": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Quantity (sales lines)."
+          },
+          "unit_price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Unit price (sales lines)."
+          },
+          "item_ref_value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The product or service id (sales lines)."
+          },
+          "item_ref_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The product or service name."
+          },
+          "editable": {
+            "type": "boolean",
+            "description": "Sales and description lines can be edited."
           }
         }
       },
@@ -27980,6 +28929,52 @@
             "type": "integer",
             "description": "Messages erased.",
             "minimum": 0
+          }
+        }
+      },
+      "QboCustomer": {
+        "type": "object",
+        "description": "A `QuickBooks` customer.",
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`QuickBooks` customer id."
+          },
+          "display_name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Primary email."
+          }
+        }
+      },
+      "QboCustomers": {
+        "type": "object",
+        "description": "`GET /v1/qbo/customers`.",
+        "required": [
+          "connected",
+          "customers"
+        ],
+        "properties": {
+          "connected": {
+            "type": "boolean",
+            "description": "False when the company has not connected `QuickBooks`."
+          },
+          "customers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QboCustomer"
+            },
+            "description": "Matches."
           }
         }
       },
@@ -31560,6 +32555,10 @@
     {
       "name": "notifications",
       "description": "The notification bell"
+    },
+    {
+      "name": "quickbooks",
+      "description": "QuickBooks Online invoices and customers"
     }
   ]
 }
