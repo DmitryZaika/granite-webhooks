@@ -57,6 +57,7 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         (name = "sms", description = "SMS conversations through CloudTalk or RingCentral"),
         (name = "notifications", description = "The notification bell"),
         (name = "quickbooks", description = "QuickBooks Online invoices and customers"),
+        (name = "jobs", description = "Scheduled jobs the time-triggered Lambda runs (job key, no session)"),
     )
 )]
 struct ApiDoc;
@@ -73,6 +74,13 @@ impl Modify for SessionCookie {
             SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::with_description(
                 "__session",
                 "Signed React Router session cookie set by the Granite Manager login.",
+            ))),
+        );
+        components.add_security_scheme(
+            "job_key",
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::with_description(
+                "Authorization",
+                "`LAMBDA_KEY`, sent by the time-triggered Lambda.",
             ))),
         );
     }

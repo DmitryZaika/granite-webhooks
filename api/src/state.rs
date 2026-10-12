@@ -49,6 +49,9 @@ pub struct AppState {
     pub transcriber: Transcriber,
     /// `QuickBooks` Online.
     pub qbo: Qbo,
+    /// `LAMBDA_KEY`: the `Authorization` the scheduled jobs (`/v1/jobs/*`)
+    /// must send. Jobs are refused when unset.
+    pub job_key: Option<Arc<str>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -74,6 +77,7 @@ impl AppState {
             signwell_base: Arc::from("https://www.signwell.com/api/v1"),
             transcriber: Transcriber::disabled(),
             qbo: Qbo::disabled(),
+            job_key: None,
         }
     }
 
@@ -120,6 +124,14 @@ impl AppState {
     }
 
     #[must_use]
+    pub fn with_job_key(mut self, key: &str) -> Self {
+        self.job_key = Some(key.trim())
+            .filter(|key| !key.is_empty())
+            .map(Arc::from);
+        self
+    }
+
+    #[must_use]
     pub fn with_maps(mut self, maps: Maps) -> Self {
         self.maps = maps;
         self
@@ -142,7 +154,8 @@ impl AppState {
             .with_maps(Maps::from_env())
             .with_ai(Ai::from_env())
             .with_transcriber(Transcriber::from_env())
-            .with_qbo(Qbo::from_env()))
+            .with_qbo(Qbo::from_env())
+            .with_job_key(&std::env::var("LAMBDA_KEY").unwrap_or_default()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the

@@ -37,8 +37,29 @@ impl Channel {
     }
 }
 
+/// Which message: the booking itself, or a reminder before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyKind {
+    Scheduled,
+    /// A day before.
+    Day,
+    /// An hour before.
+    Hour,
+}
+
+impl NotifyKind {
+    fn subject(self, company_name: &str) -> String {
+        match self {
+            Self::Scheduled => format!("{company_name} - In-Home Estimate Scheduled"),
+            Self::Day => format!("{company_name} - In-Home Estimate Reminder"),
+            Self::Hour => format!("{company_name} - In-Home Estimate Starting Soon"),
+        }
+    }
+}
+
 /// The booking to tell the customer about.
 pub struct Booking<'a> {
+    pub kind: NotifyKind,
     pub company_id: i32,
     pub customer_id: i32,
     pub customer_name: &'a str,
@@ -68,8 +89,9 @@ fn first_name(full: &str) -> &str {
     full.split_whitespace().next().unwrap_or("there")
 }
 
-/// The confirmation text.
+/// The confirmation (or reminder) text.
 pub fn booking_message(
+    kind: NotifyKind,
     user_name: &str,
     user_phone: Option<&str>,
     customer_name: &str,
@@ -78,14 +100,25 @@ pub fn booking_message(
 ) -> String {
     let customer = first_name(customer_name);
     let user = first_name(user_name);
-    let mut message =
-        format!("Hi {customer}, your in-home estimate with {user} is scheduled for {when}.");
+    let mut message = match kind {
+        NotifyKind::Scheduled => {
+            format!("Hi {customer}, your in-home estimate with {user} is scheduled for {when}.")
+        }
+        NotifyKind::Day => format!(
+            "Hi {customer}, this is a reminder that your in-home estimate with {user} is scheduled for {when}."
+        ),
+        NotifyKind::Hour => {
+            format!(
+                "Hi {customer}, your in-home estimate with {user} starts in about 1 hour ({when})."
+            )
+        }
+    };
     if let Some(phone) = user_phone.map(str::trim).filter(|phone| !phone.is_empty()) {
         let _ = write!(message, " Contact {user} at {phone}.");
     }
     if let Some(location) = location
         .map(str::trim)
-        .filter(|location| !location.is_empty())
+        .filter(|location| !location.is_empty() && kind == NotifyKind::Scheduled)
     {
         let _ = write!(message, " Address: {location}.");
     }
@@ -283,6 +316,7 @@ pub async fn notify_booking(
         .unwrap_or_else(|| company_name.clone());
     let phone = contact_phone(pool, booking).await?;
     let text = booking_message(
+        booking.kind,
         &user_name,
         phone.as_deref(),
         booking.customer_name,
@@ -333,7 +367,7 @@ pub async fn notify_booking(
         to: vec![email],
         cc: Vec::new(),
         bcc: Vec::new(),
-        subject: format!("{company_name} - In-Home Estimate Scheduled"),
+        subject: booking.kind.subject(&company_name),
         body: format!("<p>{}</p>", escape_html(&text)),
         signature: None,
         in_reply_to: None,
@@ -362,6 +396,7 @@ mod tests {
         assert_eq!(when, "Tuesday, January 15 at 10:00 AM – 11:00 AM");
         assert_eq!(
             booking_message(
+                NotifyKind::Scheduled,
                 "Rita Rep",
                 Some("317-555-0100"),
                 "Alice Lead",
@@ -371,8 +406,19 @@ mod tests {
             "Hi Alice, your in-home estimate with Rita is scheduled for Tuesday, January 15 at 10:00 AM – 11:00 AM. Contact Rita at 317-555-0100. Address: 1 Main St."
         );
         assert_eq!(
-            booking_message("Rita", None, "", &when, None),
+            booking_message(NotifyKind::Scheduled, "Rita", None, "", &when, None),
             "Hi there, your in-home estimate with Rita is scheduled for Tuesday, January 15 at 10:00 AM – 11:00 AM."
+        );
+        assert_eq!(
+            booking_message(
+                NotifyKind::Hour,
+                "Rita",
+                None,
+                "Alice",
+                &when,
+                Some("1 Main St")
+            ),
+            "Hi Alice, your in-home estimate with Rita starts in about 1 hour (Tuesday, January 15 at 10:00 AM – 11:00 AM)."
         );
     }
 

@@ -3,7 +3,7 @@
 //! Remix: `api.schedule-estimate.ts`.
 
 use super::history::{History, record};
-use super::notify::{Booking, Channel, customer_email, customer_phone, notify_booking};
+use super::notify::{Booking, Channel, NotifyKind, customer_email, customer_phone, notify_booking};
 use super::reminders::{self, Appointment};
 use super::writes::{EventInput, check};
 use crate::auth::EmployeeUser;
@@ -195,6 +195,7 @@ pub async fn book(
     let channel = notify_booking(
         &state,
         &Booking {
+            kind: NotifyKind::Scheduled,
             company_id: user.company_id,
             customer_id: input.customer_id,
             customer_name: if customer_name.is_empty() {

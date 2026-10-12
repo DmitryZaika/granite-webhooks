@@ -21484,6 +21484,53 @@
           }
         ]
       }
+    },
+    "/v1/jobs/appointment-reminders": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Send due appointment reminders",
+        "description": "Texts (else emails) customers their 24-hour and 1-hour reminders, and\nnotifies reps the day before and an hour before. Reminders for\nappointments that already started are marked failed.",
+        "operationId": "run_appointment_reminders",
+        "responses": {
+          "200": {
+            "description": "What was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReminderRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -29625,6 +29672,50 @@
           "other"
         ]
       },
+      "ReminderRun": {
+        "type": "object",
+        "description": "What a run did.",
+        "required": [
+          "processed",
+          "sent",
+          "failed",
+          "rep_processed",
+          "rep_sent",
+          "rep_failed"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Customer reminders that were due.",
+            "minimum": 0
+          },
+          "sent": {
+            "type": "integer",
+            "description": "Customer reminders sent.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "description": "Customer reminders that failed (or came too late).",
+            "minimum": 0
+          },
+          "rep_processed": {
+            "type": "integer",
+            "description": "Rep reminders that were due.",
+            "minimum": 0
+          },
+          "rep_sent": {
+            "type": "integer",
+            "description": "Rep reminders sent.",
+            "minimum": 0
+          },
+          "rep_failed": {
+            "type": "integer",
+            "description": "Rep reminders that failed.",
+            "minimum": 0
+          }
+        }
+      },
       "ReorderBody": {
         "type": "object",
         "description": "Body of `POST /v1/deals/reorder`.",
@@ -33006,6 +33097,12 @@
       }
     },
     "securitySchemes": {
+      "job_key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "`LAMBDA_KEY`, sent by the time-triggered Lambda."
+      },
       "session_cookie": {
         "type": "apiKey",
         "in": "cookie",
@@ -33134,6 +33231,10 @@
     {
       "name": "quickbooks",
       "description": "QuickBooks Online invoices and customers"
+    },
+    {
+      "name": "jobs",
+      "description": "Scheduled jobs the time-triggered Lambda runs (job key, no session)"
     }
   ]
 }

@@ -157,6 +157,29 @@ impl WebhooksClient {
 }
 
 impl WebhooksClient {
+    /// A CRM notification to the user's Telegram (`POST /telegram/crm-notify`).
+    /// Best effort: failures are only logged.
+    pub async fn notify_telegram_crm(&self, notify: &TelegramCrmNotify) {
+        let Some(target) = &self.target else {
+            return;
+        };
+        let (url, key) = target.as_ref();
+        let result = self
+            .http
+            .post(format!("{url}/telegram/crm-notify"))
+            .header("Authorization", key)
+            .json(notify)
+            .send()
+            .await;
+        match result {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) => {
+                tracing::warn!(status = %response.status(), "CRM telegram notify refused");
+            }
+            Err(err) => tracing::warn!(error = %err.without_url(), "CRM telegram notify failed"),
+        }
+    }
+
     /// Sends a text (`POST /sms/send`); the ids of the rows sent.
     pub async fn send_sms(&self, sms: &OutgoingSms) -> Result<Vec<i64>, SmsFailure> {
         let Some(target) = &self.target else {
@@ -192,6 +215,18 @@ impl WebhooksClient {
             unsent_s3_keys: reply.unsent_s3_keys,
         })
     }
+}
+
+/// Body of the `webhooks` `POST /telegram/crm-notify`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TelegramCrmNotify {
+    pub user_id: i32,
+    pub deal_id: i32,
+    /// `estimate_appointment_reminder`, ...
+    pub notification_type: String,
+    pub message: String,
+    pub actor_name: Option<String>,
+    pub customer_name: Option<String>,
 }
 
 /// Body of the `webhooks` `POST /sms/send`.

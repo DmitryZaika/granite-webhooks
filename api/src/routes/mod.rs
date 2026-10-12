@@ -24,6 +24,7 @@ pub mod events;
 pub mod faucets;
 pub mod fixtures;
 pub mod instructions;
+pub mod jobs;
 pub mod leaderboard;
 pub mod me;
 pub mod notifications;
@@ -83,4 +84,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(ai::router())
         .merge(notifications::router())
         .merge(quickbooks::router())
+        .merge(jobs::router())
 }

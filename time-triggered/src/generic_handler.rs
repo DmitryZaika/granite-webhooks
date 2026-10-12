@@ -156,8 +156,46 @@ async fn post_app_process_route(path: &str, label: &str) -> Result<usize, Error>
     Ok(usize::try_from(processed).unwrap_or(0))
 }
 
+/// Runs a scheduled job of the API (`POST <API_URL>/v1/jobs/<job>`).
+async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
+    let api_url = match std::env::var("API_URL") {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(?error, "API_URL is not set; skipping {label}");
+            return Ok(0);
+        }
+    };
+    let lambda_key = match std::env::var("LAMBDA_KEY") {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(?error, "LAMBDA_KEY is not set; skipping {label}");
+            return Ok(0);
+        }
+    };
+    let url = format!("{}/v1/jobs/{job}", api_url.trim_end_matches('/'));
+    let response = Client::new()
+        .post(url)
+        .header("Authorization", lambda_key)
+        .send()
+        .await
+        .map_err(|error| Error::from(error.to_string()))?;
+    if !response.status().is_success() {
+        tracing::warn!(status = response.status().as_u16(), "Failed to process {label}");
+        return Ok(0);
+    }
+    let body = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| Error::from(error.to_string()))?;
+    let processed = body
+        .get("processed")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    Ok(usize::try_from(processed).unwrap_or(0))
+}
+
 async fn process_estimate_appointment_reminders() -> Result<usize, Error> {
-    post_app_process_route("api/estimate-reminders/process", "estimate reminders").await
+    post_api_job("appointment-reminders", "estimate reminders").await
 }
 
 async fn process_maintenance_due_reminders() -> Result<usize, Error> {
