@@ -27542,6 +27542,135 @@
         ]
       }
     },
+    "/v1/quotes": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List the company's quotes",
+        "description": "Every quote of the caller's company that is not deleted, newest first,\nwith its customer, price list and when its email was last viewed.",
+        "operationId": "list_quotes",
+        "responses": {
+          "200": {
+            "description": "Quotes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}": {
+      "delete": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Delete a quote",
+        "description": "Soft-deletes one of the company's quotes: it leaves the list, its rows stay.",
+        "operationId": "delete_quote",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/quotes/inventory-slabs": {
       "get": {
         "tags": [
@@ -40479,6 +40608,123 @@
           }
         },
         "additionalProperties": false
+      },
+      "QuoteList": {
+        "type": "object",
+        "description": "`GET /v1/quotes`.",
+        "required": [
+          "quotes",
+          "default_show"
+        ],
+        "properties": {
+          "quotes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteListRow"
+            },
+            "description": "Not deleted quotes, newest first."
+          },
+          "default_show": {
+            "type": "string",
+            "description": "`all` for sales reps (they start on every quote), else `mine`."
+          }
+        }
+      },
+      "QuoteListRow": {
+        "type": "object",
+        "description": "A quote in the quotes list.",
+        "required": [
+          "id",
+          "quote_type",
+          "status",
+          "current_revision",
+          "sales_rep",
+          "mine"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The quote."
+          },
+          "quote_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's name."
+          },
+          "quote_type": {
+            "type": "string",
+            "description": "Quote type."
+          },
+          "status": {
+            "type": "string",
+            "description": "`draft`, `sent`, `converted`, ..."
+          },
+          "created_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was made (UTC, ISO 8601)."
+          },
+          "current_revision": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Last sent revision; 0 for a draft."
+          },
+          "price_list_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its price list."
+          },
+          "sales_rep": {
+            "type": "string",
+            "description": "The salesperson's name."
+          },
+          "email_viewed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the customer last opened an emailed revision (UTC, ISO 8601)."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address, for the list search."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone, for the list search."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email, for the list search."
+          },
+          "mine": {
+            "type": "boolean",
+            "description": "The caller is its salesperson (or made it and it has none)."
+          }
+        }
       },
       "QuotePaymentTerm": {
         "type": "object",

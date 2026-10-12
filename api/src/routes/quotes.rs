@@ -1,21 +1,167 @@
 //! Quote tools.
 //!
+//! - `GET /v1/quotes` → the company's quotes for the quotes list
+//! - `DELETE /v1/quotes/{id}` → soft-deletes a quote
 //! - `GET /v1/quotes/inventory-slabs` → a stone's free slabs for the layout
 //!
-//! Replaces the Remix `api.quote-inventory-slabs` route. Slab pictures for a
+//! Replaces the Remix `employee.quotes` loader, the `employee.quotes.delete`
+//! route and `api.quote-inventory-slabs`. Slab pictures for a
 //! layout upload to the `quotes` folder (`POST /v1/uploads`).
 
-use crate::auth::ShopOrEmployeeUser;
-use crate::error::{ApiResult, ErrorBody};
+use crate::auth::{EmployeeUser, ShopOrEmployeeUser};
+use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::state::AppState;
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(inventory_slabs))
+    OpenApiRouter::new()
+        .routes(routes!(list_quotes))
+        .routes(routes!(delete_quote))
+        .routes(routes!(inventory_slabs))
+}
+
+/// `positions.id` of a sales rep.
+const SALES_REP: i32 = 1;
+
+/// A quote in the quotes list.
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+pub struct QuoteListRow {
+    /// The quote.
+    pub id: i32,
+    /// Its name.
+    pub quote_name: Option<String>,
+    /// The customer's name.
+    pub customer_name: Option<String>,
+    /// Quote type.
+    pub quote_type: String,
+    /// `draft`, `sent`, `converted`, ...
+    pub status: String,
+    /// When it was made (UTC, ISO 8601).
+    pub created_date: Option<String>,
+    /// Last sent revision; 0 for a draft.
+    pub current_revision: i32,
+    /// Its price list.
+    pub price_list_name: Option<String>,
+    /// The salesperson's name.
+    pub sales_rep: String,
+    /// When the customer last opened an emailed revision (UTC, ISO 8601).
+    pub email_viewed_at: Option<String>,
+    /// Address, for the list search.
+    pub address: Option<String>,
+    /// Phone, for the list search.
+    pub phone: Option<String>,
+    /// Email, for the list search.
+    pub email: Option<String>,
+    /// The caller is its salesperson (or made it and it has none).
+    pub mine: bool,
+}
+
+/// `GET /v1/quotes`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct QuoteList {
+    /// Not deleted quotes, newest first.
+    pub quotes: Vec<QuoteListRow>,
+    /// `all` for sales reps (they start on every quote), else `mine`.
+    pub default_show: String,
+}
+
+/// List the company's quotes
+///
+/// Every quote of the caller's company that is not deleted, newest first,
+/// with its customer, price list and when its email was last viewed.
+#[utoipa::path(
+    get,
+    path = "/v1/quotes",
+    operation_id = "list_quotes",
+    tag = "quotes",
+    responses(
+        (status = 200, description = "Quotes", body = QuoteList),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn list_quotes(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+) -> ApiResult<Json<QuoteList>> {
+    let quotes: Vec<QuoteListRow> = sqlx::query_as(
+        "SELECT q.id, q.quote_name, c.name AS customer_name, q.quote_type, q.status,
+                DATE_FORMAT(q.created_date, '%Y-%m-%dT%H:%i:%sZ') AS created_date,
+                q.current_revision, pl.name AS price_list_name, q.sales_rep,
+                q.address, q.phone, q.email,
+                DATE_FORMAT(MAX(e.last_viewed_at), '%Y-%m-%dT%H:%i:%sZ') AS email_viewed_at,
+                COALESCE(q.salesperson_id = ? OR (q.salesperson_id IS NULL AND q.created_by = ?), 0) = 1 AS mine
+           FROM quotes q
+           LEFT JOIN customers c ON c.id = q.customer_id
+           LEFT JOIN price_lists pl ON pl.id = q.price_list_id
+           LEFT JOIN quote_emails e ON e.quote_id = q.id
+          WHERE q.company_id = ? AND q.deleted_at IS NULL
+          GROUP BY q.id
+          ORDER BY q.created_date DESC, q.id DESC",
+    )
+    .bind(user.id)
+    .bind(user.id)
+    .bind(user.company_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let sales_rep: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM users_positions
+          WHERE user_id = ? AND company_id = ? AND position_id = ? LIMIT 1",
+    )
+    .bind(user.id)
+    .bind(user.company_id)
+    .bind(SALES_REP)
+    .fetch_optional(&state.pool)
+    .await?;
+    let default_show = if sales_rep.is_some() { "all" } else { "mine" };
+    Ok(Json(QuoteList {
+        quotes,
+        default_show: default_show.to_string(),
+    }))
+}
+
+/// Delete a quote
+///
+/// Soft-deletes one of the company's quotes: it leaves the list, its rows stay.
+#[utoipa::path(
+    delete,
+    path = "/v1/quotes/{id}",
+    operation_id = "delete_quote",
+    tag = "quotes",
+    params(("id" = i32, Path, description = "Quote id")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 404, description = "No such quote in the company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn delete_quote(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+) -> ApiResult<StatusCode> {
+    let done = sqlx::query(
+        "UPDATE quotes SET deleted_at = NOW()
+          WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .bind(user.company_id)
+    .execute(&state.pool)
+    .await?;
+    if done.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Query of `GET /v1/quotes/inventory-slabs`.
