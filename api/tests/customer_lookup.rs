@@ -264,3 +264,59 @@ async fn duplicates_match_phones_and_addresses(pool: MySqlPool) {
     // Another company's customer is not a duplicate here.
     assert_eq!(find("?phone=463-555-0200").await, serde_json::json!([]));
 }
+
+#[test_db::test(seed)]
+async fn email_recipients_suggest_addresses_and_coworkers(pool: MySqlPool) {
+    let server = server(pool);
+    let suggest = |query: &'static str| {
+        let server = &server;
+        async move {
+            let res = server
+                .get(&format!("/v1/customers/email-recipients{query}"))
+                .with_session(sessions::REP)
+                .await;
+            res.assert_status_ok();
+            res.json::<Value>()
+        }
+    };
+    let alice = suggest("?term=alice").await;
+    let emails: Vec<&str> = alice["customers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["email"].as_str().unwrap())
+        .collect();
+    assert!(emails.contains(&"alice@example.com") && emails.contains(&"alice.work@example.com"));
+    assert_eq!(alice["users"], serde_json::json!([]));
+    // One typo in the address still finds it.
+    let typo = suggest("?term=alicr").await;
+    assert!(
+        typo["customers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["email"] == "alice@example.com")
+    );
+    // A typo before a typed domain is tolerated too.
+    let domain = suggest("?term=alise%40example.com").await;
+    assert!(
+        domain["customers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["email"] == "alice@example.com")
+    );
+    // Coworkers on demand, all of them for an empty term.
+    let users = suggest("?term=&include_users=true").await;
+    assert!(
+        users["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u["email"] == "rep@acme.test")
+    );
+    assert_eq!(users["customers"], serde_json::json!([]));
+    // Another company's customers never show.
+    let other = suggest("?term=buyer").await;
+    assert_eq!(other["customers"], serde_json::json!([]));
+}

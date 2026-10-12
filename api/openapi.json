@@ -771,6 +771,83 @@
         ]
       }
     },
+    "/v1/customers/email-recipients": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Suggest email recipients",
+        "description": "Addresses of the company's live customers matching `term` by name,\ncompany or address, tolerating one typo in the address; with a domain\ntyped, every address of that domain. Best matches first, at most 15.\nWith `include_users`, also the company's users (empty `term`: all).",
+        "operationId": "suggest_email_recipients",
+        "parameters": [
+          {
+            "name": "term",
+            "in": "query",
+            "description": "What was typed (name, company or address).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_users",
+            "in": "query",
+            "description": "Also suggest the company's users.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Suggestions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Recipients"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/customers/{id}": {
       "get": {
         "tags": [
@@ -18144,21 +18221,56 @@
       },
       "Recipient": {
         "type": "object",
-        "description": "An email address to send a bulk email to.",
+        "description": "A suggested address.",
         "required": [
+          "id",
+          "name",
           "email"
         ],
         "properties": {
-          "email": {
-            "type": "string",
-            "description": "Lowercased, trimmed address."
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer (or user) id."
           },
           "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "email": {
+            "type": "string",
+            "description": "Address."
+          },
+          "company_name": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Customer name, or null."
+            "description": "Company of a business customer."
+          }
+        }
+      },
+      "Recipients": {
+        "type": "object",
+        "description": "Result of `GET /v1/customers/email-recipients`.",
+        "required": [
+          "customers",
+          "users"
+        ],
+        "properties": {
+          "customers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Recipient"
+            },
+            "description": "Customers' addresses, best match first (at most 15)."
+          },
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Recipient"
+            },
+            "description": "Coworkers (with `include_users`)."
           }
         }
       },

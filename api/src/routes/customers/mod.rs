@@ -18,6 +18,7 @@ mod handlers;
 mod history;
 mod projects;
 pub mod queries;
+mod recipients;
 pub mod schemas;
 pub mod service;
 mod write;
@@ -31,6 +32,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::emails_batch))
         .routes(routes!(handlers::search))
         .routes(routes!(duplicates::duplicates))
+        .routes(routes!(recipients::recipients))
         .routes(routes!(handlers::get, write::update, write::delete))
         .routes(routes!(write::set_sales_rep))
         .routes(routes!(write::set_temperature))
