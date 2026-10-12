@@ -3,10 +3,13 @@
 //! - `GET /v1/superuser/onboarding-feedbacks`           → every guided-tour rating
 //! - `GET /v1/superuser/signature-access`               → who may send for signature
 //! - `PUT /v1/superuser/users/{id}/signature-access`    → let a user send, or not
+//! - `POST /v1/superuser/emails`                        → send a plain email
 //!
 //! Replaces the Remix `admin.superuser-dashboard.onboarding-feedbacks` and
-//! `admin.superuser-dashboard.feature-access` loaders and actions.
+//! `admin.superuser-dashboard.feature-access` loaders and actions and the
+//! `superuser.sendemail` action.
 
+use super::bug_reports::escape;
 use super::company::queries::signature_on;
 use crate::auth::CurrentUser;
 use crate::auth::session::SessionUser;
@@ -14,6 +17,7 @@ use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
+use crate::webhooks_client::{OutgoingEmail, SendFailure};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -28,6 +32,82 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(signature_access))
         .routes(routes!(set_signature_access))
         .routes(routes!(widget_analytics))
+        .routes(routes!(send_email))
+}
+
+/// Body of `POST /v1/superuser/emails`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PlainEmail {
+    /// Recipient address.
+    pub to: String,
+    /// Subject (required).
+    pub subject: String,
+    /// Plain-text body (required).
+    pub text: String,
+}
+
+/// Send an email
+///
+/// Sends a plain-text email from `noreply@granite-manager.com` through the
+/// webhooks Lambda. Super admins only.
+#[utoipa::path(
+    post,
+    path = "/v1/superuser/emails",
+    operation_id = "send_superuser_email",
+    tag = "superuser",
+    request_body = PlainEmail,
+    responses(
+        (status = 204, description = "Sent"),
+        (status = 400, description = "Bad address, or no subject or body", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a super admin", body = ErrorBody),
+        (status = 502, description = "Sending failed", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn send_email(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    JsonBody(input): JsonBody<PlainEmail>,
+) -> ApiResult<StatusCode> {
+    super_only(&user)?;
+    let to = input.to.trim();
+    let valid = to.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty() && domain.contains('.') && !to.contains(' ')
+    });
+    if !valid {
+        return Err(ApiError::BadRequest("Invalid email address".into()));
+    }
+    if input.subject.trim().is_empty() {
+        return Err(ApiError::BadRequest("Subject is required".into()));
+    }
+    if input.text.trim().is_empty() {
+        return Err(ApiError::BadRequest("Email body is required".into()));
+    }
+    let email = OutgoingEmail {
+        from_name: None,
+        from_address: "noreply@granite-manager.com".into(),
+        to: vec![to.to_string()],
+        cc: Vec::new(),
+        bcc: Vec::new(),
+        subject: input.subject.trim().to_string(),
+        body: escape(&input.text).replace('\n', "<br>"),
+        signature: None,
+        reply_to: Vec::new(),
+        in_reply_to: None,
+        references: Vec::new(),
+        attachments: Vec::new(),
+        transactional: true,
+    };
+    state
+        .webhooks
+        .send_email(&email)
+        .await
+        .map_err(|err| match err {
+            SendFailure::Rejected(message) => ApiError::BadRequest(message),
+            SendFailure::Failed(_) => ApiError::Upstream("Failed to send email".into()),
+        })?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 const fn super_only(user: &SessionUser) -> ApiResult<()> {

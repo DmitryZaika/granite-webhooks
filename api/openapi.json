@@ -25121,6 +25121,76 @@
         ]
       }
     },
+    "/v1/superuser/emails": {
+      "post": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Send an email",
+        "description": "Sends a plain-text email from `noreply@granite-manager.com` through the\nwebhooks Lambda. Super admins only.",
+        "operationId": "send_superuser_email",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlainEmail"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Sent"
+          },
+          "400": {
+            "description": "Bad address, or no subject or body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a super admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Sending failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/transactions": {
       "get": {
         "tags": [
@@ -40608,6 +40678,29 @@
               "null"
             ],
             "description": "Two-letter country."
+          }
+        }
+      },
+      "PlainEmail": {
+        "type": "object",
+        "description": "Body of `POST /v1/superuser/emails`.",
+        "required": [
+          "to",
+          "subject",
+          "text"
+        ],
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "Recipient address."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Subject (required)."
+          },
+          "text": {
+            "type": "string",
+            "description": "Plain-text body (required)."
           }
         }
       },

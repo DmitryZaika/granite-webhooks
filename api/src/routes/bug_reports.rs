@@ -91,7 +91,8 @@ pub fn title_of(description: &str) -> String {
     format!("{}…", cut.trim_end())
 }
 
-fn escape(text: &str) -> String {
+/// `text` safe inside HTML text and attributes.
+pub(crate) fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

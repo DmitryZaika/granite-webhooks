@@ -121,3 +121,57 @@ async fn super_admins_read_widget_analytics(pool: MySqlPool) {
         .await
         .assert_status(axum::http::StatusCode::FORBIDDEN);
 }
+
+#[test_db::test(seed)]
+async fn super_admins_send_a_plain_email(pool: MySqlPool) {
+    use api::app;
+    use api::state::AppState;
+    use api::webhooks_client::{OutgoingEmail, WebhooksClient};
+    use axum::extract::State;
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use axum_test::TestServer;
+    use std::sync::{Arc, Mutex};
+
+    type Sent = Arc<Mutex<Vec<OutgoingEmail>>>;
+    async fn fake_send(State(sent): State<Sent>, Json(email): Json<OutgoingEmail>) -> Json<Value> {
+        sent.lock().unwrap().push(email);
+        Json(json!({ "message_id": "<m@test>" }))
+    }
+    make_super(&pool).await;
+    let sent: Sent = Arc::default();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = Router::new()
+        .route("/email/send", post(fake_send))
+        .with_state(sent.clone());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let state = AppState::new(pool, common::SECRET, common::ALLOWED_ORIGIN).with_webhooks(
+        WebhooksClient::new(Some(&format!("http://{address}")), Some("key")),
+    );
+    let server = TestServer::new(app(state));
+    let body = json!({ "to": "a@example.com", "subject": "Hi", "text": "Line <1>\nLine 2" });
+    server
+        .post("/v1/superuser/emails")
+        .with_session(sessions::ADMIN)
+        .json(&body)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .post("/v1/superuser/emails")
+        .with_session(sessions::SUPER_ADMIN)
+        .json(&json!({ "to": "nope", "subject": "Hi", "text": "x" }))
+        .await
+        .assert_status_bad_request();
+    server
+        .post("/v1/superuser/emails")
+        .with_session(sessions::SUPER_ADMIN)
+        .json(&body)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let sent = sent.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to, ["a@example.com"]);
+    assert_eq!(sent[0].body, "Line &lt;1&gt;<br>Line 2");
+    assert!(sent[0].transactional);
+}
