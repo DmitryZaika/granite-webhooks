@@ -19859,7 +19859,7 @@
           "instructions"
         ],
         "summary": "Delete an instruction",
-        "description": "Removes it from its tree.",
+        "description": "Removes it and its access rows; its children move to the top level.",
         "operationId": "delete_instruction",
         "parameters": [
           {

@@ -206,4 +206,10 @@ async fn admins_add_edit_and_delete_instructions(pool: MySqlPool) {
         .with_session(sessions::ADMIN)
         .await
         .assert_status(StatusCode::NO_CONTENT);
+    // One limited to some positions goes too.
+    server
+        .delete("/v1/instructions/601")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 }

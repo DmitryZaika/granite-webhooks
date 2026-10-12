@@ -451,7 +451,7 @@ pub async fn update(
 
 /// Delete an instruction
 ///
-/// Removes it from its tree.
+/// Removes it and its access rows; its children move to the top level.
 #[utoipa::path(
     delete,
     path = "/v1/instructions/{id}",
@@ -473,9 +473,17 @@ pub async fn delete(
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
     editable_company(&state.pool, &user, id).await?;
+    // Its access rows hold a foreign key without cascade; children and the
+    // next sibling are unlinked by the table's own `ON DELETE SET NULL`.
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM instruction_access WHERE instruction_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM instructions WHERE id = ?")
         .bind(id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
