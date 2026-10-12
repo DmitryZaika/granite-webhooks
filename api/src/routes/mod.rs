@@ -40,6 +40,7 @@ pub mod quickbooks;
 pub mod quotes;
 pub mod sales;
 pub mod schedule;
+pub mod shop;
 pub mod sinks;
 pub mod slabs;
 pub mod sms;
@@ -87,6 +88,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(image_library::router())
         .merge(supports::router())
         .merge(invoice_queue::router())
+        .merge(shop::router())
         .merge(survey_results::router())
         .merge(bug_reports::router())
         .merge(superuser::router())

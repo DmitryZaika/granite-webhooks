@@ -20586,6 +20586,95 @@
         ]
       }
     },
+    "/v1/shop/cut-stats": {
+      "get": {
+        "tags": [
+          "shop"
+        ],
+        "summary": "Cut square feet per day",
+        "description": "Square feet of sold slabs whose room is fully cut, by the day each slab\nwas cut and by stone type, for the caller's company. A slab's square\nfeet are its `square_feet`, else length × width / 144. Rooms with any\nuncut slab are left out.",
+        "operationId": "get_shop_cut_stats",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "description": "First day, `YYYY-MM-DD`; default 29 days before `end`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "Last day, `YYYY-MM-DD`; default today (UTC).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cutting by day and material",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CutStats"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`start` after `end`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not of the shop or an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/survey-results": {
       "get": {
         "tags": [
@@ -29206,6 +29295,46 @@
         },
         "additionalProperties": false
       },
+      "CutStats": {
+        "type": "object",
+        "description": "Cutting over a range of days.",
+        "required": [
+          "start",
+          "end",
+          "days",
+          "materials",
+          "total_sqft"
+        ],
+        "properties": {
+          "start": {
+            "type": "string",
+            "description": "The range used, `YYYY-MM-DD`."
+          },
+          "end": {
+            "type": "string",
+            "description": "The range used, `YYYY-MM-DD`."
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DayCut"
+            },
+            "description": "Days with cutting, oldest first."
+          },
+          "materials": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MaterialSqft"
+            },
+            "description": "The whole range by material, most first."
+          },
+          "total_sqft": {
+            "type": "number",
+            "format": "double",
+            "description": "Square feet over the range."
+          }
+        }
+      },
       "DashboardLayout": {
         "type": "object",
         "description": "The signed-in user's dashboard layout in the company the request acts in.",
@@ -29239,6 +29368,33 @@
           "emails-per-month",
           "sms-per-month"
         ]
+      },
+      "DayCut": {
+        "type": "object",
+        "description": "One day with cutting finished.",
+        "required": [
+          "day",
+          "total",
+          "materials"
+        ],
+        "properties": {
+          "day": {
+            "type": "string",
+            "description": "The day, `YYYY-MM-DD`."
+          },
+          "total": {
+            "type": "number",
+            "format": "double",
+            "description": "Square feet that day."
+          },
+          "materials": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MaterialSqft"
+            },
+            "description": "By material, most first."
+          }
+        }
       },
       "DayMap": {
         "type": "object",
@@ -33520,6 +33676,25 @@
           "name": {
             "type": "string",
             "description": "Its name."
+          }
+        }
+      },
+      "MaterialSqft": {
+        "type": "object",
+        "description": "Square feet of one material.",
+        "required": [
+          "stone_type",
+          "sqft"
+        ],
+        "properties": {
+          "stone_type": {
+            "type": "string",
+            "description": "Stone type, e.g. `granite`; `Unknown` when the stone has none."
+          },
+          "sqft": {
+            "type": "number",
+            "format": "double",
+            "description": "Square feet."
           }
         }
       },
@@ -40342,6 +40517,10 @@
     {
       "name": "checklists",
       "description": "Post-installation checklists installers fill in and customers sign"
+    },
+    {
+      "name": "shop",
+      "description": "The fabrication shop's own pages"
     },
     {
       "name": "company",
