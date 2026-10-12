@@ -11,7 +11,7 @@
 //! - `GET /v1/me/marketing-companies` → companies the user markets for
 //! - `/v1/me/todos`, `/v1/me/todo-order` → the to-do list (see [`todos`])
 
-mod handlers;
+pub mod handlers;
 pub mod queries;
 pub mod schemas;
 mod todos;

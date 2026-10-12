@@ -37,6 +37,7 @@ pub mod maintenance;
 pub mod marketing;
 pub mod me;
 pub mod notifications;
+pub mod onboarding;
 pub mod places;
 pub mod public;
 pub mod questionnaires;
@@ -118,6 +119,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(ai_usage::router())
         .merge(auth::router())
         .merge(app_shell::router())
+        .merge(onboarding::router())
         .merge(ai::router())
         .merge(notifications::router())
         .merge(quickbooks::router())

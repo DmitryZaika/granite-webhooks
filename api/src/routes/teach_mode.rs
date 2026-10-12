@@ -793,7 +793,7 @@ pub async fn publish_instruction(
 }
 
 /// Plain text of an instruction's HTML.
-fn text_from_html(html: &str) -> String {
+pub fn text_from_html(html: &str) -> String {
     let mut text = String::with_capacity(html.len());
     let mut in_tag = false;
     let mut skip_until: Option<&str> = None;

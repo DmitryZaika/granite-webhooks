@@ -142,7 +142,16 @@ pub async fn telegram(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<TelegramStatus>> {
-    let ids = telegram_ids(&state.pool, user.id).await?;
+    Ok(Json(telegram_status(&state, user.id).await?))
+}
+
+/// The user's link to each bot, checked with Telegram (a rejected link is
+/// removed and reported as not linked).
+pub async fn telegram_status(
+    state: &AppState,
+    user_id: i32,
+) -> Result<TelegramStatus, sqlx::Error> {
+    let ids = telegram_ids(&state.pool, user_id).await?;
     let bots = &state.telegram;
     let check = async |bot, chat_id: &Option<String>| match chat_id {
         Some(chat_id) => bots.can_message(bot, chat_id).await,
@@ -160,14 +169,14 @@ pub async fn telegram(
         notifications_bot_id: bots.bot_id(Bot::Notifications),
     };
     if leads_ok == Some(false) {
-        clear_telegram_id(&state.pool, user.id, Bot::Leads).await?;
+        clear_telegram_id(&state.pool, user_id, Bot::Leads).await?;
         status.leads_linked = false;
     }
     if notifications_ok == Some(false) {
-        clear_telegram_id(&state.pool, user.id, Bot::Notifications).await?;
+        clear_telegram_id(&state.pool, user_id, Bot::Notifications).await?;
         status.notifications_linked = false;
     }
-    Ok(Json(status))
+    Ok(status)
 }
 
 /// Body of `PUT /v1/me/sidebar-pin`.

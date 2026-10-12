@@ -30470,6 +30470,314 @@
         ]
       }
     },
+    "/v1/me/onboarding": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "My onboarding progress",
+        "description": "The first-run journey, feature tours and points saved for the signed-in\nuser (their home company's journey). `has_row` is false before any.",
+        "operationId": "get_my_onboarding",
+        "responses": {
+          "200": {
+            "description": "Progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingRecord"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an employee or shop user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/onboarding/events": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Save onboarding progress",
+        "description": "Applies the events in one write. Replays are harmless; events dated\nbefore the user's last reset are dropped; task events are dropped while\nthe home company's guided tours are off, for retired tours, and for setup\ntasks only the server may complete. Points come from the tour registry,\nnever from the request.",
+        "operationId": "save_my_onboarding_events",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppliedProgress"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an employee or shop user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/onboarding/reset": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Restart the first-run journey",
+        "description": "Clears the old tours' modules and position; feature tours and points\nstay. Events the device still holds from before are dropped.",
+        "operationId": "reset_my_onboarding",
+        "responses": {
+          "204": {
+            "description": "Restarted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an employee or shop user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/onboarding/setup": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "The onboarding widget",
+        "description": "The user's onboarding profile and progress, the setup checklist, and\ncredit for setup work already done (the email name, signature and\nTelegram tasks complete with their points, once). `credit` is null unless\nsomething was credited just now.",
+        "operationId": "get_my_onboarding_setup",
+        "responses": {
+          "200": {
+            "description": "The widget's data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/onboarding/claim": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Claim a setup task",
+        "description": "Completes a setup task, with its points, when the user's own setup shows\nits work is done; a second claim pays nothing more.",
+        "operationId": "claim_my_onboarding_task",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/ai/improve": {
       "post": {
         "tags": [
@@ -32988,6 +33296,31 @@
           }
         }
       },
+      "AppliedProgress": {
+        "type": "object",
+        "description": "The progress after events.",
+        "required": [
+          "state",
+          "feature_tasks_enabled"
+        ],
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/OnboardingState",
+            "description": "The saved state."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the first-run journey was completed."
+          },
+          "feature_tasks_enabled": {
+            "type": "boolean",
+            "description": "The home company's guided tours are on (off: task events were dropped)."
+          }
+        }
+      },
       "AttachableStone": {
         "type": "object",
         "description": "A stone to attach.",
@@ -34180,6 +34513,50 @@
           }
         }
       },
+      "ClaimInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/me/onboarding/claim`.",
+        "required": [
+          "task_id"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "A setup task (`setup-email-name`, `setup-email-signature`, `setup-telegram`)."
+          }
+        }
+      },
+      "ClaimResult": {
+        "type": "object",
+        "description": "The claim's outcome.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "`credited`, `already-completed`, `not-done` (open its page instead) or\n`unavailable` (guided tours are off)."
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The task credited."
+          },
+          "state": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OnboardingState",
+                "description": "The saved state (credited and already-completed)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "ClassSales": {
         "type": "object",
         "description": "`GET /v1/qbo/class-sales`.",
@@ -35158,6 +35535,27 @@
             "type": "integer",
             "format": "int32",
             "description": "The new user."
+          }
+        }
+      },
+      "Credit": {
+        "type": "object",
+        "description": "Setup tasks credited by this request.",
+        "required": [
+          "task_ids",
+          "state"
+        ],
+        "properties": {
+          "task_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The tasks now completed."
+          },
+          "state": {
+            "$ref": "#/components/schemas/OnboardingState",
+            "description": "The saved state after the credit."
           }
         }
       },
@@ -38478,6 +38876,22 @@
           "source": {
             "type": "string",
             "description": "Always `photo`."
+          }
+        }
+      },
+      "EventsInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/me/onboarding/events`.",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "1 to 200 events, oldest first. Each has a `type` and an ISO 8601 `at`:\n`journey.position` (`moduleId`, `stepKey`), `journey.module_step`,\n`journey.module_completed`, `journey.module_reopened` (`moduleId`),\n`journey.dismissed`, `journey.resumed`, `journey.completed`,\n`journey.feedback_dismissed`, `task.position` and `task.closed`\n(`taskId`, `version`, `stepKey`), `task.step_done` (`taskId`,\n`version`, `steps`: step key → `action` | `manual`), `task.completed`\n(`taskId`, `version`)."
           }
         }
       },
@@ -42464,6 +42878,178 @@
           }
         }
       },
+      "OnboardingProfile": {
+        "type": "object",
+        "description": "What the onboarding widget knows about the user.",
+        "required": [
+          "user_id",
+          "is_admin",
+          "can_manage_users",
+          "has_cloudtalk_api",
+          "has_ringcentral_api",
+          "has_inbound_email",
+          "has_cloudtalk_agent",
+          "is_shop_worker",
+          "is_shop_manager"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The user."
+          },
+          "is_admin": {
+            "type": "boolean",
+            "description": "Admin or super user."
+          },
+          "can_manage_users": {
+            "type": "boolean",
+            "description": "May manage users (super user, or Manager)."
+          },
+          "has_cloudtalk_api": {
+            "type": "boolean",
+            "description": "The company has CloudTalk."
+          },
+          "has_ringcentral_api": {
+            "type": "boolean",
+            "description": "The company has RingCentral."
+          },
+          "has_inbound_email": {
+            "type": "boolean",
+            "description": "The company receives email."
+          },
+          "has_cloudtalk_agent": {
+            "type": "boolean",
+            "description": "The user has a CloudTalk agent."
+          },
+          "is_shop_worker": {
+            "type": "boolean",
+            "description": "Holds the Shop Worker position."
+          },
+          "is_shop_manager": {
+            "type": "boolean",
+            "description": "Holds the Shop Manager position."
+          },
+          "onboarding_completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the first-run journey was completed."
+          },
+          "saved_progress": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OnboardingState",
+                "description": "The saved progress; null before any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "OnboardingRecord": {
+        "type": "object",
+        "description": "A user's onboarding record.",
+        "required": [
+          "state",
+          "has_row"
+        ],
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/OnboardingState",
+            "description": "The saved state."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the first-run journey was completed."
+          },
+          "has_row": {
+            "type": "boolean",
+            "description": "A journey row exists (an empty but dated one counts)."
+          }
+        }
+      },
+      "OnboardingState": {
+        "type": "object",
+        "description": "A user's saved onboarding.",
+        "required": [
+          "dismissed",
+          "feedback_dismissed",
+          "completed_module_ids",
+          "module_step_keys",
+          "tasks",
+          "points"
+        ],
+        "properties": {
+          "current_module_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first-run module the user is in."
+          },
+          "current_step_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its step."
+          },
+          "dismissed": {
+            "type": "boolean",
+            "description": "The first-run journey was put away."
+          },
+          "feedback_dismissed": {
+            "type": "boolean",
+            "description": "The feedback prompt was put away."
+          },
+          "completed_module_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Finished first-run modules, by id."
+          },
+          "module_step_keys": {
+            "type": "object",
+            "description": "Each started module's step key.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "tasks": {
+            "type": "object",
+            "description": "Feature tours, by task id.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TaskProgress"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "points": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Points of completed tours."
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Latest change (UTC, ISO 8601)."
+          }
+        }
+      },
       "OptimizedRoute": {
         "type": "object",
         "description": "`POST /v1/schedule/optimize-route`.",
@@ -46344,6 +46930,113 @@
           }
         }
       },
+      "SetupPage": {
+        "type": "object",
+        "description": "`GET /v1/me/onboarding/setup`.",
+        "required": [
+          "profile",
+          "setup"
+        ],
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/OnboardingProfile",
+            "description": "The onboarding profile."
+          },
+          "setup": {
+            "$ref": "#/components/schemas/SetupStatus",
+            "description": "The setup checklist."
+          },
+          "credit": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Credit",
+                "description": "Null unless something was credited just now."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SetupStatus": {
+        "type": "object",
+        "description": "The setup checklist (`EmployeeSetupChecklistStatus`).",
+        "required": [
+          "has_email_name",
+          "has_email_signature",
+          "has_telegram",
+          "has_sales_goal",
+          "is_admin",
+          "is_sales_rep",
+          "has_sales_rep",
+          "has_installer",
+          "has_walk_in_login",
+          "has_logo",
+          "has_sales_tax",
+          "has_quick_books",
+          "quickbooks_feature_enabled",
+          "has_supplier_price_lists"
+        ],
+        "properties": {
+          "has_email_name": {
+            "type": "boolean",
+            "description": "An email sender name is set."
+          },
+          "has_email_signature": {
+            "type": "boolean",
+            "description": "An email signature is set."
+          },
+          "has_telegram": {
+            "type": "boolean",
+            "description": "Linked to both Telegram bots."
+          },
+          "has_sales_goal": {
+            "type": "boolean",
+            "description": "A monthly sales goal is set."
+          },
+          "is_admin": {
+            "type": "boolean",
+            "description": "Admin checklist rows apply."
+          },
+          "is_sales_rep": {
+            "type": "boolean",
+            "description": "Holds the Sales Rep position."
+          },
+          "has_sales_rep": {
+            "type": "boolean",
+            "description": "The company has a sales rep."
+          },
+          "has_installer": {
+            "type": "boolean",
+            "description": "The company has an installer."
+          },
+          "has_walk_in_login": {
+            "type": "boolean",
+            "description": "A walk-in has checked in."
+          },
+          "has_logo": {
+            "type": "boolean",
+            "description": "The company has a logo."
+          },
+          "has_sales_tax": {
+            "type": "boolean",
+            "description": "The company sales tax is set."
+          },
+          "has_quick_books": {
+            "type": "boolean",
+            "description": "QuickBooks is connected."
+          },
+          "quickbooks_feature_enabled": {
+            "type": "boolean",
+            "description": "QuickBooks is switched on."
+          },
+          "has_supplier_price_lists": {
+            "type": "boolean",
+            "description": "A supplier price list is processed."
+          }
+        }
+      },
       "ShellCompany": {
         "type": "object",
         "description": "The company requests act in, for the header.",
@@ -48675,6 +49368,64 @@
           "sales_rep_name": {
             "type": "string",
             "description": "The sales rep's name."
+          }
+        }
+      },
+      "TaskProgress": {
+        "type": "object",
+        "description": "A feature tour's saved progress.",
+        "required": [
+          "version",
+          "status",
+          "done_steps",
+          "points_awarded"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Registry version the progress was recorded against."
+          },
+          "status": {
+            "type": "string",
+            "description": "`in_progress`, `closed` or `completed`."
+          },
+          "step_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The step the user is on."
+          },
+          "done_steps": {
+            "type": "object",
+            "description": "Steps done, by stored key."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was completed (UTC, ISO 8601)."
+          },
+          "points_awarded": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Points it paid (completed tours only, never negative)."
+          },
+          "last_active_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last activity (UTC, ISO 8601)."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it started (UTC, ISO 8601)."
           }
         }
       },
