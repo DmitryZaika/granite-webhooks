@@ -13358,6 +13358,323 @@
         ]
       }
     },
+    "/v1/sms-templates": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "List SMS templates",
+        "description": "The company's templates and the caller's own, in the caller's picker\norder (most used first unless they saved a custom order; then company\ntemplates first, by position, newest first). With `scope=company`\n(admins): only the company's, with the deal lists drips can start from.",
+        "operationId": "list_sms_templates",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`company`: only the company's templates, for admins to manage, with\nthe deal lists drips can use.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Who sees a template.",
+              "enum": [
+                "company",
+                "personal"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsTemplates"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No SMS provider, or not an admin for the company scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Create an SMS template",
+        "description": "`scope: company` (admins only) makes it the company's, and only a\ncompany template can drip; otherwise it is the caller's own. It goes\nlast.",
+        "operationId": "create_sms_template",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewSmsTemplate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name or body, unpaired braces, or a drip already taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No SMS provider, or not an admin for a company template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms-templates/{id}": {
+      "put": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Edit an SMS template",
+        "description": "The caller's own template, or (admins) a company one. Leaving out\n`lead_list_id` / `hour_delay` keeps the drip; a template that stops\ndripping cancels its pending drip texts.",
+        "operationId": "update_sms_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmsTemplateUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name or body, unpaired braces, or a drip already taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No SMS provider",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such template the caller may change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Delete an SMS template",
+        "description": "The caller's own template, or (admins) a company one; its pending drip\ntexts are cancelled.",
+        "operationId": "delete_sms_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No SMS provider",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such template the caller may change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/sms/{provider}/threads": {
       "get": {
         "tags": [
@@ -16622,6 +16939,52 @@
         },
         "additionalProperties": false
       },
+      "Drip": {
+        "type": "object",
+        "description": "When a company template sends itself.",
+        "properties": {
+          "lead_list_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The deal list that starts it; null: no drip."
+          },
+          "hour_delay": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Hours after a deal enters the list, 0 to 8760."
+          }
+        }
+      },
+      "DripList": {
+        "type": "object",
+        "description": "A deal list a drip can start from.",
+        "required": [
+          "id",
+          "name",
+          "group_name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The list."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "group_name": {
+            "type": "string",
+            "description": "Its pipeline."
+          }
+        }
+      },
       "DuplicateCustomer": {
         "type": "object",
         "description": "A live customer with one of the given contacts.",
@@ -18086,6 +18449,39 @@
           }
         },
         "additionalProperties": false
+      },
+      "NewSmsTemplate": {
+        "type": "object",
+        "description": "Body of `POST /v1/sms-templates`.",
+        "required": [
+          "name",
+          "body"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Shown in the picker."
+          },
+          "body": {
+            "type": "string",
+            "description": "The text, with `{{variables}}`, up to 1600 characters."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/TemplateScope",
+            "description": "`company` (admins only) or `personal` (default)."
+          },
+          "drip": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Drip",
+                "description": "Company templates only."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       },
       "NextActivity": {
         "type": "object",
@@ -20457,6 +20853,130 @@
               "type": "string"
             },
             "description": "Files of the messages that did not go out (set when some did)."
+          }
+        }
+      },
+      "SmsTemplate": {
+        "type": "object",
+        "description": "An SMS template.",
+        "required": [
+          "id",
+          "name",
+          "body",
+          "position",
+          "scope",
+          "can_edit"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The template."
+          },
+          "name": {
+            "type": "string",
+            "description": "Shown in the picker."
+          },
+          "body": {
+            "type": "string",
+            "description": "The text, with `{{variables}}`."
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Order among the company's (or the user's) templates."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/TemplateScope"
+          },
+          "can_edit": {
+            "type": "boolean",
+            "description": "The caller may change it."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was made."
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it last changed."
+          },
+          "lead_list_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Company drip: the deal list that starts it."
+          },
+          "hour_delay": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Company drip: hours after a deal enters the list."
+          }
+        }
+      },
+      "SmsTemplateUpdate": {
+        "type": "object",
+        "description": "Body of `PUT /v1/sms-templates/{id}`.",
+        "required": [
+          "name",
+          "body"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Shown in the picker."
+          },
+          "body": {
+            "type": "string",
+            "description": "The text, with `{{variables}}`, up to 1600 characters."
+          },
+          "drip": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Drip",
+                "description": "Company templates only; left out keeps the drip."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SmsTemplates": {
+        "type": "object",
+        "description": "`GET /v1/sms-templates`.",
+        "required": [
+          "templates",
+          "deal_lists"
+        ],
+        "properties": {
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SmsTemplate"
+            },
+            "description": "In picker order."
+          },
+          "deal_lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DripList"
+            },
+            "description": "With `scope=company`: deal lists for drips."
           }
         }
       },

@@ -9,6 +9,7 @@
 //! - `PUT    /v1/me/template-order/{type}`      → save a drag-and-drop order
 //! - `DELETE /v1/me/template-order/{type}`      → back to automatic order
 //! - `POST   /v1/templates/fill`                → a template with its variables filled
+//! - `GET|POST /v1/sms-templates`, `PUT|DELETE /v1/sms-templates/{id}` → SMS templates (see [`sms`])
 //!
 //! Replaces the Remix `api.email-templates*`, `api.sms.templates.order`,
 //! `api.quote-email-templates.order` and `api.emailTemplate.fill` routes.
@@ -16,6 +17,7 @@
 mod handlers;
 pub mod order;
 pub mod schemas;
+mod sms;
 
 use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -30,4 +32,6 @@ pub fn router() -> OpenApiRouter<AppState> {
             handlers::reset_order
         ))
         .routes(routes!(handlers::fill))
+        .routes(routes!(sms::list, sms::create))
+        .routes(routes!(sms::update, sms::delete))
 }
