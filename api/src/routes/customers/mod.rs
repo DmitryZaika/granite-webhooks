@@ -8,6 +8,7 @@
 //! - `PUT  /v1/customers/{id}/sales-rep`, `/temperature` → assign, rate
 //! - `GET  /v1/customers/{id}/history` → deals, reassignments, emails, activities and notes
 //! - `GET  /v1/customers/{id}/projects`, `PUT /v1/customers/{id}/parent` → linked projects
+//! - `GET  /v1/customers/sms-contacts`, `POST /v1/customers/{id}/phone`, `POST /v1/customers/from-phone` → the SMS inbox's contacts
 //!
 //! Replaces `loadCustomersListPage` in the Remix app
 //! (`app/utils/customersListLoader.server.ts`).
@@ -16,6 +17,7 @@ mod duplicates;
 pub(crate) mod fuzzy;
 mod handlers;
 mod history;
+mod phones;
 mod projects;
 pub mod queries;
 mod recipients;
@@ -41,4 +43,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(projects::projects))
         .routes(routes!(projects::set_parent))
         .routes(routes!(projects::sales))
+        .routes(routes!(phones::sms_contacts))
+        .routes(routes!(phones::link_phone))
+        .routes(routes!(phones::from_phone))
 }

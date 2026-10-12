@@ -105,6 +105,101 @@ pub fn matches_name_fuzzy(name: &str, term: &str) -> bool {
     })
 }
 
+/// A customer found by name.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct NamedCustomer {
+    pub id: i32,
+    pub name: Option<String>,
+    pub company_name: Option<String>,
+    pub phone: Option<String>,
+    pub phone_2: Option<String>,
+}
+
+/// 0 exact, 1 the name starts with the term as a word, 2 contains it, 3 else.
+fn name_rank(name: &str, term: &str) -> u8 {
+    let name = name.trim().to_lowercase();
+    let term = normalize_term(term).to_lowercase();
+    if name == term {
+        0
+    } else if name.starts_with(&format!("{term} ")) {
+        1
+    } else if name.contains(&term) {
+        2
+    } else {
+        3
+    }
+}
+
+/// The company's live customers whose name or company matches `term`, typos
+/// allowed, best match first. The SQL fetches loose candidates (with several
+/// words, N-1 of N hits) and [`matches_name_fuzzy`] decides. Port of
+/// `findCustomersByFuzzyName`.
+pub async fn find_by_name(
+    pool: &sqlx::MySqlPool,
+    company_id: i32,
+    term: &str,
+    limit: usize,
+) -> Result<Vec<NamedCustomer>, sqlx::Error> {
+    let term = term.trim();
+    if term.chars().count() < 2 {
+        return Ok(Vec::new());
+    }
+    let normalized = normalize_term(term);
+    let words: Vec<&str> = normalized.split_whitespace().collect();
+    let mut sql = sqlx::QueryBuilder::<sqlx::MySql>::new(
+        "SELECT id, name, company_name, phone, phone_2 FROM customers
+          WHERE company_id = ",
+    );
+    sql.push_bind(company_id)
+        .push(" AND deleted_at IS NULL AND (name LIKE ");
+    let short = |word: &str| format!("%{}%", word.chars().take(3).collect::<String>());
+    if words.len() > 1 {
+        sql.push_bind(format!("%{}%", words.join(" ")))
+            .push(" OR (");
+        for (index, word) in words.iter().enumerate() {
+            if index > 0 {
+                sql.push(" + ");
+            }
+            sql.push("(name LIKE ")
+                .push_bind(short(word))
+                .push(" OR name LIKE ")
+                .push_bind(format!("%{word}%"))
+                .push(")");
+        }
+        sql.push(format!(") >= {}", words.len() - 1));
+    } else {
+        sql.push_bind(short(&normalized));
+        let chars: Vec<char> = normalized.chars().collect();
+        if chars.len() > 3 {
+            let tail: String = chars[chars.len() - 3..].iter().collect();
+            sql.push(" OR name LIKE ").push_bind(format!("%{tail}%"));
+        }
+    }
+    sql.push(" OR (company_name IS NOT NULL AND company_name != '' AND (company_name LIKE ")
+        .push_bind(format!("{normalized}%"))
+        .push(" OR company_name LIKE ")
+        .push_bind(format!("%{normalized}%"))
+        .push(")))")
+        .push(" ORDER BY name LIMIT ")
+        .push_bind(i64::try_from(limit.max(100)).unwrap_or(100));
+    let mut rows: Vec<NamedCustomer> = sql.build_query_as().fetch_all(pool).await?;
+    rows.retain(|c| {
+        matches_name_fuzzy(c.name.as_deref().unwrap_or_default(), term)
+            || matches_name_fuzzy(c.company_name.as_deref().unwrap_or_default(), term)
+    });
+    rows.sort_by(|a, b| {
+        let (a_name, b_name) = (
+            a.name.as_deref().unwrap_or_default(),
+            b.name.as_deref().unwrap_or_default(),
+        );
+        name_rank(a_name, term)
+            .cmp(&name_rank(b_name, term))
+            .then_with(|| a_name.to_lowercase().cmp(&b_name.to_lowercase()))
+    });
+    rows.truncate(limit);
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

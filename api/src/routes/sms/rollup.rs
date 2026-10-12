@@ -10,7 +10,7 @@
 use super::provider::{Param, SmsProvider, marks};
 use super::scope::Narrowing;
 use crate::auth::session::SessionUser;
-use crate::routes::customers::fuzzy::{matches_name_fuzzy, normalize_term};
+use crate::routes::customers::fuzzy::{NamedCustomer, find_by_name};
 use sqlx::MySqlPool;
 use std::collections::BTreeSet;
 
@@ -93,15 +93,6 @@ fn last10(phone: Option<&str>) -> Option<String> {
     (digits.len() >= 10).then_some(digits)
 }
 
-#[derive(sqlx::FromRow)]
-struct NamedCustomer {
-    id: i32,
-    name: Option<String>,
-    company_name: Option<String>,
-    phone: Option<String>,
-    phone_2: Option<String>,
-}
-
 /// Phones of customers whose name (or company) matches, typos allowed, and of
 /// their `CloudTalk` contacts. Port of `findThreadPhoneDigitsByCustomerName`.
 async fn customer_phones_by_name(
@@ -109,61 +100,8 @@ async fn customer_phones_by_name(
     company_id: i32,
     term: &str,
 ) -> Result<BTreeSet<String>, sqlx::Error> {
-    let normalized = normalize_term(term);
-    let words: Vec<&str> = normalized.split_whitespace().collect();
-    let like = format!("%{normalized}%");
-    let prefix = format!("{normalized}%");
-    let company = "(company_name IS NOT NULL AND company_name != '' AND (company_name LIKE ? OR company_name LIKE ?))";
-    let mut params: Vec<Param> = vec![company_id.into()];
-    let clause = if words.len() > 1 {
-        // N-1 of N word hits, so one mangled word cannot reject the row.
-        let hits: Vec<&str> = words
-            .iter()
-            .map(|_| "(name LIKE ? OR name LIKE ?)")
-            .collect();
-        params.push(format!("%{}%", words.join(" ")).into());
-        for word in &words {
-            params.push(format!("%{}%", word.chars().take(3).collect::<String>()).into());
-            params.push(format!("%{word}%").into());
-        }
-        format!(
-            "(name LIKE ? OR ({}) >= {} OR {company})",
-            hits.join(" + "),
-            words.len() - 1
-        )
-    } else {
-        let short: String = normalized.chars().take(3).collect();
-        params.push(format!("%{short}%").into());
-        if normalized.chars().count() > 3 {
-            let tail: String = {
-                let chars: Vec<char> = normalized.chars().collect();
-                chars[chars.len() - 3..].iter().collect()
-            };
-            params.push(format!("%{tail}%").into());
-            format!("(name LIKE ? OR name LIKE ? OR {company})")
-        } else {
-            format!("(name LIKE ? OR {company})")
-        }
-    };
-    params.push(prefix.into());
-    params.push(like.into());
-    let rows: Vec<NamedCustomer> = super::provider::fetch_all(
-        pool,
-        format!(
-            "SELECT id, name, company_name, phone, phone_2 FROM customers
-              WHERE company_id = ? AND deleted_at IS NULL AND {clause}
-              ORDER BY name LIMIT 100"
-        ),
-        &params,
-    )
-    .await?;
-    let matching: Vec<&NamedCustomer> = rows
-        .iter()
-        .filter(|c| {
-            matches_name_fuzzy(c.name.as_deref().unwrap_or_default(), term)
-                || matches_name_fuzzy(c.company_name.as_deref().unwrap_or_default(), term)
-        })
-        .collect();
+    let rows = find_by_name(pool, company_id, term, 100).await?;
+    let matching: Vec<&NamedCustomer> = rows.iter().collect();
     let mut phones = BTreeSet::new();
     for customer in &matching {
         phones.extend(last10(customer.phone.as_deref()));

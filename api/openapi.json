@@ -1743,6 +1743,250 @@
         ]
       }
     },
+    "/v1/customers/sms-contacts": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Find people to text",
+        "description": "Customers whose name matches `term` (typos allowed) or whose phone\ncontains its digits, and suppliers by name or phone.",
+        "operationId": "find_sms_contacts",
+        "parameters": [
+          {
+            "name": "term",
+            "in": "query",
+            "description": "A name (typos allowed) or phone digits; at least two characters.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matches (none for a term under two characters)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsContacts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/customers/{id}/phone": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Link a phone to a customer",
+        "description": "Saves the phone as the customer's phone, or as the second phone when the\nfirst is taken, and pushes the customer to the telephony address books\nso the conversation shows their name.",
+        "operationId": "link_customer_phone",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneCustomer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a phone number (`invalid_phone`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/customers/from-phone": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Create a customer for a phone",
+        "description": "A new customer with just a name and the phone, for an unknown number in\nthe SMS inbox.",
+        "operationId": "create_customer_from_phone",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPhoneCustomer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneCustomer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_phone` or `empty_name`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/users/sales-reps": {
       "get": {
         "tags": [
@@ -18970,6 +19214,24 @@
           }
         }
       },
+      "NewPhoneCustomer": {
+        "type": "object",
+        "description": "Body of `POST /v1/customers/from-phone`.",
+        "required": [
+          "phone_digits",
+          "name"
+        ],
+        "properties": {
+          "phone_digits": {
+            "type": "string",
+            "description": "10 to 15 digits."
+          },
+          "name": {
+            "type": "string",
+            "description": "The customer's name (at most 200 characters are kept)."
+          }
+        }
+      },
       "NewQuestionnaire": {
         "type": "object",
         "description": "Body of `POST /v1/questionnaires`.",
@@ -19368,6 +19630,38 @@
               "null"
             ],
             "description": "That customer's name."
+          }
+        }
+      },
+      "PhoneCustomer": {
+        "type": "object",
+        "description": "The customer a phone now belongs to.",
+        "required": [
+          "customer_id",
+          "customer_name"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The customer."
+          },
+          "customer_name": {
+            "type": "string",
+            "description": "Their name."
+          }
+        }
+      },
+      "PhoneInput": {
+        "type": "object",
+        "description": "Body of the phone routes.",
+        "required": [
+          "phone_digits"
+        ],
+        "properties": {
+          "phone_digits": {
+            "type": "string",
+            "description": "10 to 15 digits."
           }
         }
       },
@@ -21356,6 +21650,54 @@
           "stone": {
             "$ref": "#/components/schemas/SlabStone",
             "description": "The slab's stone."
+          }
+        }
+      },
+      "SmsContact": {
+        "type": "object",
+        "description": "Someone to text.",
+        "required": [
+          "id",
+          "name",
+          "phone"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer or supplier id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Their name."
+          },
+          "phone": {
+            "type": "string",
+            "description": "The phone as saved (may be empty)."
+          }
+        }
+      },
+      "SmsContacts": {
+        "type": "object",
+        "description": "`GET /v1/customers/sms-contacts`.",
+        "required": [
+          "customers",
+          "suppliers"
+        ],
+        "properties": {
+          "customers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SmsContact"
+            },
+            "description": "Up to 10 customers, best match first."
+          },
+          "suppliers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SmsContact"
+            },
+            "description": "Up to 10 suppliers by name or phone."
           }
         }
       },
