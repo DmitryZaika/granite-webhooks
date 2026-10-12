@@ -348,6 +348,8 @@ async fn admins_make_company_templates_that_send_automatically(pool: MySqlPool) 
     assert_eq!(created["scope"], "company");
     assert_eq!(created["lead_list_id"], 100);
     assert_eq!(created["hour_delay"], 4);
+    assert_eq!(created["list_name"], "New");
+    assert_eq!(created["group_name"], "Sales");
     assert!(created["created_at"].is_string());
     let group: Option<i32> =
         sqlx::query_scalar("SELECT lead_group_id FROM email_templates WHERE id = ?")
@@ -370,10 +372,19 @@ async fn admins_make_company_templates_that_send_automatically(pool: MySqlPool) 
     );
     for (body, why) in [
         (drip("X", Some(102), Some(1), "company"), "deleted list"),
-        (drip("X", Some(103), Some(1), "company"), "other company's list"),
+        (
+            drip("X", Some(103), Some(1), "company"),
+            "other company's list",
+        ),
         (drip("X", Some(100), None, "company"), "no delay"),
-        (drip("X", Some(100), Some(9000), "company"), "delay too long"),
-        (drip("X", Some(100), Some(1), "personal"), "personal template"),
+        (
+            drip("X", Some(100), Some(9000), "company"),
+            "delay too long",
+        ),
+        (
+            drip("X", Some(100), Some(1), "personal"),
+            "personal template",
+        ),
     ] {
         let res = server
             .post("/v1/email-templates")
@@ -468,9 +479,7 @@ async fn template_attachments(pool: MySqlPool) {
         .await;
     res.assert_status(StatusCode::CREATED);
     let url = res.json::<Value>()["url"].as_str().unwrap().to_string();
-    let attach = |url: String| {
-        json!({ "url": url, "filename": "terms.pdf", "content_type": "application/pdf" })
-    };
+    let attach = |url: String| json!({ "url": url, "filename": "terms.pdf", "content_type": "application/pdf" });
     let res = server
         .post("/v1/email-templates/8670/attachments")
         .with_session(sessions::ADMIN)

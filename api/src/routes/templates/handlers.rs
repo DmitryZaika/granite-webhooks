@@ -28,10 +28,16 @@ struct TemplateRow {
     created_at: Option<DateTime<Utc>>,
     lead_list_id: Option<i32>,
     hour_delay: Option<i32>,
+    list_name: Option<String>,
+    group_name: Option<String>,
 }
 
 const TEMPLATE_COLUMNS: &str = "id, user_id, template_name, template_subject, template_body, \
-     created_at, lead_list_id, hour_delay";
+     created_at, lead_list_id, hour_delay, \
+     (SELECT dl.name FROM deals_list dl \
+       WHERE dl.id = email_templates.lead_list_id AND dl.deleted_at IS NULL) AS list_name, \
+     (SELECT gl.name FROM deals_list dl JOIN groups_list gl ON gl.id = dl.group_id AND gl.deleted_at IS NULL \
+       WHERE dl.id = email_templates.lead_list_id AND dl.deleted_at IS NULL) AS group_name";
 
 fn to_template(
     row: TemplateRow,
@@ -52,6 +58,8 @@ fn to_template(
         can_edit: row.user_id == Some(user.id),
         lead_list_id: row.lead_list_id,
         hour_delay: row.hour_delay,
+        list_name: row.list_name,
+        group_name: row.group_name,
         created_at: row.created_at,
     }
 }

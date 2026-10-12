@@ -50,6 +50,10 @@ pub struct EmailTemplate {
     pub lead_list_id: Option<i32>,
     /// Hours after a deal enters `lead_list_id` that it is sent.
     pub hour_delay: Option<i32>,
+    /// Name of that list (null when it was deleted).
+    pub list_name: Option<String>,
+    /// Name of the list's group.
+    pub group_name: Option<String>,
     /// When it was made.
     #[serde(serialize_with = "js_date")]
     #[schema(value_type = Option<String>, format = DateTime)]

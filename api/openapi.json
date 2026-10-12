@@ -26428,6 +26428,20 @@
             "format": "int32",
             "description": "Hours after a deal enters `lead_list_id` that it is sent."
           },
+          "list_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of that list (null when it was deleted)."
+          },
+          "group_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the list's group."
+          },
           "created_at": {
             "type": [
               "string",
