@@ -16,6 +16,7 @@
 
 pub mod ai;
 pub mod auth;
+pub mod email_signature;
 pub mod error;
 pub mod extract;
 pub mod maps;

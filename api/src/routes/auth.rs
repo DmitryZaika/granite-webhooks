@@ -135,7 +135,7 @@ fn request_session(
 }
 
 /// The request's session id, when its cookie verifies.
-fn request_session_id(headers: &HeaderMap, secret: &str) -> Option<String> {
+pub(crate) fn request_session_id(headers: &HeaderMap, secret: &str) -> Option<String> {
     headers
         .get_all(COOKIE)
         .iter()

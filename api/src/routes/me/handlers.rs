@@ -133,14 +133,14 @@ pub async fn set_sales_goal(
     responses(
         (status = 200, description = "Link status per bot", body = TelegramStatus),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or of the shop", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn telegram(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    crate::auth::ShopOrEmployeeUser(user): crate::auth::ShopOrEmployeeUser,
 ) -> ApiResult<Json<TelegramStatus>> {
     Ok(Json(telegram_status(&state, user.id).await?))
 }

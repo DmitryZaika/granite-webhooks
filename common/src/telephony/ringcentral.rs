@@ -445,3 +445,123 @@ mod tests {
         assert_eq!(mms_error_token(&error(503, "down")), "ringcentral_503");
     }
 }
+
+/// `RingCentral`'s ceiling for `WebHook` subscriptions (20 years).
+const SUBSCRIPTION_EXPIRES_IN_SECONDS: u64 = 630_720_000;
+
+/// What [`ensure_sms_subscription`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubscriptionOutcome {
+    Created,
+    Renewed,
+    /// `LAMBDA_URL` or `RINGCENTRAL_WEBHOOK_TOKEN` is not set, or the
+    /// account has no enabled user extensions.
+    Skipped,
+}
+
+/// Where `RingCentral` pushes the company's new texts
+/// (`/ringcentral/notify/{company_id}` on the webhooks Lambda).
+pub fn notify_address(company_id: i32) -> Option<String> {
+    let base = std::env::var("LAMBDA_URL").ok()?;
+    let base = base.trim().trim_end_matches('/');
+    (!base.is_empty()).then(|| format!("{base}/ringcentral/notify/{company_id}"))
+}
+
+/// The SMS event filter of each extension.
+pub fn sms_event_filters(extension_ids: &[String]) -> Vec<String> {
+    extension_ids
+        .iter()
+        .map(|id| format!("/restapi/v1.0/account/~/extension/{id}/message-store/instant?type=SMS"))
+        .collect()
+}
+
+/// Creates the company's SMS webhook subscription, or renews it with the
+/// current extensions so reps added since are covered too. Without it
+/// inbound texts never reach the CRM. Port of
+/// `ensureRingCentralSmsSubscription`.
+pub async fn ensure_sms_subscription(
+    pool: &MySqlPool,
+    client: &Client,
+    company_id: i32,
+) -> Result<SubscriptionOutcome, ApiError> {
+    let Some(address) = notify_address(company_id) else {
+        return Ok(SubscriptionOutcome::Skipped);
+    };
+    // RingCentral rejects hyphens; the webhook parses the 32-hex form as the same UUID.
+    let token = std::env::var("RINGCENTRAL_WEBHOOK_TOKEN")
+        .unwrap_or_default()
+        .trim()
+        .replace('-', "");
+    if token.is_empty() {
+        return Ok(SubscriptionOutcome::Skipped);
+    }
+    let extensions = request(
+        pool,
+        client,
+        company_id,
+        Method::GET,
+        "account/~/extension?type=User&status=Enabled&perPage=1000",
+        &Body::Empty,
+        None,
+    )
+    .await?;
+    let extension_ids: Vec<String> = extensions["records"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|record| {
+            record["id"]
+                .as_i64()
+                .map(|id| id.to_string())
+                .or_else(|| record["id"].as_str().map(str::to_string))
+        })
+        .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()))
+        .collect();
+    if extension_ids.is_empty() {
+        return Ok(SubscriptionOutcome::Skipped);
+    }
+    let subscriptions = request(
+        pool,
+        client,
+        company_id,
+        Method::GET,
+        "subscription",
+        &Body::Empty,
+        None,
+    )
+    .await?;
+    let existing = subscriptions["records"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|record| record["deliveryMode"]["address"].as_str() == Some(address.as_str()))
+        .and_then(|record| record["id"].as_str().map(str::to_string));
+    let body = json!({
+        "eventFilters": sms_event_filters(&extension_ids),
+        "deliveryMode": { "transportType": "WebHook", "address": address, "verificationToken": token },
+        "expiresIn": SUBSCRIPTION_EXPIRES_IN_SECONDS,
+    });
+    let (method, path, outcome) = match &existing {
+        Some(id) => (
+            Method::PUT,
+            format!("subscription/{id}"),
+            SubscriptionOutcome::Renewed,
+        ),
+        None => (
+            Method::POST,
+            "subscription".to_string(),
+            SubscriptionOutcome::Created,
+        ),
+    };
+    request(
+        pool,
+        client,
+        company_id,
+        method,
+        &path,
+        &Body::Json(&body),
+        None,
+    )
+    .await?;
+    Ok(outcome)
+}

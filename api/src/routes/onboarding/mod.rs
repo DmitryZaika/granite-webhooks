@@ -6,6 +6,8 @@
 //! - `GET  /v1/me/onboarding/setup`  → the dashboard widget: profile, setup
 //!   checklist, and credit for setup already done
 //! - `POST /v1/me/onboarding/claim`  → complete a setup task whose work is done
+//! - `GET  /v1/onboarding/team`      → the company's tours progress (admins;
+//!   see [`team`])
 //!
 //! Replaces the Remix `api.onboarding.events`, `api.onboarding.reset` and
 //! `api.employee.onboarding-setup` routes. Progress is the user's HOME
@@ -13,9 +15,10 @@
 
 pub mod manifest;
 pub mod store;
+mod team;
 
+use crate::auth::ShopOrEmployeeUser;
 use crate::auth::session::SessionUser;
-use crate::auth::{EmployeeUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::state::AppState;
@@ -34,6 +37,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(reset))
         .routes(routes!(setup))
         .routes(routes!(claim))
+        .routes(routes!(team::team))
 }
 
 /// Most events one request may carry.
@@ -359,7 +363,7 @@ fn setup_done(setup: &SetupStatus) -> Vec<&'static str> {
 }
 
 /// How a credit went.
-enum CreditOutcome {
+pub enum CreditOutcome {
     /// No such user, or the home company's guided tours are off.
     Unavailable,
     /// Every task was already completed.
@@ -372,7 +376,11 @@ enum CreditOutcome {
 }
 
 /// Completes the done setup tasks not completed yet, with their points.
-async fn credit_done(state: &AppState, user_id: i32, done: &[&str]) -> ApiResult<CreditOutcome> {
+pub async fn credit_done(
+    state: &AppState,
+    user_id: i32,
+    done: &[&str],
+) -> ApiResult<CreditOutcome> {
     let pool = &state.pool;
     let Some(actor) = store::actor(pool, user_id).await? else {
         return Ok(CreditOutcome::Unavailable);
@@ -448,14 +456,14 @@ async fn credit_done(state: &AppState, user_id: i32, done: &[&str]) -> ApiResult
     responses(
         (status = 200, description = "The widget's data", body = SetupPage),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or of the shop", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn setup(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
 ) -> ApiResult<Json<SetupPage>> {
     let pool = &state.pool;
     let positions: Vec<(i32, i32)> =
@@ -536,14 +544,14 @@ pub struct ClaimResult {
     responses(
         (status = 200, description = "The outcome", body = ClaimResult),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or of the shop", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn claim(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     JsonBody(input): JsonBody<ClaimInput>,
 ) -> ApiResult<Json<ClaimResult>> {
     let task_id = input.task_id.trim();

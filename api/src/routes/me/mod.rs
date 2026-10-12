@@ -1,6 +1,7 @@
 //! The signed-in user.
 //!
 //! - `GET /v1/me`           → effective session user (no extra query beyond auth)
+//! - `GET`/`PUT /v1/me/account` → My Account (see [`account`])
 //! - `GET /v1/me/positions` → position ids in the company the request acts in
 //! - `GET /v1/me/sales-goal` → monthly sales goal; `PUT` sets it
 //! - `POST /v1/me/telegram/leads|notifications` → link a bot (Telegram login widget)
@@ -11,6 +12,7 @@
 //! - `GET /v1/me/marketing-companies` → companies the user markets for
 //! - `/v1/me/todos`, `/v1/me/todo-order` → the to-do list (see [`todos`])
 
+mod account;
 pub mod handlers;
 pub mod queries;
 pub mod schemas;
@@ -22,6 +24,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(handlers::me))
+        .routes(routes!(account::account, account::update_account))
         .routes(routes!(handlers::positions))
         .routes(routes!(handlers::sales_goal, handlers::set_sales_goal))
         .routes(routes!(handlers::telegram))

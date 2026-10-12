@@ -639,6 +639,33 @@ async fn ringcentral_extension(
     user_id: i32,
     phone: Option<&str>,
 ) -> Result<Option<String>, sqlx::Error> {
+    Ok(
+        resolve_ringcentral_extension(state, company_id, user_id, phone)
+            .await?
+            .extension_id,
+    )
+}
+
+/// A user's `RingCentral` line, resolved from their number.
+pub struct ExtensionLink {
+    /// The extension to store.
+    pub extension_id: Option<String>,
+    /// `RingCentral` has an extension holding the number (otherwise the
+    /// stored extension was kept).
+    pub matched: bool,
+}
+
+/// [`ringcentral_extension`], also telling whether the number was found.
+pub async fn resolve_ringcentral_extension(
+    state: &AppState,
+    company_id: i32,
+    user_id: i32,
+    phone: Option<&str>,
+) -> Result<ExtensionLink, sqlx::Error> {
+    let kept = |extension_id: Option<String>| ExtensionLink {
+        extension_id,
+        matched: false,
+    };
     let stored: Option<Option<String>> = sqlx::query_scalar(
         "SELECT ringcentral_extension_id FROM users WHERE id = ? AND company_id = ? AND is_deleted = 0",
     )
@@ -648,10 +675,10 @@ async fn ringcentral_extension(
     .await?;
     let current = stored.flatten();
     let Some(phone) = phone else {
-        return Ok(None);
+        return Ok(kept(None));
     };
     if !company_features(&state.pool, company_id).await?.ringcentral {
-        return Ok(current);
+        return Ok(kept(current));
     }
     let pool = &state.pool;
     let client = &state.telephony_http;
@@ -666,7 +693,7 @@ async fn ringcentral_extension(
     )
     .await;
     let Ok(list) = list else {
-        return Ok(current);
+        return Ok(kept(current));
     };
     for record in list["records"].as_array().into_iter().flatten() {
         let Some(id) = record["id"]
@@ -694,11 +721,14 @@ async fn ringcentral_extension(
             .filter_map(|number| number["phoneNumber"].as_str())
             .any(|number| phone10(number) == phone);
         if matches {
-            return Ok(Some(id));
+            return Ok(ExtensionLink {
+                extension_id: Some(id),
+                matched: true,
+            });
         }
     }
     tracing::info!(user_id, "no RingCentral extension holds the number");
-    Ok(current)
+    Ok(kept(current))
 }
 
 #[derive(Debug, Clone, Copy, sqlx::FromRow)]

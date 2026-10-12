@@ -53,6 +53,148 @@
         ]
       }
     },
+    "/v1/me/account": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "My account",
+        "description": "The user's details in their home company, and what the page shows: the\ntexting providers, the signature, and the guided tours rating.",
+        "operationId": "get_my_account",
+        "responses": {
+          "200": {
+            "description": "The account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Save my account",
+        "description": "Saves the user's details in their home company. A new password ends the\nuser's other sessions. The texting line is checked with its provider (the\n`RingCentral` extension is looked up from the number), and a number moved\nfrom `CloudTalk` to `RingCentral` brings its texting history along. A newly\nfilled email name or signature completes its setup task, with its points.",
+        "operationId": "update_my_account",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountSaved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The email belongs to another account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/positions": {
       "get": {
         "tags": [
@@ -265,7 +407,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or of the shop",
             "content": {
               "application/json": {
                 "schema": {
@@ -30684,7 +30826,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or of the shop",
             "content": {
               "application/json": {
                 "schema": {
@@ -30751,7 +30893,64 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/onboarding/team": {
+      "get": {
+        "tags": [
+          "onboarding"
+        ],
+        "summary": "The onboarding team",
+        "description": "The employees of the company the request acts in, with the facts the\ntour registry reads (admin, manager and shop positions, a texting line),\nthe company's capabilities and everyone's saved tours progress. While\nthe company's guided tours are off, `enabled` is false and the list empty.",
+        "operationId": "get_onboarding_team",
+        "responses": {
+          "200": {
+            "description": "The team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -32401,6 +32600,207 @@
   },
   "components": {
     "schemas": {
+      "Account": {
+        "type": "object",
+        "description": "`GET /v1/me/account`.",
+        "required": [
+          "user_id",
+          "has_cloudtalk_api",
+          "has_ringcentral_api",
+          "shows_email_signature",
+          "has_onboarding_feedback",
+          "feedback_dismissed"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The user."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sign-in email."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone."
+          },
+          "email_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name recipients see in the From field."
+          },
+          "email_signature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The email signature (sanitized HTML)."
+          },
+          "cloudtalk_agent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` agent id."
+          },
+          "cloudtalk_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` line (10 digits)."
+          },
+          "ringcentral_extension_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` extension of the line."
+          },
+          "ringcentral_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` line (10 digits)."
+          },
+          "has_cloudtalk_api": {
+            "type": "boolean",
+            "description": "The home company has `CloudTalk`."
+          },
+          "has_ringcentral_api": {
+            "type": "boolean",
+            "description": "The home company has `RingCentral`."
+          },
+          "shows_email_signature": {
+            "type": "boolean",
+            "description": "The signature applies (not for shop managers and workers)."
+          },
+          "has_onboarding_feedback": {
+            "type": "boolean",
+            "description": "The user already rated the guided tours."
+          },
+          "feedback_dismissed": {
+            "type": "boolean",
+            "description": "The user dismissed the tours rating."
+          }
+        }
+      },
+      "AccountInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/me/account`. A field left out keeps its value; an empty\none clears it.",
+        "required": [
+          "name",
+          "email"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name (required)."
+          },
+          "email": {
+            "type": "string",
+            "description": "Sign-in email (required)."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone (at least 10 digits)."
+          },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new password (at least 8 characters); empty keeps the current one."
+          },
+          "email_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The email sender name."
+          },
+          "email_signature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The email signature (HTML, sanitized on save)."
+          },
+          "cloudtalk_agent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` agent id (digits)."
+          },
+          "cloudtalk_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` line (10+ digits)."
+          },
+          "ringcentral_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` line (10+ digits); the extension is looked up from it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "AccountSaved": {
+        "type": "object",
+        "description": "What a save did.",
+        "required": [
+          "texting_line_status"
+        ],
+        "properties": {
+          "texting_line_status": {
+            "type": "string",
+            "description": "The texting line: `saved`, `unchanged`, `unmatched` (the provider did\nnot confirm it), `incomplete` (a `CloudTalk` line without its agent id)\nor `none` (no line submitted)."
+          },
+          "texting_line_provider": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provider of that line (`CloudTalk`, `RingCentral`); null for `none`."
+          },
+          "credit": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Credit",
+                "description": "Setup tasks this save finished, with their points; null when none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "ActiveCompany": {
         "type": "object",
         "description": "Body of `PUT /v1/auth/active-company`.",
@@ -49426,6 +49826,13 @@
               "null"
             ],
             "description": "When it started (UTC, ISO 8601)."
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was last closed (UTC, ISO 8601): a skip, unless completed since."
           }
         }
       },
@@ -49464,6 +49871,124 @@
               "$ref": "#/components/schemas/AnswerAttempt"
             },
             "description": "Their answers, by employee, newest try first."
+          }
+        }
+      },
+      "Team": {
+        "type": "object",
+        "description": "`GET /v1/onboarding/team`.",
+        "required": [
+          "enabled",
+          "capabilities",
+          "members"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "The company's guided tours are on; off, `members` is empty."
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/TeamCapabilities",
+            "description": "The company's capabilities."
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamMember"
+            },
+            "description": "The company's employees, by name."
+          }
+        }
+      },
+      "TeamCapabilities": {
+        "type": "object",
+        "description": "What the company can do, as the tour registry gates on it.",
+        "required": [
+          "cloudtalk",
+          "quickbooks",
+          "verified_domain",
+          "sms_provider",
+          "followup_tours",
+          "onboarding"
+        ],
+        "properties": {
+          "cloudtalk": {
+            "type": "boolean",
+            "description": "`CloudTalk` is connected."
+          },
+          "quickbooks": {
+            "type": "boolean",
+            "description": "A `QuickBooks` company is linked."
+          },
+          "verified_domain": {
+            "type": "boolean",
+            "description": "SES has verified the company's mail domain."
+          },
+          "sms_provider": {
+            "type": "boolean",
+            "description": "`CloudTalk` or `RingCentral` is connected."
+          },
+          "followup_tours": {
+            "type": "boolean",
+            "description": "The follow-up tours are switched on (`FOLLOWUP_ONBOARDING_ENABLED`)."
+          },
+          "onboarding": {
+            "type": "boolean",
+            "description": "The company's guided tours are on."
+          }
+        }
+      },
+      "TeamMember": {
+        "type": "object",
+        "description": "One employee.",
+        "required": [
+          "user_id",
+          "name",
+          "email",
+          "is_admin",
+          "can_manage_users",
+          "is_shop_worker",
+          "is_shop_manager",
+          "has_sms_line",
+          "progress"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "User id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "email": {
+            "type": "string",
+            "description": "Email."
+          },
+          "is_admin": {
+            "type": "boolean",
+            "description": "Admin access."
+          },
+          "can_manage_users": {
+            "type": "boolean",
+            "description": "Holds the Manager position (may manage users)."
+          },
+          "is_shop_worker": {
+            "type": "boolean",
+            "description": "Holds the Shop Worker position."
+          },
+          "is_shop_manager": {
+            "type": "boolean",
+            "description": "Holds the Shop Manager position."
+          },
+          "has_sms_line": {
+            "type": "boolean",
+            "description": "Has a texting line of their own (`CloudTalk` agent and number, or a\n`RingCentral` extension and number)."
+          },
+          "progress": {
+            "$ref": "#/components/schemas/OnboardingState",
+            "description": "Saved progress (empty before any)."
           }
         }
       },
