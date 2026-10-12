@@ -447,3 +447,30 @@ pub struct SavedDraft {
     /// Conversation it will start.
     pub thread_id: String,
 }
+
+/// Body of `POST /v1/email-attachments/{id}/deal`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AddToDeal {
+    /// Deal to save the attachment on.
+    pub deal_id: i64,
+}
+
+/// Query of `GET /v1/deals/file-urls`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DealFileUrlsQuery {
+    /// The deal; wins over the customer.
+    pub deal_id: Option<i64>,
+    /// Without `deal_id`: any address of the customer.
+    pub customer_email: Option<String>,
+    /// Without `deal_id`: the customer's exact name.
+    pub customer_name: Option<String>,
+}
+
+/// URLs of deal files.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DealFileUrls {
+    /// Photo and document URLs.
+    pub urls: Vec<String>,
+}

@@ -10683,6 +10683,185 @@
         ]
       }
     },
+    "/v1/email-attachments/{id}/deal": {
+      "post": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Save an attachment to a deal",
+        "description": "Adds the attachment to the deal's photos (images) or documents (other\nfiles), once: saving it again changes nothing.",
+        "operationId": "add_email_attachment_to_deal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Attachment id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddToDeal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved on the deal"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such attachment the caller may read, or no such deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/file-urls": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "List a deal's file URLs",
+        "description": "URLs of the photos and documents of the deal, or of every deal of the\ncustomer (by address or name). Attachments whose URL is listed are\nalready saved.",
+        "operationId": "list_deal_file_urls",
+        "parameters": [
+          {
+            "name": "deal_id",
+            "in": "query",
+            "description": "The deal; wins over the customer.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "customer_email",
+            "in": "query",
+            "description": "Without `deal_id`: any address of the customer.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customer_name",
+            "in": "query",
+            "description": "Without `deal_id`: the customer's exact name.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File URLs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DealFileUrls"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/emails/drafts/{id}": {
       "get": {
         "tags": [
@@ -11746,6 +11925,21 @@
               "type": "string"
             },
             "description": "URLs of uploads to the model's folder, 1 to 50."
+          }
+        },
+        "additionalProperties": false
+      },
+      "AddToDeal": {
+        "type": "object",
+        "description": "Body of `POST /v1/email-attachments/{id}/deal`.",
+        "required": [
+          "deal_id"
+        ],
+        "properties": {
+          "deal_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal to save the attachment on."
           }
         },
         "additionalProperties": false
@@ -13184,6 +13378,22 @@
               "$ref": "#/components/schemas/HistoryEmail"
             },
             "description": "The deal's and the customer's conversations only (the History tab)."
+          }
+        }
+      },
+      "DealFileUrls": {
+        "type": "object",
+        "description": "URLs of deal files.",
+        "required": [
+          "urls"
+        ],
+        "properties": {
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Photo and document URLs."
           }
         }
       },

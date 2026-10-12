@@ -9,12 +9,15 @@
 //! - `POST /v1/emails/threads/{thread_id}/read`   → mark an opened conversation read
 //! - `POST /v1/emails/threads/{mark-read,mark-unread,delete,restore,purge}` → bulk changes
 //! - `POST /v1/emails`                            → send (or schedule) an email
+//! - `POST /v1/email-attachments/{id}/deal`      → save an attachment to a deal
+//! - `GET  /v1/deals/file-urls`                   → file URLs of a deal or a customer's deals
 //! - `POST /v1/emails/drafts`, `GET|PUT|DELETE /v1/emails/drafts/{id}` → the caller's drafts
 //!
 //! Replaces the Remix `employee.emails*` loaders and `api.emails.*` routes.
 //! The `webhooks` Lambda builds and sends the MIME message (it owns SES).
 
 pub mod attachment_token;
+mod attachments;
 pub mod deal_history;
 mod drafts;
 mod handlers;
@@ -44,6 +47,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(deal_history::deal_emails))
         .routes(routes!(send::send))
         .routes(routes!(drafts::create_draft))
+        .routes(routes!(attachments::add_to_deal))
+        .routes(routes!(attachments::deal_file_urls))
         .routes(routes!(
             drafts::get_draft,
             drafts::update_draft,
