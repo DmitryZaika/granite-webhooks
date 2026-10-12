@@ -23983,6 +23983,684 @@
         ]
       }
     },
+    "/v1/teach-mode": {
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "The employee test",
+        "description": "The company's questions visible to employees with their answers, and the\ninstructions they test, each marked completed when the caller once\nanswered all its questions right in one try.",
+        "operationId": "get_teach_mode",
+        "responses": {
+          "200": {
+            "description": "The test",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeTest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/teach-mode/attempts": {
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Submit a test",
+        "description": "Grades the caller's answers (a skipped question is wrong) and saves them as\ntheir next try at those questions.",
+        "operationId": "submit_teach_mode_attempt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttemptInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Graded and saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttemptResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No answers, or a question that is not the company's visible one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/teach-mode/questions": {
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "List the questions",
+        "description": "Every question of the company, published or draft, with its answers.",
+        "operationId": "list_teach_mode_questions",
+        "responses": {
+          "200": {
+            "description": "Questions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminQuestions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Add a question",
+        "description": "A published multiple-choice question on one of the company's instructions.",
+        "operationId": "create_teach_mode_question",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewQuestion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown instruction, or not two answers with one right",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/teach-mode/questions/{id}": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Edit a question",
+        "description": "Saves the text and the answers: listed answers with an id are updated,\nthose without are added, and the question's other answers are deleted.",
+        "operationId": "update_teach_mode_question",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Question id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Not two answers with one right",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such question in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Delete a question",
+        "description": "Soft-deletes one of the company's questions; past answers stay.",
+        "operationId": "delete_teach_mode_question",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Question id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such question in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/teach-mode/questions/{id}/visibility": {
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Publish or hide a question",
+        "description": "Shows the question to employees, or moves it back to the drafts.",
+        "operationId": "set_teach_mode_question_visibility",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Question id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Visibility"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such question in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/teach-mode/instructions/{id}/publish": {
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Publish an instruction's drafts",
+        "description": "Shows every draft question of the instruction to employees.",
+        "operationId": "publish_teach_mode_instruction",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instruction id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Drafts published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestionCount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Instruction not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/teach-mode/instructions/{id}/generate": {
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Generate questions",
+        "description": "Asks the AI for a multiple-choice test covering the instruction (up to 30\nquestions, avoiding the existing ones) and adds them published.",
+        "operationId": "generate_teach_mode_questions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instruction id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Questions added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestionCount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Instruction not found or empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The AI failed or returned no usable questions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/teach-mode/progress": {
       "get": {
         "tags": [
@@ -30307,6 +30985,74 @@
           }
         }
       },
+      "AdminQuestion": {
+        "type": "object",
+        "description": "A question, for the admin page.",
+        "required": [
+          "id",
+          "text",
+          "question_type",
+          "is_visible_to_employees"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The question."
+          },
+          "text": {
+            "type": "string",
+            "description": "Its text."
+          },
+          "instruction_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The instruction it tests."
+          },
+          "question_type": {
+            "type": "string",
+            "description": "`MC` or `TF`."
+          },
+          "is_visible_to_employees": {
+            "type": "boolean",
+            "description": "Published to employees (else a draft)."
+          },
+          "created_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was added (UTC, ISO 8601)."
+          }
+        }
+      },
+      "AdminQuestions": {
+        "type": "object",
+        "description": "`GET /v1/teach-mode/questions`.",
+        "required": [
+          "questions",
+          "answer_choices"
+        ],
+        "properties": {
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminQuestion"
+            },
+            "description": "Not deleted questions, newest first."
+          },
+          "answer_choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnswerChoice"
+            },
+            "description": "Their answers, by question."
+          }
+        }
+      },
       "AgreedTime": {
         "type": "object",
         "description": "An agreed estimate time, on the user's clock.",
@@ -30386,6 +31132,36 @@
           },
           "correct_answer_text": {
             "type": "string",
+            "description": "The right answer."
+          }
+        }
+      },
+      "AnswerChoice": {
+        "type": "object",
+        "description": "An answer to pick.",
+        "required": [
+          "id",
+          "question_id",
+          "text",
+          "is_correct"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The answer."
+          },
+          "question_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its question."
+          },
+          "text": {
+            "type": "string",
+            "description": "Its text."
+          },
+          "is_correct": {
+            "type": "boolean",
             "description": "The right answer."
           }
         }
@@ -30631,6 +31407,63 @@
               "$ref": "#/components/schemas/AttachmentFile"
             },
             "description": "Documents (pdf, Word, Excel, csv, txt) or images."
+          }
+        }
+      },
+      "AttemptAnswer": {
+        "type": "object",
+        "description": "One answer of a finished test.",
+        "required": [
+          "question_id"
+        ],
+        "properties": {
+          "question_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The question."
+          },
+          "selected_answer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The answer picked; null when skipped."
+          }
+        }
+      },
+      "AttemptInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/teach-mode/attempts`.",
+        "required": [
+          "answers"
+        ],
+        "properties": {
+          "answers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttemptAnswer"
+            },
+            "description": "Every question of the test, answered or not."
+          }
+        }
+      },
+      "AttemptResult": {
+        "type": "object",
+        "description": "The grade of a test.",
+        "required": [
+          "score_percent",
+          "passed"
+        ],
+        "properties": {
+          "score_percent": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Right answers, in percent (rounded)."
+          },
+          "passed": {
+            "type": "boolean",
+            "description": "Every answer was right."
           }
         }
       },
@@ -31444,6 +32277,32 @@
           "cleanup_completed": {
             "type": "boolean",
             "description": "\"Clean up completed\"."
+          }
+        }
+      },
+      "ChoiceInput": {
+        "type": "object",
+        "description": "An answer of a question being saved.",
+        "required": [
+          "text",
+          "is_correct"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "An existing answer to keep; omitted for a new one."
+          },
+          "text": {
+            "type": "string",
+            "description": "Its text; a blank answer is dropped."
+          },
+          "is_correct": {
+            "type": "boolean",
+            "description": "The right answer."
           }
         }
       },
@@ -34767,6 +35626,38 @@
               "format": "int32"
             },
             "description": "Customer ids to look up, at most 20000. Ids of other companies are ignored."
+          }
+        }
+      },
+      "EmployeeTest": {
+        "type": "object",
+        "description": "`GET /v1/teach-mode`.",
+        "required": [
+          "questions",
+          "answer_choices",
+          "instructions"
+        ],
+        "properties": {
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TestQuestion"
+            },
+            "description": "Visible questions, newest first."
+          },
+          "answer_choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnswerChoice"
+            },
+            "description": "Their answers, by question."
+          },
+          "instructions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TestInstruction"
+            },
+            "description": "Instructions with visible questions, by title."
           }
         }
       },
@@ -38696,6 +39587,33 @@
           }
         }
       },
+      "NewQuestion": {
+        "type": "object",
+        "description": "Body of `POST /v1/teach-mode/questions`.",
+        "required": [
+          "instruction_id",
+          "text",
+          "choices"
+        ],
+        "properties": {
+          "instruction_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The instruction it tests."
+          },
+          "text": {
+            "type": "string",
+            "description": "The question."
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChoiceInput"
+            },
+            "description": "At least two answers, exactly one right."
+          }
+        }
+      },
       "NewQuestionnaire": {
         "type": "object",
         "description": "Body of `POST /v1/questionnaires`.",
@@ -40338,6 +41256,21 @@
           }
         }
       },
+      "QuestionCount": {
+        "type": "object",
+        "description": "How many questions a call published or generated.",
+        "required": [
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Questions.",
+            "minimum": 0
+          }
+        }
+      },
       "QuestionInput": {
         "type": "object",
         "description": "Body of a question write.",
@@ -40348,6 +41281,27 @@
           "question": {
             "type": "string",
             "description": "The question, 1 to 5000 characters."
+          }
+        }
+      },
+      "QuestionUpdate": {
+        "type": "object",
+        "description": "Body of `PUT /v1/teach-mode/questions/{id}`.",
+        "required": [
+          "text",
+          "choices"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The question."
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChoiceInput"
+            },
+            "description": "The answers it keeps (others are deleted): at least two, exactly one right."
           }
         }
       },
@@ -44632,6 +45586,60 @@
           "personal"
         ]
       },
+      "TestInstruction": {
+        "type": "object",
+        "description": "An instruction with a test.",
+        "required": [
+          "id",
+          "title",
+          "completed"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The instruction."
+          },
+          "title": {
+            "type": "string",
+            "description": "Its title (\"Untitled instruction\" when blank)."
+          },
+          "completed": {
+            "type": "boolean",
+            "description": "The caller once answered every one of its questions right in one try."
+          }
+        }
+      },
+      "TestQuestion": {
+        "type": "object",
+        "description": "A test question.",
+        "required": [
+          "id",
+          "text",
+          "instruction_id",
+          "question_type"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The question."
+          },
+          "text": {
+            "type": "string",
+            "description": "Its text."
+          },
+          "instruction_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The instruction it tests."
+          },
+          "question_type": {
+            "type": "string",
+            "description": "`MC` or `TF`."
+          }
+        }
+      },
       "ThreadCustomer": {
         "type": "object",
         "description": "Who the conversation is with.",
@@ -45597,6 +46605,19 @@
           "has_ringcentral_api": {
             "type": "boolean",
             "description": "The listed company has `RingCentral`."
+          }
+        }
+      },
+      "Visibility": {
+        "type": "object",
+        "description": "Body of `PUT /v1/teach-mode/questions/{id}/visibility`.",
+        "required": [
+          "visible"
+        ],
+        "properties": {
+          "visible": {
+            "type": "boolean",
+            "description": "Published to employees (false: a draft)."
           }
         }
       },
