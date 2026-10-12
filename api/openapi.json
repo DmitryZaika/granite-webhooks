@@ -20639,6 +20639,83 @@
         ]
       }
     },
+    "/v1/ai/call-activities": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Extract activities from a call",
+        "description": "The follow-up tasks of a call (call backs, links and quotes to send,\nphotos to wait for, on-site estimates) with their deadlines, read by AI\nand checked against the transcript.",
+        "operationId": "extract_call_activities",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallActivitiesInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Activities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallActivities"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty transcript",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI failed or answered with something else",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/ai/email-template": {
       "post": {
         "tags": [
@@ -22884,6 +22961,53 @@
               "null"
             ],
             "description": "The demo booking page."
+          }
+        }
+      },
+      "CallActivities": {
+        "type": "object",
+        "description": "`POST /v1/ai/call-activities`.",
+        "required": [
+          "activities"
+        ],
+        "properties": {
+          "activities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CallActivity"
+            },
+            "description": "Activities to add to the deal."
+          }
+        }
+      },
+      "CallActivitiesInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/call-activities`.",
+        "required": [
+          "transcript"
+        ],
+        "properties": {
+          "transcript": {
+            "type": "string",
+            "description": "The call's transcript."
+          },
+          "call_started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the call started (ISO 8601); relative deadlines count from it."
+          },
+          "committed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the activities are being created (ISO 8601); now when absent."
+          },
+          "is_voicemail": {
+            "type": "boolean",
+            "description": "The provider said it was a voicemail."
           }
         }
       },

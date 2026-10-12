@@ -197,3 +197,46 @@ async fn the_agreed_estimate_time_is_read_from_the_conversation(pool: MySqlPool)
         .await
         .assert_status(StatusCode::NOT_FOUND);
 }
+
+#[test_db::test(seed)]
+async fn call_activities_come_from_the_transcript(pool: MySqlPool) {
+    let (server, seen) = server(
+        &pool,
+        r#"{"activities":[{"name":"Call back in two or three weeks","deadline":null},{"name":"Send granite inventory link","deadline":null}]}"#,
+    )
+    .await;
+    let body: Value = server
+        .post("/v1/ai/call-activities")
+        .with_session(sessions::REP)
+        .json(&json!({
+            "transcript": "Would you like me to call you in two or three weeks? We are in litigation. I'll send you the inventory link a little bit later.",
+            "call_started_at": "2026-11-02T15:00:00.000Z",
+            "committed_at": "2026-11-02T15:30:00.000Z",
+        }))
+        .await
+        .json();
+    assert_eq!(
+        body,
+        json!({ "activities": [
+            { "name": "Send granite inventory link", "deadline": "2026-11-02" },
+            { "name": "Call back, check if litigation is finished", "deadline": "2026-11-16" },
+        ] })
+    );
+    let sent = seen.lock().unwrap().clone();
+    let system = sent[0]["messages"][0]["content"].as_str().unwrap();
+    assert!(
+        system.ends_with("Call date/time for relative deadlines (ISO): 2026-11-02T15:00:00.000Z")
+    );
+    // A greeting-only voicemail needs no AI (the CRM renames its activity too).
+    let voicemail: Value = server
+        .post("/v1/ai/call-activities")
+        .with_session(sessions::REP)
+        .json(&json!({ "transcript": "Please leave a message after the tone.", "is_voicemail": true }))
+        .await
+        .json();
+    assert_eq!(
+        voicemail,
+        json!({ "activities": [{ "name": "Call back, follow up", "deadline": null }] })
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
