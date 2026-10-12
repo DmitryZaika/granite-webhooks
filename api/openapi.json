@@ -3717,6 +3717,409 @@
         ]
       }
     },
+    "/v1/admin/users": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List users",
+        "description": "The live users of the caller's company (superusers: of `company_id`, or\nof every company), which of them only a superuser may change, the\ncompanies the caller may pick with their user counts and limits, and\nwhether the listed company has `CloudTalk` or `RingCentral`.",
+        "operationId": "list_managed_users",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers: one company's users (default every company's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsersPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller may not manage users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Add a user",
+        "description": "Creates a user with their positions in the caller's company\n(superusers: in `company_id`). The email must be unused, even by a\ndeleted user.",
+        "operationId": "create_managed_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedUser"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid field, or positions that can't go together",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller may not manage users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The email is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/users/{id}": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Get a user to edit",
+        "description": "The user with their positions, marketing and Super Admin companies, the\ncompanies the caller may pick (non-superusers: the user's own and the\nones a superuser granted marketing for) and their company's telephony.",
+        "operationId": "get_managed_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The form",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserForm"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller may not manage users, or only a superuser may change this one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live user of the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Save a user",
+        "description": "Saves the user's details and positions. Positions that stay keep their\nrows (Telegram lead buttons point at them). Non-superusers keep the\nuser's company, Super Admin and check-in positions and Super Admin\ncompanies as they are, and may only grant marketing for the user's own\ncompany (or remove companies a superuser granted). Super Admins are\nalways admins. The `RingCentral` extension follows the number.",
+        "operationId": "update_managed_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserChanges"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Missing or invalid field, or positions that can't go together",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller may not manage users, or only a superuser may change this one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live user of the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The email is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Delete a user",
+        "description": "Soft-deletes a live user of the caller's company (superusers: any).",
+        "operationId": "delete_managed_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller may not manage users, or only a superuser may delete this one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live user of the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/stones": {
       "get": {
         "tags": [
@@ -26085,6 +26488,27 @@
           }
         }
       },
+      "CompanyName": {
+        "type": "object",
+        "description": "A company to pick.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          }
+        }
+      },
       "CompanyOption": {
         "type": "object",
         "description": "A company with signatures on.",
@@ -26544,6 +26968,20 @@
             "type": "integer",
             "format": "int32",
             "description": "The new to-do."
+          }
+        }
+      },
+      "CreatedUser": {
+        "type": "object",
+        "description": "`{ id }` of a new user.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The new user."
           }
         }
       },
@@ -28421,6 +28859,90 @@
               "$ref": "#/components/schemas/Line"
             },
             "description": "The lines, in order."
+          }
+        }
+      },
+      "EditedUser": {
+        "type": "object",
+        "description": "The edit form's user.",
+        "required": [
+          "id",
+          "company_id",
+          "is_admin",
+          "is_superuser",
+          "is_employee"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "User id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone."
+          },
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Their company."
+          },
+          "is_admin": {
+            "type": "boolean",
+            "description": "Admin access."
+          },
+          "is_superuser": {
+            "type": "boolean",
+            "description": "A superuser."
+          },
+          "is_employee": {
+            "type": "boolean",
+            "description": "An employee."
+          },
+          "cloudtalk_agent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` agent id."
+          },
+          "cloudtalk_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` outbound number."
+          },
+          "ringcentral_extension_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` extension id."
+          },
+          "ringcentral_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` outbound number."
           }
         }
       },
@@ -31436,6 +31958,74 @@
           }
         }
       },
+      "ManagedUser": {
+        "type": "object",
+        "description": "A user in the list.",
+        "required": [
+          "id",
+          "is_protected"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "User id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone."
+          },
+          "cloudtalk_agent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` agent id."
+          },
+          "cloudtalk_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` outbound number."
+          },
+          "ringcentral_extension_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` extension id."
+          },
+          "ringcentral_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` outbound number."
+          },
+          "is_protected": {
+            "type": "boolean",
+            "description": "A superuser or Super Admin: only superusers may change them."
+          }
+        }
+      },
       "MarketingCompany": {
         "type": "object",
         "description": "A company the user does marketing for.",
@@ -31906,6 +32496,57 @@
           "url": {
             "type": "string",
             "description": "URL of the picture uploaded to the `supports` folder."
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewUser": {
+        "type": "object",
+        "description": "Body of `POST /v1/admin/users`.",
+        "required": [
+          "name",
+          "email",
+          "password"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone (10+ characters) or empty."
+          },
+          "email": {
+            "type": "string",
+            "description": "Email, used to sign in."
+          },
+          "password": {
+            "type": "string",
+            "description": "Password (4+ characters)."
+          },
+          "company_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Superusers: the company (others add to their own)."
+          },
+          "positions": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Position ids."
+          },
+          "is_admin": {
+            "type": "boolean",
+            "description": "Admin access."
           }
         },
         "additionalProperties": false
@@ -37395,6 +38036,180 @@
         },
         "additionalProperties": false
       },
+      "UserChanges": {
+        "type": "object",
+        "description": "Body of `PUT /v1/admin/users/{id}`.",
+        "required": [
+          "name",
+          "company_id"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email, or empty for none."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone (10+ characters) or empty."
+          },
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Superusers: move them to this company."
+          },
+          "positions": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Position ids."
+          },
+          "marketing_company_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "External marketing: the companies they market for."
+          },
+          "superadmin_company_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Superusers: the companies they are Super Admin of."
+          },
+          "is_admin": {
+            "type": "boolean",
+            "description": "Admin access (always on for Super Admins)."
+          },
+          "cloudtalk_agent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` agent id (digits) or empty."
+          },
+          "cloudtalk_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` number (10+ digits) or empty."
+          },
+          "ringcentral_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` number (10+ digits) or empty; the extension is looked up\nfrom it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UserForm": {
+        "type": "object",
+        "description": "The edit form.",
+        "required": [
+          "user",
+          "positions",
+          "marketing_company_ids",
+          "superadmin_company_ids",
+          "companies",
+          "logged_in_is_superuser",
+          "has_cloudtalk_api",
+          "has_ringcentral_api"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/EditedUser",
+            "description": "The user."
+          },
+          "positions": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Their position ids."
+          },
+          "marketing_company_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Companies they market for (external marketing)."
+          },
+          "superadmin_company_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Companies they are Super Admin of."
+          },
+          "companies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompanyName"
+            },
+            "description": "Companies the caller may pick."
+          },
+          "logged_in_is_superuser": {
+            "type": "boolean",
+            "description": "The caller is a superuser."
+          },
+          "has_cloudtalk_api": {
+            "type": "boolean",
+            "description": "Their company has `CloudTalk`."
+          },
+          "has_ringcentral_api": {
+            "type": "boolean",
+            "description": "Their company has `RingCentral`."
+          }
+        }
+      },
+      "UserLimit": {
+        "type": "object",
+        "description": "How many users a company has and may have.",
+        "required": [
+          "company_id",
+          "current_count"
+        ],
+        "properties": {
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company id."
+          },
+          "current_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Users counting toward the limit (check-in-only accounts do not)."
+          },
+          "max_users": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The limit; null for none."
+          }
+        }
+      },
       "UserNameRow": {
         "type": "object",
         "description": "A user's id and display name.",
@@ -37413,6 +38228,61 @@
               "null"
             ],
             "description": "Display name."
+          }
+        }
+      },
+      "UsersPage": {
+        "type": "object",
+        "description": "The Users page.",
+        "required": [
+          "users",
+          "companies",
+          "is_super_user",
+          "user_limits",
+          "has_cloudtalk_api",
+          "has_ringcentral_api"
+        ],
+        "properties": {
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedUser"
+            },
+            "description": "The users, live only."
+          },
+          "companies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompanyName"
+            },
+            "description": "Companies the caller may pick."
+          },
+          "company_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The company listed; null for every company (superusers)."
+          },
+          "is_super_user": {
+            "type": "boolean",
+            "description": "The caller is a superuser."
+          },
+          "user_limits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserLimit"
+            },
+            "description": "Each pickable company's user count and limit."
+          },
+          "has_cloudtalk_api": {
+            "type": "boolean",
+            "description": "The listed company has `CloudTalk`."
+          },
+          "has_ringcentral_api": {
+            "type": "boolean",
+            "description": "The listed company has `RingCentral`."
           }
         }
       },

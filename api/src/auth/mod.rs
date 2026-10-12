@@ -6,6 +6,7 @@
 //! | `CurrentUser`  | `requireLoggedInUser`*      | any valid session                        |
 //! | `EmployeeUser` | `getEmployeeUser`           | `is_employee \|\| is_admin \|\| is_superuser` |
 //! | `AdminUser`    | `getAdminUser`              | `is_admin \|\| is_superuser`              |
+//! | `UserManager`  | `canEditAdminUsers`         | a superuser, or an admin holding Manager in the company |
 //! | `InstallerUser` | `getInstallerUser` | an installer of the company |
 //! | `ShopOrEmployeeUser` | `getShopOrEmployeeUser` | an employee, or a shop manager / worker of the company |
 //!
@@ -128,6 +129,29 @@ impl FromRequestParts<AppState> for AdminUser {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let user = authenticate(parts, state).await?;
         if user.is_admin || user.is_superuser {
+            Ok(Self(user))
+        } else {
+            Err(ApiError::Forbidden)
+        }
+    }
+}
+
+/// `positions.id` of a manager.
+const MANAGER_POSITION: i32 = 5;
+
+/// Who may add, edit and delete users (`canEditAdminUsers`): a superuser, or
+/// an admin who is a Manager of the company the request acts in.
+pub struct UserManager(pub SessionUser);
+
+impl FromRequestParts<AppState> for UserManager {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        let (user, positions) = authenticate_with_positions(parts, state).await?;
+        let manager = positions
+            .iter()
+            .any(|row| row.company_id == user.company_id && row.position_id == MANAGER_POSITION);
+        if user.is_superuser || ((user.is_admin) && manager) {
             Ok(Self(user))
         } else {
             Err(ApiError::Forbidden)
