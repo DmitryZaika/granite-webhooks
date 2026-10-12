@@ -146,3 +146,63 @@ async fn features_need_an_employee(pool: MySqlPool) {
         .await
         .assert_status_forbidden();
 }
+
+#[test_db::test(seed)]
+async fn the_company_tax_rate_reads_the_state_tax(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let body: serde_json::Value = server
+        .get("/v1/company/tax-rate")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(body["state_tax_pct"], 0.0);
+    sqlx::query("UPDATE company SET state_taxes = 7.25 WHERE id = 100")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let body: serde_json::Value = server
+        .get("/v1/company/tax-rate")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(body["state_tax_pct"], 7.25);
+}
+
+#[test_db::test(seed)]
+async fn teach_progress_lists_reps_and_answers(pool: MySqlPool) {
+    sqlx::query("INSERT INTO questions (id, text, question_type, company_id) VALUES (900, 'What is granite?', 'MC', 100)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO answer_choices (id, question_id, text, is_correct) VALUES
+           (901, 900, 'A stone', 1), (902, 900, 'A wood', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO answer_attempts (employee_id, question_id, selected_answer_id, attempt_number, is_correct)
+         VALUES (100, 900, 902, 1, 0), (100, 900, 901, 2, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let body: serde_json::Value = server(pool)
+        .get("/v1/teach-mode/progress")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert!(
+        body["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u["id"] == 100)
+    );
+    let attempts = body["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0]["attempt_number"], 2);
+    assert_eq!(attempts[0]["correct_answer_text"], "A stone");
+    assert_eq!(attempts[1]["selected_answer_text"], "A wood");
+}

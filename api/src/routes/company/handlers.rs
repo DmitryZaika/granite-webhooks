@@ -92,3 +92,43 @@ pub async fn drive_miles(
         miles: state.maps.driving_miles(&home, address).await,
     }))
 }
+
+/// `GET /v1/company/tax-rate`.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct TaxRate {
+    /// The company's state sales tax in percent; 0 when not set.
+    pub state_tax_pct: f64,
+}
+
+/// Get the company's sales tax
+///
+/// The state sales tax the company charges, for price calculators (0 when
+/// not set).
+#[utoipa::path(
+    get,
+    path = "/v1/company/tax-rate",
+    operation_id = "get_company_tax_rate",
+    tag = "company",
+    responses(
+        (status = 200, description = "The tax rate", body = TaxRate),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn tax_rate(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+) -> ApiResult<Json<TaxRate>> {
+    let value: Option<Option<f64>> =
+        sqlx::query_scalar("SELECT CAST(state_taxes AS DOUBLE) FROM company WHERE id = ?")
+            .bind(user.company_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let pct = value
+        .flatten()
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .unwrap_or(0.0);
+    Ok(Json(TaxRate { state_tax_pct: pct }))
+}
