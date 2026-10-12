@@ -161,7 +161,7 @@ pub fn activity(item: &Value, user_id: i32, user_name: &str) -> CallActivity {
 }
 
 /// Every call of one agent since `date_from`; empty when `CloudTalk` fails.
-async fn agent_calls(
+pub async fn agent_calls(
     state: &AppState,
     company_id: i32,
     agent_id: &str,

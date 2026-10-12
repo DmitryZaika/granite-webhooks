@@ -20705,6 +20705,74 @@
         ]
       }
     },
+    "/v1/notifications": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "List notifications",
+        "description": "Unread incoming mail of the last 14 days (one per conversation), due\nactivity and signature notifications, open billing notices and missed\n`CloudTalk` calls, newest first. The onboarding tour's sample\nnotifications are left out unless `samples` is set.",
+        "operationId": "list_notifications",
+        "parameters": [
+          {
+            "name": "samples",
+            "in": "query",
+            "description": "The onboarding tour is open: keep its sample notifications.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Notifications",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Notifications"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/notifications/done": {
       "post": {
         "tags": [
@@ -28524,6 +28592,78 @@
           }
         }
       },
+      "NotificationItem": {
+        "type": "object",
+        "description": "A notification of the bell.",
+        "required": [
+          "id",
+          "title",
+          "message",
+          "href",
+          "sent_at",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`notif-<id>`, `billing-<id>`, `call-<id>`, or the email thread id."
+          },
+          "title": {
+            "type": "string",
+            "description": "Usually the customer's name."
+          },
+          "message": {
+            "type": "string",
+            "description": "What happened."
+          },
+          "href": {
+            "type": "string",
+            "description": "Where it opens."
+          },
+          "sent_at": {
+            "type": "string",
+            "description": "When (ISO 8601, UTC)."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NotificationKind"
+          },
+          "notification_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The activity notification's type (`note_added`, ...)."
+          },
+          "actor_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who did it."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer."
+          },
+          "type_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A heading for the type (`Added a Note`)."
+          },
+          "action_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Billing: the button text."
+          }
+        }
+      },
       "NotificationKind": {
         "type": "string",
         "description": "What a notification is about.",
@@ -28599,6 +28739,22 @@
           },
           "kind": {
             "$ref": "#/components/schemas/NotificationKind"
+          }
+        }
+      },
+      "Notifications": {
+        "type": "object",
+        "description": "`GET /v1/notifications`.",
+        "required": [
+          "notifications"
+        ],
+        "properties": {
+          "notifications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationItem"
+            },
+            "description": "Newest first."
           }
         }
       },

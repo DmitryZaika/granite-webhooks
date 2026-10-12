@@ -5,7 +5,7 @@
 //!
 //! Replaces the Remix `app/routes/api.sales-reps.tsx` loader.
 
-mod call_activity;
+pub mod call_activity;
 mod handlers;
 pub mod queries;
 
