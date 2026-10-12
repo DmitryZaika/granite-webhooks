@@ -32778,7 +32778,8 @@
           },
           "customers_acquired": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Customers it brought."
           },
           "closed_deals": {
             "type": "integer",
@@ -32787,7 +32788,8 @@
           },
           "won_deals": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Won deals."
           },
           "conversion_percent": {
             "type": [
@@ -33736,39 +33738,48 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The rep's name."
           },
           "total_sold": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Won deals."
           },
           "total_created": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Deals made."
           },
           "leads_sold_same_month": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Leads' won deals."
           },
           "leads_created": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Leads' deals."
           },
           "walkin_sold_same_month": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Walk-ins' won deals."
           },
           "walkin_created": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Walk-ins' deals."
           },
           "callin_sold_same_month": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Call-ins' won deals."
           },
           "callin_created": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Call-ins' deals."
           }
         }
       },
@@ -34852,27 +34863,33 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The rep's name."
           },
           "walkin": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Walk-ins."
           },
           "callin": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Call-ins."
           },
           "leads": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Leads."
           },
           "manual": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Added by hand."
           },
           "total": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Customers."
           }
         }
       },
@@ -34887,11 +34904,13 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Customer source (`leads`, `check-in`, ...)."
           },
           "total": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Customers."
           }
         }
       },
@@ -34916,7 +34935,8 @@
         "properties": {
           "total": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Customers."
           },
           "without_rep": {
             "type": "integer",
@@ -35701,33 +35721,40 @@
         "properties": {
           "rep_id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "The rep (user id)."
           },
           "rep_name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The rep's name."
           },
           "deals_count": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Deals counted."
           },
           "avg_amount": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "description": "Average amount of deals with one."
           },
           "avg_amount_won": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "description": "Average amount of won deals with one."
           },
           "won_count": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Won deals."
           },
           "lost_count": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Lost deals."
           },
           "won_lost_ratio": {
             "type": "number",
@@ -35741,27 +35768,33 @@
           },
           "won_count_walkin": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Won deals of walk-in customers."
           },
           "lost_count_walkin": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Lost deals of walk-in customers."
           },
           "won_lost_ratio_walkin": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "description": "Walk-in won out of closed, in percent."
           },
           "won_count_leads": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Won deals of leads."
           },
           "lost_count_leads": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Lost deals of leads."
           },
           "won_lost_ratio_leads": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "description": "Leads won out of closed, in percent."
           }
         }
       },
@@ -35776,21 +35809,25 @@
         "properties": {
           "list_id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "The stage."
           },
           "list_name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The stage's name."
           },
           "deals_count": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Deals counted."
           },
           "total_amount": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "description": "Their amounts summed."
           }
         }
       },
@@ -35803,20 +35840,23 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Id."
           },
           "name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Name."
           },
           "position": {
             "type": [
               "integer",
               "null"
             ],
-            "format": "int32"
+            "format": "int32",
+            "description": "Order on the board."
           }
         }
       },
@@ -39902,17 +39942,20 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The rep's name."
           },
           "lost_reason": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Why it was lost."
           },
           "count": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "How many."
           }
         }
       },
@@ -40469,11 +40512,13 @@
         ],
         "properties": {
           "month": {
-            "type": "string"
+            "type": "string",
+            "description": "`YYYY-MM`."
           },
           "count": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "How many."
           }
         }
       },
@@ -41385,76 +41430,89 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Last day counted."
           },
           "deals_by_rep": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/DealsByRep"
-            }
+            },
+            "description": "Deals by rep."
           },
           "deals_by_stage": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/DealsByStage"
-            }
+            },
+            "description": "Open deals by stage."
           },
           "lists": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/DealsList"
-            }
+            },
+            "description": "Stages of the shown pipelines."
           },
           "customers_totals": {
-            "$ref": "#/components/schemas/CustomersTotals"
+            "$ref": "#/components/schemas/CustomersTotals",
+            "description": "Customer totals."
           },
           "customers_by_source": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/CustomersBySource"
-            }
+            },
+            "description": "Valid customers by source."
           },
           "customers_by_rep": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/CustomersByRep"
-            }
+            },
+            "description": "Valid customers by rep."
           },
           "customers_table": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/TableCustomer"
-            }
+            },
+            "description": "Customers, newest first."
           },
           "customers_deals": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/TableDeal"
-            }
+            },
+            "description": "Those customers' deals."
           },
           "conversion_metrics_by_rep": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ConversionMetrics"
-            }
+            },
+            "description": "Deals made and won by rep."
           },
           "lost_reasons_by_rep": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/LostReason"
-            }
+            },
+            "description": "Lost reasons by rep."
           },
           "customers_by_campaign": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Campaign"
-            }
+            },
+            "description": "Top 8 campaigns."
           },
           "sales_rep_ratings": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/RepRating"
-            }
+            },
+            "description": "Survey ratings by rep."
           },
           "top_sold_colors": {
             "type": "array",
@@ -41467,7 +41525,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/MonthCount"
-            }
+            },
+            "description": "Emails sent per month."
           },
           "sms_per_month": {
             "type": [
@@ -43406,24 +43465,28 @@
         "properties": {
           "rep_id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "The rep (user id)."
           },
           "rep_name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The rep's name."
           },
           "avg_rating": {
             "type": [
               "number",
               "null"
             ],
-            "format": "double"
+            "format": "double",
+            "description": "Average rating (1-5)."
           },
           "responses": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Surveys answered."
           }
         }
       },
@@ -46952,13 +47015,15 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "Id."
           },
           "name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Name."
           },
           "created_date": {
             "type": [
@@ -46971,31 +47036,36 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Customer source (`leads`, `check-in`, ...)."
           },
           "referral_source": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "How they heard of the company."
           },
           "form_name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The lead form."
           },
           "invalid_lead": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Why the lead is invalid."
           },
           "sales_rep_name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The sales rep's name."
           }
         }
       },
@@ -47010,40 +47080,47 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Id."
           },
           "customer_id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "The customer."
           },
           "amount": {
             "type": [
               "number",
               "null"
             ],
-            "format": "double"
+            "format": "double",
+            "description": "Amount."
           },
           "status": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Stage name."
           },
           "lost_reason": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Why it was lost."
           },
           "is_won": {
             "type": [
               "integer",
               "null"
             ],
-            "format": "int32"
+            "format": "int32",
+            "description": "1 won, 0 lost, null open."
           },
           "sales_rep_name": {
-            "type": "string"
+            "type": "string",
+            "description": "The sales rep's name."
           }
         }
       },
@@ -47732,15 +47809,18 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The stone."
           },
           "slabs_sold": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Slabs sold."
           },
           "square_feet": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "description": "Their square feet."
           }
         }
       },

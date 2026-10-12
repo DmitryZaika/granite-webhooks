@@ -89,45 +89,66 @@ const CUSTOMER_COUNT_DATE: &str =
 /// A rep's deals.
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct DealsByRep {
+    /// The rep (user id).
     pub rep_id: i32,
+    /// The rep's name.
     pub rep_name: Option<String>,
+    /// Deals counted.
     pub deals_count: i64,
+    /// Average amount of deals with one.
     pub avg_amount: f64,
+    /// Average amount of won deals with one.
     pub avg_amount_won: f64,
+    /// Won deals.
     pub won_count: i64,
+    /// Lost deals.
     pub lost_count: i64,
     /// Won out of closed, in percent.
     pub won_lost_ratio: f64,
     /// Open deals' amount.
     pub pipeline_amount: f64,
+    /// Won deals of walk-in customers.
     pub won_count_walkin: i64,
+    /// Lost deals of walk-in customers.
     pub lost_count_walkin: i64,
+    /// Walk-in won out of closed, in percent.
     pub won_lost_ratio_walkin: f64,
+    /// Won deals of leads.
     pub won_count_leads: i64,
+    /// Lost deals of leads.
     pub lost_count_leads: i64,
+    /// Leads won out of closed, in percent.
     pub won_lost_ratio_leads: f64,
 }
 
 /// Open deals in a stage.
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct DealsByStage {
+    /// The stage.
     pub list_id: i32,
+    /// The stage's name.
     pub list_name: Option<String>,
+    /// Deals counted.
     pub deals_count: i64,
+    /// Their amounts summed.
     pub total_amount: f64,
 }
 
 /// A pipeline stage.
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct DealsList {
+    /// Id.
     pub id: i32,
+    /// Name.
     pub name: Option<String>,
+    /// Order on the board.
     pub position: Option<i32>,
 }
 
 /// The company's customers.
 #[derive(Debug, Default, Serialize, FromRow, ToSchema)]
 pub struct CustomersTotals {
+    /// Customers.
     pub total: i64,
     /// Without a sales rep.
     pub without_rep: i64,
@@ -140,66 +161,100 @@ pub struct CustomersTotals {
 /// Valid customers from a source.
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct CustomersBySource {
+    /// Customer source (`leads`, `check-in`, ...).
     pub source: Option<String>,
+    /// Customers.
     pub total: i64,
 }
 
 /// A rep's valid customers by source.
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct CustomersByRep {
+    /// The rep's name.
     pub rep_name: Option<String>,
+    /// Walk-ins.
     pub walkin: i64,
+    /// Call-ins.
     pub callin: i64,
+    /// Leads.
     pub leads: i64,
+    /// Added by hand.
     pub manual: i64,
+    /// Customers.
     pub total: i64,
 }
 
 /// A customer of the table.
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct TableCustomer {
+    /// Id.
     pub id: i32,
+    /// Name.
     pub name: Option<String>,
     /// UTC, ISO 8601.
     pub created_date: Option<String>,
+    /// Customer source (`leads`, `check-in`, ...).
     pub source: Option<String>,
+    /// How they heard of the company.
     pub referral_source: Option<String>,
+    /// The lead form.
     pub form_name: Option<String>,
+    /// Why the lead is invalid.
     pub invalid_lead: Option<String>,
+    /// The sales rep's name.
     pub sales_rep_name: Option<String>,
 }
 
 /// A deal of the table's customers.
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct TableDeal {
+    /// Id.
     pub id: i64,
+    /// The customer.
     pub customer_id: i32,
+    /// Amount.
     pub amount: Option<f64>,
+    /// Stage name.
     pub status: Option<String>,
+    /// Why it was lost.
     pub lost_reason: Option<String>,
+    /// 1 won, 0 lost, null open.
     pub is_won: Option<i32>,
+    /// The sales rep's name.
     pub sales_rep_name: String,
 }
 
 /// A rep's deals made and sold, by customer source.
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct ConversionMetrics {
+    /// The rep's name.
     pub rep_name: Option<String>,
+    /// Won deals.
     pub total_sold: i64,
+    /// Deals made.
     pub total_created: i64,
+    /// Leads' won deals.
     pub leads_sold_same_month: i64,
+    /// Leads' deals.
     pub leads_created: i64,
+    /// Walk-ins' won deals.
     pub walkin_sold_same_month: i64,
+    /// Walk-ins' deals.
     pub walkin_created: i64,
+    /// Call-ins' won deals.
     pub callin_sold_same_month: i64,
+    /// Call-ins' deals.
     pub callin_created: i64,
 }
 
 /// How often a rep lost for a reason.
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct LostReason {
+    /// The rep's name.
     pub rep_name: Option<String>,
+    /// Why it was lost.
     pub lost_reason: Option<String>,
+    /// How many.
     pub count: i64,
 }
 
@@ -208,9 +263,11 @@ pub struct LostReason {
 pub struct Campaign {
     /// The campaign (`customers.compaign_name`).
     pub compaign_name: Option<String>,
+    /// Customers it brought.
     pub customers_acquired: i64,
     /// Won and lost deals.
     pub closed_deals: i64,
+    /// Won deals.
     pub won_deals: i64,
     /// Won out of closed, in percent; null with no closed deals.
     pub conversion_percent: Option<f64>,
@@ -219,24 +276,33 @@ pub struct Campaign {
 /// A rep's post-installation survey score.
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct RepRating {
+    /// The rep (user id).
     pub rep_id: i32,
+    /// The rep's name.
     pub rep_name: Option<String>,
+    /// Average rating (1-5).
     pub avg_rating: Option<f64>,
+    /// Surveys answered.
     pub responses: i64,
 }
 
 /// A stone's sold slabs.
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct TopSoldColor {
+    /// The stone.
     pub stone_name: Option<String>,
+    /// Slabs sold.
     pub slabs_sold: i64,
+    /// Their square feet.
     pub square_feet: f64,
 }
 
 /// A month's count (`YYYY-MM`); months without any are left out.
 #[derive(Debug, Serialize, FromRow, ToSchema)]
 pub struct MonthCount {
+    /// `YYYY-MM`.
     pub month: String,
+    /// How many.
     pub count: i64,
 }
 
@@ -245,21 +311,35 @@ pub struct MonthCount {
 pub struct Overview {
     /// The days counted, in order.
     pub from_date: Option<String>,
+    /// Last day counted.
     pub to_date: Option<String>,
+    /// Deals by rep.
     pub deals_by_rep: Vec<DealsByRep>,
+    /// Open deals by stage.
     pub deals_by_stage: Vec<DealsByStage>,
+    /// Stages of the shown pipelines.
     pub lists: Vec<DealsList>,
+    /// Customer totals.
     pub customers_totals: CustomersTotals,
+    /// Valid customers by source.
     pub customers_by_source: Vec<CustomersBySource>,
+    /// Valid customers by rep.
     pub customers_by_rep: Vec<CustomersByRep>,
+    /// Customers, newest first.
     pub customers_table: Vec<TableCustomer>,
+    /// Those customers' deals.
     pub customers_deals: Vec<TableDeal>,
+    /// Deals made and won by rep.
     pub conversion_metrics_by_rep: Vec<ConversionMetrics>,
+    /// Lost reasons by rep.
     pub lost_reasons_by_rep: Vec<LostReason>,
+    /// Top 8 campaigns.
     pub customers_by_campaign: Vec<Campaign>,
+    /// Survey ratings by rep.
     pub sales_rep_ratings: Vec<RepRating>,
     /// Top 10 stones by slabs sold.
     pub top_sold_colors: Vec<TopSoldColor>,
+    /// Emails sent per month.
     pub emails_per_month: Vec<MonthCount>,
     /// Null when the company has no SMS provider.
     pub sms_per_month: Option<Vec<MonthCount>>,
