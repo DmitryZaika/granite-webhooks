@@ -14201,7 +14201,7 @@
           "emails"
         ],
         "summary": "List the caller's email threads",
-        "description": "One page (25 threads) of a folder: `inbox` (mail addressed to the caller,\nranked by the latest message to them), `sent`, `trash` (ranked by\ndeletion) or `drafts`. Every message of each listed thread comes back,\nwith names, attachment flags and the recipient's last open. `search`\nmatches subject, text, addresses, and the addresses of customers whose\nname matches; in the inbox it matches any message of the thread. Open a\nthread with `GET /v1/emails/threads/{thread_id}`.",
+        "description": "One page (25 threads) of a folder: `inbox` (mail addressed to the caller,\nranked by the latest message to them), `sent`, `trash` (ranked by\ndeletion) or `drafts`. Every message of each listed thread comes back,\nwith names, attachment flags and the recipient's last open. `search`\nmatches subject, text, addresses, and the addresses of customers whose\nname matches; in the inbox it matches any message of the thread. Open a\nthread with `GET /v1/emails/threads/{thread_id}`.\n\n`scope=admin` (admins only) lists every employee's mail of the company\ninstead, optionally only one user's (`sales_rep`); drafts read as the\ninbox there.",
         "operationId": "list_email_threads",
         "parameters": [
           {
@@ -14233,10 +14233,34 @@
           {
             "name": "search",
             "in": "query",
-            "description": "Words to find in subject, text and addresses, or a customer name\n(whose addresses then match).",
+            "description": "Words to find in subject, text and addresses, or a customer name\n(whose addresses then match; not in the admin scope).",
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "Default `employee`; `admin` lists the whole company's mail (admins\nonly, no drafts).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose mail the suggestions search.",
+              "enum": [
+                "employee",
+                "admin"
+              ]
+            }
+          },
+          {
+            "name": "sales_rep",
+            "in": "query",
+            "description": "Admin scope: only mail sent by or to this user.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
             }
           }
         ],
@@ -14272,7 +14296,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Not an employee, or the admin scope without being an admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -14305,8 +14329,34 @@
           "emails"
         ],
         "summary": "Count the caller's email folders",
-        "description": "Unread inbox threads (customer mail to the caller or on their deals, and\ncoworkers' mail to them), threads in the trash and drafts.",
+        "description": "Unread inbox threads (customer mail to the caller or on their deals, and\ncoworkers' mail to them), threads in the trash and drafts. `scope=admin`\n(admins only) counts the whole company's unread inbox and trash\n(`sales_rep`: one user's), with no drafts.",
         "operationId": "count_email_folders",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "Default `employee`; `admin` counts the whole company's mail.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose mail the suggestions search.",
+              "enum": [
+                "employee",
+                "admin"
+              ]
+            }
+          },
+          {
+            "name": "sales_rep",
+            "in": "query",
+            "description": "Admin scope: only mail sent by or to this user.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Counts",
@@ -14329,7 +14379,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Not an employee, or the admin scope without being an admin",
             "content": {
               "application/json": {
                 "schema": {

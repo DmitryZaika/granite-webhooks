@@ -1,6 +1,7 @@
 //! Emails: the caller's mailbox and conversations.
 //!
-//! - `GET  /v1/emails/threads`                    → a page of a folder (inbox, sent, trash, drafts)
+//! - `GET  /v1/emails/threads`                    → a page of a folder (inbox, sent, trash, drafts;
+//!   `scope=admin`: the whole company's mail)
 //! - `GET  /v1/emails/folder-counts`              → unread inbox, trash and draft counts
 //! - `GET  /v1/emails/unread`                     → the inbox badge
 //! - `GET  /v1/deals/{id}/emails`                → a deal's email history
@@ -14,9 +15,10 @@
 //! - `GET  /v1/emails/{id}/images`                 → an email's pictures, for the photo viewer
 //! - `POST /v1/emails/drafts`, `GET|PUT|DELETE /v1/emails/drafts/{id}` → the caller's drafts
 //!
-//! Replaces the Remix `employee.emails*` loaders and `api.emails.*` routes.
+//! Replaces the Remix `employee.emails*` and `admin.emails*` loaders and `api.emails.*` routes.
 //! The `webhooks` Lambda builds and sends the MIME message (it owns SES).
 
+mod admin_list;
 pub mod attachment_token;
 mod attachments;
 mod conversation;

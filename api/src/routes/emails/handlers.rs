@@ -1,7 +1,8 @@
+use super::admin_list::{AdminMailbox, admin_counts, admin_page};
 use super::list::{folder_counts, list_page, suggestions};
 use super::schemas::{
-    EmailFolder, FolderCounts, ListQuery, MailboxPage, Purged, SuggestQuery, SuggestScope,
-    SuggestionRow, ThreadDetail, ThreadIds, ThreadQuery, UnreadCount,
+    CountsQuery, EmailFolder, FolderCounts, ListQuery, MailboxPage, Purged, SuggestQuery,
+    SuggestScope, SuggestionRow, ThreadDetail, ThreadIds, ThreadQuery, UnreadCount,
 };
 use super::sql::{
     Arg, Mailbox, Sql, company_scope, own_threads, received_message, unread_incoming,
@@ -37,6 +38,10 @@ pub fn mailbox(user: &SessionUser) -> Mailbox {
 /// matches subject, text, addresses, and the addresses of customers whose
 /// name matches; in the inbox it matches any message of the thread. Open a
 /// thread with `GET /v1/emails/threads/{thread_id}`.
+///
+/// `scope=admin` (admins only) lists every employee's mail of the company
+/// instead, optionally only one user's (`sales_rep`); drafts read as the
+/// inbox there.
 #[utoipa::path(
     get,
     path = "/v1/emails/threads",
@@ -47,7 +52,7 @@ pub fn mailbox(user: &SessionUser) -> Mailbox {
         (status = 200, description = "A page of the folder", body = MailboxPage),
         (status = 400, description = "Unknown folder or malformed page", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Not an employee, or the admin scope without being an admin", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -57,22 +62,42 @@ pub async fn list(
     EmployeeUser(user): EmployeeUser,
     MultiQuery(query): MultiQuery<ListQuery>,
 ) -> ApiResult<Json<MailboxPage>> {
+    if query.scope == Some(SuggestScope::Admin) {
+        if !(user.is_admin || user.is_superuser) {
+            return Err(ApiError::Forbidden);
+        }
+        let folder = match query.folder.unwrap_or_default() {
+            EmailFolder::Drafts => EmailFolder::Inbox,
+            folder => folder,
+        };
+        let mailbox = AdminMailbox {
+            company_id: user.company_id,
+            folder,
+            sales_rep: query.sales_rep,
+        };
+        let page = query.page.filter(|p| *p >= 1).unwrap_or(1);
+        let search = query.search.as_deref().unwrap_or_default();
+        return Ok(Json(admin_page(&state.pool, &mailbox, page, search).await?));
+    }
     Ok(Json(list_page(&state.pool, &mailbox(&user), &query).await?))
 }
 
 /// Count the caller's email folders
 ///
 /// Unread inbox threads (customer mail to the caller or on their deals, and
-/// coworkers' mail to them), threads in the trash and drafts.
+/// coworkers' mail to them), threads in the trash and drafts. `scope=admin`
+/// (admins only) counts the whole company's unread inbox and trash
+/// (`sales_rep`: one user's), with no drafts.
 #[utoipa::path(
     get,
     path = "/v1/emails/folder-counts",
     operation_id = "count_email_folders",
     tag = "emails",
+    params(CountsQuery),
     responses(
         (status = 200, description = "Counts", body = FolderCounts),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Not an employee, or the admin scope without being an admin", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -80,7 +105,16 @@ pub async fn list(
 pub async fn counts(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
+    MultiQuery(query): MultiQuery<CountsQuery>,
 ) -> ApiResult<Json<FolderCounts>> {
+    if query.scope == Some(SuggestScope::Admin) {
+        if !(user.is_admin || user.is_superuser) {
+            return Err(ApiError::Forbidden);
+        }
+        return Ok(Json(
+            admin_counts(&state.pool, user.company_id, query.sales_rep).await?,
+        ));
+    }
     Ok(Json(folder_counts(&state.pool, &mailbox(&user)).await?))
 }
 

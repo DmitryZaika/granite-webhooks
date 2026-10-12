@@ -459,3 +459,63 @@ async fn threads_opened_on_a_deal(pool: MySqlPool) {
         .await
         .assert_status_not_found();
 }
+
+/// Ada (an admin) moved to Olga's company, which has the mailbox seed.
+async fn admin_of_company_101(pool: &MySqlPool) -> &'static str {
+    sqlx::query("UPDATE users SET company_id = 101 WHERE id = 102")
+        .execute(pool)
+        .await
+        .unwrap();
+    sessions::ADMIN
+}
+
+#[test_db::test(seed)]
+async fn admins_list_the_whole_company_mail(pool: MySqlPool) {
+    let admin = admin_of_company_101(&pool).await;
+    let inbox = get(&pool, "/v1/emails/threads?scope=admin", admin).await;
+    // Mail from outside to a user: T1 (with Olga's reply in it) and T2.
+    assert_eq!(email_ids(&inbox), vec![8802, 8801, 8800, 8803]);
+    assert_eq!(inbox["total_count"], 2);
+    // Drafts read as the inbox for admins.
+    let drafts = get(&pool, "/v1/emails/threads?scope=admin&folder=drafts", admin).await;
+    assert_eq!(email_ids(&drafts), email_ids(&inbox));
+    let sent = get(&pool, "/v1/emails/threads?scope=admin&folder=sent", admin).await;
+    assert_eq!(email_ids(&sent), vec![8801, 8804]);
+    assert_eq!(sent["total_count"], 2);
+    let trash = get(&pool, "/v1/emails/threads?scope=admin&folder=trash", admin).await;
+    assert_eq!(email_ids(&trash), vec![8805]);
+    let found = get(
+        &pool,
+        "/v1/emails/threads?scope=admin&search=Black%20Pearl",
+        admin,
+    )
+    .await;
+    assert_eq!(email_ids(&found), vec![8803]);
+    // One user's mail.
+    let olga = get(&pool, "/v1/emails/threads?scope=admin&sales_rep=106", admin).await;
+    assert_eq!(email_ids(&olga), email_ids(&inbox));
+    let rita = get(&pool, "/v1/emails/threads?scope=admin&sales_rep=100", admin).await;
+    assert_eq!(email_ids(&rita), Vec::<i64>::new());
+    assert_eq!(
+        get(&pool, "/v1/emails/folder-counts?scope=admin", admin).await,
+        json!({ "inbox_unread": 1, "trash": 1, "drafts": 0 })
+    );
+    assert_eq!(
+        get(&pool, "/v1/emails/folder-counts?scope=admin&sales_rep=100", admin).await,
+        json!({ "inbox_unread": 0, "trash": 0, "drafts": 0 })
+    );
+}
+
+#[test_db::test(seed)]
+async fn only_admins_get_the_admin_mailbox(pool: MySqlPool) {
+    for path in [
+        "/v1/emails/threads?scope=admin",
+        "/v1/emails/folder-counts?scope=admin",
+    ] {
+        server(pool.clone())
+            .get(path)
+            .with_session(OLGA)
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+}

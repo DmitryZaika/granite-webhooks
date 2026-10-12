@@ -29,8 +29,25 @@ pub struct ListQuery {
     /// 1-based page of 25 threads. Default 1.
     pub page: Option<i64>,
     /// Words to find in subject, text and addresses, or a customer name
-    /// (whose addresses then match).
+    /// (whose addresses then match; not in the admin scope).
     pub search: Option<String>,
+    /// Default `employee`; `admin` lists the whole company's mail (admins
+    /// only, no drafts).
+    #[param(inline)]
+    pub scope: Option<SuggestScope>,
+    /// Admin scope: only mail sent by or to this user.
+    pub sales_rep: Option<i32>,
+}
+
+/// Query of `GET /v1/emails/folder-counts`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct CountsQuery {
+    /// Default `employee`; `admin` counts the whole company's mail.
+    #[param(inline)]
+    pub scope: Option<SuggestScope>,
+    /// Admin scope: only mail sent by or to this user.
+    pub sales_rep: Option<i32>,
 }
 
 /// A message of a listed thread (every message of the page's threads).
