@@ -381,7 +381,7 @@ async fn lifecycle(pool: &MySqlPool, customer_id: i32) -> Result<Vec<LifecycleRo
 
 /// `getCustomerHistoryEmailsWithReads`: mail with the customer's addresses,
 /// then the threads the customer took part in.
-async fn customer_emails(
+pub async fn customer_emails(
     pool: &MySqlPool,
     company_id: i32,
     customer_id: i32,
@@ -411,7 +411,7 @@ async fn customer_emails(
     Ok(with_thread_attachments(merge(by_address, by_participant)))
 }
 
-async fn activities(
+pub async fn activities(
     pool: &MySqlPool,
     company_id: i32,
     customer_id: i32,
@@ -435,7 +435,7 @@ async fn activities(
     .await
 }
 
-async fn notes(
+pub async fn notes(
     pool: &MySqlPool,
     company_id: i32,
     customer_id: i32,

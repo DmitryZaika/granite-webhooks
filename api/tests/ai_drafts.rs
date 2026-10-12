@@ -132,3 +132,40 @@ async fn an_invoice_edit_keeps_only_allowed_changes(pool: MySqlPool) {
     assert_eq!(user["invoice"]["lines"][0]["itemRefValue"], "3");
     assert_eq!(sent[0]["response_format"]["type"], "json_object");
 }
+
+#[test_db::test(seed)]
+async fn a_question_about_a_customer_cites_its_sources(pool: MySqlPool) {
+    let (server, seen) = server(
+        &pool,
+        r#"{"answer":" We texted her a quote. ","sourceKeys":["sms:8301","sms:8301","bogus:1"]}"#,
+    )
+    .await;
+    let body: Value = server
+        .post("/v1/customers/1000/activity-search")
+        .with_session(sessions::REP)
+        .json(&json!({ "question": "Did we send a quote?" }))
+        .await
+        .json();
+    assert_eq!(body["answer"], "We texted her a quote.");
+    let sources = body["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0]["key"], "sms:8301");
+    assert_eq!(sources[0]["href"], "/employee/cloudtalk/thread/3175550100");
+    assert!(sources[0]["label"].as_str().unwrap().starts_with("SMS · "));
+    let sent = seen.lock().unwrap().clone();
+    let prompt = sent[0]["messages"][1]["content"].as_str().unwrap();
+    assert!(prompt.starts_with("QUESTION:\nDid we send a quote?\n\nSOURCES:\n"));
+    assert!(prompt.contains("[Sales Rep]: Quote"));
+    server
+        .post("/v1/customers/1000/activity-search")
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .json(&json!({ "question": "Did we send a quote?" }))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    server
+        .post("/v1/customers/1000/activity-search")
+        .with_session(sessions::REP)
+        .json(&json!({ "question": "?" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}

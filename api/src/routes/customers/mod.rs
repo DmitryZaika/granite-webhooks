@@ -13,6 +13,7 @@
 //! Replaces `loadCustomersListPage` in the Remix app
 //! (`app/utils/customersListLoader.server.ts`).
 
+mod activity_search;
 mod duplicates;
 pub(crate) mod fuzzy;
 mod handlers;
@@ -42,6 +43,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(write::mark_invalid))
         .routes(routes!(history::history))
         .routes(routes!(signatures::signature_requests))
+        .routes(routes!(activity_search::activity_search))
         .routes(routes!(projects::projects))
         .routes(routes!(projects::set_parent))
         .routes(routes!(projects::sales))

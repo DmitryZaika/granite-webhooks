@@ -2507,6 +2507,105 @@
         ]
       }
     },
+    "/v1/customers/{id}/activity-search": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Ask about a customer's history",
+        "description": "Answers a question from the customer's emails, texts, deal notes and\nactivities (and, with `include_calls`, transcripts of their last two\nrecorded calls), with links to the sources.",
+        "operationId": "search_customer_activity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivitySearchInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityAnswer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Question too short or too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/customers/{id}/projects": {
       "get": {
         "tags": [
@@ -21525,6 +21624,27 @@
           }
         }
       },
+      "ActivityAnswer": {
+        "type": "object",
+        "description": "`POST /v1/customers/{id}/activity-search`.",
+        "required": [
+          "answer",
+          "sources"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "The answer."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivitySource"
+            },
+            "description": "The sources it rests on."
+          }
+        }
+      },
       "ActivityInput": {
         "type": "object",
         "description": "Body of `POST /v1/deals/{id}/activities`.",
@@ -21627,6 +21747,48 @@
           "is_completed": {
             "type": "boolean",
             "description": "Done."
+          }
+        }
+      },
+      "ActivitySearchInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/customers/{id}/activity-search`.",
+        "required": [
+          "question"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The question, 3 to 500 characters."
+          },
+          "include_calls": {
+            "type": "boolean",
+            "description": "Also transcribe the last two recorded calls (slower, costs more)."
+          }
+        }
+      },
+      "ActivitySource": {
+        "type": "object",
+        "description": "A source the answer cites.",
+        "required": [
+          "key",
+          "label"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "`email:42`, `sms:10`, `call:999`, `note:5` or `activity:7`."
+          },
+          "label": {
+            "type": "string",
+            "description": "What it is and when."
+          },
+          "href": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to open it in the CRM (emails and texts)."
           }
         }
       },

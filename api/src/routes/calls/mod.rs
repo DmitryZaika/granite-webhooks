@@ -90,7 +90,7 @@ fn id_text(value: &Value) -> String {
 }
 
 /// `CloudTalk` calls with any of `phones`, each call once.
-async fn cloudtalk_calls(
+pub async fn cloudtalk_calls(
     state: &AppState,
     company_id: i32,
     phones: &[String],
