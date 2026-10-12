@@ -214,7 +214,7 @@ pub async fn get_access_token(
     pool: &MySqlPool,
     company_id: u64,
 ) -> Result<(String, String), Box<dyn Error + Send + Sync>> {
-    let token = crate::ringcentral::auth::access_token(
+    let token = common::telephony::ringcentral_auth::access_token(
         pool,
         &reqwest::Client::new(),
         i32::try_from(company_id)?,

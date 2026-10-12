@@ -11,9 +11,7 @@
 //! Port of the CRM's `deliverCloudTalkSms` / `deliverRingCentralSms`.
 
 use crate::axum_helpers::guards::RemixBackend;
-use crate::cloudtalk::send as cloudtalk;
 use crate::cloudtalk::utils::normalize_to_e164;
-use crate::ringcentral::send::{self as ringcentral, MmsFile};
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -21,6 +19,8 @@ use axum::response::{IntoResponse, Response};
 use common::sms::derived::{
     PendingOutbound, SmsProvider, finalize_outbound, insert_pending_outbound,
 };
+use common::telephony::cloudtalk;
+use common::telephony::ringcentral::{self, MmsFile};
 use lambda_http::tracing;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -271,9 +271,20 @@ struct Delivery<'a> {
     provider: SmsProvider,
     from: String,
     to: String,
+    /// The `CloudTalk` API (a stub in tests).
+    cloudtalk_base: String,
 }
 
 impl Delivery<'_> {
+    fn cloudtalk(&self) -> cloudtalk::Api<'_> {
+        cloudtalk::Api {
+            pool: self.pool,
+            client: self.client,
+            base_url: &self.cloudtalk_base,
+            company_id: self.sms.company_id,
+        }
+    }
+
     /// Calls the provider for one planned message; the error token on failure.
     async fn send(
         &self,
@@ -283,9 +294,7 @@ impl Delivery<'_> {
         let company_id = self.sms.company_id;
         match self.provider {
             SmsProvider::Cloudtalk => cloudtalk::send(
-                self.pool,
-                self.client,
-                company_id,
+                self.cloudtalk(),
                 &self.from,
                 &self.to,
                 &message.text,
@@ -367,7 +376,13 @@ async fn sender_number(
 ) -> Result<String, SendFailure> {
     let sender = match provider {
         SmsProvider::Cloudtalk => {
-            cloudtalk::agent_sender(pool, client, sms.company_id, &sms.agent_id)
+            let api = cloudtalk::Api {
+                pool,
+                client,
+                base_url: &crate::cloudtalk::api::base_url(),
+                company_id: sms.company_id,
+            };
+            cloudtalk::agent_sender(api, &sms.agent_id)
                 .await
                 .map_err(|error| cloudtalk::error_token(&error))
         }
@@ -427,6 +442,7 @@ pub async fn deliver(
         provider,
         from,
         to,
+        cloudtalk_base: crate::cloudtalk::api::base_url(),
     };
     let mut ids = Vec::with_capacity(planned.len());
     for (index, message) in planned.iter().enumerate() {

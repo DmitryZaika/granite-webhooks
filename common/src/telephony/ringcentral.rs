@@ -1,8 +1,7 @@
 //! Texts through `RingCentral`: plain SMS, and MMS with the pictures attached.
 //! Port of the CRM's `ringcentralSendSms.server.ts` and `ringcentralRequest`.
 
-use super::auth::{AuthError, access_token, forget};
-use lambda_http::tracing;
+use super::ringcentral_auth::{AuthError, access_token, forget};
 use reqwest::multipart::{Form, Part};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{Value, json};

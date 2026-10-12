@@ -1,8 +1,8 @@
 //! Texts through `CloudTalk`. Port of the CRM's `cloudtalkSendSms.server.ts`
 //! and `cloudtalkRequest`.
 
-use crate::crud::cloudtalk::get_auth_string;
-use lambda_http::tracing;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
@@ -38,24 +38,59 @@ fn rate_limit_wait(reset: Option<u64>) -> u64 {
         .min(MAX_RATE_LIMIT_WAIT_SECS)
 }
 
+/// The production API.
+pub const BASE_URL: &str = "https://my.cloudtalk.io/api";
+
+/// The company's API key pair, base64 for Basic auth.
+async fn auth_string(pool: &MySqlPool, company_id: i32) -> Result<String, ApiError> {
+    let creds: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT cloudtalk_access_key, cloudtalk_access_secret FROM company WHERE id = ?",
+    )
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| ApiError {
+        status: 500,
+        message: Some(err.to_string()),
+    })?;
+    match creds {
+        Some((Some(key), Some(secret))) if !key.is_empty() && !secret.is_empty() => {
+            Ok(STANDARD.encode(format!("{key}:{secret}")))
+        }
+        _ => Err(ApiError {
+            status: 401,
+            message: Some("CloudTalk API credentials not found".into()),
+        }),
+    }
+}
+
+/// Where the API is and who calls it.
+#[derive(Clone, Copy)]
+pub struct Api<'a> {
+    pub pool: &'a MySqlPool,
+    pub client: &'a Client,
+    /// [`BASE_URL`], or a stub in tests.
+    pub base_url: &'a str,
+    pub company_id: i32,
+}
+
 /// Calls `<base>/<path>` with the company's key, retrying 5xx answers and
 /// rate limits.
 pub async fn request(
-    pool: &MySqlPool,
-    client: &Client,
-    company_id: i32,
+    api: Api<'_>,
     method: Method,
     path: &str,
     body: Option<&Value>,
     idempotency_key: Option<&str>,
 ) -> Result<Value, ApiError> {
-    let auth = get_auth_string(pool, u64::try_from(company_id).unwrap_or_default())
-        .await
-        .map_err(|err| ApiError {
-            status: 401,
-            message: Some(err.to_string()),
-        })?;
-    let url = format!("{}/{path}", super::api::base_url());
+    let Api {
+        pool,
+        client,
+        base_url,
+        company_id,
+    } = api;
+    let auth = auth_string(pool, company_id).await?;
+    let url = format!("{base_url}/{path}");
     let mut server_attempt = 0;
     let mut rate_attempt = 0;
     loop {
@@ -106,14 +141,9 @@ pub async fn request(
 }
 
 /// The agent's own number: its default, else the first associated one.
-pub async fn agent_sender(
-    pool: &MySqlPool,
-    client: &Client,
-    company_id: i32,
-    agent_id: &str,
-) -> Result<Option<String>, ApiError> {
+pub async fn agent_sender(api: Api<'_>, agent_id: &str) -> Result<Option<String>, ApiError> {
     let path = format!("agents/index.json?id={}", urlencoding::encode(agent_id));
-    let reply = request(pool, client, company_id, Method::GET, &path, None, None).await?;
+    let reply = request(api, Method::GET, &path, None, None).await?;
     // The `id` filter may be ignored; rows nest under `Agent`.
     let agent = reply["responseData"]["data"]
         .as_array()
@@ -189,9 +219,7 @@ fn message_id(reply: &Value) -> Option<i64> {
 
 /// Sends one text; the provider's message id when it gives one.
 pub async fn send(
-    pool: &MySqlPool,
-    client: &Client,
-    company_id: i32,
+    api: Api<'_>,
     from: &str,
     to: &str,
     text: &str,
@@ -199,9 +227,7 @@ pub async fn send(
 ) -> Result<Option<i64>, ApiError> {
     let body = json!({ "sender": from, "recipient": to, "message": text });
     let reply = request(
-        pool,
-        client,
-        company_id,
+        api,
         Method::POST,
         "sms/send.json",
         Some(&body),

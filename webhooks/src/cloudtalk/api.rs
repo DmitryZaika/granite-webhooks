@@ -12,7 +12,7 @@ use reqwest::{Client, Method};
 use serde::{Serialize, de::DeserializeOwned};
 use sqlx::MySqlPool;
 
-const BASE_URL: &str = "https://my.cloudtalk.io/api";
+use common::telephony::cloudtalk::BASE_URL;
 
 pub fn base_url() -> String {
     #[cfg(test)]
