@@ -12,6 +12,7 @@ use std::time::Duration;
 
 const ROUTE_MATRIX_URL: &str = "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix";
 const MAPS_API_URL: &str = "https://maps.googleapis.com/maps/api";
+const PLACES_API_URL: &str = "https://places.googleapis.com/v1";
 /// Most stops drawn on a day map.
 const MAX_MAP_STOPS: usize = 20;
 const HOME_ICON: &str = "https://maps.gstatic.com/mapfiles/ms2/micons/homegardenbusiness.png";
@@ -29,6 +30,7 @@ pub struct Maps {
     key: Option<Arc<str>>,
     url: Arc<str>,
     api_base: Arc<str>,
+    places_base: Arc<str>,
     http: reqwest::Client,
     /// Miles already asked for, so reopening a quote does not ask Google again.
     cache: Arc<Mutex<HashMap<String, Option<f64>>>>,
@@ -46,6 +48,13 @@ struct MatrixElement {
 impl Maps {
     pub fn disabled() -> Self {
         Self::new(None, ROUTE_MATRIX_URL, MAPS_API_URL)
+    }
+
+    /// Sends Places API calls to `base` (a stub in tests).
+    #[must_use]
+    pub fn with_places_base(mut self, base: &str) -> Self {
+        self.places_base = Arc::from(base.trim_end_matches('/'));
+        self
     }
 
     pub fn from_env() -> Self {
@@ -66,6 +75,7 @@ impl Maps {
                 .map(Arc::from),
             url: Arc::from(url),
             api_base: Arc::from(api_base.trim_end_matches('/')),
+            places_base: Arc::from(PLACES_API_URL),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
@@ -334,5 +344,105 @@ impl Maps {
                 unreachable.join("; ")
             ))
         }
+    }
+}
+
+impl Maps {
+    /// Place predictions for typed text in the US: `(place id, text)`.
+    /// Errs when Google refuses.
+    pub async fn autocomplete(&self, input: &str) -> Result<Vec<(String, String)>, String> {
+        let Some(key) = self.key.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let response = self
+            .http
+            .post(format!("{}/places:autocomplete", self.places_base))
+            .header("X-Goog-Api-Key", &**key)
+            .header(
+                "X-Goog-FieldMask",
+                "suggestions.placePrediction.placeId,suggestions.placePrediction.text",
+            )
+            .json(&json!({ "input": input, "includedRegionCodes": ["us"] }))
+            .send()
+            .await
+            .map_err(|err| err.without_url().to_string())?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "Google Places Autocomplete responded {}",
+                response.status()
+            ));
+        }
+        let body: Value = response.json().await.unwrap_or(Value::Null);
+        Ok(body["suggestions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|suggestion| {
+                let prediction = &suggestion["placePrediction"];
+                Some((
+                    prediction["placeId"].as_str()?.to_string(),
+                    prediction["text"]["text"].as_str()?.to_string(),
+                ))
+            })
+            .collect())
+    }
+
+    /// A place's details (`fields` is the field mask); `None` on any failure.
+    pub async fn place(&self, place_id: &str, fields: &str) -> Option<Value> {
+        let key = self.key.as_ref()?;
+        let id = place_id.trim_start_matches("places/");
+        let encoded = percent_encoding::utf8_percent_encode(id, percent_encoding::NON_ALPHANUMERIC);
+        self.http
+            .get(format!("{}/places/{encoded}", self.places_base))
+            .header("X-Goog-Api-Key", &**key)
+            .header("X-Goog-FieldMask", fields)
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json()
+            .await
+            .ok()
+    }
+
+    /// The US ZIP code Google geocodes an address to.
+    pub async fn geocode_zip(&self, address: &str) -> Option<String> {
+        let key = self.key.as_ref()?;
+        let body: Value = self
+            .http
+            .get(with_query(
+                &format!("{}/geocode/json", self.api_base),
+                &[
+                    ("address", address),
+                    ("components", "country:US"),
+                    ("key", key),
+                ],
+            ))
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        if body["status"] != "OK" {
+            return None;
+        }
+        body["results"][0]["address_components"]
+            .as_array()?
+            .iter()
+            .find(|component| {
+                component["types"]
+                    .as_array()
+                    .is_some_and(|types| types.iter().any(|kind| kind == "postal_code"))
+            })
+            .and_then(|component| {
+                component["long_name"]
+                    .as_str()
+                    .or_else(|| component["short_name"].as_str())
+            })
+            .map(str::to_string)
     }
 }

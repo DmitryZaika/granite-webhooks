@@ -18444,6 +18444,125 @@
           }
         ]
       }
+    },
+    "/v1/places/autocomplete": {
+      "get": {
+        "tags": [
+          "places"
+        ],
+        "summary": "Suggest addresses",
+        "description": "US addresses for typed text (3 characters or more), with their parts.\nA suggestion without a ZIP gets one from the place, else from geocoding.",
+        "operationId": "autocomplete_address",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Typed text; under 3 characters gives no suggestions.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Suggestions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Suggestion"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Google refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/places/{place_id}": {
+      "get": {
+        "tags": [
+          "places"
+        ],
+        "summary": "Get a place's address",
+        "description": "The address parts of a suggestion picked from the autocomplete.",
+        "operationId": "get_place",
+        "parameters": [
+          {
+            "name": "place_id",
+            "in": "path",
+            "description": "Google place id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Place",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Google refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -24071,6 +24190,40 @@
         },
         "additionalProperties": false
       },
+      "ParsedAddress": {
+        "type": "object",
+        "description": "Address parts read from a suggestion.",
+        "required": [
+          "street"
+        ],
+        "properties": {
+          "street": {
+            "type": "string",
+            "description": "First part, e.g. `11378 Gammel Pl`."
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Second-to-last part when there are three or more."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Two-letter US state."
+          },
+          "zip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ZIP code (from the text, else looked up)."
+          }
+        }
+      },
       "Participant": {
         "type": "object",
         "description": "An address on a message (no BCC).",
@@ -24286,6 +24439,61 @@
             "type": "integer",
             "format": "int32",
             "description": "Order on the board."
+          }
+        }
+      },
+      "PlaceDetails": {
+        "type": "object",
+        "description": "`GET /v1/places/{place_id}`.",
+        "properties": {
+          "place_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Google place id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name."
+          },
+          "formatted_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full address."
+          },
+          "zip_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ZIP code."
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "City."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Two-letter state."
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Two-letter country."
           }
         }
       },
@@ -27293,6 +27501,29 @@
           }
         }
       },
+      "Suggestion": {
+        "type": "object",
+        "description": "An address suggestion.",
+        "required": [
+          "place_id",
+          "description",
+          "address"
+        ],
+        "properties": {
+          "place_id": {
+            "type": "string",
+            "description": "Google place id."
+          },
+          "description": {
+            "$ref": "#/components/schemas/SuggestionText",
+            "description": "What Google suggests."
+          },
+          "address": {
+            "$ref": "#/components/schemas/ParsedAddress",
+            "description": "Its parts."
+          }
+        }
+      },
       "SuggestionRow": {
         "type": "object",
         "description": "The newest matching message of a conversation.",
@@ -27351,6 +27582,19 @@
               "null"
             ],
             "description": "Receiver's user or customer name."
+          }
+        }
+      },
+      "SuggestionText": {
+        "type": "object",
+        "description": "Suggestion text.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "e.g. `11378 Gammel Pl, Fishers, IN, USA`."
           }
         }
       },
@@ -28104,6 +28348,10 @@
     {
       "name": "instructions",
       "description": "The company's how-to pages"
+    },
+    {
+      "name": "places",
+      "description": "Address suggestions from Google Places"
     },
     {
       "name": "public",
