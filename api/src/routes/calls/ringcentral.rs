@@ -227,7 +227,7 @@ pub fn match_voicemails(
     tokens
 }
 
-fn attachment_of(record: &Value, kind: &str) -> Option<String> {
+pub fn attachment_of(record: &Value, kind: &str) -> Option<String> {
     record["attachments"]
         .as_array()?
         .iter()

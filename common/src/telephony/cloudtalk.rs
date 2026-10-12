@@ -83,6 +83,81 @@ pub async fn request(
     body: Option<&Value>,
     idempotency_key: Option<&str>,
 ) -> Result<Value, ApiError> {
+    let response = call(api, method, path, body, idempotency_key).await?;
+    Ok(response.json().await.unwrap_or(Value::Null))
+}
+
+/// A file `CloudTalk` serves, such as a call recording.
+#[derive(Debug)]
+pub struct Raw {
+    pub bytes: Vec<u8>,
+    pub content_type: String,
+}
+
+async fn raw(response: reqwest::Response) -> Result<Raw, ApiError> {
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = response.bytes().await.map_err(|err| ApiError {
+        status: 502,
+        message: Some(err.without_url().to_string()),
+    })?;
+    Ok(Raw {
+        bytes: bytes.to_vec(),
+        content_type,
+    })
+}
+
+/// `GET <base>/<path>` as bytes.
+pub async fn get_raw(api: Api<'_>, path: &str) -> Result<Raw, ApiError> {
+    raw(call(api, Method::GET, path, None, None).await?).await
+}
+
+/// A recording link `CloudTalk` gave: tried without credentials first, then
+/// with the company's key.
+pub async fn get_link(api: Api<'_>, link: &str) -> Result<Raw, ApiError> {
+    let failed = |err: reqwest::Error| ApiError {
+        status: 502,
+        message: Some(err.without_url().to_string()),
+    };
+    let open = api
+        .client
+        .get(link)
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(failed)?;
+    if open.status().is_success() {
+        return raw(open).await;
+    }
+    let auth = auth_string(api.pool, api.company_id).await?;
+    let signed = api
+        .client
+        .get(link)
+        .header("Authorization", format!("Basic {auth}"))
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(failed)?;
+    if !signed.status().is_success() {
+        return Err(ApiError {
+            status: signed.status().as_u16(),
+            message: Some("Failed to fetch recording".into()),
+        });
+    }
+    raw(signed).await
+}
+
+async fn call(
+    api: Api<'_>,
+    method: Method,
+    path: &str,
+    body: Option<&Value>,
+    idempotency_key: Option<&str>,
+) -> Result<reqwest::Response, ApiError> {
     let Api {
         pool,
         client,
@@ -111,7 +186,7 @@ pub async fn request(
         })?;
         let status = response.status();
         if status.is_success() {
-            return Ok(response.json().await.unwrap_or(Value::Null));
+            return Ok(response);
         }
         if status == StatusCode::TOO_MANY_REQUESTS && rate_attempt < RATE_LIMIT_RETRIES {
             let reset = response

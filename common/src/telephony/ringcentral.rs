@@ -92,6 +92,64 @@ pub async fn request(
     body: &Body<'_>,
     idempotency_key: Option<&str>,
 ) -> Result<Value, ApiError> {
+    let response = call(
+        pool,
+        client,
+        company_id,
+        method,
+        path,
+        body,
+        idempotency_key,
+        "application/json",
+    )
+    .await?;
+    let text = response.text().await.unwrap_or_default();
+    Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+}
+
+/// `GET restapi/v1.0/<path>` as bytes and their content type, for call
+/// recordings and voicemail (which refuse an `application/json` `Accept`).
+pub async fn get_raw(
+    pool: &MySqlPool,
+    client: &Client,
+    company_id: i32,
+    path: &str,
+) -> Result<(Vec<u8>, String), ApiError> {
+    let response = call(
+        pool,
+        client,
+        company_id,
+        Method::GET,
+        path,
+        &Body::Empty,
+        None,
+        "*/*",
+    )
+    .await?;
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = response.bytes().await.map_err(|err| ApiError {
+        status: 502,
+        message: Some(err.without_url().to_string()),
+    })?;
+    Ok((bytes.to_vec(), content_type))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn call(
+    pool: &MySqlPool,
+    client: &Client,
+    company_id: i32,
+    method: Method,
+    path: &str,
+    body: &Body<'_>,
+    idempotency_key: Option<&str>,
+    accept: &str,
+) -> Result<reqwest::Response, ApiError> {
     let mut server_attempt = 0;
     let mut rate_attempt = 0;
     loop {
@@ -104,8 +162,8 @@ pub async fn request(
         let mut builder = client
             .request(method.clone(), &url)
             .bearer_auth(&token.token)
-            .header("Accept", "application/json")
-            .timeout(Duration::from_secs(30));
+            .header("Accept", accept)
+            .timeout(Duration::from_secs(60));
         if let Some(key) = idempotency_key {
             builder = builder.header("Idempotency-Key", key);
         }
@@ -120,8 +178,7 @@ pub async fn request(
         })?;
         let status = response.status();
         if status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            return Ok(serde_json::from_str(&text).unwrap_or(Value::Null));
+            return Ok(response);
         }
         if status == StatusCode::UNAUTHORIZED && server_attempt < SERVER_RETRIES {
             forget(company_id);

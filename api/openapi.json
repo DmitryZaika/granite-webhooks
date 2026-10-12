@@ -19558,6 +19558,103 @@
         ]
       }
     },
+    "/v1/call-transcripts": {
+      "post": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "Transcribe a call",
+        "description": "Downloads the call's recording from the provider and transcribes it.\n`RingCentral` voicemail reuses `RingCentral`'s own transcript.",
+        "operationId": "transcribe_call",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TranscriptInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transcript",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallTranscript"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid call id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The recording is empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No speech in the recording",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The recording could not be fetched or transcribed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/quotes/inventory-slabs": {
       "get": {
         "tags": [
@@ -21369,6 +21466,19 @@
           "voicemail": {
             "type": "boolean",
             "description": "It was a voicemail (a shorter note)."
+          }
+        }
+      },
+      "CallTranscript": {
+        "type": "object",
+        "description": "A call's transcript.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "What was said."
           }
         }
       },
@@ -31004,6 +31114,26 @@
           "square_feet": {
             "type": "string",
             "description": "Square feet of those slabs, decimal string; \"0.00\" when no slab has a size."
+          }
+        }
+      },
+      "TranscriptInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/call-transcripts`.",
+        "required": [
+          "call_id"
+        ],
+        "properties": {
+          "call_id": {
+            "type": "string",
+            "description": "`CloudTalk`'s numeric call id, or the `RingCentral` call id."
+          },
+          "recording_link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The call's `recording_link`: a `RingCentral` media token or a\n`CloudTalk` URL."
           }
         }
       },

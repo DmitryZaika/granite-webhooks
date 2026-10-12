@@ -4,11 +4,14 @@
 //!   `CloudTalk` call shape (`RingCentral` rows are converted)
 //! - `POST /v1/calls/{provider}` → call a number: `CloudTalk` rings the
 //!   caller's agent first, `RingCentral` rings their line (`RingOut`)
+//! - `POST /v1/call-transcripts` → a recorded call's transcript
 //!
 //! Replaces the Remix `api.{cloudtalk,ringcentral}.{dealCalls,customerCalls}`,
 //! `api.cloudtalk.call` and `api.ringcentral.ringout` routes.
 
+pub mod recording;
 pub mod ringcentral;
+mod transcript;
 
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
@@ -32,7 +35,9 @@ use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(list, start))
+    OpenApiRouter::new()
+        .routes(routes!(list, start))
+        .routes(routes!(transcript::transcribe))
 }
 
 /// Query of `GET /v1/calls/{provider}`: a deal, or one or two phones.

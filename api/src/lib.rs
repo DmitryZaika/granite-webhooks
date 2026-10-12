@@ -28,6 +28,7 @@ pub mod state;
 pub mod storage;
 pub mod telegram;
 pub mod thumbnails;
+pub mod transcribe;
 pub mod webhooks_client;
 
 use axum::http::header::CONTENT_TYPE;

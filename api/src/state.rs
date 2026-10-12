@@ -2,6 +2,7 @@ use crate::ai::Ai;
 use crate::maps::Maps;
 use crate::storage::Storage;
 use crate::telegram::TelegramBots;
+use crate::transcribe::Transcriber;
 use crate::webhooks_client::WebhooksClient;
 use axum::http::{Method, header};
 use sqlx::MySqlPool;
@@ -43,6 +44,8 @@ pub struct AppState {
     pub ai: Ai,
     /// The `SignWell` API (a stub in tests).
     pub signwell_base: Arc<str>,
+    /// `AssemblyAI`, for call transcripts.
+    pub transcriber: Transcriber,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -66,6 +69,7 @@ impl AppState {
             cloudtalk_base: Arc::from(common::telephony::cloudtalk::BASE_URL),
             ai: Ai::disabled(),
             signwell_base: Arc::from("https://www.signwell.com/api/v1"),
+            transcriber: Transcriber::disabled(),
         }
     }
 
@@ -100,6 +104,12 @@ impl AppState {
     }
 
     #[must_use]
+    pub fn with_transcriber(mut self, transcriber: Transcriber) -> Self {
+        self.transcriber = transcriber;
+        self
+    }
+
+    #[must_use]
     pub fn with_maps(mut self, maps: Maps) -> Self {
         self.maps = maps;
         self
@@ -120,7 +130,8 @@ impl AppState {
             .with_telegram(TelegramBots::from_env())
             .with_webhooks(WebhooksClient::from_env())
             .with_maps(Maps::from_env())
-            .with_ai(Ai::from_env()))
+            .with_ai(Ai::from_env())
+            .with_transcriber(Transcriber::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the
