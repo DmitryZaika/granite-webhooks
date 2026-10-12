@@ -373,6 +373,9 @@ pub async fn delete_image(
 }
 
 /// Add an image folder
+///
+/// An empty folder at the top of the library; images go in with
+/// `PATCH /v1/images/{id}`.
 #[utoipa::path(
     post,
     path = "/v1/image-folders",
@@ -413,6 +416,8 @@ pub async fn create_folder(
 }
 
 /// Rename an image folder
+///
+/// Its images stay in it.
 #[utoipa::path(
     patch,
     path = "/v1/image-folders/{id}",

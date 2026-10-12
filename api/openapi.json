@@ -19059,6 +19059,7 @@
           "catalog"
         ],
         "summary": "Add an image folder",
+        "description": "An empty folder at the top of the library; images go in with\n`PATCH /v1/images/{id}`.",
         "operationId": "create_image_folder",
         "requestBody": {
           "content": {
@@ -19205,6 +19206,7 @@
           "catalog"
         ],
         "summary": "Rename an image folder",
+        "description": "Its images stay in it.",
         "operationId": "update_image_folder",
         "parameters": [
           {
