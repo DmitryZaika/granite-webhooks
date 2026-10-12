@@ -276,6 +276,7 @@ const SUGGEST_LIMIT: usize = 8;
 
 /// Typeahead for the mailbox search: the newest matching message of up to
 /// 8 conversations, in the given folder (`searchEmailSuggestions`).
+#[allow(clippy::too_many_lines)]
 pub async fn suggestions(
     pool: &MySqlPool,
     mailbox: &Mailbox,
@@ -332,12 +333,13 @@ pub async fn suggestions(
             "IS NULL"
         };
         let folder_sql = if folder == EmailFolder::Sent {
-            query
-                .sales_rep
-                .map_or(" AND e.sender_user_id IS NOT NULL".to_string(), |rep| {
+            query.sales_rep.map_or_else(
+                || " AND e.sender_user_id IS NOT NULL".to_string(),
+                |rep| {
                     args.push(rep.into());
                     " AND e.sender_user_id IS NOT NULL AND e.sender_user_id = ?".to_string()
-                })
+                },
+            )
         } else {
             " AND (e.sender_user_id IS NULL OR r.id IS NOT NULL)".to_string()
         };
