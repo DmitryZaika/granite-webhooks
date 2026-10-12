@@ -45,6 +45,7 @@ pub mod sms;
 pub mod stats;
 pub mod stones;
 pub mod supports;
+pub mod survey_results;
 pub mod templates;
 pub mod uploads;
 pub mod users;
@@ -82,6 +83,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(image_library::router())
         .merge(supports::router())
         .merge(invoice_queue::router())
+        .merge(survey_results::router())
         .merge(instructions::router())
         .merge(events::router())
         .merge(schedule::router())

@@ -19742,6 +19742,75 @@
         ]
       }
     },
+    "/v1/survey-results": {
+      "get": {
+        "tags": [
+          "surveys"
+        ],
+        "summary": "Get survey results",
+        "description": "The post-install survey answers of the last `days` days with the\ninvitation count, the answer count, each sales rep's average and the\ninvitations sent per day.",
+        "operationId": "get_survey_results",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "description": "30, 90 (default) or 365 days back; other values read as 90.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SurveyResults"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/instructions": {
       "get": {
         "tags": [
@@ -33121,6 +33190,31 @@
           }
         }
       },
+      "RepRating": {
+        "type": "object",
+        "description": "A sales rep's average.",
+        "required": [
+          "name",
+          "rating",
+          "answers"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name (\"Not specified\" when the rep is gone)."
+          },
+          "rating": {
+            "type": "number",
+            "format": "double",
+            "description": "Average sales rep rating."
+          },
+          "answers": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Answers about them."
+          }
+        }
+      },
       "RepSales": {
         "type": "object",
         "description": "`GET /v1/me/qbo-sales`.",
@@ -35690,6 +35784,117 @@
         },
         "additionalProperties": false
       },
+      "SurveyAnswer": {
+        "type": "object",
+        "description": "One answered survey.",
+        "required": [
+          "id",
+          "sales_rep_rating",
+          "technician_rating",
+          "installation_rating"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Survey id."
+          },
+          "sales_rep_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sales rep's name."
+          },
+          "sales_rep_rating": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1–5."
+          },
+          "sales_rep_comments": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the customer said about the rep."
+          },
+          "technician_rating": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1–5."
+          },
+          "technician_comments": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the customer said about the technician."
+          },
+          "installer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The installer's name."
+          },
+          "installation_rating": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1–5."
+          },
+          "installation_comments": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the customer said about the installation."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was answered."
+          }
+        }
+      },
+      "SurveyResults": {
+        "type": "object",
+        "description": "The page's data.",
+        "required": [
+          "days",
+          "items",
+          "stats",
+          "sent_by_day"
+        ],
+        "properties": {
+          "days": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The range used."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SurveyAnswer"
+            },
+            "description": "Answers, newest first."
+          },
+          "stats": {
+            "$ref": "#/components/schemas/SurveyStats",
+            "description": "Totals."
+          },
+          "sent_by_day": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Invitations sent per day, oldest first, one entry per day of the range."
+          }
+        }
+      },
       "SurveyRun": {
         "type": "object",
         "description": "What a run did.",
@@ -35744,6 +35949,34 @@
           "reminder2": {
             "$ref": "#/components/schemas/StageRun",
             "description": "Day 7 reminder."
+          }
+        }
+      },
+      "SurveyStats": {
+        "type": "object",
+        "description": "Survey totals of the range.",
+        "required": [
+          "invited",
+          "answers",
+          "sales_reps"
+        ],
+        "properties": {
+          "invited": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Customers sent the survey."
+          },
+          "answers": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Surveys answered."
+          },
+          "sales_reps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepRating"
+            },
+            "description": "Sales reps, best rated first."
           }
         }
       },
