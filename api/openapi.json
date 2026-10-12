@@ -19946,6 +19946,217 @@
         ]
       }
     },
+    "/v1/superuser/onboarding-feedbacks": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "List onboarding feedback",
+        "description": "Every company's guided-tour ratings, newest first. Super admins only.",
+        "operationId": "list_onboarding_feedbacks",
+        "responses": {
+          "200": {
+            "description": "Ratings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OnboardingFeedback"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a super admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/signature-access": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "List signature access",
+        "description": "The companies that have signatures switched on and their users with\nwhether each may send documents for signature; `company_id` narrows the\nusers to one of those companies. Super admins only.",
+        "operationId": "list_signature_access",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Only this company's users (ignored unless it has signatures).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Companies and users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignatureAccess"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a super admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/users/{id}/signature-access": {
+      "put": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Set a user's signature access",
+        "description": "Lets a live user send documents for signature, or stops them. Super\nadmins only.",
+        "operationId": "set_signature_access",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignatureAccessInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a super admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/instructions": {
       "get": {
         "tags": [
@@ -25821,6 +26032,27 @@
           "ringcentral": {
             "type": "boolean",
             "description": "The company is connected to RingCentral (OAuth, or JWT credentials).\nWhen both are set up, texts go through RingCentral."
+          }
+        }
+      },
+      "CompanyOption": {
+        "type": "object",
+        "description": "A company with signatures on.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
           }
         }
       },
@@ -34468,6 +34700,52 @@
           }
         }
       },
+      "SignatureAccess": {
+        "type": "object",
+        "description": "Who may send for signature.",
+        "required": [
+          "companies",
+          "users"
+        ],
+        "properties": {
+          "companies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompanyOption"
+            },
+            "description": "Companies with signatures on, by name."
+          },
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignatureUser"
+            },
+            "description": "Their live users, by company then name."
+          },
+          "company_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The company the list is narrowed to."
+          }
+        }
+      },
+      "SignatureAccessInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/superuser/users/{id}/signature-access`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "May send documents for signature."
+          }
+        },
+        "additionalProperties": false
+      },
       "SignatureRequest": {
         "type": "object",
         "description": "A document sent for signature.",
@@ -34512,6 +34790,52 @@
           "view_url": {
             "type": "string",
             "description": "Where to open it: the signed PDF or native document through the web\napp, else the original file."
+          }
+        }
+      },
+      "SignatureUser": {
+        "type": "object",
+        "description": "A user and whether they may send documents for signature.",
+        "required": [
+          "id",
+          "company_id",
+          "is_signature_available"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "User id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email."
+          },
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company name."
+          },
+          "is_signature_available": {
+            "type": "boolean",
+            "description": "May send for signature."
           }
         }
       },
