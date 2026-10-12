@@ -31,6 +31,7 @@ pub mod instructions;
 pub mod invoice_queue;
 pub mod jobs;
 pub mod leaderboard;
+pub mod maintenance;
 pub mod marketing;
 pub mod me;
 pub mod notifications;
@@ -92,6 +93,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(image_library::router())
         .merge(supports::router())
         .merge(invoice_queue::router())
+        .merge(maintenance::router())
         .merge(marketing::router())
         .merge(quote_presets::router())
         .merge(reports::router())

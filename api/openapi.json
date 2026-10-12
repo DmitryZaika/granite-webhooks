@@ -20744,6 +20744,728 @@
         ]
       }
     },
+    "/v1/shop/maintenance": {
+      "get": {
+        "tags": [
+          "shop"
+        ],
+        "summary": "Shop maintenance",
+        "description": "The company's equipment, checks, their conditions and completions.",
+        "operationId": "get_shop_maintenance",
+        "responses": {
+          "200": {
+            "description": "The maintenance page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Maintenance"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not of the shop or an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/shop/maintenance/items": {
+      "post": {
+        "tags": [
+          "shop"
+        ],
+        "summary": "Add equipment",
+        "description": "Adds a piece of equipment. Shop managers only.",
+        "operationId": "create_maintenance_item",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EquipmentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added"
+          },
+          "400": {
+            "description": "Invalid field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a shop manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/shop/maintenance/items/{id}": {
+      "put": {
+        "tags": [
+          "shop"
+        ],
+        "summary": "Save equipment",
+        "description": "Saves a piece of equipment. Shop managers only.",
+        "operationId": "update_maintenance_item",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Equipment id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EquipmentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Invalid field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a shop manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such equipment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "shop"
+        ],
+        "summary": "Delete equipment",
+        "description": "Deletes a piece of equipment with its checks and conditions. Shop\nmanagers only.",
+        "operationId": "delete_maintenance_item",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Equipment id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a shop manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such equipment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/shop/maintenance/checks": {
+      "post": {
+        "tags": [
+          "shop"
+        ],
+        "summary": "Add a check",
+        "description": "Adds a check to a piece of equipment with its conditions, due from\ntoday. Hour conditions need usage per day and days per month (the\ncheck's own or the equipment's). Shop managers only.",
+        "operationId": "create_maintenance_check",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedCheck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid field or no usage for hour conditions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a shop manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such equipment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/shop/maintenance/checks/{id}": {
+      "put": {
+        "tags": [
+          "shop"
+        ],
+        "summary": "Save a check",
+        "description": "Saves a check and replaces its conditions (due again from today). Shop\nmanagers only.",
+        "operationId": "update_maintenance_check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Check id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Invalid field or no usage for hour conditions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a shop manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "shop"
+        ],
+        "summary": "Delete a check",
+        "description": "Deletes a check and its conditions. Shop managers only.",
+        "operationId": "delete_maintenance_check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Check id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a shop manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/shop/maintenance/checks/{id}/complete": {
+      "post": {
+        "tags": [
+          "shop"
+        ],
+        "summary": "Mark a check done",
+        "description": "Records a completion, starts every condition of the check over from\ntoday and, with a meter reading, saves it as the new starting reading.",
+        "operationId": "complete_maintenance_check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Check id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompletionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded"
+          },
+          "400": {
+            "description": "Invalid field, or hour conditions without usage numbers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not of the shop or an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/shop/maintenance/conditions/{id}/hours": {
+      "put": {
+        "tags": [
+          "shop"
+        ],
+        "summary": "Record hours used",
+        "description": "Sets the hours used on an hour condition and moves its due day.",
+        "operationId": "update_maintenance_hours",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Condition id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HoursInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Not an hour condition, invalid hours, or no usage numbers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not of the shop or an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such condition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/marketing/{company_id}/leads": {
       "get": {
         "tags": [
@@ -30342,6 +31064,143 @@
           "sms"
         ]
       },
+      "Check": {
+        "type": "object",
+        "description": "A check of a piece of equipment; its usage fields override the equipment's.",
+        "required": [
+          "id",
+          "maintenance_item_id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Check id."
+          },
+          "maintenance_item_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its equipment."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes."
+          },
+          "last_completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Last done."
+          },
+          "hours_per_day": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Own usage per working day; null uses the equipment's."
+          },
+          "days_per_month": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Own working days per month."
+          },
+          "starting_hours": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Own meter reading."
+          },
+          "usage_unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Own unit; null uses the equipment's."
+          }
+        }
+      },
+      "CheckInput": {
+        "type": "object",
+        "description": "Body of creating or saving a check.",
+        "required": [
+          "maintenance_item_id",
+          "name",
+          "conditions"
+        ],
+        "properties": {
+          "maintenance_item_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its equipment (creating only; ignored when saving)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name; 1 to 255 characters."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes; at most 5000 characters."
+          },
+          "hours_per_day": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Own usage per working day; null uses the equipment's."
+          },
+          "days_per_month": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Own working days per month."
+          },
+          "starting_hours": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Own meter reading."
+          },
+          "usage_unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Own unit, `hours` (default) or `miles`."
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConditionInput"
+            },
+            "description": "At least one; at most one `hours` and one `days`. Saving replaces\nthe conditions (their counts start over)."
+          }
+        },
+        "additionalProperties": false
+      },
       "Checklist": {
         "type": "object",
         "description": "A post-installation checklist: what the installer checked on site after\ninstalling countertops, signed by the customer.",
@@ -30759,6 +31618,132 @@
         ],
         "description": "A customer row of the `companies` view, with totals over its own sales\nand those of its child customers."
       },
+      "Completion": {
+        "type": "object",
+        "description": "A check done.",
+        "required": [
+          "id",
+          "maintenance_sub_item_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Completion id."
+          },
+          "maintenance_sub_item_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The check."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes (with the meter reading when given)."
+          },
+          "completed_by_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who did it; null when unknown."
+          }
+        }
+      },
+      "CompletionInput": {
+        "type": "object",
+        "description": "Body of completing a check.",
+        "properties": {
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes; at most 5000 characters."
+          },
+          "total_hours_of_work": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The meter reading now (checks with an hour condition); becomes the\nstarting reading of the check (if it has its own usage) or of the\nequipment."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Condition": {
+        "type": "object",
+        "description": "When a check is due.",
+        "required": [
+          "id",
+          "maintenance_sub_item_id",
+          "condition_type",
+          "interval_value",
+          "next_due_date",
+          "hours_done"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Condition id."
+          },
+          "maintenance_sub_item_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its check."
+          },
+          "condition_type": {
+            "type": "string",
+            "description": "`hours` (of usage) or `days`."
+          },
+          "interval_value": {
+            "type": "number",
+            "format": "double",
+            "description": "Every this many hours or days."
+          },
+          "next_due_date": {
+            "type": "string",
+            "description": "Next due day, `YYYY-MM-DD`."
+          },
+          "hours_done": {
+            "type": "number",
+            "format": "double",
+            "description": "Hours used since the last time (hour conditions)."
+          }
+        }
+      },
+      "ConditionInput": {
+        "type": "object",
+        "description": "A condition of a check being saved.",
+        "required": [
+          "type",
+          "interval_value"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "`hours` or `days`."
+          },
+          "interval_value": {
+            "type": "number",
+            "format": "double",
+            "description": "Every this many hours or days; more than 0."
+          }
+        },
+        "additionalProperties": false
+      },
       "ContentInput": {
         "type": "object",
         "description": "Body creating a note or a comment.",
@@ -30939,6 +31924,20 @@
             "format": "int64",
             "description": "The new calendar.",
             "minimum": 0
+          }
+        }
+      },
+      "CreatedCheck": {
+        "type": "object",
+        "description": "Response of adding a check.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Check id."
           }
         }
       },
@@ -33642,6 +34641,99 @@
           }
         }
       },
+      "Equipment": {
+        "type": "object",
+        "description": "A piece of equipment.",
+        "required": [
+          "id",
+          "name",
+          "usage_unit"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Equipment id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "hours_per_day": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Usage per working day (hours or miles)."
+          },
+          "days_per_month": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Working days per month."
+          },
+          "starting_hours": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Meter reading at the start."
+          },
+          "usage_unit": {
+            "type": "string",
+            "description": "`hours` or `miles`."
+          }
+        }
+      },
+      "EquipmentInput": {
+        "type": "object",
+        "description": "Body of creating or saving equipment.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name; 1 to 255 characters."
+          },
+          "hours_per_day": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Usage per working day, more than 0 (at most 24 hours)."
+          },
+          "days_per_month": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Working days per month, more than 0, at most 31."
+          },
+          "starting_hours": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Meter reading, 0 or more."
+          },
+          "usage_unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`hours` (default) or `miles`."
+          }
+        },
+        "additionalProperties": false
+      },
       "ErrorBody": {
         "type": "object",
         "description": "Body of every error response.",
@@ -35416,6 +36508,21 @@
           }
         }
       },
+      "HoursInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/shop/maintenance/conditions/{id}/hours`.",
+        "required": [
+          "hours_done"
+        ],
+        "properties": {
+          "hours_done": {
+            "type": "number",
+            "format": "double",
+            "description": "Hours used since the check was last done; 0 to 100000 (capped at\nthe interval)."
+          }
+        },
+        "additionalProperties": false
+      },
       "ImageChanges": {
         "type": "object",
         "description": "Body of `PATCH /v1/images/{id}`: what to change.",
@@ -36789,6 +37896,51 @@
             ],
             "format": "date-time",
             "description": "Inbox only: the time the thread is ranked by (its latest message to the caller)."
+          }
+        }
+      },
+      "Maintenance": {
+        "type": "object",
+        "description": "Everything the maintenance page shows.",
+        "required": [
+          "can_edit",
+          "items",
+          "checks",
+          "conditions",
+          "completions"
+        ],
+        "properties": {
+          "can_edit": {
+            "type": "boolean",
+            "description": "The caller may manage equipment and checks (a shop manager)."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Equipment"
+            },
+            "description": "Equipment by name."
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Check"
+            },
+            "description": "Checks by name."
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "description": "Conditions of the checks."
+          },
+          "completions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Completion"
+            },
+            "description": "Completions, newest first."
           }
         }
       },
