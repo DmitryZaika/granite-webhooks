@@ -372,3 +372,78 @@ pub struct SendEmailResult {
     /// Conversations the messages went to.
     pub thread_ids: Vec<String>,
 }
+
+/// An unsent email of the caller.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EmailDraft {
+    /// Draft id (an `emails` row with `is_draft`).
+    pub id: i32,
+    /// Conversation it will start.
+    pub thread_id: String,
+    /// Subject.
+    pub subject: String,
+    /// Note as written (editor HTML or plain text).
+    pub body: String,
+    /// Deal it is about.
+    pub deal_id: Option<i64>,
+    /// Recipients.
+    pub to: Vec<String>,
+    /// Copy recipients.
+    pub cc: Vec<String>,
+    /// Blind copy recipients.
+    pub bcc: Vec<String>,
+    /// One message to all `to` recipients.
+    pub send_together: bool,
+    /// Files attached so far.
+    pub attachments: Vec<DraftAttachment>,
+}
+
+/// A file of a draft.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DraftAttachment {
+    /// File URL.
+    pub url: String,
+    /// File name.
+    pub filename: String,
+    /// MIME type, e.g. `application/pdf`.
+    pub content_type: String,
+}
+
+/// Body of `POST /v1/emails/drafts` and `PUT /v1/emails/drafts/{id}`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DraftInput {
+    /// Subject.
+    #[serde(default)]
+    pub subject: String,
+    /// Note. A draft needs a subject or a note.
+    #[serde(default)]
+    pub body: String,
+    /// Recipients.
+    #[serde(default)]
+    pub to: Vec<String>,
+    /// Copy recipients.
+    #[serde(default)]
+    pub cc: Vec<String>,
+    /// Blind copy recipients.
+    #[serde(default)]
+    pub bcc: Vec<String>,
+    /// Deal it is about.
+    pub deal_id: Option<i32>,
+    /// One message to all `to` recipients.
+    #[serde(default)]
+    pub send_together: bool,
+    /// Files attached so far.
+    #[serde(default)]
+    pub attachments: Vec<DraftAttachment>,
+}
+
+/// A saved draft.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SavedDraft {
+    /// Draft id.
+    pub id: i32,
+    /// Conversation it will start.
+    pub thread_id: String,
+}

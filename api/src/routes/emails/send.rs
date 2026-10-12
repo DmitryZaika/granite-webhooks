@@ -230,7 +230,7 @@ pub fn is_empty_rich_text(html: &str) -> bool {
 }
 
 /// `application/pdf` → (`application`, `pdf`).
-fn split_content_type(content_type: &str) -> (String, String) {
+pub(super) fn split_content_type(content_type: &str) -> (String, String) {
     let lower = content_type.trim().to_lowercase();
     match lower.split_once('/') {
         Some((kind, sub)) if !kind.is_empty() => (kind.to_string(), sub.to_string()),
@@ -707,11 +707,11 @@ async fn record(
     tx.commit().await
 }
 
-type ParticipantGroup = (&'static str, Vec<(String, Option<String>)>);
+pub(super) type ParticipantGroup = (&'static str, Vec<(String, Option<String>)>);
 
 /// `insertEmailParticipants`: one row per distinct address of each group,
 /// linked to the company's user or customer with that address.
-async fn insert_participants(
+pub(super) async fn insert_participants(
     tx: &mut Transaction<'_, MySql>,
     email_id: i32,
     company_id: i32,

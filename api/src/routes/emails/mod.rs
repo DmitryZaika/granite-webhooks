@@ -9,12 +9,14 @@
 //! - `POST /v1/emails/threads/{thread_id}/read`   → mark an opened conversation read
 //! - `POST /v1/emails/threads/{mark-read,mark-unread,delete,restore,purge}` → bulk changes
 //! - `POST /v1/emails`                            → send (or schedule) an email
+//! - `POST /v1/emails/drafts`, `GET|PUT|DELETE /v1/emails/drafts/{id}` → the caller's drafts
 //!
 //! Replaces the Remix `employee.emails*` loaders and `api.emails.*` routes.
 //! The `webhooks` Lambda builds and sends the MIME message (it owns SES).
 
 pub mod attachment_token;
 pub mod deal_history;
+mod drafts;
 mod handlers;
 mod list;
 mod names;
@@ -41,4 +43,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::suggest))
         .routes(routes!(deal_history::deal_emails))
         .routes(routes!(send::send))
+        .routes(routes!(drafts::create_draft))
+        .routes(routes!(
+            drafts::get_draft,
+            drafts::update_draft,
+            drafts::delete_draft
+        ))
 }

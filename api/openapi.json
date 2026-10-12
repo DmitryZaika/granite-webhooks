@@ -10606,6 +10606,329 @@
         ]
       }
     },
+    "/v1/emails/drafts": {
+      "post": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Save a new draft",
+        "description": "Stores an unsent email in the caller's Drafts folder.",
+        "operationId": "create_email_draft",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No subject and no note, or an unknown deal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/emails/drafts/{id}": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Get a draft",
+        "description": "One of the caller's drafts, to reopen in the compose page.",
+        "operationId": "get_email_draft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Draft id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailDraft"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such draft of the caller's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Update a draft",
+        "description": "Replaces the content, recipients and files of one of the caller's drafts\nand moves it to the top of Drafts.",
+        "operationId": "update_email_draft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Draft id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No subject and no note, or an unknown deal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such draft of the caller's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Delete a draft",
+        "description": "Discards one of the caller's drafts (after it was sent, or emptied).",
+        "operationId": "delete_email_draft",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Draft id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such draft of the caller's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/email-templates": {
       "get": {
         "tags": [
@@ -13098,6 +13421,159 @@
           }
         }
       },
+      "DraftAttachment": {
+        "type": "object",
+        "description": "A file of a draft.",
+        "required": [
+          "url",
+          "filename",
+          "content_type"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "File URL."
+          },
+          "filename": {
+            "type": "string",
+            "description": "File name."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "MIME type, e.g. `application/pdf`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DraftInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/emails/drafts` and `PUT /v1/emails/drafts/{id}`.",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "Subject."
+          },
+          "body": {
+            "type": "string",
+            "description": "Note. A draft needs a subject or a note."
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Recipients."
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Copy recipients."
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Blind copy recipients."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Deal it is about."
+          },
+          "send_together": {
+            "type": "boolean",
+            "description": "One message to all `to` recipients."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftAttachment"
+            },
+            "description": "Files attached so far."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EmailDraft": {
+        "type": "object",
+        "description": "An unsent email of the caller.",
+        "required": [
+          "id",
+          "thread_id",
+          "subject",
+          "body",
+          "to",
+          "cc",
+          "bcc",
+          "send_together",
+          "attachments"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Draft id (an `emails` row with `is_draft`)."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "Conversation it will start."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Subject."
+          },
+          "body": {
+            "type": "string",
+            "description": "Note as written (editor HTML or plain text)."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Deal it is about."
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Recipients."
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Copy recipients."
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Blind copy recipients."
+          },
+          "send_together": {
+            "type": "boolean",
+            "description": "One message to all `to` recipients."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftAttachment"
+            },
+            "description": "Files attached so far."
+          }
+        }
+      },
       "EmailTemplate": {
         "type": "object",
         "description": "An email template as the composer's picker shows it.",
@@ -15452,6 +15928,25 @@
           }
         },
         "additionalProperties": false
+      },
+      "SavedDraft": {
+        "type": "object",
+        "description": "A saved draft.",
+        "required": [
+          "id",
+          "thread_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Draft id."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "Conversation it will start."
+          }
+        }
       },
       "SendAttachment": {
         "type": "object",
