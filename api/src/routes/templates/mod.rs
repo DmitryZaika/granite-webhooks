@@ -1,0 +1,33 @@
+//! Message templates of the caller: email templates, the picker order of
+//! email / SMS / quote templates, and filling `{{variables}}`.
+//!
+//! - `GET    /v1/email-templates`               → company + own templates, in the caller's order
+//! - `POST   /v1/email-templates`               → create (company scope for admins)
+//! - `PUT    /v1/email-templates/{id}`          → edit an own template
+//! - `DELETE /v1/email-templates/{id}`          → delete an own template
+//! - `GET    /v1/me/template-order/{type}`      → automatic or custom order
+//! - `PUT    /v1/me/template-order/{type}`      → save a drag-and-drop order
+//! - `DELETE /v1/me/template-order/{type}`      → back to automatic order
+//! - `POST   /v1/templates/fill`                → a template with its variables filled
+//!
+//! Replaces the Remix `api.email-templates*`, `api.sms.templates.order`,
+//! `api.quote-email-templates.order` and `api.emailTemplate.fill` routes.
+
+mod handlers;
+pub mod order;
+pub mod schemas;
+
+use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
+
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(handlers::list, handlers::create))
+        .routes(routes!(handlers::update, handlers::delete))
+        .routes(routes!(
+            handlers::get_order,
+            handlers::save_order,
+            handlers::reset_order
+        ))
+        .routes(routes!(handlers::fill))
+}

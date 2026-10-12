@@ -1,0 +1,531 @@
+use super::order;
+use super::schemas::{
+    EmailTemplate, EmailTemplateInput, FillRequest, Filled, OrderPath, SaveOrder,
+    TemplateAttachment, TemplateOrder, TemplateScope,
+};
+use crate::auth::EmployeeUser;
+use crate::auth::session::SessionUser;
+use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::extract::JsonBody;
+use crate::routes::emails::sql::{normalize_address, normalized};
+use crate::state::AppState;
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use chrono::{DateTime, Utc};
+use common::crud::template::fetch_template_variable_data;
+use common::utils::template::replace_template_variables;
+use sqlx::{AssertSqlSafe, FromRow, MySqlPool};
+use std::collections::HashMap;
+
+#[derive(Debug, FromRow)]
+struct TemplateRow {
+    id: i32,
+    user_id: Option<i32>,
+    template_name: Option<String>,
+    template_subject: Option<String>,
+    template_body: Option<String>,
+    created_at: Option<DateTime<Utc>>,
+}
+
+const TEMPLATE_COLUMNS: &str =
+    "id, user_id, template_name, template_subject, template_body, created_at";
+
+fn to_template(
+    row: TemplateRow,
+    user: &SessionUser,
+    attachments: Vec<TemplateAttachment>,
+) -> EmailTemplate {
+    EmailTemplate {
+        id: row.id,
+        template_name: row.template_name.unwrap_or_default(),
+        template_subject: row.template_subject.unwrap_or_default(),
+        template_body: row.template_body.unwrap_or_default(),
+        attachments,
+        scope: if row.user_id.is_none() {
+            TemplateScope::Company
+        } else {
+            TemplateScope::Personal
+        },
+        can_edit: row.user_id == Some(user.id),
+    }
+}
+
+async fn attachments(
+    pool: &MySqlPool,
+    template_ids: &[i32],
+) -> Result<HashMap<i32, Vec<TemplateAttachment>>, sqlx::Error> {
+    if template_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders = vec!["?"; template_ids.len()].join(", ");
+    let sql = format!(
+        "SELECT template_id, id, filename, url, content_type, content_subtype
+         FROM email_template_attachments
+         WHERE template_id IN ({placeholders}) AND deleted_at IS NULL
+         ORDER BY template_id, position, id"
+    );
+    let mut query =
+        sqlx::query_as::<_, (i32, i32, String, String, String, Option<String>)>(AssertSqlSafe(sql));
+    for id in template_ids {
+        query = query.bind(id);
+    }
+    let mut grouped: HashMap<i32, Vec<TemplateAttachment>> = HashMap::new();
+    for (template_id, id, filename, url, content_type, content_subtype) in
+        query.fetch_all(pool).await?
+    {
+        grouped
+            .entry(template_id)
+            .or_default()
+            .push(TemplateAttachment {
+                id,
+                filename,
+                url,
+                content_type,
+                content_subtype: content_subtype.unwrap_or_default(),
+            });
+    }
+    Ok(grouped)
+}
+
+/// A company template, or one of the caller's own.
+async fn accessible(
+    pool: &MySqlPool,
+    user: &SessionUser,
+    template_id: i32,
+) -> Result<Option<TemplateRow>, sqlx::Error> {
+    sqlx::query_as(AssertSqlSafe(format!(
+        "SELECT {TEMPLATE_COLUMNS} FROM email_templates
+         WHERE id = ? AND company_id = ? AND deleted_at IS NULL
+           AND (user_id IS NULL OR user_id = ?)"
+    )))
+    .bind(template_id)
+    .bind(user.company_id)
+    .bind(user.id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// The caller's own template (only those can be changed).
+async fn own(pool: &MySqlPool, user: &SessionUser, template_id: i32) -> ApiResult<TemplateRow> {
+    match accessible(pool, user, template_id).await? {
+        Some(row) if row.user_id == Some(user.id) => Ok(row),
+        _ => Err(ApiError::NotFound),
+    }
+}
+
+/// `{{` and `}}` pair up, none is empty and none nests (`validateTemplateBody`).
+pub fn template_body_error(body: &str) -> Option<&'static str> {
+    let mut text = String::with_capacity(body.len());
+    let mut in_tag = false;
+    for c in body.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    if text.matches("{{").count() != text.matches("}}").count() {
+        return Some("Invalid template body format. Check for unclosed {{ or }}.");
+    }
+    let mut rest = text.as_str();
+    while let Some(start) = rest.find("{{") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            break;
+        };
+        let inner = &after[..end];
+        if inner.trim().is_empty() || inner.contains('{') {
+            return Some("Invalid template body format. Check for unclosed {{ or }}.");
+        }
+        rest = &after[end + 2..];
+    }
+    None
+}
+
+struct CleanInput {
+    name: String,
+    subject: String,
+    body: String,
+}
+
+fn clean(input: &EmailTemplateInput) -> ApiResult<CleanInput> {
+    let name = input.template_name.trim();
+    let subject = input.template_subject.trim();
+    let body = input.template_body.trim();
+    let bad = |message: &str| Err(ApiError::BadRequest(message.to_string()));
+    if name.is_empty() {
+        return bad("Template name is required");
+    }
+    if subject.is_empty() {
+        return bad("Template subject is required");
+    }
+    if body.is_empty() {
+        return bad("Template body is required");
+    }
+    if name.chars().count() > 255 || subject.chars().count() > 255 {
+        return bad("Template name and subject are at most 255 characters");
+    }
+    if let Some(error) = template_body_error(body) {
+        return bad(error);
+    }
+    Ok(CleanInput {
+        name: name.to_string(),
+        subject: subject.to_string(),
+        body: body.to_string(),
+    })
+}
+
+/// List email templates
+///
+/// The company's templates and the caller's own, sorted by the caller's
+/// picker order (most used first unless they saved a custom order; then
+/// company templates first, newest first), with their attachments.
+#[utoipa::path(
+    get,
+    path = "/v1/email-templates",
+    operation_id = "list_email_templates",
+    tag = "templates",
+    responses(
+        (status = 200, description = "Templates", body = Vec<EmailTemplate>),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn list(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+) -> ApiResult<Json<Vec<EmailTemplate>>> {
+    let pool = &state.pool;
+    let mut rows: Vec<TemplateRow> = sqlx::query_as(AssertSqlSafe(format!(
+        "SELECT {TEMPLATE_COLUMNS} FROM email_templates
+         WHERE company_id = ? AND deleted_at IS NULL AND (user_id IS NULL OR user_id = ?)"
+    )))
+    .bind(user.company_id)
+    .bind(user.id)
+    .fetch_all(pool)
+    .await?;
+    let context = order::context(pool, user.id, super::schemas::OrderingType::Email).await?;
+    order::sort(
+        &mut rows,
+        |row| row.id,
+        &context,
+        |a, b| {
+            a.user_id
+                .is_some()
+                .cmp(&b.user_id.is_some())
+                .then_with(|| b.created_at.cmp(&a.created_at))
+                .then_with(|| b.id.cmp(&a.id))
+        },
+    );
+    let ids: Vec<i32> = rows.iter().map(|row| row.id).collect();
+    let mut files = attachments(pool, &ids).await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|row| {
+                let attachments = files.remove(&row.id).unwrap_or_default();
+                to_template(row, &user, attachments)
+            })
+            .collect(),
+    ))
+}
+
+/// Create an email template
+///
+/// `scope: company` (admins only) makes it the whole company's; otherwise
+/// it is the caller's own.
+#[utoipa::path(
+    post,
+    path = "/v1/email-templates",
+    operation_id = "create_email_template",
+    tag = "templates",
+    request_body = EmailTemplateInput,
+    responses(
+        (status = 201, description = "Created", body = EmailTemplate),
+        (status = 400, description = "Missing name, subject or body, or unpaired braces", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, or not an admin for a company template", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn create(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    JsonBody(input): JsonBody<EmailTemplateInput>,
+) -> ApiResult<(StatusCode, Json<EmailTemplate>)> {
+    let clean = clean(&input)?;
+    let company = input.scope == Some(TemplateScope::Company);
+    if company && !(user.is_admin || user.is_superuser) {
+        return Err(ApiError::Forbidden);
+    }
+    let id = sqlx::query(
+        "INSERT INTO email_templates
+           (template_name, template_subject, template_body, company_id, user_id, created_by)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&clean.name)
+    .bind(&clean.subject)
+    .bind(&clean.body)
+    .bind(user.company_id)
+    .bind((!company).then_some(user.id))
+    .bind(user.id)
+    .execute(&state.pool)
+    .await?
+    .last_insert_id();
+    let row = accessible(&state.pool, &user, i32::try_from(id).unwrap_or(i32::MAX))
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(to_template(row, &user, Vec::new())),
+    ))
+}
+
+/// Edit an email template
+///
+/// Only the caller's own templates; company templates are edited in the
+/// admin automations pages.
+#[utoipa::path(
+    put,
+    path = "/v1/email-templates/{id}",
+    operation_id = "update_email_template",
+    tag = "templates",
+    params(("id" = i32, Path, description = "Template id")),
+    request_body = EmailTemplateInput,
+    responses(
+        (status = 200, description = "Updated", body = EmailTemplate),
+        (status = 400, description = "Missing name, subject or body, or unpaired braces", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 404, description = "No such template of the caller's", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn update(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+    JsonBody(input): JsonBody<EmailTemplateInput>,
+) -> ApiResult<Json<EmailTemplate>> {
+    let clean = clean(&input)?;
+    own(&state.pool, &user, id).await?;
+    sqlx::query(
+        "UPDATE email_templates SET template_name = ?, template_subject = ?, template_body = ?
+         WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(&clean.name)
+    .bind(&clean.subject)
+    .bind(&clean.body)
+    .bind(id)
+    .bind(user.company_id)
+    .execute(&state.pool)
+    .await?;
+    let row = own(&state.pool, &user, id).await?;
+    let attachments = attachments(&state.pool, &[id])
+        .await?
+        .remove(&id)
+        .unwrap_or_default();
+    Ok(Json(to_template(row, &user, attachments)))
+}
+
+/// Delete an email template
+///
+/// Soft-deletes one of the caller's own templates.
+#[utoipa::path(
+    delete,
+    path = "/v1/email-templates/{id}",
+    operation_id = "delete_email_template",
+    tag = "templates",
+    params(("id" = i32, Path, description = "Template id")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 404, description = "No such template of the caller's", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn delete(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+) -> ApiResult<StatusCode> {
+    own(&state.pool, &user, id).await?;
+    sqlx::query(
+        "UPDATE email_templates SET deleted_at = NOW()
+         WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .bind(user.company_id)
+    .execute(&state.pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Get a template picker's order
+///
+/// Whether the caller's picker of this type sorts automatically (most used
+/// first) or in their saved order.
+#[utoipa::path(
+    get,
+    path = "/v1/me/template-order/{type}",
+    operation_id = "get_template_order",
+    tag = "templates",
+    params(OrderPath),
+    responses(
+        (status = 200, description = "Mode", body = TemplateOrder),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn get_order(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(path): Path<OrderPath>,
+) -> ApiResult<Json<TemplateOrder>> {
+    let mode = order::mode(&state.pool, user.id, path.r#type).await?;
+    Ok(Json(TemplateOrder { mode }))
+}
+
+/// Save a template picker's order
+///
+/// Saves the dragged order (every template the picker shows, first to
+/// last) and switches the picker to it.
+#[utoipa::path(
+    put,
+    path = "/v1/me/template-order/{type}",
+    operation_id = "save_template_order",
+    tag = "templates",
+    params(OrderPath),
+    request_body = SaveOrder,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 400, description = "No ids, or an id that is not positive", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn save_order(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(path): Path<OrderPath>,
+    JsonBody(body): JsonBody<SaveOrder>,
+) -> ApiResult<StatusCode> {
+    if body.template_ids.is_empty() || body.template_ids.iter().any(|id| *id <= 0) {
+        return Err(ApiError::BadRequest("invalid template ids".to_string()));
+    }
+    order::save_custom(&state.pool, user.id, path.r#type, &body.template_ids).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Reset a template picker's order
+///
+/// Forgets the saved order: the picker sorts by use again.
+#[utoipa::path(
+    delete,
+    path = "/v1/me/template-order/{type}",
+    operation_id = "reset_template_order",
+    tag = "templates",
+    params(OrderPath),
+    responses(
+        (status = 204, description = "Reset"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn reset_order(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(path): Path<OrderPath>,
+) -> ApiResult<StatusCode> {
+    order::reset(&state.pool, user.id, path.r#type).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Fill template variables
+///
+/// Fills `{{user.*}}`, `{{customer.*}}`, `{{company.*}}` and
+/// `{{current_date}}` for the caller, the deal and the customer (given, or
+/// found by `recipient_email`). Unknown variables are left as they are.
+#[utoipa::path(
+    post,
+    path = "/v1/templates/fill",
+    operation_id = "fill_template",
+    tag = "templates",
+    request_body = FillRequest,
+    responses(
+        (status = 200, description = "Filled text", body = Filled),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn fill(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    JsonBody(request): JsonBody<FillRequest>,
+) -> ApiResult<Json<Filled>> {
+    if !request.template.contains("{{") {
+        return Ok(Json(Filled {
+            text: request.template,
+        }));
+    }
+    let pool = &state.pool;
+    let mut customer_id = request.customer_id.filter(|id| *id > 0);
+    if customer_id.is_none()
+        && let Some(address) = request.recipient_email.as_deref()
+    {
+        let address = normalize_address(Some(address));
+        if !address.is_empty() {
+            customer_id = sqlx::query_scalar(AssertSqlSafe(format!(
+                "SELECT c.id FROM customers c
+                 JOIN customers_emails ce ON ce.customer_id = c.id
+                 WHERE c.company_id = ? AND c.deleted_at IS NULL AND {} = ?
+                 LIMIT 1",
+                normalized("ce.email")
+            )))
+            .bind(user.company_id)
+            .bind(address)
+            .fetch_optional(pool)
+            .await?;
+        }
+    }
+    let data = fetch_template_variable_data(
+        pool,
+        user.id,
+        request.deal_id.filter(|id| *id > 0),
+        customer_id,
+        user.company_id,
+    )
+    .await?;
+    Ok(Json(Filled {
+        text: replace_template_variables(&request.template, &data),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::template_body_error;
+
+    #[test]
+    fn template_bodies() {
+        assert!(template_body_error("<p>Hi {{customer.first_name}}</p>").is_none());
+        assert!(template_body_error("Hi {{customer.first_name}").is_some());
+        assert!(template_body_error("Hi {{ }}").is_some());
+        assert!(template_body_error("Hi {{a{b}}").is_some());
+        assert!(template_body_error("No variables").is_none());
+    }
+}
