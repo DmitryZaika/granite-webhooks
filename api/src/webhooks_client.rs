@@ -65,14 +65,46 @@ impl WebhooksClient {
         );
     }
 
+    /// Removes a deleted customer from both telephony address books (best effort).
+    pub async fn remove_contacts(&self, company_id: i32, customer_id: i32) {
+        tokio::join!(
+            self.contact_request(
+                reqwest::Method::DELETE,
+                "cloudtalk",
+                company_id,
+                customer_id
+            ),
+            self.contact_request(
+                reqwest::Method::DELETE,
+                "ringcentral",
+                company_id,
+                customer_id
+            )
+        );
+    }
+
     async fn sync_contact(&self, provider: &str, company_id: i32, customer_id: i32) {
+        self.contact_request(reqwest::Method::POST, provider, company_id, customer_id)
+            .await;
+    }
+
+    async fn contact_request(
+        &self,
+        method: reqwest::Method,
+        provider: &str,
+        company_id: i32,
+        customer_id: i32,
+    ) {
         let Some(target) = &self.target else {
             return;
         };
         let (url, key) = target.as_ref();
         let result = self
             .http
-            .post(format!("{url}/{provider}/sync/{company_id}/{customer_id}"))
+            .request(
+                method,
+                format!("{url}/{provider}/sync/{company_id}/{customer_id}"),
+            )
             .header("Authorization", key)
             .send()
             .await;

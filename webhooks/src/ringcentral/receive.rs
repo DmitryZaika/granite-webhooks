@@ -296,6 +296,17 @@ pub async fn sync_ringcentral(
     sync_customer_to_ring_central(&pool, &client, customer_id).await
 }
 
+/// `DELETE /ringcentral/sync/{company_id}/{customer_id}`: drop the contact of
+/// a deleted customer.
+pub async fn unsync_ringcentral(
+    _: crate::axum_helpers::guards::RemixBackend,
+    State(pool): State<MySqlPool>,
+    Path((_company_id, customer_id)): Path<(i32, i32)>,
+) -> BasicResponse {
+    let client = reqwest::Client::new();
+    crate::ringcentral::api::delete_customer_from_ring_central(&pool, &client, customer_id).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_ringcentral_sms;

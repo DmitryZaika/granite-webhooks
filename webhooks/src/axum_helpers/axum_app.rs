@@ -2,7 +2,7 @@ use crate::amazonses::routes::{read_receipt_handler, receive_handler};
 use crate::cloudtalk::receive::{
     call_received as cloudtalk_call_received, sms_received as cloudtalk_sms_received,
     sms_received_unscoped as cloudtalk_sms_received_unscoped, sms_sent as cloudtalk_sms_sent,
-    sync_cloudtalk,
+    sync_cloudtalk, unsync_cloudtalk,
 };
 use crate::google::receive::address_information;
 use crate::libs::constants::OK_RESPONSE;
@@ -11,6 +11,7 @@ use crate::outbound::send_handler as send_email;
 use crate::ringcentral::receive::{
     call_received as ringcentral_call_received, sms_notification as ringcentral_sms_notification,
     sms_received as ringcentral_sms_received, sms_sent as ringcentral_sms_sent, sync_ringcentral,
+    unsync_ringcentral,
 };
 use crate::schemas::add_customer::NewLeadForm;
 use crate::telegram::cleanup::delete_lead_telegram_messages;
@@ -91,7 +92,7 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         )
         .route(
             "/cloudtalk/sync/{company_id}/{customer_id}",
-            post(sync_cloudtalk),
+            post(sync_cloudtalk).delete(unsync_cloudtalk),
         )
         .route(
             "/ringcentral/sms/{company_id}",
@@ -111,7 +112,7 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         )
         .route(
             "/ringcentral/sync/{company_id}/{customer_id}",
-            post(sync_ringcentral),
+            post(sync_ringcentral).delete(unsync_ringcentral),
         )
         .route("/telnyx/event-progress", post(event_progress))
         .route(

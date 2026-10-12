@@ -334,3 +334,49 @@ async fn temperature_and_other_companies(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NOT_FOUND);
 }
+
+#[test_db::test(seed)]
+async fn admins_and_sales_managers_delete_customers(pool: MySqlPool) {
+    let server = server(pool.clone());
+    // Reps may not.
+    server
+        .delete("/v1/customers/1007")
+        .with_session(RITA)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    // Mark manages sales in company 100.
+    server
+        .delete("/v1/customers/1007")
+        .with_session(sessions::MANAGER)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let gone: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT deleted_at FROM customers WHERE id = 1007")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(gone.is_some());
+
+    // Erin has the live deal 8601: refused until the deals go too.
+    let res = server
+        .delete("/v1/customers/1004")
+        .with_session(sessions::ADMIN)
+        .await;
+    res.assert_status(StatusCode::CONFLICT);
+    assert_eq!(
+        res.json::<Value>()["error"],
+        "Confirm removing associated deals"
+    );
+    server
+        .delete("/v1/customers/1004?cascade_deals=true")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(open_deals(&pool, 1004).await.is_empty());
+
+    server
+        .delete("/v1/customers/2000")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}

@@ -258,6 +258,64 @@ pub async fn find_cloudtalk_contact_by_phone(
     Ok(None)
 }
 
+/// Removes a deleted customer from the company's CloudTalk address book and
+/// forgets the mapping. Nothing to do without a mapping or CloudTalk.
+pub async fn delete_customer_from_cloud_talk(
+    pool: &MySqlPool,
+    client: &Client,
+    customer_id: i32,
+) -> BasicResponse {
+    let mapping: Result<Option<(i32, i64, Option<i32>)>, sqlx::Error> = sqlx::query_as(
+        "SELECT cc.id, cc.cloudtalk_id, c.company_id FROM cloudtalk_contacts cc
+     JOIN customers c ON c.id = cc.customer_id WHERE cc.customer_id = ? LIMIT 1",
+    )
+    .bind(customer_id)
+    .fetch_optional(pool)
+    .await;
+    let (mapping_id, cloudtalk_id, company_id) = match mapping {
+        Ok(Some((id, cloudtalk_id, Some(company_id)))) => (id, cloudtalk_id, company_id),
+        Ok(_) => return OK_RESPONSE,
+        Err(error) => {
+            tracing::error!(?error, customer_id, "Failed to load CloudTalk mapping");
+            return internal_error("Failed to load CloudTalk mapping");
+        }
+    };
+    match company_has_cloud_talk(pool, company_id).await {
+        Ok(true) => {}
+        Ok(false) => return OK_RESPONSE,
+        Err(error) => {
+            tracing::error!(?error, company_id, "Failed to check CloudTalk");
+            return internal_error("Failed to check CloudTalk");
+        }
+    }
+    let Ok(company) = u64::try_from(company_id) else {
+        return internal_error("Invalid company id");
+    };
+    let path = format!("contacts/delete/{cloudtalk_id}.json");
+    if let Err(error) = cloudtalk_request::<(), serde_json::Value>(
+        pool,
+        client,
+        &path,
+        company,
+        Method::DELETE,
+        None,
+    )
+    .await
+    {
+        tracing::error!(?error, customer_id, "Failed to delete CloudTalk contact");
+        return internal_error("Failed to delete CloudTalk contact");
+    }
+    if let Err(error) = sqlx::query("DELETE FROM cloudtalk_contacts WHERE id = ?")
+        .bind(mapping_id)
+        .execute(pool)
+        .await
+    {
+        tracing::error!(?error, customer_id, "Failed to delete CloudTalk mapping");
+        return internal_error("Failed to delete CloudTalk mapping");
+    }
+    OK_RESPONSE
+}
+
 #[cfg(test)]
 mod local_tests {
     use super::*;
@@ -380,6 +438,18 @@ mod local_tests {
 
         // Should return your designated NOT_FOUND_RESPONSE status code
         assert_eq!(res.0, StatusCode::NOT_FOUND);
+    }
+
+    #[test_db::test]
+    async fn test_delete_customer_without_mapping_is_a_no_op(pool: MySqlPool) {
+        let client = setup_mock_client();
+        let customer_id = create_customer(&pool, None, Some("317-316-1456"), None, None)
+            .await
+            .unwrap();
+        let res =
+            delete_customer_from_cloud_talk(&pool, &client, i32::try_from(customer_id).unwrap())
+                .await;
+        assert_eq!(res.0, StatusCode::OK);
     }
 
     #[test_db::test]

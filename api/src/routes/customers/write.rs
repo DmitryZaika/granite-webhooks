@@ -12,7 +12,7 @@ use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::state::AppState;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -106,6 +106,15 @@ impl Temperature {
             Self::Cold => "cold",
         }
     }
+}
+
+/// Query of `DELETE /v1/customers/{id}`.
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DeleteQuery {
+    /// Also delete the customer's live deals (required when it has any).
+    #[serde(default)]
+    pub cascade_deals: bool,
 }
 
 /// Body of `PUT /v1/customers/{id}/temperature`.
@@ -430,5 +439,87 @@ pub async fn set_temperature(
         .bind(user.company_id)
         .execute(&state.pool)
         .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `positions.id` of a sales manager (may delete customers).
+const SALES_MANAGER_POSITION: i32 = 2;
+
+/// Delete a customer
+///
+/// Hides the customer (soft delete) and removes it from the telephony
+/// address books. A customer with live deals needs `cascade_deals=true`,
+/// which hides the deals too. Admins and sales managers only.
+#[utoipa::path(
+    delete,
+    path = "/v1/customers/{id}",
+    operation_id = "delete_customer",
+    tag = "customers",
+    params(("id" = i32, Path, description = "Customer id"), DeleteQuery),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is neither an admin nor a sales manager", body = ErrorBody),
+        (status = 404, description = "No such live customer in the company", body = ErrorBody),
+        (status = 409, description = "The customer has live deals and `cascade_deals` is not set", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn delete(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+    Query(query): Query<DeleteQuery>,
+) -> ApiResult<StatusCode> {
+    let pool = &state.pool;
+    if !(user.is_admin || user.is_superuser) {
+        let manager: Option<i32> = sqlx::query_scalar(
+            "SELECT 1 FROM users_positions WHERE user_id = ? AND company_id = ? AND position_id = ? LIMIT 1",
+        )
+        .bind(user.id)
+        .bind(user.company_id)
+        .bind(SALES_MANAGER_POSITION)
+        .fetch_optional(pool)
+        .await?;
+        if manager.is_none() {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    let found: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM customers WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .bind(user.company_id)
+    .fetch_optional(pool)
+    .await?;
+    found.ok_or(ApiError::NotFound)?;
+    let deals: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM deals WHERE customer_id = ? AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+    if deals > 0 && !query.cascade_deals {
+        return Err(ApiError::Conflict(
+            "Confirm removing associated deals".into(),
+        ));
+    }
+    let mut tx = pool.begin().await?;
+    if query.cascade_deals {
+        sqlx::query(
+            "UPDATE deals SET deleted_at = NOW() WHERE customer_id = ? AND deleted_at IS NULL",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query("UPDATE customers SET deleted_at = NOW() WHERE id = ? AND company_id = ?")
+        .bind(id)
+        .bind(user.company_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    state.webhooks.remove_contacts(user.company_id, id).await;
     Ok(StatusCode::NO_CONTENT)
 }

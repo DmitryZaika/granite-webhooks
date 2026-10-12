@@ -874,6 +874,95 @@
             "session_cookie": []
           }
         ]
+      },
+      "delete": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Delete a customer",
+        "description": "Hides the customer (soft delete) and removes it from the telephony\naddress books. A customer with live deals needs `cascade_deals=true`,\nwhich hides the deals too. Admins and sales managers only.",
+        "operationId": "delete_customer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "cascade_deals",
+            "in": "query",
+            "description": "Also delete the customer's live deals (required when it has any).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither an admin nor a sales manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live customer in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The customer has live deals and `cascade_deals` is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/customers/{id}/sales-rep": {

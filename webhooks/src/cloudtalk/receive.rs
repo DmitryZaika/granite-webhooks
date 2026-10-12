@@ -302,6 +302,17 @@ pub async fn sync_cloudtalk(
     sync_customer_to_cloud_talk(&pool, &client, customer_id).await
 }
 
+/// `DELETE /cloudtalk/sync/{company_id}/{customer_id}`: drop the contact of a
+/// deleted customer.
+pub async fn unsync_cloudtalk(
+    _: crate::axum_helpers::guards::RemixBackend,
+    State(pool): State<MySqlPool>,
+    Path((_company_id, customer_id)): Path<(i32, i32)>,
+) -> BasicResponse {
+    let client = Client::new();
+    crate::cloudtalk::api::delete_customer_from_cloud_talk(&pool, &client, customer_id).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_cloudtalk_sms;
