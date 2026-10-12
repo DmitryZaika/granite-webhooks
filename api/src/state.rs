@@ -1,3 +1,4 @@
+use crate::maps::Maps;
 use crate::storage::Storage;
 use crate::telegram::TelegramBots;
 use crate::webhooks_client::WebhooksClient;
@@ -29,6 +30,8 @@ pub struct AppState {
     pub sms_upkeep: Arc<Mutex<HashMap<(&'static str, i32), Instant>>>,
     /// Recent texts sent per user, for the per-minute limit.
     pub sms_sends: Arc<Mutex<HashMap<i32, VecDeque<Instant>>>>,
+    /// Google Maps, for driving distances.
+    pub maps: Maps,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +49,7 @@ impl AppState {
             webhooks: WebhooksClient::disabled(),
             sms_upkeep: Arc::default(),
             sms_sends: Arc::default(),
+            maps: Maps::disabled(),
         }
     }
 
@@ -62,6 +66,12 @@ impl AppState {
     }
 
     #[must_use]
+    pub fn with_maps(mut self, maps: Maps) -> Self {
+        self.maps = maps;
+        self
+    }
+
+    #[must_use]
     pub fn with_webhooks(mut self, webhooks: WebhooksClient) -> Self {
         self.webhooks = webhooks;
         self
@@ -74,7 +84,8 @@ impl AppState {
         Ok(Self::new(pool, &secret, &origins)
             .with_storage(Storage::from_env())
             .with_telegram(TelegramBots::from_env())
-            .with_webhooks(WebhooksClient::from_env()))
+            .with_webhooks(WebhooksClient::from_env())
+            .with_maps(Maps::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the

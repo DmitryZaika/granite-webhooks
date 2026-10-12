@@ -5,6 +5,7 @@
 //!   `/{id}/slabs`, `/{id}/images`) → displayed stones in stock
 //! - `GET /v1/public/companies/{company_id}/sinks|faucets` → displayed models in stock
 //! - `GET /v1/public/colors` → stone colors
+//! - `GET /v1/public/vcard` → a contact card file
 //!
 //! Nothing here returns costs, hidden items or sold slabs. Replaces the
 //! loaders of `customer.$company.stones|sinks|faucets`,
@@ -14,6 +15,7 @@
 mod handlers;
 pub mod queries;
 pub mod schemas;
+mod vcard;
 
 use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -29,4 +31,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::sinks))
         .routes(routes!(handlers::faucets))
         .routes(routes!(handlers::colors))
+        .routes(routes!(vcard::vcard))
 }

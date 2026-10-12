@@ -31,6 +31,7 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         (name = "customers", description = "Customers and leads of the company"),
         (name = "users", description = "Other users of the company"),
         (name = "stones", description = "Stones (slab materials) and their slab inventory"),
+        (name = "instructions", description = "The company's how-to pages"),
         (name = "public", description = "The public showroom; no session needed"),
         (name = "catalog", description = "Suppliers, colors and stone types the inventory forms pick from"),
         (name = "uploads", description = "Presigned uploads of images to storage"),

@@ -17,6 +17,7 @@
 pub mod auth;
 pub mod error;
 pub mod extract;
+pub mod maps;
 pub mod openapi;
 pub mod period;
 pub mod routes;

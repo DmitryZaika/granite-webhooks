@@ -8040,6 +8040,94 @@
         }
       }
     },
+    "/v1/public/vcard": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Download a contact card",
+        "description": "A vCard 3.0 file with the given name, phone, email, company and address.",
+        "operationId": "download_vcard",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Full name.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phone",
+            "in": "query",
+            "description": "Phone number.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "email",
+            "in": "query",
+            "description": "Email address.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "description": "Company.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "address",
+            "in": "query",
+            "description": "Street address, one line.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "query",
+            "description": "Download name; `.vcf` is added. Defaults to the name.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The card",
+            "content": {
+              "text/vcard": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No contact field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/company/features": {
       "get": {
         "tags": [
@@ -8055,6 +8143,74 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CompanyFeatures"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/drive-miles": {
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Driving miles from the company",
+        "description": "Miles by car from the company's address to `address`; null when either\naddress is missing or there is no route.",
+        "operationId": "get_drive_miles",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "description": "Where to drive to.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Miles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveMiles"
                 }
               }
             }
@@ -16623,6 +16779,76 @@
           }
         ]
       }
+    },
+    "/v1/instructions/order": {
+      "put": {
+        "tags": [
+          "instructions"
+        ],
+        "summary": "Order instructions",
+        "description": "Saves the order of one parent's children; the list must hold each of\nthem exactly once.",
+        "operationId": "order_instructions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstructionOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Empty, repeated, missing or foreign ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -19323,6 +19549,20 @@
           }
         }
       },
+      "DriveMiles": {
+        "type": "object",
+        "description": "`GET /v1/company/drive-miles`.",
+        "properties": {
+          "miles": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Driving miles, one decimal; null when unknown."
+          }
+        }
+      },
       "DuplicateCustomer": {
         "type": "object",
         "description": "A live customer with one of the given contacts.",
@@ -20483,6 +20723,43 @@
             "description": "Photos and files sent with it."
           }
         }
+      },
+      "InstructionOrder": {
+        "type": "object",
+        "description": "Body of `PUT /v1/instructions/order`.",
+        "required": [
+          "ordered_ids"
+        ],
+        "properties": {
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The parent whose children are reordered; null for the top level."
+          },
+          "ordered_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Every child of that parent, in the new order."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/InstructionScope",
+            "description": "`company` (default) or `general`."
+          }
+        }
+      },
+      "InstructionScope": {
+        "type": "string",
+        "description": "Which instructions to reorder.",
+        "enum": [
+          "company",
+          "general"
+        ]
       },
       "InvalidInput": {
         "type": "object",
@@ -25433,6 +25710,10 @@
     {
       "name": "stones",
       "description": "Stones (slab materials) and their slab inventory"
+    },
+    {
+      "name": "instructions",
+      "description": "The company's how-to pages"
     },
     {
       "name": "public",

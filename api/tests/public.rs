@@ -163,3 +163,29 @@ async fn sinks_faucets_colors_and_subdomains(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NOT_FOUND);
 }
+
+#[test_db::test(seed)]
+async fn a_vcard_is_built_from_the_query(pool: MySqlPool) {
+    let server = server(pool);
+    let res = server
+        .get("/v1/public/vcard")
+        .add_query_param("name", "Alice Lead")
+        .add_query_param("phone", "317-555-0100")
+        .add_query_param("company", "null")
+        .add_query_param("filename", "Alice Lead")
+        .await;
+    res.assert_status_ok();
+    assert_eq!(
+        res.header("content-disposition"),
+        "attachment; filename=\"Alice_Lead.vcf\""
+    );
+    assert_eq!(
+        res.text(),
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Lead\r\nN:Alice Lead;;;;\r\nTEL:317-555-0100\r\nEND:VCARD\r\n"
+    );
+    server
+        .get("/v1/public/vcard")
+        .add_query_param("name", " ")
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+}

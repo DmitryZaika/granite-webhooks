@@ -18,6 +18,7 @@ pub mod deals;
 pub mod emails;
 pub mod faucets;
 pub mod fixtures;
+pub mod instructions;
 pub mod leaderboard;
 pub mod me;
 pub mod public;
@@ -61,4 +62,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(templates::router())
         .merge(sms::router())
         .merge(attachable::router())
+        .merge(instructions::router())
 }

@@ -32,3 +32,63 @@ pub async fn features(
 ) -> ApiResult<Json<CompanyFeatures>> {
     Ok(Json(company_features(&state.pool, user.company_id).await?))
 }
+
+/// Query of `GET /v1/company/drive-miles`.
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DriveMilesQuery {
+    /// Where to drive to.
+    #[serde(default)]
+    pub address: String,
+}
+
+/// `GET /v1/company/drive-miles`.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct DriveMiles {
+    /// Driving miles, one decimal; null when unknown.
+    pub miles: Option<f64>,
+}
+
+/// Driving miles from the company
+///
+/// Miles by car from the company's address to `address`; null when either
+/// address is missing or there is no route.
+#[utoipa::path(
+    get,
+    path = "/v1/company/drive-miles",
+    operation_id = "get_drive_miles",
+    tag = "company",
+    params(DriveMilesQuery),
+    responses(
+        (status = 200, description = "Miles", body = DriveMiles),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn drive_miles(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    axum::extract::Query(query): axum::extract::Query<DriveMilesQuery>,
+) -> ApiResult<Json<DriveMiles>> {
+    let address = query.address.trim();
+    if address.is_empty() {
+        return Ok(Json(DriveMiles { miles: None }));
+    }
+    let home: Option<Option<String>> =
+        sqlx::query_scalar("SELECT address FROM company WHERE id = ?")
+            .bind(user.company_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some(home) = home
+        .flatten()
+        .map(|home| home.trim().to_string())
+        .filter(|h| !h.is_empty())
+    else {
+        return Ok(Json(DriveMiles { miles: None }));
+    };
+    Ok(Json(DriveMiles {
+        miles: state.maps.driving_miles(&home, address).await,
+    }))
+}
