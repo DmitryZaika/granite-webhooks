@@ -52,6 +52,8 @@ pub struct AppState {
     /// `LAMBDA_KEY`: the `Authorization` the scheduled jobs (`/v1/jobs/*`)
     /// must send. Jobs are refused when unset.
     pub job_key: Option<Arc<str>>,
+    /// Where the contract templates are read from (a stub in tests).
+    pub contract_templates_base: Arc<str>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -78,6 +80,7 @@ impl AppState {
             transcriber: Transcriber::disabled(),
             qbo: Qbo::disabled(),
             job_key: None,
+            contract_templates_base: Arc::from(crate::routes::sales::contract::TEMPLATES_BASE),
         }
     }
 
@@ -102,6 +105,12 @@ impl AppState {
     #[must_use]
     pub fn with_signwell_base(mut self, base: &str) -> Self {
         self.signwell_base = Arc::from(base.trim_end_matches('/'));
+        self
+    }
+
+    #[must_use]
+    pub fn with_contract_templates_base(mut self, base: &str) -> Self {
+        self.contract_templates_base = Arc::from(base.trim_end_matches('/'));
         self
     }
 

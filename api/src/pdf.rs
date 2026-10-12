@@ -10,6 +10,11 @@ use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str};
 pub const PAGE_WIDTH: f32 = 595.28;
 pub const PAGE_HEIGHT: f32 = 841.89;
 
+/// `text` in WinAnsi, as Helvetica draws it; missing characters become `?`.
+pub fn winansi(text: &str) -> Vec<u8> {
+    Font::Regular.encode(text)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Font {
     Regular,

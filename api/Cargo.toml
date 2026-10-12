@@ -18,6 +18,7 @@ chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 hmac = "0.13"
 lambda_http = "1.1"
+lopdf = { version = "0.45", default-features = false }
 miniz_oxide = "0.8"
 pdf-writer = "0.15"
 percent-encoding = "2.3"
