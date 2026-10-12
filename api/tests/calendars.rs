@@ -96,3 +96,98 @@ async fn renamed_built_in_calendar_gets_its_name_back(pool: MySqlPool) {
     assert_eq!(estimates["name"], "Estimates");
     assert_eq!(estimates["color"], "purple");
 }
+
+#[test_db::test(seed)]
+async fn admins_manage_calendars(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO calendars (id, company_id, name, color, slug, is_hidden) VALUES
+           (8710, 100, 'Installations', 'red', 'installations', 0),
+           (8711, 101, 'Theirs', 'gray', NULL, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool.clone());
+    let status = axum::http::StatusCode::from_u16;
+    server
+        .post("/v1/calendars")
+        .with_session(sessions::REP)
+        .json(&json!({ "name": "Crew" }))
+        .await
+        .assert_status(status(403).unwrap());
+    for (body, code) in [
+        (json!({ "name": " " }), 400),
+        (json!({ "name": "estimates" }), 400),
+        (json!({ "name": "x".repeat(101) }), 400),
+    ] {
+        server
+            .post("/v1/calendars")
+            .with_session(sessions::ADMIN)
+            .json(&body)
+            .await
+            .assert_status(status(code).unwrap());
+    }
+    let res = server
+        .post("/v1/calendars")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": " Crew ", "hidden": true }))
+        .await;
+    res.assert_status(status(201).unwrap());
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    let row = |id: i64| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, String, bool, bool)>(
+                "SELECT name, color, is_hidden <> 0, deleted_at IS NOT NULL FROM calendars WHERE id = ?",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(row(id).await, ("Crew".into(), "blue".into(), true, false));
+
+    server
+        .put(&format!("/v1/calendars/{id}"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Crew B", "color": "teal" }))
+        .await
+        .assert_status(status(204).unwrap());
+    server
+        .put(&format!("/v1/calendars/{id}/hidden"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "hidden": false }))
+        .await
+        .assert_status(status(204).unwrap());
+    assert_eq!(
+        row(id).await,
+        ("Crew B".into(), "teal".into(), false, false)
+    );
+
+    // A built-in calendar keeps its name and cannot be deleted.
+    server
+        .put("/v1/calendars/8710")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Installs", "color": "pink" }))
+        .await
+        .assert_status(status(204).unwrap());
+    assert_eq!(row(8710).await.0, "Installations");
+    assert_eq!(row(8710).await.1, "pink");
+    server
+        .delete("/v1/calendars/8710")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(status(400).unwrap());
+    server
+        .delete("/v1/calendars/8711")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(status(404).unwrap());
+    server
+        .delete(&format!("/v1/calendars/{id}"))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(status(204).unwrap());
+    assert!(row(id).await.3);
+}
