@@ -51,6 +51,7 @@ async fn get_returns_contact_details_and_every_email(pool: MySqlPool) {
             "qbo_id": null,
             "attached_file": null,
             "created_date": "2026-01-15T10:00:00.000Z",
+            "invalid_lead": null,
             "lead": {
                 "remodal_type": null, "project_size": null, "contact_time": null,
                 "remove_and_dispose": null, "improve_offer": null, "sink": null,

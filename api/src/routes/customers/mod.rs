@@ -32,6 +32,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::get, write::update, write::delete))
         .routes(routes!(write::set_sales_rep))
         .routes(routes!(write::set_temperature))
+        .routes(routes!(write::mark_invalid))
         .routes(routes!(history::history))
         .routes(routes!(projects::projects))
         .routes(routes!(projects::set_parent))

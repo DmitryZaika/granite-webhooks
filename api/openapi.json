@@ -1149,6 +1149,98 @@
         ]
       }
     },
+    "/v1/customers/{id}/invalid": {
+      "put": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Mark a lead invalid",
+        "description": "Records why the lead is invalid, unassigns it and hides its live deals\n(each deletion audited). Admins and sales managers only.",
+        "operationId": "mark_customer_invalid",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvalidInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Marked"
+          },
+          "400": {
+            "description": "Missing reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither an admin nor a sales manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live customer in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/customers/{id}/history": {
       "get": {
         "tags": [
@@ -16203,6 +16295,20 @@
             "description": "Comments, oldest first."
           }
         }
+      },
+      "InvalidInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/customers/{id}/invalid`.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Why the lead is invalid, e.g. `Out of area` (1–255 characters)."
+          }
+        },
+        "additionalProperties": false
       },
       "LeadAnswers": {
         "type": "object",

@@ -445,6 +445,110 @@ pub async fn set_temperature(
 /// `positions.id` of a sales manager (may delete customers).
 const SALES_MANAGER_POSITION: i32 = 2;
 
+/// Admins and the company's sales managers manage customers' fate.
+async fn require_manager(
+    pool: &sqlx::MySqlPool,
+    user: &crate::auth::session::SessionUser,
+) -> ApiResult<()> {
+    if user.is_admin || user.is_superuser {
+        return Ok(());
+    }
+    let manager: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM users_positions WHERE user_id = ? AND company_id = ? AND position_id = ? LIMIT 1",
+    )
+    .bind(user.id)
+    .bind(user.company_id)
+    .bind(SALES_MANAGER_POSITION)
+    .fetch_optional(pool)
+    .await?;
+    manager.map(|_| ()).ok_or(ApiError::Forbidden)
+}
+
+/// Body of `PUT /v1/customers/{id}/invalid`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InvalidInput {
+    /// Why the lead is invalid, e.g. `Out of area` (1–255 characters).
+    pub reason: String,
+}
+
+/// Mark a lead invalid
+///
+/// Records why the lead is invalid, unassigns it and hides its live deals
+/// (each deletion audited). Admins and sales managers only.
+#[utoipa::path(
+    put,
+    path = "/v1/customers/{id}/invalid",
+    operation_id = "mark_customer_invalid",
+    tag = "customers",
+    params(("id" = i32, Path, description = "Customer id")),
+    request_body = InvalidInput,
+    responses(
+        (status = 204, description = "Marked"),
+        (status = 400, description = "Missing reason", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is neither an admin nor a sales manager", body = ErrorBody),
+        (status = 404, description = "No such live customer in the company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn mark_invalid(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+    JsonBody(body): JsonBody<InvalidInput>,
+) -> ApiResult<StatusCode> {
+    let pool = &state.pool;
+    require_manager(pool, &user).await?;
+    let reason = body.reason.trim();
+    if reason.is_empty() || reason.chars().count() > 255 {
+        return Err(ApiError::BadRequest("Select a reason".into()));
+    }
+    let found: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM customers WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .bind(user.company_id)
+    .fetch_optional(pool)
+    .await?;
+    found.ok_or(ApiError::NotFound)?;
+    let deals: Vec<i64> = sqlx::query_scalar(
+        "SELECT CAST(id AS SIGNED) FROM deals WHERE customer_id = ? AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
+    let by = audit_name(user.name.as_deref());
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "UPDATE customers SET invalid_lead = ?, sales_rep = NULL WHERE id = ? AND company_id = ?",
+    )
+    .bind(reason)
+    .bind(id)
+    .bind(user.company_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE deals SET deleted_at = NOW() WHERE customer_id = ? AND deleted_at IS NULL")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    if let Some(by) = &by {
+        for deal_id in deals {
+            sqlx::query(
+                "INSERT INTO customers_history (customer_id, reassigned_by, reassigned_to) VALUES (?, ?, ?)",
+            )
+            .bind(id)
+            .bind(by)
+            .bind(format!("deal_deleted:{deal_id}"))
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Delete a customer
 ///
 /// Hides the customer (soft delete) and removes it from the telephony
@@ -473,19 +577,7 @@ pub async fn delete(
     Query(query): Query<DeleteQuery>,
 ) -> ApiResult<StatusCode> {
     let pool = &state.pool;
-    if !(user.is_admin || user.is_superuser) {
-        let manager: Option<i32> = sqlx::query_scalar(
-            "SELECT 1 FROM users_positions WHERE user_id = ? AND company_id = ? AND position_id = ? LIMIT 1",
-        )
-        .bind(user.id)
-        .bind(user.company_id)
-        .bind(SALES_MANAGER_POSITION)
-        .fetch_optional(pool)
-        .await?;
-        if manager.is_none() {
-            return Err(ApiError::Forbidden);
-        }
-    }
+    require_manager(pool, &user).await?;
     let found: Option<i32> = sqlx::query_scalar(
         "SELECT 1 FROM customers WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )

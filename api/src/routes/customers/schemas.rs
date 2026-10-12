@@ -191,6 +191,8 @@ pub struct CustomerDetail {
     #[serde(serialize_with = "js_date")]
     #[schema(value_type = Option<String>, format = DateTime)]
     pub created_date: Option<DateTime<Utc>>,
+    /// Why the lead was marked invalid; null or empty for a valid one.
+    pub invalid_lead: Option<String>,
     /// Lead form answers, as the lead sources send them (free text).
     #[sqlx(flatten)]
     pub lead: LeadAnswers,

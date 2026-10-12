@@ -140,7 +140,7 @@ pub async fn find_customer(
         "SELECT c.id, c.name, c.address, c.phone, c.phone_2, ce.email, c.company_name,
             c.source, c.referral_source, c.your_message, c.sales_rep, u.name AS sales_rep_name,
             c.city, c.state, c.postal_code, CAST(c.customer_temperature AS CHAR) AS customer_temperature,
-            c.notes, c.qbo_id, c.attached_file, c.created_date,
+            c.notes, c.qbo_id, c.attached_file, c.created_date, c.invalid_lead,
             c.remodal_type, c.project_size, c.contact_time, c.remove_and_dispose, c.improve_offer,
             c.sink, c.when_start, c.details, c.compaign_name, c.adset_name, c.ad_name,
             c.backsplash, c.kitchen_stove

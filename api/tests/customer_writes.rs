@@ -380,3 +380,46 @@ async fn admins_and_sales_managers_delete_customers(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NOT_FOUND);
 }
+
+#[test_db::test(seed)]
+async fn managers_mark_leads_invalid(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let mark = |session: &'static str, id: i32| {
+        let server = &server;
+        async move {
+            server
+                .put(&format!("/v1/customers/{id}/invalid"))
+                .with_session(session)
+                .json(&json!({ "reason": "Out of area" }))
+                .await
+        }
+    };
+    mark(RITA, 1000).await.assert_status(StatusCode::FORBIDDEN);
+    mark(sessions::MANAGER, 2000)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    mark(sessions::MANAGER, 1000)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let (reason, rep): (Option<String>, Option<i32>) =
+        sqlx::query_as("SELECT invalid_lead, sales_rep FROM customers WHERE id = 1000")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(reason.as_deref(), Some("Out of area"));
+    assert_eq!(rep, None);
+    let live: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM deals WHERE customer_id = 1000 AND deleted_at IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(live, 0);
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM customers_history WHERE customer_id = 1000 AND reassigned_by = 'Mark Manager' AND reassigned_to LIKE 'deal_deleted:%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audited, 3);
+}
