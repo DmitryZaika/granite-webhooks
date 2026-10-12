@@ -36,6 +36,7 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         (name = "calls", description = "Calls through the company's telephony provider"),
         (name = "quotes", description = "Quote tools"),
         (name = "delayed", description = "Scheduled emails and texts"),
+        (name = "ai-usage", description = "AI usage for the super-user dashboard"),
         (name = "public", description = "The public showroom; no session needed"),
         (name = "catalog", description = "Suppliers, colors and stone types the inventory forms pick from"),
         (name = "uploads", description = "Presigned uploads of images to storage"),

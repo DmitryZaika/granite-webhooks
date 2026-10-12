@@ -19816,6 +19816,124 @@
           }
         ]
       }
+    },
+    "/v1/ai-usage/feature": {
+      "get": {
+        "tags": [
+          "ai-usage"
+        ],
+        "summary": "Get one AI feature's usage",
+        "description": "Totals, the five costliest users and the latest calls of a feature in\na date range (optionally one company). Super users only.",
+        "operationId": "get_ai_feature_usage",
+        "parameters": [
+          {
+            "name": "feature",
+            "in": "query",
+            "description": "Feature key, up to 50 of `a-z 0-9 _ . : -`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from_date",
+            "in": "query",
+            "description": "First day (default: all time).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to_date",
+            "in": "query",
+            "description": "Last day.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Only this company.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "call_limit",
+            "in": "query",
+            "description": "Recent calls shown, 1 to 200 (default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureUsage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a feature key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a super user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -23659,6 +23777,197 @@
             "type": "integer",
             "format": "int64",
             "description": "Units in stock that are not installed on a sold slab."
+          }
+        }
+      },
+      "FeatureCall": {
+        "type": "object",
+        "description": "A recent call.",
+        "required": [
+          "id",
+          "model",
+          "api_kind",
+          "cost_usd",
+          "success",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The log row."
+          },
+          "model": {
+            "type": "string",
+            "description": "Model used."
+          },
+          "api_kind": {
+            "type": "string",
+            "description": "`chat`, `image` or `transcription`."
+          },
+          "user_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who made it; null for background jobs."
+          },
+          "input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Input tokens."
+          },
+          "output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Output tokens."
+          },
+          "cost_usd": {
+            "type": "number",
+            "format": "double",
+            "description": "Cost (USD)."
+          },
+          "success": {
+            "type": "boolean",
+            "description": "It succeeded."
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How long it took."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When."
+          }
+        }
+      },
+      "FeatureMetrics": {
+        "type": "object",
+        "description": "Totals of the feature in the range.",
+        "required": [
+          "requests",
+          "avg_cost_usd",
+          "total_cost_usd"
+        ],
+        "properties": {
+          "requests": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls."
+          },
+          "success_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Share that succeeded, 0 to 1; null without calls."
+          },
+          "avg_input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Average input tokens."
+          },
+          "avg_output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Average output tokens."
+          },
+          "avg_cost_usd": {
+            "type": "number",
+            "format": "double",
+            "description": "Average cost per call (USD)."
+          },
+          "total_cost_usd": {
+            "type": "number",
+            "format": "double",
+            "description": "Total cost (USD)."
+          }
+        }
+      },
+      "FeatureUsage": {
+        "type": "object",
+        "description": "`GET /v1/ai-usage/feature`.",
+        "required": [
+          "metrics",
+          "top_users",
+          "recent_calls",
+          "has_more_recent_calls"
+        ],
+        "properties": {
+          "metrics": {
+            "$ref": "#/components/schemas/FeatureMetrics",
+            "description": "Totals."
+          },
+          "top_users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeatureUser"
+            },
+            "description": "The five costliest users."
+          },
+          "recent_calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeatureCall"
+            },
+            "description": "Newest calls first."
+          },
+          "has_more_recent_calls": {
+            "type": "boolean",
+            "description": "More calls than `call_limit` (under 200)."
+          }
+        }
+      },
+      "FeatureUser": {
+        "type": "object",
+        "description": "One of the five costliest users.",
+        "required": [
+          "requests",
+          "cost_usd"
+        ],
+        "properties": {
+          "user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The user; null for background jobs."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their name."
+          },
+          "requests": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls."
+          },
+          "cost_usd": {
+            "type": "number",
+            "format": "double",
+            "description": "Cost (USD)."
           }
         }
       },
@@ -30187,6 +30496,10 @@
     {
       "name": "delayed",
       "description": "Scheduled emails and texts"
+    },
+    {
+      "name": "ai-usage",
+      "description": "AI usage for the super-user dashboard"
     },
     {
       "name": "public",
