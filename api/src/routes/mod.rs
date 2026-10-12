@@ -16,6 +16,7 @@ pub mod customer_sources;
 pub mod customers;
 pub mod dashboard;
 pub mod deals;
+pub mod delayed;
 pub mod emails;
 pub mod events;
 pub mod faucets;
@@ -73,4 +74,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(places::router())
         .merge(calls::router())
         .merge(quotes::router())
+        .merge(delayed::router())
 }

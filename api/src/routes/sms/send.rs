@@ -128,7 +128,7 @@ fn valid_key(company_id: i32, key: &str) -> bool {
 }
 
 /// Checks the request; the error token when it cannot be sent.
-fn check(user: &SessionUser, request: &SendSmsRequest) -> Result<(), &'static str> {
+pub fn check(user: &SessionUser, request: &SendSmsRequest) -> Result<(), &'static str> {
     let images_enabled = std::env::var("SMS_IMAGES_ENABLED").map_or(true, |value| {
         !matches!(
             value.trim().to_lowercase().as_str(),
@@ -299,6 +299,78 @@ fn failure_response(failure: SmsFailure) -> Response {
         .into_response()
 }
 
+/// Why a text did not go out.
+pub enum Undelivered {
+    /// Storage or database failed.
+    Api(ApiError),
+    /// The webhooks Lambda refused or the provider failed.
+    Sms(SmsFailure),
+}
+
+/// Sends a checked text now through the webhooks Lambda, marks the thread
+/// read for the sender and counts the template; the stored message ids.
+pub async fn deliver_now(
+    state: &AppState,
+    user: &SessionUser,
+    provider: SmsProvider,
+    agent_id: String,
+    request: &SendSmsRequest,
+) -> Result<Vec<i64>, Undelivered> {
+    let mut attachments = Vec::with_capacity(request.attachments.len());
+    for file in &request.attachments {
+        let default_name = if file.content_type.starts_with("image/") {
+            "image"
+        } else {
+            "file"
+        };
+        let filename: String = file.filename.chars().take(255).collect();
+        attachments.push(OutgoingSmsFile {
+            url: state
+                .storage
+                .public_url(&file.s3_key)
+                .map_err(|err| Undelivered::Api(err.into()))?,
+            s3_key: file.s3_key.clone(),
+            content_type: file.content_type.clone(),
+            filename: if filename.is_empty() {
+                default_name.to_string()
+            } else {
+                filename
+            },
+            width: file.width,
+            height: file.height,
+        });
+    }
+    let outgoing = OutgoingSms {
+        provider: provider.as_str().to_string(),
+        company_id: user.company_id,
+        user_id: user.id,
+        agent_id,
+        phone_digits: request.phone_digits.clone(),
+        text: request.text.trim().to_string(),
+        attachments,
+        is_automated: false,
+    };
+    let ids = match state.webhooks.send_sms(&outgoing).await {
+        Ok(ids) => ids,
+        Err(failure) => return Err(Undelivered::Sms(failure)),
+    };
+    let digits = phone10(&request.phone_digits);
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO {} (user_id, company_id, customer_phone_digits, last_read_at)
+         VALUES (?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE last_read_at = GREATEST(last_read_at, NOW())",
+        provider.reads_table()
+    )))
+    .bind(user.id)
+    .bind(user.company_id)
+    .bind(&digits)
+    .execute(&state.pool)
+    .await
+    .map_err(|err| Undelivered::Api(err.into()))?;
+    record_template_usage(&state.pool, user, provider, request.template_id).await;
+    Ok(ids)
+}
+
 /// Send a text
 ///
 /// Sends a text (with photos or files uploaded beforehand) to a phone
@@ -350,54 +422,12 @@ pub async fn send(
     if !take_send_slot(&state, user.id) {
         return Ok(refuse(StatusCode::TOO_MANY_REQUESTS, "rate_limited"));
     }
-    let mut attachments = Vec::with_capacity(request.attachments.len());
-    for file in &request.attachments {
-        let default_name = if file.content_type.starts_with("image/") {
-            "image"
-        } else {
-            "file"
-        };
-        let filename: String = file.filename.chars().take(255).collect();
-        attachments.push(OutgoingSmsFile {
-            url: state.storage.public_url(&file.s3_key)?,
-            s3_key: file.s3_key.clone(),
-            content_type: file.content_type.clone(),
-            filename: if filename.is_empty() {
-                default_name.to_string()
-            } else {
-                filename
-            },
-            width: file.width,
-            height: file.height,
-        });
-    }
-    let outgoing = OutgoingSms {
-        provider: provider.as_str().to_string(),
-        company_id: user.company_id,
-        user_id: user.id,
-        agent_id,
-        phone_digits: request.phone_digits.clone(),
-        text: request.text.trim().to_string(),
-        attachments,
-        is_automated: false,
-    };
-    let ids = match state.webhooks.send_sms(&outgoing).await {
+    let ids = match deliver_now(&state, &user, provider, agent_id, &request).await {
         Ok(ids) => ids,
-        Err(failure) => return Ok(failure_response(failure)),
+        Err(Undelivered::Api(err)) => return Err(err),
+        Err(Undelivered::Sms(failure)) => return Ok(failure_response(failure)),
     };
     let digits = phone10(&request.phone_digits);
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "INSERT INTO {} (user_id, company_id, customer_phone_digits, last_read_at)
-         VALUES (?, ?, ?, NOW())
-         ON DUPLICATE KEY UPDATE last_read_at = GREATEST(last_read_at, NOW())",
-        provider.reads_table()
-    )))
-    .bind(user.id)
-    .bind(user.company_id)
-    .bind(&digits)
-    .execute(&state.pool)
-    .await?;
-    record_template_usage(&state.pool, &user, provider, request.template_id).await;
     let message = match ids.first() {
         Some(id) => message_by_id(&state.pool, provider, user.company_id, &digits, *id).await?,
         None => None,

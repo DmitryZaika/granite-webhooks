@@ -23,7 +23,7 @@ pub mod provider;
 mod rollup;
 mod schemas;
 mod scope;
-mod send;
+pub mod send;
 mod thread;
 mod threads;
 

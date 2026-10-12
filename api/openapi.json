@@ -19202,6 +19202,444 @@
           }
         ]
       }
+    },
+    "/v1/delayed/sms": {
+      "get": {
+        "tags": [
+          "delayed"
+        ],
+        "summary": "List my scheduled texts to a phone",
+        "description": "Sends the caller's due messages first.",
+        "operationId": "list_delayed_sms",
+        "parameters": [
+          {
+            "name": "phone_digits",
+            "in": "query",
+            "description": "The thread's phone, 5 to 15 digits.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scheduled texts, soonest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Pending"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a thread phone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/delayed/emails": {
+      "get": {
+        "tags": [
+          "delayed"
+        ],
+        "summary": "List my scheduled emails in a conversation or to a customer",
+        "description": "Sends the caller's due messages first; empty without a thread or customer.",
+        "operationId": "list_delayed_emails",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "query",
+            "description": "The conversation.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "description": "Or the customer.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scheduled emails, soonest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Pending"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/delayed/{kind}/{id}": {
+      "put": {
+        "tags": [
+          "delayed"
+        ],
+        "summary": "Edit a scheduled message",
+        "description": "Replaces the text (an email's body) and the send time.",
+        "operationId": "edit_delayed",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "`sms` or `emails`",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Which scheduled messages.",
+              "enum": [
+                "sms",
+                "emails"
+              ]
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Row id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditPending"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Past or too far send time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's pending message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "delayed"
+        ],
+        "summary": "Cancel a scheduled message",
+        "description": "It will not be sent.",
+        "operationId": "cancel_delayed",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "`sms` or `emails`",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Which scheduled messages.",
+              "enum": [
+                "sms",
+                "emails"
+              ]
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Row id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Cancelled"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's pending message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/delayed/{kind}/{id}/send-now": {
+      "post": {
+        "tags": [
+          "delayed"
+        ],
+        "summary": "Send a scheduled message now",
+        "description": "Sends it right away, even if the customer has written since.",
+        "operationId": "send_delayed_now",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "`sms` or `emails`",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Which scheduled messages.",
+              "enum": [
+                "sms",
+                "emails"
+              ]
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Row id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Sent (or failed; the row says which)"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's pending message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -22140,6 +22578,25 @@
               "null"
             ],
             "description": "Assigned sales rep's name."
+          }
+        }
+      },
+      "EditPending": {
+        "type": "object",
+        "description": "Body of `PUT /v1/delayed/{kind}/{id}`.",
+        "required": [
+          "text",
+          "send_at"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The new text (email body)."
+          },
+          "send_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When to send it: in the future, within 90 days."
           }
         }
       },
@@ -25092,6 +25549,41 @@
               "null"
             ],
             "description": "That customer's name."
+          }
+        }
+      },
+      "Pending": {
+        "type": "object",
+        "description": "A scheduled message.",
+        "required": [
+          "id",
+          "send_at",
+          "text",
+          "message",
+          "cancel_if_customer_messages"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The row."
+          },
+          "send_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it goes out (UTC)."
+          },
+          "text": {
+            "type": "string",
+            "description": "The text; for an email the subject and body, shortened."
+          },
+          "message": {
+            "type": "string",
+            "description": "The full text or email body."
+          },
+          "cancel_if_customer_messages": {
+            "type": "boolean",
+            "description": "Dropped if the customer writes first."
           }
         }
       },
@@ -29258,6 +29750,10 @@
     {
       "name": "quotes",
       "description": "Quote tools"
+    },
+    {
+      "name": "delayed",
+      "description": "Scheduled emails and texts"
     },
     {
       "name": "public",

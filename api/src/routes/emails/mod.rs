@@ -25,7 +25,7 @@ mod handlers;
 mod list;
 mod names;
 pub mod schemas;
-mod send;
+pub mod send;
 pub mod sql;
 pub mod thread;
 

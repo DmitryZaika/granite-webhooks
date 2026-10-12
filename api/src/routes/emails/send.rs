@@ -505,7 +505,7 @@ impl Envelope {
     }
 }
 
-async fn deliver(
+pub async fn deliver(
     state: &AppState,
     user: &SessionUser,
     email: &Cleaned,

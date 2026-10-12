@@ -35,6 +35,7 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         (name = "places", description = "Address suggestions from Google Places"),
         (name = "calls", description = "Calls through the company's telephony provider"),
         (name = "quotes", description = "Quote tools"),
+        (name = "delayed", description = "Scheduled emails and texts"),
         (name = "public", description = "The public showroom; no session needed"),
         (name = "catalog", description = "Suppliers, colors and stone types the inventory forms pick from"),
         (name = "uploads", description = "Presigned uploads of images to storage"),
