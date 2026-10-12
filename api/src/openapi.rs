@@ -48,6 +48,7 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         (name = "checklists", description = "Post-installation checklists installers fill in and customers sign"),
         (name = "shop", description = "The fabrication shop's own pages"),
         (name = "reports", description = "Admin reports"),
+        (name = "marketing", description = "The marketing team's portal: a company's leads"),
         (name = "company", description = "The company the request acts in"),
         (name = "stats", description = "The signed-in user's own sales and messaging numbers"),
         (name = "dashboard", description = "The signed-in user's employee dashboard layout"),

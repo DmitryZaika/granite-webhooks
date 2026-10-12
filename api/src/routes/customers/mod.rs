@@ -18,7 +18,7 @@ mod duplicates;
 pub mod estimate_time;
 pub(crate) mod fuzzy;
 mod handlers;
-mod history;
+pub mod history;
 mod phones;
 mod projects;
 pub mod queries;

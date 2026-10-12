@@ -20687,6 +20687,1137 @@
         ]
       }
     },
+    "/v1/marketing/{company_id}/leads": {
+      "get": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "List the leads",
+        "description": "The company's leads (or walk-ins) created in the range, newest first,\nwith their live deals, the company's stages and invalid / lost counts.",
+        "operationId": "list_marketing_leads",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view",
+            "in": "query",
+            "description": "`leads` (default; web and ad leads), `walkins` (check-ins) or `all`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "description": "`all` (default), `facebook` or `website`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Created on or after this day, `YYYY-MM-DD`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Created on or before this day, `YYYY-MM-DD`. Swapped with `from`\nwhen before it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The leads page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadsPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "Add a lead",
+        "description": "Saves a lead (source `leads`, created by \"Marketing team\") with its\nemails, then hands it to the lead pipeline, which opens its deal and\ntells the sales team.",
+        "operationId": "create_marketing_lead",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedLead"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or an unknown referral source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An email belongs to another customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/marketing/{company_id}/leads/{id}": {
+      "get": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "Get a lead",
+        "description": "A live lead of the company, for its edit form.",
+        "operationId": "get_marketing_lead",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The lead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditableLead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live lead in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "Edit a lead",
+        "description": "Saves the name, phones, address, message and emails of a live lead.",
+        "operationId": "update_marketing_lead",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "No name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live lead in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An email belongs to another customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "Delete a lead",
+        "description": "Deletes a live lead and its deals, and removes the Telegram messages\nabout it.",
+        "operationId": "delete_marketing_lead",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live lead in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/marketing/{company_id}/leads/{id}/info": {
+      "get": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "A lead's card",
+        "description": "A live lead of the company with its deals and reassignments.",
+        "operationId": "get_marketing_lead_card",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The card",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadCard"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live lead in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/marketing/{company_id}/leads/{id}/projects": {
+      "get": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "A lead's projects",
+        "description": "The lead's business (its parent, or itself) and every project under\nit, by name, with their sales.",
+        "operationId": "list_marketing_lead_projects",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Projects by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LeadProject"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live lead in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/marketing/{company_id}/uploads": {
+      "post": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "Upload a lead picture",
+        "description": "A presigned `PUT` URL for a picture to attach to a new lead, and the\npublic URL to send as its `file_url`.",
+        "operationId": "create_marketing_upload",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Upload URL and public URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Upload"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an image",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Uploads are not configured on this server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/marketing/{company_id}/referral-sources": {
+      "get": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "List referral sources",
+        "description": "The company's referral sources, by name: the choices for a new lead.",
+        "operationId": "list_marketing_referral_sources",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sources by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReferralSource"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "Add a referral source",
+        "description": "Adds a source the company's leads can come from.",
+        "operationId": "create_marketing_referral_source",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReferralSourceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferralSource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or longer than 255 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A source with this name exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/marketing/{company_id}/referral-sources/{id}": {
+      "delete": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "Delete a referral source",
+        "description": "Hides a source from the add-lead form; leads keep it.",
+        "operationId": "delete_marketing_referral_source",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "Rename a referral source",
+        "description": "Renames a source; leads keep the name they were saved with.",
+        "operationId": "rename_marketing_referral_source",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReferralSourceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Renamed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferralSource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or longer than 255 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another source has this name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/reports/cut-slabs": {
       "get": {
         "tags": [
@@ -28579,6 +29710,20 @@
           }
         }
       },
+      "CreatedLead": {
+        "type": "object",
+        "description": "Response of creating a lead.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id."
+          }
+        }
+      },
       "CreatedModel": {
         "type": "object",
         "description": "Response of the create routes.",
@@ -30722,6 +31867,70 @@
               "$ref": "#/components/schemas/Line"
             },
             "description": "The lines, in order."
+          }
+        }
+      },
+      "EditableLead": {
+        "type": "object",
+        "description": "A lead as its edit form shows it.",
+        "required": [
+          "id",
+          "emails"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone."
+          },
+          "phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Second phone."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`leads` or `check-in`."
+          },
+          "your_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the customer wrote."
+          },
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Email addresses, primary first."
           }
         }
       },
@@ -33159,6 +34368,94 @@
         },
         "additionalProperties": false
       },
+      "InvalidReasons": {
+        "type": "object",
+        "description": "Leads lost or marked invalid, by reason.",
+        "required": [
+          "too_expensive",
+          "out_of_area",
+          "never_responded",
+          "wrong_contact",
+          "accident_submission",
+          "unrelated_service",
+          "bought_elsewhere",
+          "stopped_responding",
+          "gave_up_on_the_project"
+        ],
+        "properties": {
+          "too_expensive": {
+            "type": "integer",
+            "format": "int64",
+            "description": "\"Too expensive\"."
+          },
+          "out_of_area": {
+            "type": "integer",
+            "format": "int64",
+            "description": "\"Out of area\"."
+          },
+          "never_responded": {
+            "type": "integer",
+            "format": "int64",
+            "description": "\"Never responded\"."
+          },
+          "wrong_contact": {
+            "type": "integer",
+            "format": "int64",
+            "description": "\"Wrong number, email, etc.\"."
+          },
+          "accident_submission": {
+            "type": "integer",
+            "format": "int64",
+            "description": "\"Accident submission\"."
+          },
+          "unrelated_service": {
+            "type": "integer",
+            "format": "int64",
+            "description": "\"Looking for unrelated service\"."
+          },
+          "bought_elsewhere": {
+            "type": "integer",
+            "format": "int64",
+            "description": "\"Bought somewhere else\"."
+          },
+          "stopped_responding": {
+            "type": "integer",
+            "format": "int64",
+            "description": "\"Stopped responding\"."
+          },
+          "gave_up_on_the_project": {
+            "type": "integer",
+            "format": "int64",
+            "description": "\"Gave up on the project\"."
+          }
+        }
+      },
+      "InvalidStats": {
+        "type": "object",
+        "description": "Invalid leads by channel.",
+        "required": [
+          "facebook",
+          "website",
+          "total"
+        ],
+        "properties": {
+          "facebook": {
+            "type": "integer",
+            "format": "int64",
+            "description": "From Facebook."
+          },
+          "website": {
+            "type": "integer",
+            "format": "int64",
+            "description": "From the website."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "All."
+          }
+        }
+      },
       "InventorySlab": {
         "type": "object",
         "description": "A free slab.",
@@ -33454,6 +34751,225 @@
           }
         }
       },
+      "LeadCard": {
+        "type": "object",
+        "description": "A lead's card.",
+        "required": [
+          "customer",
+          "history",
+          "has_projects"
+        ],
+        "properties": {
+          "customer": {
+            "$ref": "#/components/schemas/CustomerDetail",
+            "description": "Contact details and the web form's answers."
+          },
+          "history": {
+            "$ref": "#/components/schemas/CustomerHistory",
+            "description": "Deals, reassignments and when it reached a sales rep (no emails,\nactivities or notes)."
+          },
+          "has_projects": {
+            "type": "boolean",
+            "description": "The lead is a business or has projects (show the projects tab)."
+          }
+        }
+      },
+      "LeadInput": {
+        "type": "object",
+        "description": "Body of `POST` and `PUT` on a lead.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name; required."
+          },
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Email addresses, the first one primary."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone."
+          },
+          "phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Second phone."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address."
+          },
+          "your_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the customer wrote."
+          },
+          "referral_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Creating only: one of the company's referral sources; required."
+          },
+          "file_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Creating only: a picture uploaded with `POST /v1/marketing/{company_id}/uploads`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LeadProject": {
+        "type": "object",
+        "description": "A project (the lead's business or one of its jobs).",
+        "required": [
+          "id",
+          "emails",
+          "sales"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Primary email."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Source."
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "City."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "State."
+          },
+          "postal_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ZIP code."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Business name."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes."
+          },
+          "sales_rep_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Assigned sales rep's name."
+          },
+          "deal_stage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stage of its newest live deal."
+          },
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every email address, primary first."
+          },
+          "sales": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectSale"
+            },
+            "description": "Its sales."
+          }
+        }
+      },
+      "LeadUploadRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/marketing/{company_id}/uploads`.",
+        "required": [
+          "file_name",
+          "content_type"
+        ],
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "description": "Original file name; only its extension is kept."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "An image type (`image/jpeg`, `image/png`...): the `Content-Type` of the `PUT`."
+          }
+        },
+        "additionalProperties": false
+      },
       "LeaderboardActivity": {
         "type": "object",
         "description": "Counts behind the call, text and email points, after the daily caps.",
@@ -33542,6 +35058,62 @@
           "all",
           "month"
         ]
+      },
+      "LeadsPage": {
+        "type": "object",
+        "description": "The leads page.",
+        "required": [
+          "leads",
+          "deals",
+          "stages",
+          "invalid_stats",
+          "invalid_reasons"
+        ],
+        "properties": {
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The range used, `YYYY-MM-DD`; null when open."
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The range used."
+          },
+          "leads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketingLead"
+            },
+            "description": "Leads, newest first."
+          },
+          "deals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketingDeal"
+            },
+            "description": "Their live deals created in the range, newest first."
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketingStage"
+            },
+            "description": "The company's stages."
+          },
+          "invalid_stats": {
+            "$ref": "#/components/schemas/InvalidStats",
+            "description": "Invalid leads by channel."
+          },
+          "invalid_reasons": {
+            "$ref": "#/components/schemas/InvalidReasons",
+            "description": "Lost or invalid leads by reason."
+          }
+        }
       },
       "LibraryFile": {
         "type": "object",
@@ -33949,6 +35521,178 @@
           "name": {
             "type": "string",
             "description": "Its name."
+          }
+        }
+      },
+      "MarketingDeal": {
+        "type": "object",
+        "description": "A live deal of a listed lead.",
+        "required": [
+          "id",
+          "customer_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal id."
+          },
+          "customer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The lead."
+          },
+          "list_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its stage."
+          },
+          "amount": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Amount, decimal string."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Status text."
+          },
+          "lost_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it was lost."
+          },
+          "is_won": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "1 won, 0 lost, null open."
+          }
+        }
+      },
+      "MarketingLead": {
+        "type": "object",
+        "description": "A lead in the list.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Primary email."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone."
+          },
+          "created_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the lead came in."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`leads` or `check-in`."
+          },
+          "referral_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it came from, e.g. `facebook`."
+          },
+          "form_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The web form it came through."
+          },
+          "sales_rep": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Assigned sales rep."
+          },
+          "sales_rep_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their name."
+          },
+          "invalid_lead": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it is invalid; null when valid."
+          }
+        }
+      },
+      "MarketingStage": {
+        "type": "object",
+        "description": "A deal stage of the company's displayed pipelines.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stage id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Order in the board."
           }
         }
       },
@@ -36226,6 +37970,20 @@
           "instagram",
           "other"
         ]
+      },
+      "ReferralSourceInput": {
+        "type": "object",
+        "description": "Body of `POST` and `PATCH` on referral sources.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "1 to 255 characters; unique per company, ignoring case."
+          }
+        },
+        "additionalProperties": false
       },
       "ReminderRun": {
         "type": "object",
@@ -40513,7 +42271,8 @@
           "images",
           "supports",
           "bug-reports",
-          "email-templates"
+          "email-templates",
+          "leads"
         ]
       },
       "UploadRequest": {
@@ -40923,6 +42682,10 @@
     {
       "name": "reports",
       "description": "Admin reports"
+    },
+    {
+      "name": "marketing",
+      "description": "The marketing team's portal: a company's leads"
     },
     {
       "name": "company",

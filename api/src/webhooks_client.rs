@@ -157,6 +157,54 @@ impl WebhooksClient {
 }
 
 impl WebhooksClient {
+    /// Hands a lead the marketing team added to the lead pipeline
+    /// (`POST /v1/webhooks/new-lead-form/{company_id}`): it finds the saved
+    /// customer, opens a deal and notifies the sales team. Best effort.
+    pub async fn notify_new_lead(&self, company_id: i32, lead: &serde_json::Value) {
+        let Some(target) = &self.target else {
+            return;
+        };
+        let (url, key) = target.as_ref();
+        let result = self
+            .http
+            .post(format!("{url}/v1/webhooks/new-lead-form/{company_id}"))
+            .header("Authorization", key)
+            .json(lead)
+            .send()
+            .await;
+        match result {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) => {
+                tracing::warn!(status = %response.status(), company_id, "new lead webhook refused");
+            }
+            Err(err) => tracing::warn!(error = %err.without_url(), "new lead webhook failed"),
+        }
+    }
+
+    /// Deletes the Telegram messages about a deleted lead
+    /// (`DELETE /telegram/lead-messages/{company_id}/{customer_id}`). Best effort.
+    pub async fn delete_lead_messages(&self, company_id: i32, customer_id: i32) {
+        let Some(target) = &self.target else {
+            return;
+        };
+        let (url, key) = target.as_ref();
+        let result = self
+            .http
+            .delete(format!(
+                "{url}/telegram/lead-messages/{company_id}/{customer_id}"
+            ))
+            .header("Authorization", key)
+            .send()
+            .await;
+        match result {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) => {
+                tracing::warn!(status = %response.status(), customer_id, "lead message cleanup refused");
+            }
+            Err(err) => tracing::warn!(error = %err.without_url(), "lead message cleanup failed"),
+        }
+    }
+
     /// A CRM notification to the user's Telegram (`POST /telegram/crm-notify`).
     /// Best effort: failures are only logged.
     pub async fn notify_telegram_crm(&self, notify: &TelegramCrmNotify) {

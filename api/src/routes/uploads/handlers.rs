@@ -110,7 +110,7 @@ pub const DOCUMENT_CONTENT_TYPES: &[&str] = &[
 ];
 
 /// `.jpg` from `photo.JPG`, else from the content type.
-fn extension(file_name: &str, content_type: &str) -> String {
+pub fn extension(file_name: &str, content_type: &str) -> String {
     let from_name = file_name
         .rsplit_once('.')
         .map(|(_, ext)| ext.to_lowercase())

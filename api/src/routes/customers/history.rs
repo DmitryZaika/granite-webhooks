@@ -251,6 +251,25 @@ pub async fn history(
 ) -> ApiResult<Json<CustomerHistory>> {
     let pool = &state.pool;
     let company_id = user.company_id;
+    let mut history = lead_history(pool, company_id, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    record_missing_sends(pool, None, id).await;
+    history.emails = customer_emails(pool, company_id, id).await?;
+    if history.deleted_at.is_none() {
+        history.activities = activities(pool, company_id, id).await?;
+        history.notes = notes(pool, company_id, id).await?;
+    }
+    Ok(Json(history))
+}
+
+/// The customer's history without its emails, activities and notes (what
+/// the marketing team may see); `None` when the company has no such customer.
+pub async fn lead_history(
+    pool: &MySqlPool,
+    company_id: i32,
+    id: i32,
+) -> Result<Option<CustomerHistory>, sqlx::Error> {
     let customer: Option<CustomerRow> = sqlx::query_as(
         "SELECT created_by, assigned_date, deleted_at, parent_id
          FROM customers WHERE id = ? AND company_id = ?",
@@ -259,7 +278,9 @@ pub async fn history(
     .bind(company_id)
     .fetch_optional(pool)
     .await?;
-    let (created_by, assigned_date, deleted_at, parent_id) = customer.ok_or(ApiError::NotFound)?;
+    let Some((created_by, assigned_date, deleted_at, parent_id)) = customer else {
+        return Ok(None);
+    };
 
     let deals: Vec<HistoryDeal> = sqlx::query_as(
         "SELECT CAST(d.id AS SIGNED) AS id, CAST(d.amount AS CHAR) AS amount, d.lost_reason,
@@ -292,17 +313,6 @@ pub async fn history(
     .await?;
     let (first_rep_deal_created_at, initial_sales_rep_name) = first.unwrap_or_default();
 
-    record_missing_sends(pool, None, id).await;
-    let emails = customer_emails(pool, company_id, id).await?;
-    let (activities, notes) = if deleted_at.is_none() {
-        (
-            activities(pool, company_id, id).await?,
-            notes(pool, company_id, id).await?,
-        )
-    } else {
-        (Vec::new(), Vec::new())
-    };
-
     let mut created_deals = Vec::new();
     let mut deleted_deals = Vec::new();
     let mut closed_deals = Vec::new();
@@ -334,7 +344,7 @@ pub async fn history(
         }
     }
 
-    Ok(Json(CustomerHistory {
+    Ok(Some(CustomerHistory {
         created_by,
         assigned_date,
         deleted_at,
@@ -346,9 +356,9 @@ pub async fn history(
         created_deals,
         deleted_deals,
         closed_deals,
-        emails,
-        activities,
-        notes,
+        emails: Vec::new(),
+        activities: Vec::new(),
+        notes: Vec::new(),
     }))
 }
 

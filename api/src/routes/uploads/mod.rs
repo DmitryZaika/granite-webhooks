@@ -6,7 +6,7 @@
 //! Records take the public URL afterwards (stone image, installed photos,
 //! slab photo); [`attach`] checks it and stores the thumbnail.
 
-mod handlers;
+pub mod handlers;
 pub mod schemas;
 
 use crate::error::ApiError;
