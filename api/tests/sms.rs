@@ -361,3 +361,60 @@ async fn search_finds_names_in_any_word_order(pool: MySqlPool) {
     .await;
     assert_eq!(phones(&found), ["3175550100"]);
 }
+
+#[test_db::test(seed)]
+async fn history_lists_a_deals_or_phones_texts(pool: MySqlPool) {
+    seed(&pool).await;
+    // Deal 8000 (Alice, made last month): the fixture's texts are older.
+    sqlx::query("UPDATE deals SET created_at = '2025-06-01 10:02:00' WHERE id = 8000")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let deal = get(
+        &pool,
+        "/v1/sms/cloudtalk/history?deal_id=8000",
+        sessions::REP,
+    )
+    .await;
+    let ids: Vec<i64> = deal["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_i64().unwrap())
+        .collect();
+    // The seed's texts of this month, then 9001; 9000 is before the deal and
+    // 9006 a hidden echo.
+    assert_eq!(ids, [8304, 8303, 8302, 8301, 8300, 9001]);
+    assert!(
+        deal["customer_phone_digits"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("13175550100"))
+    );
+
+    let phones = get(
+        &pool,
+        "/v1/sms/cloudtalk/history?phone=317-555-0888&phone=(317)%20555-0100",
+        sessions::REP,
+    )
+    .await;
+    let items: Vec<&Value> = phones["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["id"].as_i64().unwrap() >= 9000)
+        .collect();
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0]["id"], 9005);
+    assert_eq!(items[0]["attachment_count"], 1);
+    assert_eq!(items[0]["agent"], "Rita Rep");
+    assert_eq!(items[0]["agent_id"], "5001");
+
+    let other = get(
+        &pool,
+        "/v1/sms/cloudtalk/history?deal_id=8000",
+        sessions::OTHER_COMPANY_REP,
+    )
+    .await;
+    assert_eq!(other["items"], serde_json::json!([]));
+}

@@ -38,7 +38,10 @@ async fn contacts_match_names_phones_and_suppliers(pool: MySqlPool) {
     assert_eq!(get("0888").await["suppliers"][0]["id"], 9100);
     assert_eq!(get("a").await, json!({ "customers": [], "suppliers": [] }));
     // Company 101's customer never shows.
-    assert_eq!(ids(&get("Other%20Co").await["customers"]), Vec::<i64>::new());
+    assert_eq!(
+        ids(&get("Other%20Co").await["customers"]),
+        Vec::<i64>::new()
+    );
 }
 
 #[test_db::test(seed)]
