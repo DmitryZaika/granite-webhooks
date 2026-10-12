@@ -205,3 +205,50 @@ async fn finished_setup_is_credited_once(pool: MySqlPool) {
         .json();
     assert_eq!(telegram["status"], "not-done");
 }
+
+#[test_db::test(seed)]
+async fn admins_see_their_company_team_progress(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let off: Value = server
+        .get("/v1/onboarding/team")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(off["enabled"], false);
+    assert_eq!(off["members"], json!([]));
+
+    tours_on(&pool).await;
+    server
+        .post("/v1/me/onboarding/events")
+        .with_session(sessions::REP)
+        .json(&post_events(json!([
+            { "type": "task.closed", "at": "2026-05-01T10:02:00.000Z", "taskId": "dashboard-overview", "version": 2, "stepKey": null }
+        ])))
+        .await
+        .assert_status_ok();
+    server
+        .get("/v1/onboarding/team")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let team: Value = server
+        .get("/v1/onboarding/team")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(team["enabled"], true);
+    assert_eq!(team["capabilities"]["onboarding"], true);
+    let members = team["members"].as_array().unwrap();
+    assert!(
+        members
+            .iter()
+            .all(|m| m["email"].as_str().unwrap().ends_with("@acme.test"))
+    );
+    let rita = members.iter().find(|m| m["user_id"] == 100).unwrap();
+    let tour = &rita["progress"]["tasks"]["dashboard-overview"];
+    assert_eq!(tour["status"], "closed");
+    assert!(tour["closed_at"].is_string(), "{tour}");
+    let ada = members.iter().find(|m| m["user_id"] == 102).unwrap();
+    assert_eq!(ada["is_admin"], true);
+    assert_eq!(ada["progress"]["tasks"], json!({}));
+}

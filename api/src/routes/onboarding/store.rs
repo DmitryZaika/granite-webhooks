@@ -8,7 +8,7 @@ use super::manifest::{self, price_for};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use sqlx::{MySqlConnection, MySqlPool};
+use sqlx::{MySql, MySqlConnection, MySqlPool, QueryBuilder};
 use std::collections::{BTreeMap, HashMap};
 use utoipa::ToSchema;
 
@@ -255,6 +255,8 @@ pub struct TaskProgress {
     pub last_active_at: Option<String>,
     /// When it started (UTC, ISO 8601).
     pub started_at: Option<String>,
+    /// When it was last closed (UTC, ISO 8601): a skip, unless completed since.
+    pub closed_at: Option<String>,
 }
 
 /// A user's saved onboarding.
@@ -301,6 +303,7 @@ fn later(a: Option<String>, b: Option<String>) -> Option<String> {
 }
 
 type JourneyRow = (
+    i32,
     Option<String>,
     Option<String>,
     bool,
@@ -308,8 +311,9 @@ type JourneyRow = (
     bool,
     Option<String>,
 );
-type ModuleRow = (String, Option<String>, bool, Option<String>);
+type ModuleRow = (i32, String, Option<String>, bool, Option<String>);
 type TaskRow = (
+    i32,
     String,
     i64,
     String,
@@ -319,21 +323,59 @@ type TaskRow = (
     Option<String>,
     Option<String>,
     Option<String>,
+    Option<String>,
 );
 
 /// The record of one user (by user only: a changed company still reads).
 pub async fn load_record(pool: &MySqlPool, user_id: i32) -> sqlx::Result<OnboardingRecord> {
-    let mut record = OnboardingRecord::default();
-    let journey: Option<JourneyRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT current_module_id, current_step_key, dismissed_at IS NOT NULL,
-                DATE_FORMAT(completed_at, {ISO}), feedback_dismissed_at IS NOT NULL,
-                DATE_FORMAT(updated_at, {ISO})
-           FROM user_onboarding WHERE user_id = ?"
-    )))
-    .bind(user_id)
-    .fetch_optional(pool)
+    Ok(load_records(pool, &[user_id])
+        .await?
+        .remove(&user_id)
+        .unwrap_or_default())
+}
+
+/// `SELECT ... WHERE user_id IN (...) <rest>`, bound to `users`.
+fn by_users(select: &str, users: &[i32], rest: &str) -> QueryBuilder<MySql> {
+    let mut query = QueryBuilder::new(format!("{select} WHERE user_id IN ("));
+    let mut list = query.separated(", ");
+    for user in users {
+        list.push_bind(*user);
+    }
+    query.push(") ");
+    query.push(rest);
+    query
+}
+
+/// The records of many users at once (four queries in all); every user asked
+/// for has one, empty when they never started.
+pub async fn load_records(
+    pool: &MySqlPool,
+    users: &[i32],
+) -> sqlx::Result<HashMap<i32, OnboardingRecord>> {
+    let mut records: HashMap<i32, OnboardingRecord> = users
+        .iter()
+        .map(|user| (*user, OnboardingRecord::default()))
+        .collect();
+    if users.is_empty() {
+        return Ok(records);
+    }
+    let journeys: Vec<JourneyRow> = by_users(
+        &format!(
+            "SELECT user_id, current_module_id, current_step_key, dismissed_at IS NOT NULL,
+                    DATE_FORMAT(completed_at, {ISO}), feedback_dismissed_at IS NOT NULL,
+                    DATE_FORMAT(updated_at, {ISO})
+               FROM user_onboarding"
+        ),
+        users,
+        "",
+    )
+    .build_query_as()
+    .fetch_all(pool)
     .await?;
-    if let Some((module, step, dismissed, completed_at, feedback, updated)) = journey {
+    for (user, module, step, dismissed, completed_at, feedback, updated) in journeys {
+        let Some(record) = records.get_mut(&user) else {
+            continue;
+        };
         record.has_row = true;
         record.completed_at = completed_at;
         let module = module.filter(|id| manifest::is_module(id));
@@ -343,14 +385,22 @@ pub async fn load_record(pool: &MySqlPool, user_id: i32) -> sqlx::Result<Onboard
         record.state.feedback_dismissed = feedback;
         record.state.updated_at = updated;
     }
-    let modules: Vec<ModuleRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT module_id, step_key, completed_at IS NOT NULL, DATE_FORMAT(updated_at, {ISO})
-           FROM user_onboarding_modules WHERE user_id = ? ORDER BY module_id"
-    )))
-    .bind(user_id)
+    let modules: Vec<ModuleRow> = by_users(
+        &format!(
+            "SELECT user_id, module_id, step_key, completed_at IS NOT NULL,
+                    DATE_FORMAT(updated_at, {ISO})
+               FROM user_onboarding_modules"
+        ),
+        users,
+        "ORDER BY module_id",
+    )
+    .build_query_as()
     .fetch_all(pool)
     .await?;
-    for (module, step, completed, updated) in modules {
+    for (user, module, step, completed, updated) in modules {
+        let Some(record) = records.get_mut(&user) else {
+            continue;
+        };
         if !manifest::is_module(&module) {
             continue;
         }
@@ -362,30 +412,69 @@ pub async fn load_record(pool: &MySqlPool, user_id: i32) -> sqlx::Result<Onboard
         }
         record.state.updated_at = later(record.state.updated_at.take(), updated);
     }
-    let points: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT task_id, CAST(SUM(points) AS SIGNED) FROM user_points_ledger
-          WHERE user_id = ? GROUP BY task_id",
+    fill_tasks(pool, users, &mut records).await?;
+    Ok(records)
+}
+
+/// The feature tours of [`load_records`], with the points each paid.
+async fn fill_tasks(
+    pool: &MySqlPool,
+    users: &[i32],
+    records: &mut HashMap<i32, OnboardingRecord>,
+) -> sqlx::Result<()> {
+    let points: Vec<(i32, String, i64)> = by_users(
+        "SELECT user_id, task_id, CAST(SUM(points) AS SIGNED) FROM user_points_ledger",
+        users,
+        "GROUP BY user_id, task_id",
     )
-    .bind(user_id)
+    .build_query_as()
     .fetch_all(pool)
     .await?;
-    let points: HashMap<String, i64> = points.into_iter().collect();
-    let tasks: Vec<TaskRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT task_id, CAST(version AS SIGNED), status, step_key, done_steps,
-                DATE_FORMAT(started_at, {ISO}), DATE_FORMAT(completed_at, {ISO}),
-                DATE_FORMAT(last_active_at, {ISO}), DATE_FORMAT(updated_at, {ISO})
-           FROM user_feature_tasks WHERE user_id = ?"
-    )))
-    .bind(user_id)
+    let points: HashMap<(i32, String), i64> = points
+        .into_iter()
+        .map(|(user, task, points)| ((user, task), points))
+        .collect();
+    let tasks: Vec<TaskRow> = by_users(
+        &format!(
+            "SELECT user_id, task_id, CAST(version AS SIGNED), status, step_key, done_steps,
+                    DATE_FORMAT(started_at, {ISO}), DATE_FORMAT(completed_at, {ISO}),
+                    DATE_FORMAT(last_active_at, {ISO}), DATE_FORMAT(updated_at, {ISO}),
+                    DATE_FORMAT(closed_at, {ISO})
+               FROM user_feature_tasks"
+        ),
+        users,
+        "",
+    )
+    .build_query_as()
     .fetch_all(pool)
     .await?;
-    for (task_id, version, status, step_key, done, started, completed, active, updated) in tasks {
+    for (
+        user,
+        task_id,
+        version,
+        status,
+        step_key,
+        done,
+        started,
+        completed,
+        active,
+        updated,
+        closed,
+    ) in tasks
+    {
+        let Some(record) = records.get_mut(&user) else {
+            continue;
+        };
         let status = match status.as_str() {
             "completed" | "closed" => status,
             _ => "in_progress".to_string(),
         };
         let awarded = if status == "completed" {
-            points.get(&task_id).copied().unwrap_or(0).max(0)
+            points
+                .get(&(user, task_id.clone()))
+                .copied()
+                .unwrap_or(0)
+                .max(0)
         } else {
             0
         };
@@ -401,11 +490,12 @@ pub async fn load_record(pool: &MySqlPool, user_id: i32) -> sqlx::Result<Onboard
                 points_awarded: awarded,
                 last_active_at: active,
                 started_at: started,
+                closed_at: closed,
             },
         );
         record.state.updated_at = later(record.state.updated_at.take(), updated);
     }
-    Ok(record)
+    Ok(())
 }
 
 /// `parseDoneSteps`: only `action` / `manual` entries.

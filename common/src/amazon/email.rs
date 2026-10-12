@@ -222,3 +222,61 @@ mod tests {
         );
     }
 }
+
+/// How long a domain's SES verification is remembered.
+const DOMAIN_CHECK_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+type DomainChecks = std::collections::HashMap<String, (std::time::Instant, bool)>;
+
+static DOMAIN_CHECKS: std::sync::LazyLock<std::sync::Mutex<DomainChecks>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Whether SES has verified `domain` for sending (`isSesDomainVerified`).
+/// `None` when SES could not be asked (no permission, no network, timeout,
+/// or `SES_DOMAIN_CHECK=off`); an unknown identity is `Some(false)`.
+/// Answers are cached for ten minutes.
+pub async fn domain_verified(domain: &str) -> Option<bool> {
+    let domain = domain.trim().to_lowercase();
+    if domain.is_empty() {
+        return Some(false);
+    }
+    if std::env::var("SES_DOMAIN_CHECK").is_ok_and(|value| value.trim() == "off") {
+        return None;
+    }
+    if let Ok(checks) = DOMAIN_CHECKS.lock()
+        && let Some((at, verified)) = checks.get(&domain)
+        && at.elapsed() < DOMAIN_CHECK_TTL
+    {
+        return Some(*verified);
+    }
+    let lookup = async {
+        let region_provider = RegionProviderChain::first_try(Region::new("us-east-2"));
+        let shared_config = aws_config::from_env().region(region_provider).load().await;
+        Client::new(&shared_config)
+            .get_email_identity()
+            .email_identity(&domain)
+            .send()
+            .await
+    };
+    let verified = match tokio::time::timeout(std::time::Duration::from_secs(5), lookup).await {
+        Ok(Ok(identity)) => identity.verified_for_sending_status(),
+        Ok(Err(error)) => {
+            let not_found = error
+                .as_service_error()
+                .is_some_and(aws_sdk_sesv2::operation::get_email_identity::GetEmailIdentityError::is_not_found_exception);
+            if !not_found {
+                tracing::warn!(domain, %error, "SES GetEmailIdentity failed");
+                return None;
+            }
+            false
+        }
+        Err(_) => {
+            tracing::warn!(domain, "SES GetEmailIdentity timed out");
+            return None;
+        }
+    };
+    if let Ok(mut checks) = DOMAIN_CHECKS.lock() {
+        checks.insert(domain, (std::time::Instant::now(), verified));
+    }
+    Some(verified)
+}
