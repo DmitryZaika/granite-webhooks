@@ -21935,6 +21935,600 @@
         ]
       }
     },
+    "/v1/quote-tax-rates": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List quote tax rates",
+        "description": "The company's tax rates, by sequence then name.",
+        "operationId": "list_quote_tax_rates",
+        "responses": {
+          "200": {
+            "description": "Tax rates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QuoteTaxRate"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Add a quote tax rate",
+        "description": "Adds a tax rate quotes can pick.",
+        "operationId": "create_quote_tax_rate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteTaxRateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteTaxRate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or a percent outside 0-100",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-tax-rates/{id}": {
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Save a quote tax rate",
+        "description": "Saves the name, sequence and percent of a tax rate.",
+        "operationId": "update_quote_tax_rate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tax rate id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteTaxRateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "No name, or a percent outside 0-100",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such tax rate in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Delete a quote tax rate",
+        "description": "Removes a tax rate from the lists; quotes keep what they saved.",
+        "operationId": "delete_quote_tax_rate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tax rate id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such tax rate in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-payment-terms": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List quote payment terms",
+        "description": "The company's payment terms, by sequence then name.",
+        "operationId": "list_quote_payment_terms",
+        "responses": {
+          "200": {
+            "description": "Payment terms",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QuotePaymentTerm"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Add quote payment terms",
+        "description": "Adds payment terms quotes can pick.",
+        "operationId": "create_quote_payment_term",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuotePaymentTermInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotePaymentTerm"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name or no terms",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-payment-terms/{id}": {
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Save quote payment terms",
+        "description": "Saves the name, sequence and text of payment terms.",
+        "operationId": "update_quote_payment_term",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Payment terms id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuotePaymentTermInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "No name or no terms",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such payment terms in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Delete quote payment terms",
+        "description": "Removes payment terms from the lists; quotes keep what they saved.",
+        "operationId": "delete_quote_payment_term",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Payment terms id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such payment terms in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/reports/cut-slabs": {
       "get": {
         "tags": [
@@ -37988,6 +38582,122 @@
               "type": "string"
             },
             "description": "Bundle labels of the slabs to add when `leftover` is false."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuotePaymentTerm": {
+        "type": "object",
+        "description": "Payment terms a quote can show.",
+        "required": [
+          "id",
+          "name",
+          "sequence",
+          "terms"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Terms id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name, e.g. \"50% deposit\"."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Order in the lists; the first one prefills new quotes."
+          },
+          "terms": {
+            "type": "string",
+            "description": "The terms text."
+          }
+        }
+      },
+      "QuotePaymentTermInput": {
+        "type": "object",
+        "description": "Body of creating or saving payment terms.",
+        "required": [
+          "name",
+          "terms"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name; required, at most 120 characters (longer is cut)."
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Order; 1 or more (default 1)."
+          },
+          "terms": {
+            "type": "string",
+            "description": "The terms text; required, at most 5000 characters (longer is cut)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuoteTaxRate": {
+        "type": "object",
+        "description": "A tax rate a quote can apply.",
+        "required": [
+          "id",
+          "name",
+          "sequence",
+          "tax_pct"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rate id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name, e.g. \"Marion County\"."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Order in the lists; the first one is the default."
+          },
+          "tax_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Percent, e.g. `7.25`."
+          }
+        }
+      },
+      "QuoteTaxRateInput": {
+        "type": "object",
+        "description": "Body of creating or saving a tax rate.",
+        "required": [
+          "name",
+          "tax_pct"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name; required, at most 120 characters (longer is cut)."
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Order; 1 or more (default 1)."
+          },
+          "tax_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Percent, 0 to 100."
           }
         },
         "additionalProperties": false
