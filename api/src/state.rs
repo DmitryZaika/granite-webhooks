@@ -41,6 +41,8 @@ pub struct AppState {
     pub cloudtalk_base: Arc<str>,
     /// `OpenAI`, for the AI helpers.
     pub ai: Ai,
+    /// The `SignWell` API (a stub in tests).
+    pub signwell_base: Arc<str>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -63,6 +65,7 @@ impl AppState {
             telephony_http: reqwest::Client::new(),
             cloudtalk_base: Arc::from(common::telephony::cloudtalk::BASE_URL),
             ai: Ai::disabled(),
+            signwell_base: Arc::from("https://www.signwell.com/api/v1"),
         }
     }
 
@@ -81,6 +84,12 @@ impl AppState {
     #[must_use]
     pub fn with_cloudtalk_base(mut self, base: &str) -> Self {
         self.cloudtalk_base = Arc::from(base.trim_end_matches('/'));
+        self
+    }
+
+    #[must_use]
+    pub fn with_signwell_base(mut self, base: &str) -> Self {
+        self.signwell_base = Arc::from(base.trim_end_matches('/'));
         self
     }
 

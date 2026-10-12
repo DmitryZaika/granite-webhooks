@@ -2425,6 +2425,88 @@
         ]
       }
     },
+    "/v1/customers/{id}/signature-requests": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "List a customer's signature requests",
+        "description": "Documents sent to the customer for e-signature, newest first. Open\n`SignWell` requests are checked with `SignWell` first.",
+        "operationId": "list_customer_signature_requests",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SignatureRequest"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/customers/{id}/projects": {
       "get": {
         "tags": [
@@ -28453,6 +28535,53 @@
           "pinned": {
             "type": "boolean",
             "description": "Keep the desktop sidebar open instead of expanding on hover."
+          }
+        }
+      },
+      "SignatureRequest": {
+        "type": "object",
+        "description": "A document sent for signature.",
+        "required": [
+          "id",
+          "filename",
+          "signer_name",
+          "signer_email",
+          "status",
+          "view_url"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The request."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Document name."
+          },
+          "signer_name": {
+            "type": "string",
+            "description": "Who signs."
+          },
+          "signer_email": {
+            "type": "string",
+            "description": "Their email."
+          },
+          "status": {
+            "type": "string",
+            "description": "`draft`, `sent`, `viewed`, `signed`, `declined` or `expired`."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sent."
+          },
+          "view_url": {
+            "type": "string",
+            "description": "Where to open it: the signed PDF or native document through the web\napp, else the original file."
           }
         }
       },

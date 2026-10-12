@@ -23,6 +23,7 @@ pub mod queries;
 mod recipients;
 pub mod schemas;
 pub mod service;
+pub mod signatures;
 mod write;
 
 use crate::state::AppState;
@@ -40,6 +41,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(write::set_temperature))
         .routes(routes!(write::mark_invalid))
         .routes(routes!(history::history))
+        .routes(routes!(signatures::signature_requests))
         .routes(routes!(projects::projects))
         .routes(routes!(projects::set_parent))
         .routes(routes!(projects::sales))
