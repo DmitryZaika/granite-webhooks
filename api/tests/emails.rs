@@ -345,3 +345,73 @@ async fn search_suggestions_per_conversation(pool: MySqlPool) {
     .await;
     assert_eq!(acme[0]["thread_id"], T6);
 }
+
+#[test_db::test(seed)]
+async fn deal_email_history(pool: MySqlPool) {
+    let history = get(&pool, "/v1/deals/8009/emails", OLGA).await;
+    let ids = |v: &Value| -> Vec<i64> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_i64().unwrap())
+            .collect()
+    };
+    // T1 is on the deal; the customer has one deal, so mail to her address
+    // too (T3, and the draft T5: the address query never filtered drafts).
+    assert_eq!(ids(&history["emails"]), vec![8802, 8801, 8800, 8806, 8804]);
+    assert_eq!(ids(&history["thread_emails"]), vec![8802, 8801, 8800]);
+    assert_eq!(history["customer_emails"], json!([]));
+    assert_eq!(
+        history["emails"][1],
+        json!({
+            "id": 8801, "deal_id": 8009, "thread_id": T1, "subject": "Re: Kitchen quote",
+            "body": "Sure, attached.", "sent_at": "2026-04-10T11:00:00.000Z", "read_count": 1,
+            "has_attachments": false, "sender_user_id": 106,
+            "sender_email": "Olga Other <rep@other.test>", "sender_name": "Olga Other",
+            "employee_read_at": null, "thread_has_attachments": true
+        })
+    );
+    server(pool)
+        .get("/v1/deals/8009/emails")
+        .with_session(sessions::REP)
+        .await
+        .assert_status_not_found();
+}
+
+#[test_db::test(seed)]
+async fn sent_drips_missing_from_history_are_recorded(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO email_templates (id, template_name, template_subject, template_body, company_id, show_template)
+           VALUES (8890, 'Thanks', 'Thank you!', 'Hi {{customer.first_name}}, from {{user.first_name}}', 101, 1);
+         INSERT INTO scheduled_emails (id, template_id, deal_id, list_id, customer_id, user_id, company_id, send_at, status, sent_at, message_id)
+           VALUES (8891, 8890, 8009, 103, 2000, 106, 101, '2026-04-12 10:00:00', 'sent', '2026-04-12 10:00:00', '<ses-8891@amazonses.com>');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let history = get(&pool, "/v1/deals/8009/emails", OLGA).await;
+    let first = &history["emails"][0];
+    assert_eq!(first["subject"], "Thank you!");
+    assert_eq!(first["body"], "Hi Other, from Olga");
+    assert_eq!(first["sent_at"], "2026-04-12T10:00:00.000Z");
+    // To the primary address of the customer. Only once.
+    let again = get(&pool, "/v1/deals/8009/emails", OLGA).await;
+    assert_eq!(
+        again["emails"].as_array().unwrap().len(),
+        history["emails"].as_array().unwrap().len()
+    );
+    let participants: Vec<(String, String)> = sqlx::query_as(
+        "SELECT CAST(ep.type AS CHAR), ep.email FROM email_participants ep JOIN emails e ON e.id = ep.email_id
+         WHERE e.message_id = 'ses-8891@amazonses.com' ORDER BY ep.id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        participants,
+        vec![
+            ("from".to_string(), "rep@other.test".to_string()),
+            ("to".to_string(), "other@otherco.example".to_string())
+        ]
+    );
+}

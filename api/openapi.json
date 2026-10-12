@@ -10429,6 +10429,85 @@
           }
         ]
       }
+    },
+    "/v1/deals/{id}/emails": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Get a deal's email history",
+        "description": "The deal's conversations and every conversation with its customer, plus\n(when the customer has no other deal) any mail to or from the customer's\naddresses; `customer_emails` lists the address mail when some of it is\nnot in `emails`. Messages carry real open counts. Before reading, sent\nlist drips missing from the history are recorded (so the page always\nshows them). Open a conversation with `GET /v1/emails/threads/{thread_id}`.",
+        "operationId": "list_deal_emails",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DealEmails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -12061,6 +12140,38 @@
           }
         }
       },
+      "DealEmails": {
+        "type": "object",
+        "description": "Email history of a deal.",
+        "required": [
+          "emails",
+          "customer_emails",
+          "thread_emails"
+        ],
+        "properties": {
+          "emails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryEmail"
+            },
+            "description": "What the deal page lists: the deal's conversations and those with the\ncustomer; when the customer has only this deal, also any mail to or\nfrom their addresses. Newest first."
+          },
+          "customer_emails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryEmail"
+            },
+            "description": "Mail with the customer's addresses, when some of it is outside `emails`."
+          },
+          "thread_emails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryEmail"
+            },
+            "description": "The deal's and the customer's conversations only (the History tab)."
+          }
+        }
+      },
       "DealFiles": {
         "type": "object",
         "description": "Photos and documents of a deal, newest first.",
@@ -12615,6 +12726,99 @@
             "type": "integer",
             "format": "int64",
             "description": "Draft threads."
+          }
+        }
+      },
+      "HistoryEmail": {
+        "type": "object",
+        "description": "A message of a deal's or customer's email history.",
+        "required": [
+          "id",
+          "thread_id",
+          "body",
+          "read_count",
+          "has_attachments",
+          "thread_has_attachments"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Message id."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Deal the message was sent on, if any."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "Conversation id."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subject."
+          },
+          "body": {
+            "type": "string",
+            "description": "Plain text body."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sent."
+          },
+          "read_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Real opens by the recipient (not proxies firing right after the send)."
+          },
+          "has_attachments": {
+            "type": "boolean",
+            "description": "The message has attachments."
+          },
+          "sender_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Sending user; null for mail from the customer."
+          },
+          "sender_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "From header."
+          },
+          "sender_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sending user's name."
+          },
+          "employee_read_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When an employee opened it."
+          },
+          "thread_has_attachments": {
+            "type": "boolean",
+            "description": "Some message of the conversation has attachments."
           }
         }
       },

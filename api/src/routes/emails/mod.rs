@@ -3,6 +3,7 @@
 //! - `GET  /v1/emails/threads`                    → a page of a folder (inbox, sent, trash, drafts)
 //! - `GET  /v1/emails/folder-counts`              → unread inbox, trash and draft counts
 //! - `GET  /v1/emails/unread`                     → the inbox badge
+//! - `GET  /v1/deals/{id}/emails`                → a deal's email history
 //! - `GET  /v1/emails/search-suggestions`         → typeahead of the search box
 //! - `GET  /v1/emails/threads/{thread_id}`        → one conversation
 //! - `POST /v1/emails/threads/{thread_id}/read`   → mark an opened conversation read
@@ -11,6 +12,7 @@
 //! Replaces the Remix `employee.emails*` loaders and `api.emails.*` routes.
 //! Sending mail lives in the `webhooks` Lambda (it owns SES).
 
+pub mod deal_history;
 mod handlers;
 mod list;
 mod names;
@@ -34,4 +36,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::restore_threads))
         .routes(routes!(handlers::purge))
         .routes(routes!(handlers::suggest))
+        .routes(routes!(deal_history::deal_emails))
 }
