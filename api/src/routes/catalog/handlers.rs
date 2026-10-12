@@ -17,13 +17,15 @@ use axum::response::{IntoResponse, Response};
 
 /// List the company's suppliers
 ///
-/// Returns every supplier of the caller's company, by name. Stones, sinks and
+/// Returns every supplier of the caller's company, by name (with `has`, only
+/// those the company has stones, sinks or faucets of). Stones, sinks and
 /// faucets refer to them by `supplier_id`.
 #[utoipa::path(
     get,
     path = "/v1/suppliers",
     operation_id = "list_suppliers",
     tag = "catalog",
+    params(super::queries::SuppliersQuery),
     responses(
         (status = 200, description = "Suppliers by name", body = Vec<Supplier>),
         (status = 401, description = "No valid session", body = ErrorBody),
@@ -35,8 +37,11 @@ use axum::response::{IntoResponse, Response};
 pub async fn suppliers(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
+    crate::extract::MultiQuery(query): crate::extract::MultiQuery<super::queries::SuppliersQuery>,
 ) -> ApiResult<Json<Vec<Supplier>>> {
-    Ok(Json(list_suppliers(&state.pool, user.company_id).await?))
+    Ok(Json(
+        list_suppliers(&state.pool, user.company_id, query.has).await?,
+    ))
 }
 
 /// The supplier directory

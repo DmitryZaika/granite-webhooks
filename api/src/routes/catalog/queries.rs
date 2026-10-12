@@ -4,14 +4,46 @@ use sqlx::{AssertSqlSafe, MySqlPool};
 pub async fn list_suppliers(
     pool: &MySqlPool,
     company_id: i32,
+    has: Option<SupplierItems>,
 ) -> Result<Vec<Supplier>, sqlx::Error> {
-    sqlx::query_as(
-        "SELECT id, supplier_name AS name FROM suppliers WHERE company_id = ?
-         ORDER BY supplier_name ASC, id ASC",
-    )
+    // Only suppliers the company has items of, for the sidebar filters.
+    let items = match has {
+        None => "",
+        Some(SupplierItems::Stones) => {
+            " AND EXISTS (SELECT 1 FROM stones i WHERE i.supplier_id = s.id)"
+        }
+        Some(SupplierItems::Sinks) => {
+            " AND EXISTS (SELECT 1 FROM sink_type i WHERE i.supplier_id = s.id)"
+        }
+        Some(SupplierItems::Faucets) => {
+            " AND EXISTS (SELECT 1 FROM faucet_type i WHERE i.supplier_id = s.id)"
+        }
+    };
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT s.id, s.supplier_name AS name FROM suppliers s WHERE s.company_id = ?{items}
+         ORDER BY s.supplier_name ASC, s.id ASC"
+    )))
     .bind(company_id)
     .fetch_all(pool)
     .await
+}
+
+/// Items a supplier must have to be listed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SupplierItems {
+    Stones,
+    Sinks,
+    Faucets,
+}
+
+/// Query of `GET /v1/suppliers`.
+#[derive(Debug, Default, serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SuppliersQuery {
+    /// Only suppliers of the company's `stones`, `sinks` or `faucets`.
+    #[param(inline)]
+    pub has: Option<SupplierItems>,
 }
 
 pub async fn list_colors(pool: &MySqlPool) -> Result<Vec<Color>, sqlx::Error> {
