@@ -16009,7 +16009,7 @@
           "templates"
         ],
         "summary": "Create an email template",
-        "description": "`scope: company` (admins only) makes it the whole company's; otherwise\nit is the caller's own.",
+        "description": "`scope: company` (admins only) makes it the whole company's; otherwise\nit is the caller's own. A company template may send automatically:\n`lead_list_id` + `hour_delay` schedule it for deals entering that list.",
         "operationId": "create_email_template",
         "requestBody": {
           "content": {
@@ -16033,7 +16033,7 @@
             }
           },
           "400": {
-            "description": "Missing name, subject or body, or unpaired braces",
+            "description": "Missing name, subject or body, unpaired braces, or a bad automation",
             "content": {
               "application/json": {
                 "schema": {
@@ -16054,6 +16054,16 @@
           },
           "403": {
             "description": "Caller is not an employee, or not an admin for a company template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another company template sends on this list after this delay",
             "content": {
               "application/json": {
                 "schema": {
@@ -16086,7 +16096,7 @@
           "templates"
         ],
         "summary": "Edit an email template",
-        "description": "Only the caller's own templates; company templates are edited in the\nadmin automations pages.",
+        "description": "The caller's own templates, and (admins) the company's, whose automation\n(`lead_list_id`, `hour_delay`) it sets too; removing the automation calls\noff the template's pending sends.",
         "operationId": "update_email_template",
         "parameters": [
           {
@@ -16122,7 +16132,7 @@
             }
           },
           "400": {
-            "description": "Missing name, subject or body, or unpaired braces",
+            "description": "Missing name, subject or body, unpaired braces, or a bad automation",
             "content": {
               "application/json": {
                 "schema": {
@@ -16152,7 +16162,17 @@
             }
           },
           "404": {
-            "description": "No such template of the caller's",
+            "description": "No such template the caller may edit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another company template sends on this list after this delay",
             "content": {
               "application/json": {
                 "schema": {
@@ -16183,7 +16203,7 @@
           "templates"
         ],
         "summary": "Delete an email template",
-        "description": "Soft-deletes one of the caller's own templates.",
+        "description": "Soft-deletes one of the caller's own templates or (admins) a company\ntemplate, with its attachments; its pending automatic sends are called off.",
         "operationId": "delete_email_template",
         "parameters": [
           {
@@ -16222,7 +16242,188 @@
             }
           },
           "404": {
-            "description": "No such template of the caller's",
+            "description": "No such template the caller may delete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/email-templates/{id}/attachments": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Attach a file to an email template",
+        "description": "Adds a file uploaded to the `email-templates` folder (`POST /v1/uploads`)\nafter the template's other attachments. Emails made from the template\ncarry it.",
+        "operationId": "add_email_template_attachment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateAttachmentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateAttachment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an uploaded template file, or no file name or type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such template the caller may edit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/email-templates/{id}/attachments/{attachment_id}": {
+      "delete": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Remove a file from an email template",
+        "description": "Emails made from the template no longer carry it.",
+        "operationId": "delete_email_template_attachment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "attachment_id",
+            "in": "path",
+            "description": "Attachment id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such template the caller may edit, or no such attachment on it",
             "content": {
               "application/json": {
                 "schema": {
@@ -26210,6 +26411,30 @@
           "can_edit": {
             "type": "boolean",
             "description": "The caller may edit or delete it (only their own templates)."
+          },
+          "lead_list_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Company templates: the deal list whose deals get it automatically."
+          },
+          "hour_delay": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Hours after a deal enters `lead_list_id` that it is sent."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was made."
           }
         }
       },
@@ -26267,6 +26492,22 @@
                 "type": "null"
               }
             ]
+          },
+          "lead_list_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Company templates only: send it automatically when a deal enters\nthis list (with `hour_delay`); null for no automation."
+          },
+          "hour_delay": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Hours to wait (0–8760); required with `lead_list_id`."
           }
         },
         "additionalProperties": false
@@ -33641,6 +33882,30 @@
           }
         }
       },
+      "TemplateAttachmentInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/email-templates/{id}/attachments`.",
+        "required": [
+          "url",
+          "filename",
+          "content_type"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "URL of a file uploaded to the `email-templates` folder."
+          },
+          "filename": {
+            "type": "string",
+            "description": "File name shown and sent."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "MIME type, e.g. `application/pdf`."
+          }
+        },
+        "additionalProperties": false
+      },
       "TemplateOrder": {
         "type": "object",
         "description": "The caller's sorting of one picker.",
@@ -34188,7 +34453,8 @@
           "emails",
           "events",
           "quotes",
-          "template-images"
+          "template-images",
+          "email-templates"
         ]
       },
       "UploadRequest": {
@@ -34210,7 +34476,7 @@
           },
           "content_type": {
             "type": "string",
-            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`; for `deals` also PDF, Word,\nExcel, CSV and plain text; for `emails` any type. Send the same value\nas the `Content-Type` header of the `PUT`."
+            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`; for `deals` also PDF, Word,\nExcel, CSV and plain text; for `emails` and `email-templates` any type. Send the same value\nas the `Content-Type` header of the `PUT`."
           }
         },
         "additionalProperties": false

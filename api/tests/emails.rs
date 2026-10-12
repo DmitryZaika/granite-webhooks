@@ -501,7 +501,12 @@ async fn admins_list_the_whole_company_mail(pool: MySqlPool) {
         json!({ "inbox_unread": 1, "trash": 1, "drafts": 0 })
     );
     assert_eq!(
-        get(&pool, "/v1/emails/folder-counts?scope=admin&sales_rep=100", admin).await,
+        get(
+            &pool,
+            "/v1/emails/folder-counts?scope=admin&sales_rep=100",
+            admin
+        )
+        .await,
         json!({ "inbox_unread": 0, "trash": 0, "drafts": 0 })
     );
 }

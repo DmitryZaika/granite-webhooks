@@ -57,7 +57,8 @@ pub async fn create(
     let content_type = request.content_type.trim().to_lowercase();
     let allowed = IMAGE_CONTENT_TYPES.contains(&content_type.as_str())
         || (is_deal && DOCUMENT_CONTENT_TYPES.contains(&content_type.as_str()))
-        || (is_email && is_mime_type(&content_type));
+        || ((is_email || request.folder == UploadFolder::EmailTemplates)
+            && is_mime_type(&content_type));
     if !allowed {
         return Err(ApiError::BadRequest(format!(
             "unsupported content type: {content_type}"

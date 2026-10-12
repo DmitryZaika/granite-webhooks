@@ -1,7 +1,7 @@
 use super::order;
 use super::schemas::{
     EmailTemplate, EmailTemplateInput, FillRequest, Filled, OrderPath, SaveOrder,
-    TemplateAttachment, TemplateOrder, TemplateScope,
+    TemplateAttachment, TemplateAttachmentInput, TemplateOrder, TemplateScope,
 };
 use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
@@ -26,10 +26,12 @@ struct TemplateRow {
     template_subject: Option<String>,
     template_body: Option<String>,
     created_at: Option<DateTime<Utc>>,
+    lead_list_id: Option<i32>,
+    hour_delay: Option<i32>,
 }
 
-const TEMPLATE_COLUMNS: &str =
-    "id, user_id, template_name, template_subject, template_body, created_at";
+const TEMPLATE_COLUMNS: &str = "id, user_id, template_name, template_subject, template_body, \
+     created_at, lead_list_id, hour_delay";
 
 fn to_template(
     row: TemplateRow,
@@ -48,6 +50,9 @@ fn to_template(
             TemplateScope::Personal
         },
         can_edit: row.user_id == Some(user.id),
+        lead_list_id: row.lead_list_id,
+        hour_delay: row.hour_delay,
+        created_at: row.created_at,
     }
 }
 
@@ -106,12 +111,99 @@ async fn accessible(
     .await
 }
 
-/// The caller's own template (only those can be changed).
-async fn own(pool: &MySqlPool, user: &SessionUser, template_id: i32) -> ApiResult<TemplateRow> {
+/// One the caller may change: their own, or (admins) a company template.
+async fn editable(
+    pool: &MySqlPool,
+    user: &SessionUser,
+    template_id: i32,
+) -> ApiResult<TemplateRow> {
+    let admin = user.is_admin || user.is_superuser;
     match accessible(pool, user, template_id).await? {
-        Some(row) if row.user_id == Some(user.id) => Ok(row),
+        Some(row) if row.user_id == Some(user.id) || (row.user_id.is_none() && admin) => Ok(row),
         _ => Err(ApiError::NotFound),
     }
+}
+
+/// The checked automation of a company template: list, its group and the delay.
+struct Automation {
+    list: i32,
+    group: i32,
+    hours: i32,
+}
+
+/// `lead_list_id` and `hour_delay` of a company template: both or neither, a
+/// live deal list the company sees, a free (list, delay) pair.
+async fn automation(
+    pool: &MySqlPool,
+    company_id: i32,
+    input: &EmailTemplateInput,
+    company: bool,
+    exclude: Option<i32>,
+) -> ApiResult<Option<Automation>> {
+    let bad = |message: &str| Err(ApiError::BadRequest(message.to_string()));
+    let Some(list) = input.lead_list_id else {
+        return match input.hour_delay {
+            Some(hours) if !(0..=8760).contains(&hours) => {
+                bad("Delay must be between 0 and 8760 hours.")
+            }
+            _ => Ok(None),
+        };
+    };
+    if !company {
+        return bad("Only company templates send automatically.");
+    }
+    let Some(hours) = input.hour_delay else {
+        return bad("Set how many hours to wait before sending.");
+    };
+    if !(0..=8760).contains(&hours) {
+        return bad("Delay must be between 0 and 8760 hours.");
+    }
+    let group: Option<i32> = sqlx::query_scalar(
+        "SELECT dl.group_id FROM deals_list dl
+           JOIN groups_list gl ON gl.id = dl.group_id AND gl.deleted_at IS NULL
+          WHERE dl.id = ? AND dl.deleted_at IS NULL AND (gl.company_id = ? OR gl.id = 1)",
+    )
+    .bind(list)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(group) = group else {
+        return bad("Select a valid deal list.");
+    };
+    let taken: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM email_templates
+          WHERE company_id = ? AND user_id IS NULL AND lead_list_id = ? AND hour_delay = ?
+            AND deleted_at IS NULL AND id <> ? LIMIT 1",
+    )
+    .bind(company_id)
+    .bind(list)
+    .bind(hours)
+    .bind(exclude.unwrap_or(0))
+    .fetch_optional(pool)
+    .await?;
+    if taken.is_some() {
+        return Err(ApiError::Conflict(
+            "Another email template already uses this list and delay.".into(),
+        ));
+    }
+    Ok(Some(Automation { list, group, hours }))
+}
+
+/// Pending automatic sends of a template are called off.
+async fn cancel_pending(
+    pool: &MySqlPool,
+    template_id: i32,
+    reason: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE scheduled_emails SET status = 'cancelled', error_message = ?
+          WHERE template_id = ? AND status = 'pending'",
+    )
+    .bind(reason)
+    .bind(template_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// `{{` and `}}` pair up, none is empty and none nests (`validateTemplateBody`).
@@ -236,7 +328,8 @@ pub async fn list(
 /// Create an email template
 ///
 /// `scope: company` (admins only) makes it the whole company's; otherwise
-/// it is the caller's own.
+/// it is the caller's own. A company template may send automatically:
+/// `lead_list_id` + `hour_delay` schedule it for deals entering that list.
 #[utoipa::path(
     post,
     path = "/v1/email-templates",
@@ -245,9 +338,10 @@ pub async fn list(
     request_body = EmailTemplateInput,
     responses(
         (status = 201, description = "Created", body = EmailTemplate),
-        (status = 400, description = "Missing name, subject or body, or unpaired braces", body = ErrorBody),
+        (status = 400, description = "Missing name, subject or body, unpaired braces, or a bad automation", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee, or not an admin for a company template", body = ErrorBody),
+        (status = 409, description = "Another company template sends on this list after this delay", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -262,10 +356,12 @@ pub async fn create(
     if company && !(user.is_admin || user.is_superuser) {
         return Err(ApiError::Forbidden);
     }
+    let automation = automation(&state.pool, user.company_id, &input, company, None).await?;
     let id = sqlx::query(
         "INSERT INTO email_templates
-           (template_name, template_subject, template_body, company_id, user_id, created_by)
-         VALUES (?, ?, ?, ?, ?, ?)",
+           (template_name, template_subject, template_body, company_id, user_id, created_by,
+            lead_group_id, lead_list_id, hour_delay)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&clean.name)
     .bind(&clean.subject)
@@ -273,6 +369,9 @@ pub async fn create(
     .bind(user.company_id)
     .bind((!company).then_some(user.id))
     .bind(user.id)
+    .bind(automation.as_ref().map(|a| a.group))
+    .bind(automation.as_ref().map(|a| a.list))
+    .bind(automation.as_ref().map(|a| a.hours))
     .execute(&state.pool)
     .await?
     .last_insert_id();
@@ -287,8 +386,9 @@ pub async fn create(
 
 /// Edit an email template
 ///
-/// Only the caller's own templates; company templates are edited in the
-/// admin automations pages.
+/// The caller's own templates, and (admins) the company's, whose automation
+/// (`lead_list_id`, `hour_delay`) it sets too; removing the automation calls
+/// off the template's pending sends.
 #[utoipa::path(
     put,
     path = "/v1/email-templates/{id}",
@@ -298,10 +398,11 @@ pub async fn create(
     request_body = EmailTemplateInput,
     responses(
         (status = 200, description = "Updated", body = EmailTemplate),
-        (status = 400, description = "Missing name, subject or body, or unpaired braces", body = ErrorBody),
+        (status = 400, description = "Missing name, subject or body, unpaired braces, or a bad automation", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee", body = ErrorBody),
-        (status = 404, description = "No such template of the caller's", body = ErrorBody),
+        (status = 404, description = "No such template the caller may edit", body = ErrorBody),
+        (status = 409, description = "Another company template sends on this list after this delay", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -313,19 +414,27 @@ pub async fn update(
     JsonBody(input): JsonBody<EmailTemplateInput>,
 ) -> ApiResult<Json<EmailTemplate>> {
     let clean = clean(&input)?;
-    own(&state.pool, &user, id).await?;
+    let company = editable(&state.pool, &user, id).await?.user_id.is_none();
+    let automation = automation(&state.pool, user.company_id, &input, company, Some(id)).await?;
     sqlx::query(
-        "UPDATE email_templates SET template_name = ?, template_subject = ?, template_body = ?
+        "UPDATE email_templates SET template_name = ?, template_subject = ?, template_body = ?,
+                lead_group_id = ?, lead_list_id = ?, hour_delay = ?
          WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
     .bind(&clean.name)
     .bind(&clean.subject)
     .bind(&clean.body)
+    .bind(automation.as_ref().map(|a| a.group))
+    .bind(automation.as_ref().map(|a| a.list))
+    .bind(automation.as_ref().map(|a| a.hours))
     .bind(id)
     .bind(user.company_id)
     .execute(&state.pool)
     .await?;
-    let row = own(&state.pool, &user, id).await?;
+    if automation.is_none() {
+        cancel_pending(&state.pool, id, "Template deleted").await?;
+    }
+    let row = editable(&state.pool, &user, id).await?;
     let attachments = attachments(&state.pool, &[id])
         .await?
         .remove(&id)
@@ -335,7 +444,8 @@ pub async fn update(
 
 /// Delete an email template
 ///
-/// Soft-deletes one of the caller's own templates.
+/// Soft-deletes one of the caller's own templates or (admins) a company
+/// template, with its attachments; its pending automatic sends are called off.
 #[utoipa::path(
     delete,
     path = "/v1/email-templates/{id}",
@@ -346,7 +456,7 @@ pub async fn update(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee", body = ErrorBody),
-        (status = 404, description = "No such template of the caller's", body = ErrorBody),
+        (status = 404, description = "No such template the caller may delete", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -356,15 +466,147 @@ pub async fn delete(
     EmployeeUser(user): EmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
-    own(&state.pool, &user, id).await?;
+    editable(&state.pool, &user, id).await?;
     sqlx::query(
-        "UPDATE email_templates SET deleted_at = NOW()
-         WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+        // The automation goes too: (list, company, delay) is unique, deleted
+        // templates included.
+        "UPDATE email_templates
+            SET deleted_at = NOW(), lead_group_id = NULL, lead_list_id = NULL, hour_delay = NULL
+          WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
     .bind(id)
     .bind(user.company_id)
     .execute(&state.pool)
     .await?;
+    cancel_pending(&state.pool, id, "Template deleted").await?;
+    sqlx::query(
+        "UPDATE email_template_attachments SET deleted_at = NOW()
+          WHERE template_id = ? AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .execute(&state.pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Attach a file to an email template
+///
+/// Adds a file uploaded to the `email-templates` folder (`POST /v1/uploads`)
+/// after the template's other attachments. Emails made from the template
+/// carry it.
+#[utoipa::path(
+    post,
+    path = "/v1/email-templates/{id}/attachments",
+    operation_id = "add_email_template_attachment",
+    tag = "templates",
+    params(("id" = i32, Path, description = "Template id")),
+    request_body = TemplateAttachmentInput,
+    responses(
+        (status = 201, description = "Attached", body = TemplateAttachment),
+        (status = 400, description = "Not an uploaded template file, or no file name or type", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 404, description = "No such template the caller may edit", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn add_attachment(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+    JsonBody(input): JsonBody<TemplateAttachmentInput>,
+) -> ApiResult<(StatusCode, Json<TemplateAttachment>)> {
+    editable(&state.pool, &user, id).await?;
+    let in_folder = state
+        .storage
+        .key_for_url(&input.url)
+        .is_some_and(|key| key.starts_with("email-templates/"));
+    let filename = input.filename.trim();
+    let (kind, subtype) = input
+        .content_type
+        .trim()
+        .to_lowercase()
+        .split_once('/')
+        .map(|(kind, subtype)| (kind.to_string(), subtype.to_string()))
+        .unwrap_or_default();
+    if !in_folder || filename.is_empty() || kind.is_empty() {
+        return Err(ApiError::BadRequest(
+            "Attach a file uploaded to the email-templates folder, with its name and type".into(),
+        ));
+    }
+    let position: i64 = sqlx::query_scalar(
+        "SELECT CAST(COALESCE(MAX(position) + 1, 0) AS SIGNED) FROM email_template_attachments
+          WHERE template_id = ? AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await?;
+    let attachment_id = sqlx::query(
+        "INSERT INTO email_template_attachments
+           (template_id, content_type, content_subtype, filename, url, position)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(&kind)
+    .bind(&subtype)
+    .bind(filename)
+    .bind(&input.url)
+    .bind(position)
+    .execute(&state.pool)
+    .await?
+    .last_insert_id();
+    Ok((
+        StatusCode::CREATED,
+        Json(TemplateAttachment {
+            id: i32::try_from(attachment_id).unwrap_or(i32::MAX),
+            filename: filename.to_string(),
+            url: input.url,
+            content_type: kind,
+            content_subtype: subtype,
+        }),
+    ))
+}
+
+/// Remove a file from an email template
+///
+/// Emails made from the template no longer carry it.
+#[utoipa::path(
+    delete,
+    path = "/v1/email-templates/{id}/attachments/{attachment_id}",
+    operation_id = "delete_email_template_attachment",
+    tag = "templates",
+    params(
+        ("id" = i32, Path, description = "Template id"),
+        ("attachment_id" = i32, Path, description = "Attachment id"),
+    ),
+    responses(
+        (status = 204, description = "Removed"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 404, description = "No such template the caller may edit, or no such attachment on it", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn delete_attachment(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path((id, attachment_id)): Path<(i32, i32)>,
+) -> ApiResult<StatusCode> {
+    editable(&state.pool, &user, id).await?;
+    let removed = sqlx::query(
+        "UPDATE email_template_attachments SET deleted_at = NOW()
+          WHERE id = ? AND template_id = ? AND deleted_at IS NULL",
+    )
+    .bind(attachment_id)
+    .bind(id)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+    if removed == 0 {
+        return Err(ApiError::NotFound);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

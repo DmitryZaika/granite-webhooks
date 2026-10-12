@@ -1,3 +1,5 @@
+use crate::serde_helpers::js_date;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -44,6 +46,14 @@ pub struct EmailTemplate {
     pub scope: TemplateScope,
     /// The caller may edit or delete it (only their own templates).
     pub can_edit: bool,
+    /// Company templates: the deal list whose deals get it automatically.
+    pub lead_list_id: Option<i32>,
+    /// Hours after a deal enters `lead_list_id` that it is sent.
+    pub hour_delay: Option<i32>,
+    /// When it was made.
+    #[serde(serialize_with = "js_date")]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 /// Body of `POST /v1/email-templates` and `PUT /v1/email-templates/{id}`.
@@ -59,6 +69,25 @@ pub struct EmailTemplateInput {
     /// Create only: `company` (admins) or `personal` (default).
     #[serde(default)]
     pub scope: Option<TemplateScope>,
+    /// Company templates only: send it automatically when a deal enters
+    /// this list (with `hour_delay`); null for no automation.
+    #[serde(default)]
+    pub lead_list_id: Option<i32>,
+    /// Hours to wait (0–8760); required with `lead_list_id`.
+    #[serde(default)]
+    pub hour_delay: Option<i32>,
+}
+
+/// Body of `POST /v1/email-templates/{id}/attachments`.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateAttachmentInput {
+    /// URL of a file uploaded to the `email-templates` folder.
+    pub url: String,
+    /// File name shown and sent.
+    pub filename: String,
+    /// MIME type, e.g. `application/pdf`.
+    pub content_type: String,
 }
 
 /// Which template picker an order belongs to.

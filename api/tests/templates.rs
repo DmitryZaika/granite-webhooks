@@ -133,7 +133,7 @@ async fn own_templates_are_edited_and_deleted(pool: MySqlPool) {
         .assert_status(StatusCode::NOT_FOUND);
     server
         .put("/v1/email-templates/8670")
-        .with_session(sessions::ADMIN)
+        .with_session(RITA)
         .json(&edit)
         .await
         .assert_status(StatusCode::NOT_FOUND);
@@ -322,4 +322,194 @@ async fn employees_read_stored_files_through_the_api(pool: MySqlPool) {
 
 fn urlencoding(value: &str) -> String {
     percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
+}
+
+fn drip(name: &str, list: Option<i64>, hours: Option<i64>, scope: &str) -> Value {
+    json!({
+        "template_name": name,
+        "template_subject": "Subject",
+        "template_body": "<p>Hi</p>",
+        "scope": scope,
+        "lead_list_id": list,
+        "hour_delay": hours,
+    })
+}
+
+#[test_db::test(seed)]
+async fn admins_make_company_templates_that_send_automatically(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let res = server
+        .post("/v1/email-templates")
+        .with_session(sessions::ADMIN)
+        .json(&drip("New lead hello", Some(100), Some(4), "company"))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let created: Value = res.json();
+    assert_eq!(created["scope"], "company");
+    assert_eq!(created["lead_list_id"], 100);
+    assert_eq!(created["hour_delay"], 4);
+    assert!(created["created_at"].is_string());
+    let group: Option<i32> =
+        sqlx::query_scalar("SELECT lead_group_id FROM email_templates WHERE id = ?")
+            .bind(created["id"].as_i64().unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(group, Some(100));
+
+    // 8670 already sends on list 101 after 2 hours.
+    let res = server
+        .post("/v1/email-templates")
+        .with_session(sessions::ADMIN)
+        .json(&drip("Twin", Some(101), Some(2), "company"))
+        .await;
+    res.assert_status(StatusCode::CONFLICT);
+    assert_eq!(
+        res.json::<Value>()["error"],
+        "Another email template already uses this list and delay."
+    );
+    for (body, why) in [
+        (drip("X", Some(102), Some(1), "company"), "deleted list"),
+        (drip("X", Some(103), Some(1), "company"), "other company's list"),
+        (drip("X", Some(100), None, "company"), "no delay"),
+        (drip("X", Some(100), Some(9000), "company"), "delay too long"),
+        (drip("X", Some(100), Some(1), "personal"), "personal template"),
+    ] {
+        let res = server
+            .post("/v1/email-templates")
+            .with_session(sessions::ADMIN)
+            .json(&body)
+            .await;
+        assert_eq!(res.status_code(), StatusCode::BAD_REQUEST, "{why}");
+    }
+}
+
+async fn pending_send(pool: &MySqlPool) -> i64 {
+    sqlx::query(
+        "INSERT INTO scheduled_emails (template_id, deal_id, list_id, customer_id, user_id, company_id, send_at, status)
+         VALUES (8670, 8602, 101, 1010, 107, 100, '2037-01-01 00:00:00', 'pending')",
+    )
+    .execute(pool)
+    .await
+    .unwrap()
+    .last_insert_id()
+    .try_into()
+    .unwrap()
+}
+
+async fn send_status(pool: &MySqlPool, id: i64) -> String {
+    sqlx::query_scalar("SELECT status FROM scheduled_emails WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[test_db::test(seed)]
+async fn admins_edit_company_templates_and_their_automation(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let send = pending_send(&pool).await;
+    let res = server
+        .put("/v1/email-templates/8670")
+        .with_session(sessions::ADMIN)
+        .json(&drip("Quoted drip", Some(101), Some(3), "company"))
+        .await;
+    res.assert_status_ok();
+    assert_eq!(res.json::<Value>()["hour_delay"], 3);
+    assert_eq!(send_status(&pool, send).await, "pending");
+    // No automation any more: its pending sends are called off.
+    let res = server
+        .put("/v1/email-templates/8670")
+        .with_session(sessions::ADMIN)
+        .json(&drip("Quoted drip", None, None, "company"))
+        .await;
+    res.assert_status_ok();
+    assert_eq!(res.json::<Value>()["lead_list_id"], Value::Null);
+    assert_eq!(send_status(&pool, send).await, "cancelled");
+}
+
+#[test_db::test(seed)]
+async fn deleting_a_company_template_stops_its_sends(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let send = pending_send(&pool).await;
+    server
+        .delete("/v1/email-templates/8670")
+        .with_session(RITA)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    server
+        .delete("/v1/email-templates/8670")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(send_status(&pool, send).await, "cancelled");
+    // Its list and delay are free again.
+    server
+        .post("/v1/email-templates")
+        .with_session(sessions::ADMIN)
+        .json(&drip("Again", Some(101), Some(2), "company"))
+        .await
+        .assert_status(StatusCode::CREATED);
+}
+
+#[test_db::test(seed)]
+async fn template_attachments(pool: MySqlPool) {
+    let (server, _) = common::server_with_storage(pool);
+    server
+        .post("/v1/uploads")
+        .with_session(RITA)
+        .json(&json!({ "folder": "email-templates", "file_name": "a.pdf", "content_type": "application/pdf" }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let res = server
+        .post("/v1/uploads")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "folder": "email-templates", "file_name": "terms.pdf", "content_type": "application/pdf" }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let url = res.json::<Value>()["url"].as_str().unwrap().to_string();
+    let attach = |url: String| {
+        json!({ "url": url, "filename": "terms.pdf", "content_type": "application/pdf" })
+    };
+    let res = server
+        .post("/v1/email-templates/8670/attachments")
+        .with_session(sessions::ADMIN)
+        .json(&attach(url.clone()))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let attachment: Value = res.json();
+    assert_eq!(attachment["content_type"], "application");
+    assert_eq!(attachment["content_subtype"], "pdf");
+    server
+        .post("/v1/email-templates/8670/attachments")
+        .with_session(sessions::ADMIN)
+        .json(&attach("https://evil.example/terms.pdf".into()))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    server
+        .post("/v1/email-templates/8670/attachments")
+        .with_session(RITA)
+        .json(&attach(url))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    let templates = list(&server, sessions::ADMIN).await;
+    let drip = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == 8670)
+        .unwrap();
+    assert_eq!(drip["attachments"][0]["filename"], "terms.pdf");
+    let id = attachment["id"].as_i64().unwrap();
+    let path = format!("/v1/email-templates/8670/attachments/{id}");
+    server
+        .delete(&path)
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .delete(&path)
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 }
