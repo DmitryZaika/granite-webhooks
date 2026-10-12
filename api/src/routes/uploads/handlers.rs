@@ -42,7 +42,8 @@ pub async fn create(
 ) -> ApiResult<(StatusCode, Json<Upload>)> {
     let is_deal = matches!(request.folder, UploadFolder::Deals | UploadFolder::Events);
     let is_email = request.folder == UploadFolder::Emails;
-    if !(is_deal || is_email || user.is_admin || user.is_superuser) {
+    let is_quote = request.folder == UploadFolder::Quotes;
+    if !(is_deal || is_email || is_quote || user.is_admin || user.is_superuser) {
         return Err(ApiError::Forbidden);
     }
     let content_type = request.content_type.trim().to_lowercase();

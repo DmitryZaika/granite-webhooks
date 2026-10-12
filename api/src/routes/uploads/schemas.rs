@@ -18,6 +18,8 @@ pub enum UploadFolder {
     /// Schedule event attachments and comment files (any employee; images
     /// and documents).
     Events,
+    /// Slab pictures for a quote's layout (any employee; images).
+    Quotes,
 }
 
 impl UploadFolder {
@@ -29,6 +31,7 @@ impl UploadFolder {
             Self::Deals => "deals",
             Self::Emails => "emails",
             Self::Events => "events",
+            Self::Quotes => "quotes",
         }
     }
 }

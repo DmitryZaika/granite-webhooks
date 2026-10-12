@@ -19125,6 +19125,83 @@
           }
         ]
       }
+    },
+    "/v1/quotes/inventory-slabs": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List a stone's free slabs",
+        "description": "Slabs not sold, cut or deleted of the company's stones with this name\n(and type), and of the stones they show slabs from, for a quote's slab\nlayout.",
+        "operationId": "list_quote_inventory_slabs",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Stone name (any case).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "Stone type (any case); any type when empty.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Slabs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventorySlabs"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or shop staff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -23809,6 +23886,78 @@
           }
         },
         "additionalProperties": false
+      },
+      "InventorySlab": {
+        "type": "object",
+        "description": "A free slab.",
+        "required": [
+          "id",
+          "leftover"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The slab."
+          },
+          "bundle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bundle label."
+          },
+          "width": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Width in inches."
+          },
+          "length": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Length in inches."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Slab photo."
+          },
+          "leftover": {
+            "type": "boolean",
+            "description": "A remnant."
+          }
+        }
+      },
+      "InventorySlabs": {
+        "type": "object",
+        "description": "`GET /v1/quotes/inventory-slabs`.",
+        "required": [
+          "slabs"
+        ],
+        "properties": {
+          "stone_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stone's picture."
+          },
+          "slabs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InventorySlab"
+            },
+            "description": "Free slabs of the stone and of the stones it shows slabs from, by bundle."
+          }
+        }
       },
       "LeadAnswers": {
         "type": "object",
@@ -28985,7 +29134,8 @@
           "faucets",
           "deals",
           "emails",
-          "events"
+          "events",
+          "quotes"
         ]
       },
       "UploadRequest": {
@@ -29104,6 +29254,10 @@
     {
       "name": "calls",
       "description": "Calls through the company's telephony provider"
+    },
+    {
+      "name": "quotes",
+      "description": "Quote tools"
     },
     {
       "name": "public",
