@@ -21625,6 +21625,53 @@
           }
         ]
       }
+    },
+    "/v1/jobs/call-points": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Sync and classify call points",
+        "description": "Pulls reps' outbound calls into the call points table, then transcribes\nand classifies a few of the calls long enough to need it.",
+        "operationId": "run_call_points",
+        "responses": {
+          "200": {
+            "description": "What was done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallPointsRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -22674,6 +22721,26 @@
           "voicemail": {
             "type": "boolean",
             "description": "It was a voicemail (a shorter note)."
+          }
+        }
+      },
+      "CallPointsRun": {
+        "type": "object",
+        "description": "What a run did.",
+        "required": [
+          "processed",
+          "classified"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Calls written or refreshed.",
+            "minimum": 0
+          },
+          "classified": {
+            "type": "integer",
+            "description": "Calls classified from a transcript.",
+            "minimum": 0
           }
         }
       },

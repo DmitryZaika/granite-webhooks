@@ -4,10 +4,12 @@
 //! - `POST /v1/jobs/appointment-reminders` → due customer and rep reminders
 //! - `POST /v1/jobs/maintenance-reminders` → the 9 AM shop maintenance digest
 //! - `POST /v1/jobs/survey-notifications` → post-installation surveys
+//! - `POST /v1/jobs/call-points` → outbound calls into call points
 //!
 //! Replaces the Remix `api.*.process` cron routes.
 
 mod appointment_reminders;
+pub mod call_points;
 pub mod maintenance_reminders;
 pub mod survey_notifications;
 
@@ -22,6 +24,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(appointment_reminders::run))
         .routes(routes!(maintenance_reminders::run))
         .routes(routes!(survey_notifications::run))
+        .routes(routes!(call_points::run))
 }
 
 /// The `time-triggered` Lambda, by its key.

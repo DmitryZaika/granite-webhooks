@@ -239,3 +239,54 @@ async fn sent_address(sent: &Sent) -> String {
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     format!("http://{address}")
 }
+
+#[test_db::test(seed)]
+async fn outbound_calls_become_call_points(pool: MySqlPool) {
+    // Olga (106, company 101 with CloudTalk keys) is agent 5106.
+    sqlx::raw_sql("UPDATE users SET cloudtalk_agent_id = '5106' WHERE id = 106; DELETE FROM phone_call_points;")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let router = Router::new()
+        .route(
+            "/calls/index.json",
+            axum::routing::get(|| async {
+                Json(json!({ "responseData": { "data": [
+                    { "Cdr": { "id": "1", "type": "outgoing", "user_id": "5106", "public_external": "+13175550100",
+                               "started_at": "2026-05-01 10:00:00", "talking_time": "12" } },
+                    { "Cdr": { "id": "2", "type": "outgoing", "user_id": "5106", "public_external": "+13175550100",
+                               "started_at": "2026-05-01 11:00:00", "talking_time": "95" } },
+                    { "Cdr": { "id": "3", "type": "outgoing", "user_id": "9999", "public_external": "+13175550100",
+                               "started_at": "2026-05-01 12:00:00", "talking_time": "95" } },
+                ] } }))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
+        .with_cloudtalk_base(&format!("http://{address}"))
+        .with_job_key("job-secret");
+    let server = TestServer::new(app(state));
+    let body: Value = server
+        .post("/v1/jobs/call-points")
+        .add_header("Authorization", "job-secret")
+        .await
+        .json();
+    assert_eq!(body["processed"], 2);
+    // The long call has no recording: it scores as an attempt once classified.
+    assert_eq!(body["classified"], 1);
+    let rows: Vec<(String, i32, String)> = sqlx::query_as(
+        "SELECT provider_call_id, user_id, CAST(outcome AS CHAR) FROM phone_call_points ORDER BY provider_call_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        [
+            ("1".into(), 106, "attempt".into()),
+            ("2".into(), 106, "attempt".into())
+        ]
+    );
+}

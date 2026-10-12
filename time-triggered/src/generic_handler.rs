@@ -207,7 +207,7 @@ async fn process_sms_followups() -> Result<usize, Error> {
 }
 
 async fn process_call_points() -> Result<usize, Error> {
-    post_app_process_route("api/call-points/process", "call points").await
+    post_api_job("call-points", "call points").await
 }
 
 async fn process_checklist_surveys() -> Result<usize, Error> {
