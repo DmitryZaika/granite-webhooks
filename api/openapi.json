@@ -8470,6 +8470,28 @@
         }
       }
     },
+    "/v1/public/calendly-url": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Get the demo booking page",
+        "description": "The Calendly page the marketing site opens to book a demo.",
+        "operationId": "get_calendly_url",
+        "responses": {
+          "200": {
+            "description": "Booking page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendlyUrl"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/company/features": {
       "get": {
         "tags": [
@@ -20425,6 +20447,19 @@
           "hidden": {
             "type": "boolean",
             "description": "Hidden from everyone's schedule (create only)."
+          }
+        }
+      },
+      "CalendlyUrl": {
+        "type": "object",
+        "description": "`GET /v1/public/calendly-url`.",
+        "properties": {
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The demo booking page."
           }
         }
       },
