@@ -199,11 +199,7 @@ async fn process_estimate_appointment_reminders() -> Result<usize, Error> {
 }
 
 async fn process_maintenance_due_reminders() -> Result<usize, Error> {
-    post_app_process_route(
-        "api/maintenance-reminders/process",
-        "maintenance due reminders",
-    )
-    .await
+    post_api_job("maintenance-reminders", "maintenance due reminders").await
 }
 
 async fn process_sms_followups() -> Result<usize, Error> {
@@ -215,11 +211,7 @@ async fn process_call_points() -> Result<usize, Error> {
 }
 
 async fn process_checklist_surveys() -> Result<usize, Error> {
-    post_app_process_route(
-        "api/survey-notifications/process",
-        "checklist survey notifications",
-    )
-    .await
+    post_api_job("survey-notifications", "checklist survey notifications").await
 }
 
 pub fn scheduled_email_recipient(email: Option<&str>) -> Option<&str> {

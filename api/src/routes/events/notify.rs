@@ -177,13 +177,13 @@ pub async fn customer_email(
 }
 
 #[derive(sqlx::FromRow)]
-struct OfficeManager {
-    id: i32,
-    name: Option<String>,
-    agent_id: String,
+pub struct OfficeManager {
+    pub id: i32,
+    pub name: Option<String>,
+    pub agent_id: String,
 }
 
-async fn office_manager(
+pub async fn office_manager(
     pool: &MySqlPool,
     company_id: i32,
     provider: SmsProvider,

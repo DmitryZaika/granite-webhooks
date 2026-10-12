@@ -2,10 +2,14 @@
 //! send `Authorization: <LAMBDA_KEY>` instead of a session.
 //!
 //! - `POST /v1/jobs/appointment-reminders` → due customer and rep reminders
+//! - `POST /v1/jobs/maintenance-reminders` → the 9 AM shop maintenance digest
+//! - `POST /v1/jobs/survey-notifications` → post-installation surveys
 //!
 //! Replaces the Remix `api.*.process` cron routes.
 
 mod appointment_reminders;
+pub mod maintenance_reminders;
+pub mod survey_notifications;
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -14,7 +18,10 @@ use axum::http::request::Parts;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(appointment_reminders::run))
+    OpenApiRouter::new()
+        .routes(routes!(appointment_reminders::run))
+        .routes(routes!(maintenance_reminders::run))
+        .routes(routes!(survey_notifications::run))
 }
 
 /// The `time-triggered` Lambda, by its key.

@@ -180,6 +180,29 @@ impl WebhooksClient {
         }
     }
 
+    /// A message to the user's notifications Telegram bot
+    /// (`POST /telegram/notifications-notify`); false when it did not go out.
+    pub async fn notify_telegram(&self, user_id: i32, message: &str) -> bool {
+        let Some(target) = &self.target else {
+            return false;
+        };
+        let (url, key) = target.as_ref();
+        let result = self
+            .http
+            .post(format!("{url}/telegram/notifications-notify"))
+            .header("Authorization", key)
+            .json(&serde_json::json!({ "user_id": user_id, "message": message }))
+            .send()
+            .await;
+        match result {
+            Ok(response) => response.status().is_success(),
+            Err(err) => {
+                tracing::warn!(error = %err.without_url(), "telegram notify failed");
+                false
+            }
+        }
+    }
+
     /// Sends a text (`POST /sms/send`); the ids of the rows sent.
     pub async fn send_sms(&self, sms: &OutgoingSms) -> Result<Vec<i64>, SmsFailure> {
         let Some(target) = &self.target else {
