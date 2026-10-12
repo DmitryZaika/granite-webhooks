@@ -169,3 +169,31 @@ async fn a_question_about_a_customer_cites_its_sources(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::BAD_REQUEST);
 }
+
+#[test_db::test(seed)]
+async fn the_agreed_estimate_time_is_read_from_the_conversation(pool: MySqlPool) {
+    let (server, seen) = server(
+        &pool,
+        r#"{"start":"2099-05-01T10:00","end":null,"evidence":"Friday at 10 works"}"#,
+    )
+    .await;
+    let body: Value = server
+        .get("/v1/customers/1000/estimate-time?tz=America/New_York")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(
+        body,
+        json!({ "time": { "start": "2099-05-01T10:00", "end": null, "evidence": "Friday at 10 works" } })
+    );
+    let sent = seen.lock().unwrap().clone();
+    assert_eq!(sent[0]["reasoning_effort"], "low");
+    let prompt = sent[0]["messages"][1]["content"].as_str().unwrap();
+    assert!(prompt.starts_with("Now: "));
+    assert!(prompt.contains("] Sales rep (sms): Hi Alice"));
+    server
+        .get("/v1/customers/1000/estimate-time")
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}

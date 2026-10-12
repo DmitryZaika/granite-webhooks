@@ -2606,6 +2606,94 @@
         ]
       }
     },
+    "/v1/customers/{id}/estimate-time": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Find the agreed estimate time",
+        "description": "Reads the customer's last 30 texts and emails with AI and returns the\nin-home estimate time both sides agreed on, if there is an exact one.",
+        "operationId": "find_customer_estimate_time",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "tz",
+            "in": "query",
+            "description": "The user's IANA time zone; the answer is on its clock.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The time, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstimateTime"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/customers/{id}/projects": {
       "get": {
         "tags": [
@@ -22164,6 +22252,31 @@
           }
         }
       },
+      "AgreedTime": {
+        "type": "object",
+        "description": "An agreed estimate time, on the user's clock.",
+        "required": [
+          "start",
+          "evidence"
+        ],
+        "properties": {
+          "start": {
+            "type": "string",
+            "description": "`YYYY-MM-DDTHH:mm`."
+          },
+          "end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`YYYY-MM-DDTHH:mm`, when the conversation says."
+          },
+          "evidence": {
+            "type": "string",
+            "description": "The words that set the time."
+          }
+        }
+      },
       "AnswerInput": {
         "type": "object",
         "description": "One answer.",
@@ -25630,6 +25743,23 @@
           }
         ],
         "description": "Body of `POST /v1/events/estimates`."
+      },
+      "EstimateTime": {
+        "type": "object",
+        "description": "`GET /v1/customers/{id}/estimate-time`.",
+        "properties": {
+          "time": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgreedTime",
+                "description": "Null when no exact time was agreed (or the AI did not answer)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       },
       "EventAttachment": {
         "type": "object",

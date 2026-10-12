@@ -15,6 +15,7 @@
 
 mod activity_search;
 mod duplicates;
+pub mod estimate_time;
 pub(crate) mod fuzzy;
 mod handlers;
 mod history;
@@ -44,6 +45,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(history::history))
         .routes(routes!(signatures::signature_requests))
         .routes(routes!(activity_search::activity_search))
+        .routes(routes!(estimate_time::estimate_time))
         .routes(routes!(projects::projects))
         .routes(routes!(projects::set_parent))
         .routes(routes!(projects::sales))
