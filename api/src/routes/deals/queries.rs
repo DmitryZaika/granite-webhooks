@@ -108,6 +108,14 @@ struct BoardRow {
     customer_name: Option<String>,
     company_name: Option<String>,
     temperature: Option<String>,
+    sales_rep: Option<String>,
+}
+
+/// Whose deals a board query returns.
+pub enum BoardOwner<'a> {
+    User(i32),
+    /// Every deal of the company, optionally one sales rep's (by name).
+    Company(Option<&'a str>),
 }
 
 #[derive(FromRow)]
@@ -124,29 +132,39 @@ struct ActivityRow {
 pub async fn board(
     pool: &MySqlPool,
     company_id: i32,
-    user_id: i32,
+    owner: BoardOwner<'_>,
     group_id: i32,
     status: DealStatus,
 ) -> Result<Vec<BoardDeal>, sqlx::Error> {
+    let owner_sql = match owner {
+        BoardOwner::User(_) => "AND d.user_id = ?",
+        BoardOwner::Company(Some(_)) => "AND rep.name = ?",
+        BoardOwner::Company(None) => "",
+    };
     let sql = format!(
         "SELECT CAST(d.id AS SIGNED) AS id, d.title, CAST(d.amount AS CHAR) AS amount, d.list_id,
                 d.position, d.status, d.is_won, d.lost_reason,
                 DATE_FORMAT(d.due_date, '%Y-%m-%d') AS due_date,
                 owner.id AS owner_id, c.id AS customer_id, c.name AS customer_name, c.company_name,
-                CAST(c.customer_temperature AS CHAR) AS temperature
+                CAST(c.customer_temperature AS CHAR) AS temperature, rep.name AS sales_rep
          FROM deals d
          JOIN deals_list dl ON dl.id = d.list_id AND dl.deleted_at IS NULL
          JOIN groups_list gl ON gl.id = dl.group_id
          JOIN customers owner ON owner.id = d.customer_id AND owner.company_id = ?
          LEFT JOIN customers c ON c.id = d.customer_id AND c.deleted_at IS NULL
-         WHERE d.deleted_at IS NULL AND d.user_id = ? AND {won}
+         LEFT JOIN users rep ON rep.id = d.user_id
+         WHERE d.deleted_at IS NULL {owner_sql} AND {won}
            AND dl.group_id = ? AND {GROUP_VISIBLE}
          ORDER BY d.list_id, d.position, d.id",
         won = status.sql("d"),
     );
-    let rows: Vec<BoardRow> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
-        .bind(company_id)
-        .bind(user_id)
+    let mut query = sqlx::query_as::<_, BoardRow>(sqlx::AssertSqlSafe(sql)).bind(company_id);
+    query = match owner {
+        BoardOwner::User(user_id) => query.bind(user_id),
+        BoardOwner::Company(Some(name)) => query.bind(name.to_string()),
+        BoardOwner::Company(None) => query,
+    };
+    let rows: Vec<BoardRow> = query
         .bind(group_id)
         .bind(company_id)
         .fetch_all(pool)
@@ -258,6 +276,7 @@ pub async fn board(
             earliest_activity_deadline: earliest.remove(&row.id),
             next_activity: next_activity.remove(&row.id),
             sms_flow_phone: sms_flows.get(&row.id).cloned(),
+            sales_rep: row.sales_rep,
         })
         .collect())
 }

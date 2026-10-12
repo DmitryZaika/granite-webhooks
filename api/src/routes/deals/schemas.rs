@@ -88,6 +88,22 @@ pub struct BoardQuery {
     pub group_id: i32,
     /// Default `open`.
     pub status: Option<DealStatus>,
+    /// `mine` (default) or `company` (every sales rep's; admins only).
+    #[param(inline)]
+    pub scope: Option<BoardScope>,
+    /// With `scope=company`: only this sales rep's deals (user name).
+    pub sales_rep: Option<String>,
+}
+
+/// Whose deals a board shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum BoardScope {
+    /// The caller's deals.
+    #[default]
+    Mine,
+    /// Every deal of the company (admins).
+    Company,
 }
 
 /// The customer a deal is for, as the board card shows it.
@@ -155,6 +171,8 @@ pub struct BoardDeal {
     pub next_activity: Option<NextActivity>,
     /// Phone digits of an active or paused SMS follow-up flow for the customer.
     pub sms_flow_phone: Option<String>,
+    /// Name of the sales rep who owns the deal.
+    pub sales_rep: Option<String>,
 }
 
 /// One deal in full.

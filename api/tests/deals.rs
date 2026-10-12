@@ -157,7 +157,8 @@ async fn board_lists_the_callers_open_deals_of_the_group(pool: MySqlPool) {
             "open_activity_count": 2,
             "earliest_activity_deadline": "2026-01-05T09:30:00",
             "next_activity": { "id": 8620, "name": "Call back", "deadline": "2026-01-05T09:30:00", "priority": "high" },
-            "sms_flow_phone": null
+            "sms_flow_phone": null,
+            "sales_rep": "Dina Dealer"
         })
     );
     // Undated activity only; completed and deleted ones do not count.
@@ -182,12 +183,53 @@ async fn board_lists_the_callers_open_deals_of_the_group(pool: MySqlPool) {
             "open_activity_count": 1,
             "earliest_activity_deadline": null,
             "next_activity": { "id": 8622, "name": "Measure", "deadline": null, "priority": "medium" },
-            "sms_flow_phone": null
+            "sms_flow_phone": null,
+            "sales_rep": "Dina Dealer"
         })
     );
     assert_eq!(board[2]["customer"], Value::Null);
     // A deleted note does not count.
     assert_eq!(board[3]["has_notes"], false);
+}
+
+#[test_db::test(seed)]
+async fn admins_see_the_whole_company_board(pool: MySqlPool) {
+    let company = get(
+        &pool,
+        "/v1/deals?group_id=100&scope=company",
+        sessions::ADMIN,
+    )
+    .await;
+    let all = ids(&company);
+    for id in [8600, 8601, 8606, 8602] {
+        assert!(all.contains(&id), "{id} in {all:?}");
+    }
+    let dina = get(
+        &pool,
+        "/v1/deals?group_id=100&scope=company&sales_rep=Dina%20Dealer",
+        sessions::ADMIN,
+    )
+    .await;
+    assert_eq!(ids(&dina), vec![8600, 8601, 8606, 8602]);
+    assert!(
+        company
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|deal| deal["sales_rep"].is_string() || deal["sales_rep"].is_null())
+    );
+    let everyone = get(
+        &pool,
+        "/v1/deals?group_id=100&scope=company&sales_rep=All",
+        sessions::ADMIN,
+    )
+    .await;
+    assert_eq!(ids(&everyone), all);
+    server(pool)
+        .get("/v1/deals?group_id=100&scope=company")
+        .with_session(sessions::DEALER)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
 }
 
 #[test_db::test(seed)]

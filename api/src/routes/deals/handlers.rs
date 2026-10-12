@@ -1,6 +1,6 @@
 use super::queries;
 use super::schemas::{
-    Activity, ActivityInput, ActivityPatch, ActivitySuggestion, BoardDeal, BoardQuery,
+    Activity, ActivityInput, ActivityPatch, ActivitySuggestion, BoardDeal, BoardQuery, BoardScope,
     ByCustomerQuery, ContentInput, CustomerDeal, DealCreate, DealCreated, DealDetail, DealGroup,
     DealList, DealPatch, DealStatus, GroupsQuery, ListsQuery, Note, NotePatch, OutcomeBody,
     Recipient, RecipientsQuery, ReorderBody, StageVisit,
@@ -106,9 +106,10 @@ pub async fn list_lists(
     ))
 }
 
-/// List the caller's deals on a board
+/// List deals on a board
 ///
-/// Returns the caller's live deals in the live stages of `group_id` with the
+/// Returns the caller's live deals (with `scope=company`, an admin gets every
+/// sales rep's, or `sales_rep`'s) in the live stages of `group_id` with the
 /// given `status` (default `open`), ordered by stage, then position. Each card
 /// carries its customer (null when deleted), whether it has photos, emails
 /// and notes, its unfinished activities (count, earliest deadline, the one
@@ -123,7 +124,7 @@ pub async fn list_lists(
         (status = 200, description = "Deal cards", body = Vec<BoardDeal>),
         (status = 400, description = "Missing or malformed `group_id`, unknown `status`", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or not an admin for `scope=company`", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -134,15 +135,20 @@ pub async fn board(
     MultiQuery(query): MultiQuery<BoardQuery>,
 ) -> ApiResult<Json<Vec<BoardDeal>>> {
     let status = query.status.unwrap_or_default();
+    let sales_rep = query
+        .sales_rep
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && *name != "All");
+    let owner = match query.scope.unwrap_or_default() {
+        BoardScope::Mine => queries::BoardOwner::User(user.id),
+        BoardScope::Company if user.is_admin || user.is_superuser => {
+            queries::BoardOwner::Company(sales_rep)
+        }
+        BoardScope::Company => return Err(ApiError::Forbidden),
+    };
     Ok(Json(
-        queries::board(
-            &state.pool,
-            user.company_id,
-            user.id,
-            query.group_id,
-            status,
-        )
-        .await?,
+        queries::board(&state.pool, user.company_id, owner, query.group_id, status).await?,
     ))
 }
 

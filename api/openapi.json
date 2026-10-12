@@ -6472,8 +6472,8 @@
         "tags": [
           "deals"
         ],
-        "summary": "List the caller's deals on a board",
-        "description": "Returns the caller's live deals in the live stages of `group_id` with the\ngiven `status` (default `open`), ordered by stage, then position. Each card\ncarries its customer (null when deleted), whether it has photos, emails\nand notes, its unfinished activities (count, earliest deadline, the one\ndue first) and the phone of a running SMS follow-up flow.",
+        "summary": "List deals on a board",
+        "description": "Returns the caller's live deals (with `scope=company`, an admin gets every\nsales rep's, or `sales_rep`'s) in the live stages of `group_id` with the\ngiven `status` (default `open`), ordered by stage, then position. Each card\ncarries its customer (null when deleted), whether it has photos, emails\nand notes, its unfinished activities (count, earliest deadline, the one\ndue first) and the phone of a running SMS follow-up flow.",
         "operationId": "list_board_deals",
         "parameters": [
           {
@@ -6493,6 +6493,29 @@
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/DealStatus"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`mine` (default) or `company` (every sales rep's; admins only).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose deals a board shows.",
+              "enum": [
+                "mine",
+                "company"
+              ]
+            }
+          },
+          {
+            "name": "sales_rep",
+            "in": "query",
+            "description": "With `scope=company`: only this sales rep's deals (user name).",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -6531,7 +6554,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or not an admin for `scope=company`",
             "content": {
               "application/json": {
                 "schema": {
@@ -12222,6 +12245,13 @@
               "null"
             ],
             "description": "Phone digits of an active or paused SMS follow-up flow for the customer."
+          },
+          "sales_rep": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the sales rep who owns the deal."
           }
         }
       },
