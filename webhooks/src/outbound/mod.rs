@@ -36,6 +36,9 @@ pub struct OutgoingEmail {
     pub body: String,
     /// The sender's signature (HTML or plain text), added below the note.
     pub signature: Option<String>,
+    /// Where replies go, when not to the sender.
+    #[serde(default)]
+    pub reply_to: Vec<String>,
     /// `Message-ID` of the message this one answers.
     pub in_reply_to: Option<String>,
     /// `Message-ID`s of the thread, oldest first.
@@ -179,6 +182,9 @@ pub fn build_message(email: &OutgoingEmail, files: Vec<Vec<u8>>) -> Vec<u8> {
     if !email.cc.is_empty() {
         message = message.cc(email.cc.clone());
     }
+    if !email.reply_to.is_empty() {
+        message = message.reply_to(email.reply_to.clone());
+    }
     if let Some(in_reply_to) = email
         .in_reply_to
         .as_deref()
@@ -289,6 +295,7 @@ mod tests {
             subject: "Your quote".into(),
             body: "<p>Hi Nina</p>".into(),
             signature: Some("Dina".into()),
+            reply_to: Vec::new(),
             in_reply_to: Some("<prev@us-east-2.amazonses.com>".into()),
             references: vec!["first@x".into(), "<prev@us-east-2.amazonses.com>".into()],
             attachments: vec![OutgoingAttachment {

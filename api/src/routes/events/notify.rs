@@ -370,6 +370,7 @@ pub async fn notify_booking(
         subject: booking.kind.subject(&company_name),
         body: format!("<p>{}</p>", escape_html(&text)),
         signature: None,
+        reply_to: Vec::new(),
         in_reply_to: None,
         references: Vec::new(),
         attachments: Vec::new(),

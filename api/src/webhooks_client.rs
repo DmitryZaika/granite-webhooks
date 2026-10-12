@@ -327,6 +327,9 @@ pub struct OutgoingEmail {
     pub subject: String,
     pub body: String,
     pub signature: Option<String>,
+    /// Where replies go, when not to the sender.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reply_to: Vec<String>,
     pub in_reply_to: Option<String>,
     pub references: Vec<String>,
     pub attachments: Vec<OutgoingAttachment>,

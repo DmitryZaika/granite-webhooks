@@ -19811,6 +19811,141 @@
         ]
       }
     },
+    "/v1/bug-reports": {
+      "get": {
+        "tags": [
+          "support"
+        ],
+        "summary": "List bug reports",
+        "description": "Every company's reports, newest first, with the reporter, the company\nand the files. Super admins only.",
+        "operationId": "list_bug_reports",
+        "responses": {
+          "200": {
+            "description": "Reports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BugReport"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a super admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "support"
+        ],
+        "summary": "Report a bug",
+        "description": "Saves the report with its files and emails it to the team (replies go to\nthe reporter). When the email fails the report is still saved and\n`notified` is false.",
+        "operationId": "create_bug_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewBugReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Filed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FiledBugReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No description, or a file not uploaded for bug reports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/instructions": {
       "get": {
         "tags": [
@@ -24941,6 +25076,79 @@
           }
         }
       },
+      "BugReport": {
+        "type": "object",
+        "description": "A report as super admins list it.",
+        "required": [
+          "id",
+          "user_id",
+          "company_id",
+          "title",
+          "description",
+          "image_urls"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Report id."
+          },
+          "user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Reporter."
+          },
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Reporter's company."
+          },
+          "title": {
+            "type": "string",
+            "description": "First line of the description."
+          },
+          "description": {
+            "type": "string",
+            "description": "What happened."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was filed."
+          },
+          "user_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reporter's name."
+          },
+          "user_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reporter's email."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company name."
+          },
+          "image_urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Files attached."
+          }
+        }
+      },
       "Calendar": {
         "type": "object",
         "description": "A calendar of the company's schedule.",
@@ -28963,6 +29171,25 @@
           "documents"
         ]
       },
+      "FiledBugReport": {
+        "type": "object",
+        "description": "The filed report.",
+        "required": [
+          "id",
+          "notified"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Report id."
+          },
+          "notified": {
+            "type": "boolean",
+            "description": "The team was emailed (false when the email failed; the report is saved)."
+          }
+        }
+      },
       "FillRequest": {
         "type": "object",
         "description": "Body of `POST /v1/templates/fill`.",
@@ -31046,6 +31273,27 @@
           "name": {
             "type": "string",
             "description": "Name (1–255 characters)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewBugReport": {
+        "type": "object",
+        "description": "Body of `POST /v1/bug-reports`.",
+        "required": [
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "What happened; its first line is the title."
+          },
+          "file_urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Files uploaded to the `bug-reports` folder (`POST /v1/uploads`)."
           }
         },
         "additionalProperties": false
@@ -36717,6 +36965,7 @@
           "documents",
           "images",
           "supports",
+          "bug-reports",
           "email-templates"
         ]
       },

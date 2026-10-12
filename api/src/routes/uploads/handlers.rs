@@ -47,18 +47,19 @@ pub async fn create(
 ) -> ApiResult<(StatusCode, Json<Upload>)> {
     let is_deal = matches!(request.folder, UploadFolder::Deals | UploadFolder::Events);
     let is_email = request.folder == UploadFolder::Emails;
+    let is_bug_report = request.folder == UploadFolder::BugReports;
     let is_quote = matches!(
         request.folder,
         UploadFolder::Quotes | UploadFolder::TemplateImages
     );
-    if !(is_deal || is_email || is_quote || user.is_admin || user.is_superuser) {
+    if !(is_deal || is_email || is_quote || is_bug_report || user.is_admin || user.is_superuser) {
         return Err(ApiError::Forbidden);
     }
     let content_type = request.content_type.trim().to_lowercase();
     let allowed = IMAGE_CONTENT_TYPES.contains(&content_type.as_str())
         || ((is_deal || request.folder == UploadFolder::Documents)
             && DOCUMENT_CONTENT_TYPES.contains(&content_type.as_str()))
-        || ((is_email || request.folder == UploadFolder::EmailTemplates)
+        || ((is_email || is_bug_report || request.folder == UploadFolder::EmailTemplates)
             && is_mime_type(&content_type));
     if !allowed {
         return Err(ApiError::BadRequest(format!(

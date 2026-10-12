@@ -8,6 +8,7 @@
 pub mod ai;
 pub mod ai_usage;
 pub mod attachable;
+pub mod bug_reports;
 pub mod calendars;
 pub mod call_coaching;
 pub mod calls;
@@ -84,6 +85,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(supports::router())
         .merge(invoice_queue::router())
         .merge(survey_results::router())
+        .merge(bug_reports::router())
         .merge(instructions::router())
         .merge(events::router())
         .merge(schedule::router())

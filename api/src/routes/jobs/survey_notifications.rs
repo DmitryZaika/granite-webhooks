@@ -315,6 +315,7 @@ async fn send_email(
         },
         body: email_html(company, url, reminder),
         signature: None,
+        reply_to: Vec::new(),
         in_reply_to: None,
         references: Vec::new(),
         attachments: Vec::new(),

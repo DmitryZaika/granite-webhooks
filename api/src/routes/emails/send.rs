@@ -497,6 +497,7 @@ impl Envelope {
             subject: email.subject.clone(),
             body,
             signature: self.sender.signature.clone(),
+            reply_to: Vec::new(),
             in_reply_to: self.in_reply_to.clone(),
             references: self.references.clone(),
             attachments: self.attachments.clone(),
