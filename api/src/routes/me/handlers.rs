@@ -351,3 +351,159 @@ pub async fn set_notification_preferences(
     .await?;
     Ok(Json(load_preferences(&state.pool, user.id).await?))
 }
+
+/// A Telegram id the widget sends as a number or a string.
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+#[serde(untagged)]
+pub enum TelegramNumber {
+    Number(i64),
+    Text(String),
+}
+
+impl TelegramNumber {
+    fn text(&self) -> String {
+        match self {
+            Self::Number(number) => number.to_string(),
+            Self::Text(text) => text.clone(),
+        }
+    }
+}
+
+/// Body of `POST /v1/me/telegram/{bot}`: what the Telegram login widget returned.
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct TelegramLink {
+    /// The CRM user the page linked for; must be the caller.
+    pub crm_user_id: i32,
+    /// Telegram user id.
+    pub telegram_id: TelegramNumber,
+    /// Unix seconds of the login.
+    pub auth_date: TelegramNumber,
+    /// Telegram's signature.
+    pub hash: String,
+    /// Telegram first name.
+    pub first_name: String,
+    /// Telegram last name.
+    #[serde(default)]
+    pub last_name: Option<String>,
+    /// Telegram username.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Telegram photo.
+    #[serde(default)]
+    pub photo_url: Option<String>,
+}
+
+async fn link_telegram(
+    state: &AppState,
+    user: &SessionUser,
+    bot: Bot,
+    input: &TelegramLink,
+) -> ApiResult<axum::http::StatusCode> {
+    use crate::telegram::{TelegramLogin, login_fresh, login_signed};
+    let token = state
+        .telegram
+        .login_token(bot)
+        .ok_or_else(|| ApiError::Internal("Telegram linking is not configured".into()))?;
+    if input.crm_user_id != user.id {
+        return Err(ApiError::Unauthorized);
+    }
+    let telegram_id = input.telegram_id.text();
+    let auth_date = input.auth_date.text();
+    if input.first_name.is_empty()
+        || telegram_id.is_empty()
+        || !telegram_id.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err(ApiError::BadRequest("Invalid request".into()));
+    }
+    let fresh = auth_date
+        .parse::<i64>()
+        .is_ok_and(|at| login_fresh(at, chrono::Utc::now().timestamp()));
+    if !fresh {
+        return Err(ApiError::BadRequest(
+            "Telegram authentication expired".into(),
+        ));
+    }
+    let login = TelegramLogin {
+        id: &telegram_id,
+        auth_date: &auth_date,
+        first_name: &input.first_name,
+        last_name: input.last_name.as_deref(),
+        username: input.username.as_deref(),
+        photo_url: input.photo_url.as_deref(),
+    };
+    if !login_signed(&login, &input.hash, token) {
+        return Err(ApiError::BadRequest("Invalid Telegram signature".into()));
+    }
+    let column = match bot {
+        Bot::Leads => "telegram_id",
+        Bot::Notifications => "notifications_telegram_id",
+    };
+    let updated = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE users SET {column} = ?, temp_telegram_id = NULL, telegram_conf_code = NULL,
+                telegram_conf_expires_at = NULL
+          WHERE id = ? AND is_deleted = 0"
+    )))
+    .bind(&telegram_id)
+    .bind(user.id)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+    if updated == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// Link my Telegram to the lead alerts bot
+///
+/// Checks the Telegram login widget's signature (made in the last day) and
+/// saves the Telegram id for lead alerts.
+#[utoipa::path(
+    post,
+    path = "/v1/me/telegram/leads",
+    operation_id = "link_leads_telegram",
+    tag = "me",
+    request_body = TelegramLink,
+    responses(
+        (status = 204, description = "Linked"),
+        (status = 400, description = "Bad, expired or forged login", body = ErrorBody),
+        (status = 401, description = "No valid session, or another user's login", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Bot not configured, or database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn link_leads_telegram(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    JsonBody(input): JsonBody<TelegramLink>,
+) -> ApiResult<axum::http::StatusCode> {
+    link_telegram(&state, &user, Bot::Leads, &input).await
+}
+
+/// Link my Telegram to the notifications bot
+///
+/// Like the lead alerts link, for the CRM notifications bot; shop staff may
+/// link it too.
+#[utoipa::path(
+    post,
+    path = "/v1/me/telegram/notifications",
+    operation_id = "link_notifications_telegram",
+    tag = "me",
+    request_body = TelegramLink,
+    responses(
+        (status = 204, description = "Linked"),
+        (status = 400, description = "Bad, expired or forged login", body = ErrorBody),
+        (status = 401, description = "No valid session, or another user's login", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or shop staff", body = ErrorBody),
+        (status = 500, description = "Bot not configured, or database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn link_notifications_telegram(
+    State(state): State<AppState>,
+    crate::auth::ShopOrEmployeeUser(user): crate::auth::ShopOrEmployeeUser,
+    JsonBody(input): JsonBody<TelegramLink>,
+) -> ApiResult<axum::http::StatusCode> {
+    link_telegram(&state, &user, Bot::Notifications, &input).await
+}

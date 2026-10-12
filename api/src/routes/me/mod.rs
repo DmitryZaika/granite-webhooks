@@ -3,6 +3,7 @@
 //! - `GET /v1/me`           → effective session user (no extra query beyond auth)
 //! - `GET /v1/me/positions` → position ids in the company the request acts in
 //! - `GET /v1/me/sales-goal` → monthly sales goal; `PUT` sets it
+//! - `POST /v1/me/telegram/leads|notifications` → link a bot (Telegram login widget)
 //! - `GET /v1/me/telegram`   → Telegram link status per bot (checked with Telegram)
 //! - `GET`/`PUT /v1/me/notification-preferences` → Telegram alert settings
 //! - `PUT /v1/me/sidebar-pin` → keep the desktop sidebar open
@@ -23,6 +24,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::positions))
         .routes(routes!(handlers::sales_goal, handlers::set_sales_goal))
         .routes(routes!(handlers::telegram))
+        .routes(routes!(handlers::link_leads_telegram))
+        .routes(routes!(handlers::link_notifications_telegram))
         .routes(routes!(handlers::set_sidebar_pin))
         .routes(routes!(
             handlers::notification_preferences,

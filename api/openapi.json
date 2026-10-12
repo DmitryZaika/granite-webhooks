@@ -292,6 +292,146 @@
         ]
       }
     },
+    "/v1/me/telegram/leads": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Link my Telegram to the lead alerts bot",
+        "description": "Checks the Telegram login widget's signature (made in the last day) and\nsaves the Telegram id for lead alerts.",
+        "operationId": "link_leads_telegram",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramLink"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Linked"
+          },
+          "400": {
+            "description": "Bad, expired or forged login",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session, or another user's login",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Bot not configured, or database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/telegram/notifications": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Link my Telegram to the notifications bot",
+        "description": "Like the lead alerts link, for the CRM notifications bot; shop staff may\nlink it too.",
+        "operationId": "link_notifications_telegram",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramLink"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Linked"
+          },
+          "400": {
+            "description": "Bad, expired or forged login",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session, or another user's login",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or shop staff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Bot not configured, or database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/sidebar-pin": {
       "put": {
         "tags": [
@@ -27789,6 +27929,73 @@
             "description": "Supplier name."
           }
         }
+      },
+      "TelegramLink": {
+        "type": "object",
+        "description": "Body of `POST /v1/me/telegram/{bot}`: what the Telegram login widget returned.",
+        "required": [
+          "crm_user_id",
+          "telegram_id",
+          "auth_date",
+          "hash",
+          "first_name"
+        ],
+        "properties": {
+          "crm_user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The CRM user the page linked for; must be the caller."
+          },
+          "telegram_id": {
+            "$ref": "#/components/schemas/TelegramNumber",
+            "description": "Telegram user id."
+          },
+          "auth_date": {
+            "$ref": "#/components/schemas/TelegramNumber",
+            "description": "Unix seconds of the login."
+          },
+          "hash": {
+            "type": "string",
+            "description": "Telegram's signature."
+          },
+          "first_name": {
+            "type": "string",
+            "description": "Telegram first name."
+          },
+          "last_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Telegram last name."
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Telegram username."
+          },
+          "photo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Telegram photo."
+          }
+        }
+      },
+      "TelegramNumber": {
+        "oneOf": [
+          {
+            "type": "integer",
+            "format": "int64"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "description": "A Telegram id the widget sends as a number or a string."
       },
       "TelegramStatus": {
         "type": "object",

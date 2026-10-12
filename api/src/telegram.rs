@@ -140,3 +140,104 @@ impl TelegramBots {
         }
     }
 }
+
+/// Seconds a Telegram login stays valid.
+pub const LOGIN_MAX_AGE_SECONDS: i64 = 86_400;
+
+/// The fields the Telegram login widget signs.
+pub struct TelegramLogin<'a> {
+    pub id: &'a str,
+    pub auth_date: &'a str,
+    pub first_name: &'a str,
+    pub last_name: Option<&'a str>,
+    pub username: Option<&'a str>,
+    pub photo_url: Option<&'a str>,
+}
+
+impl TelegramLogin<'_> {
+    /// `key=value` lines sorted by key, empty optional fields left out.
+    fn data_check_string(&self) -> String {
+        let mut entries = vec![
+            ("auth_date", self.auth_date),
+            ("first_name", self.first_name),
+            ("id", self.id),
+        ];
+        for (key, value) in [
+            ("last_name", self.last_name),
+            ("photo_url", self.photo_url),
+            ("username", self.username),
+        ] {
+            if let Some(value) = value.filter(|value| !value.is_empty()) {
+                entries.push((key, value));
+            }
+        }
+        entries.sort_by_key(|(key, _)| *key);
+        entries
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// `hash` is Telegram's signature of `login` with `token`.
+pub fn login_signed(login: &TelegramLogin<'_>, hash: &str, token: &str) -> bool {
+    use hmac::{Hmac, KeyInit, Mac};
+    use sha2::{Digest, Sha256};
+    let secret = Sha256::digest(token.as_bytes());
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(&secret) else {
+        return false;
+    };
+    mac.update(login.data_check_string().as_bytes());
+    let Some(expected) = (0..hash.len())
+        .step_by(2)
+        .map(|i| {
+            hash.get(i..i + 2)
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+        })
+        .collect::<Option<Vec<u8>>>()
+    else {
+        return false;
+    };
+    mac.verify_slice(&expected).is_ok()
+}
+
+/// A login made in the last day (and not in the future).
+pub const fn login_fresh(auth_date: i64, now: i64) -> bool {
+    auth_date > 0 && auth_date <= now + 60 && now - auth_date <= LOGIN_MAX_AGE_SECONDS
+}
+
+impl TelegramBots {
+    /// The bot's token, to check a login against.
+    pub fn login_token(&self, bot: Bot) -> Option<&str> {
+        self.token(bot)
+    }
+}
+
+#[cfg(test)]
+mod login_tests {
+    use super::*;
+
+    #[test]
+    fn a_login_is_checked_against_the_bot_token() {
+        let login = TelegramLogin {
+            id: "42",
+            auth_date: "1700000000",
+            first_name: "Rita",
+            last_name: None,
+            username: Some("rita"),
+            photo_url: Some(""),
+        };
+        assert_eq!(
+            login.data_check_string(),
+            "auth_date=1700000000\nfirst_name=Rita\nid=42\nusername=rita"
+        );
+        // HMAC-SHA256(key = SHA256("123:abc"), data), computed with Node's crypto.
+        let hash = "f2df0cd9464348b6d8b2d8fb0c786e78655d34066af315f76ee7c0bd659f007a";
+        assert!(login_signed(&login, hash, "123:abc"));
+        assert!(!login_signed(&login, hash, "123:other"));
+        assert!(!login_signed(&login, "zz", "123:abc"));
+        assert!(login_fresh(1_700_000_000, 1_700_000_100));
+        assert!(!login_fresh(1_700_000_000, 1_700_100_000));
+    }
+}

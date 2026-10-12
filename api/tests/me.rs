@@ -324,3 +324,65 @@ async fn telegram_alerts_are_switched_on_and_off(pool: MySqlPool) {
         .json();
     assert_eq!(read, saved);
 }
+
+fn telegram_hash(token: &str, data: &str) -> String {
+    use hmac::{Hmac, KeyInit, Mac};
+    use sha2::{Digest, Sha256};
+    let mut mac = Hmac::<Sha256>::new_from_slice(&Sha256::digest(token.as_bytes())).unwrap();
+    mac.update(data.as_bytes());
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+#[test_db::test(seed)]
+async fn telegram_logins_link_the_bots(pool: MySqlPool) {
+    let bots = TelegramBots::new(Some("111:leads"), Some("222:notes"), "http://127.0.0.1:9");
+    let server = axum_test::TestServer::new(app(AppState::new(
+        pool.clone(),
+        common::SECRET,
+        common::ALLOWED_ORIGIN,
+    )
+    .with_telegram(bots)));
+    let now = chrono::Utc::now().timestamp();
+    let login = |token: &str, user: i32, auth_date: i64| {
+        let data = format!("auth_date={auth_date}\nfirst_name=Rita\nid=5550001");
+        serde_json::json!({
+            "crm_user_id": user, "telegram_id": 5_550_001, "auth_date": auth_date.to_string(),
+            "hash": telegram_hash(token, &data), "first_name": "Rita",
+        })
+    };
+    let post = |bot: &str, body: serde_json::Value| {
+        let request = server
+            .post(&format!("/v1/me/telegram/{bot}"))
+            .with_session(sessions::REP)
+            .json(&body);
+        async move { request.await }
+    };
+    post("leads", login("111:leads", 100, now))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    post("notifications", login("222:notes", 100, now))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let ids: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT CAST(telegram_id AS CHAR), CAST(notifications_telegram_id AS CHAR) FROM users WHERE id = 100",
+    )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(ids, (Some("5550001".into()), Some("5550001".into())));
+
+    // Signed for the other bot, too old, or for another user.
+    post("leads", login("222:notes", 100, now))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    post("leads", login("111:leads", 100, now - 90_000))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    post("leads", login("111:leads", 101, now))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
