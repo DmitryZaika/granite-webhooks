@@ -312,3 +312,36 @@ async fn trash_restore_and_purge(pool: MySqlPool) {
         .assert_status_bad_request();
     let _ = T5;
 }
+
+#[test_db::test(seed)]
+async fn search_suggestions_per_conversation(pool: MySqlPool) {
+    let rows = get(&pool, "/v1/emails/search-suggestions?term=kitchen", OLGA).await;
+    // The newest matching message of T1 only.
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["thread_id"], T1);
+    assert_eq!(rows[0]["sender_name"], "Other Co Customer");
+    assert_eq!(
+        get(&pool, "/v1/emails/search-suggestions?term=k", OLGA).await,
+        json!([])
+    );
+    let sent = get(
+        &pool,
+        "/v1/emails/search-suggestions?term=following&folder=sent",
+        OLGA,
+    )
+    .await;
+    assert_eq!(sent[0]["thread_id"], T3);
+    // The admin scope needs an admin; it sees the whole company's mail.
+    server(pool.clone())
+        .get("/v1/emails/search-suggestions?term=kitchen&scope=admin")
+        .with_session(OLGA)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let acme = get(
+        &pool,
+        "/v1/emails/search-suggestions?term=acme&scope=admin",
+        sessions::ADMIN,
+    )
+    .await;
+    assert_eq!(acme[0]["thread_id"], T6);
+}

@@ -3,6 +3,7 @@
 //! - `GET  /v1/emails/threads`                    → a page of a folder (inbox, sent, trash, drafts)
 //! - `GET  /v1/emails/folder-counts`              → unread inbox, trash and draft counts
 //! - `GET  /v1/emails/unread`                     → the inbox badge
+//! - `GET  /v1/emails/search-suggestions`         → typeahead of the search box
 //! - `GET  /v1/emails/threads/{thread_id}`        → one conversation
 //! - `POST /v1/emails/threads/{thread_id}/read`   → mark an opened conversation read
 //! - `POST /v1/emails/threads/{mark-read,mark-unread,delete,restore,purge}` → bulk changes
@@ -32,4 +33,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::delete_threads))
         .routes(routes!(handlers::restore_threads))
         .routes(routes!(handlers::purge))
+        .routes(routes!(handlers::suggest))
 }

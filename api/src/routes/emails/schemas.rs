@@ -250,3 +250,53 @@ pub struct Purged {
     /// Messages erased.
     pub purged: usize,
 }
+
+/// Whose mail the suggestions search.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SuggestScope {
+    /// The caller's own mailbox.
+    #[default]
+    Employee,
+    /// The whole company's mail (admins only).
+    Admin,
+}
+
+/// Query of `GET /v1/emails/search-suggestions`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SuggestQuery {
+    /// What the user typed; fewer than 2 characters returns nothing.
+    pub term: String,
+    /// Default `inbox` (`drafts` is `inbox` for the admin scope).
+    #[param(inline)]
+    pub folder: Option<EmailFolder>,
+    /// Default `employee`.
+    #[param(inline)]
+    pub scope: Option<SuggestScope>,
+    /// Admin scope: only mail sent by or to this user.
+    pub sales_rep: Option<i32>,
+}
+
+/// The newest matching message of a conversation.
+#[derive(Debug, Clone, Serialize, FromRow, ToSchema)]
+pub struct SuggestionRow {
+    /// Conversation to open.
+    pub thread_id: String,
+    /// Subject.
+    pub subject: Option<String>,
+    /// Plain text body (the client makes the snippet).
+    pub body: String,
+    /// When it was sent.
+    #[serde(serialize_with = "js_date")]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub sent_at: Option<DateTime<Utc>>,
+    /// From header.
+    pub sender_email: Option<String>,
+    /// To header.
+    pub receiver_email: Option<String>,
+    /// Sender's user or customer name.
+    pub sender_name: Option<String>,
+    /// Receiver's user or customer name.
+    pub receiver_name: Option<String>,
+}

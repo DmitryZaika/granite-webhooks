@@ -1,10 +1,13 @@
 //! The mailbox: thread list per folder and the folder counts.
 
 use super::names::fill_display_names;
-use super::schemas::{EmailFolder, FolderCounts, ListQuery, MailboxPage, MailboxRow};
+use super::schemas::{
+    EmailFolder, FolderCounts, ListQuery, MailboxPage, MailboxRow, SuggestQuery, SuggestScope,
+    SuggestionRow,
+};
 use super::sql::{
     Arg, Mailbox, Sql, client_read_at, company_scope, customer_name_by_email, list_search,
-    normalized, receiver_condition, sender_condition, unread_incoming,
+    normalize_search_term, normalized, receiver_condition, sender_condition, unread_incoming,
 };
 use sqlx::MySqlPool;
 
@@ -266,4 +269,158 @@ pub async fn folder_counts(
         trash,
         drafts,
     })
+}
+
+/// Suggestions per conversation, newest first.
+const SUGGEST_LIMIT: usize = 8;
+
+/// Typeahead for the mailbox search: the newest matching message of up to
+/// 8 conversations, in the given folder (`searchEmailSuggestions`).
+pub async fn suggestions(
+    pool: &MySqlPool,
+    mailbox: &Mailbox,
+    query: &SuggestQuery,
+) -> Result<Vec<SuggestionRow>, sqlx::Error> {
+    let term = normalize_search_term(&query.term);
+    if term.chars().count() < 2 {
+        return Ok(Vec::new());
+    }
+    let scope_kind = query.scope.unwrap_or_default();
+    let mut folder = query.folder.unwrap_or_default();
+    if scope_kind == SuggestScope::Admin && folder == EmailFolder::Drafts {
+        folder = EmailFolder::Inbox;
+    }
+    let extra = if scope_kind == SuggestScope::Employee {
+        let addresses = customer_addresses(pool, mailbox.company_id, &term).await?;
+        (!addresses.is_empty()).then(|| {
+            let marks = vec!["?"; addresses.len()].join(",");
+            let mut args: Vec<Arg> = addresses.iter().map(|a| Arg::from(a.clone())).collect();
+            args.extend(addresses.iter().map(|a| Arg::from(a.clone())));
+            Sql::new(
+                format!(
+                    " OR {} IN ({marks}) OR {} IN ({marks})",
+                    normalized("e.sender_email"),
+                    normalized("e.receiver_email")
+                ),
+                args,
+            )
+        })
+    } else {
+        None
+    };
+    let search = list_search(&term, extra);
+    if search.sql.is_empty() {
+        return Ok(Vec::new());
+    }
+    let fetch = SUGGEST_LIMIT * 4;
+    let (where_sql, mut args, name_company) = if scope_kind == SuggestScope::Admin {
+        let company = mailbox.company_id;
+        let mut args: Vec<Arg> = vec![
+            company.into(),
+            company.into(),
+            company.into(),
+            company.into(),
+        ];
+        let rep = query.sales_rep.map_or(String::new(), |rep| {
+            args.push(rep.into());
+            args.push(rep.into());
+            " AND (e.sender_user_id = ? OR r.id = ?)".to_string()
+        });
+        let deleted = if folder == EmailFolder::Trash {
+            "IS NOT NULL"
+        } else {
+            "IS NULL"
+        };
+        let folder_sql = if folder == EmailFolder::Sent {
+            query
+                .sales_rep
+                .map_or(" AND e.sender_user_id IS NOT NULL".to_string(), |rep| {
+                    args.push(rep.into());
+                    " AND e.sender_user_id IS NOT NULL AND e.sender_user_id = ?".to_string()
+                })
+        } else {
+            " AND (e.sender_user_id IS NULL OR r.id IS NOT NULL)".to_string()
+        };
+        (
+            format!(
+                "e.deleted_at {deleted} AND e.is_draft = 0 AND (s.company_id = ? OR r.company_id = ?){rep}{folder_sql}"
+            ),
+            args,
+            " AND c.company_id = ?",
+        )
+    } else {
+        let scope = company_scope("e", mailbox.company_id);
+        let (where_sql, args) = if folder == EmailFolder::Drafts {
+            (
+                format!(
+                    "e.deleted_at IS NULL AND {} AND e.sender_user_id = ? AND e.is_draft = 1",
+                    scope.sql
+                ),
+                vec![Arg::from(mailbox.company_id), Arg::from(mailbox.user_id)],
+            )
+        } else {
+            let condition = if folder == EmailFolder::Sent {
+                sender_condition("e", mailbox)
+            } else {
+                receiver_condition("e", mailbox)
+            };
+            let deleted = if folder == EmailFolder::Trash {
+                "IS NOT NULL"
+            } else {
+                "IS NULL"
+            };
+            let mut args = scope.args;
+            args.extend(condition.args);
+            (
+                format!(
+                    "e.deleted_at {deleted} AND {} AND e.is_draft = 0 AND {}",
+                    scope.sql, condition.sql
+                ),
+                args,
+            )
+        };
+        (where_sql, args, "")
+    };
+    // Admin: the two company placeholders of the name lookups come first.
+    let name = |column: &str| {
+        format!(
+            "(SELECT c.name FROM customers c JOIN customers_emails ce ON ce.customer_id = c.id \
+             WHERE ce.email = {column}{name_company} LIMIT 1)"
+        )
+    };
+    if scope_kind == SuggestScope::Employee {
+        args.extend(search.args);
+    } else {
+        // [company, company] (names), then scope args after the first two.
+        let names = args.drain(..2).collect::<Vec<_>>();
+        let mut ordered = names;
+        ordered.extend(args);
+        ordered.extend(search.args);
+        args = ordered;
+    }
+    let rows: Vec<SuggestionRow> = Sql::new(
+        format!(
+            "SELECT e.thread_id, e.subject, e.body, e.sent_at, e.sender_email, e.receiver_email,
+                    COALESCE(s.name, {}) AS sender_name, COALESCE(r.name, {}) AS receiver_name
+             FROM emails e
+             LEFT JOIN users s ON e.sender_user_id = s.id
+             LEFT JOIN users r ON e.receiver_email = r.email
+             WHERE {where_sql}{} AND e.thread_id IS NOT NULL
+             ORDER BY e.sent_at DESC, e.id DESC
+             LIMIT {fetch}",
+            name("e.sender_email"),
+            name("e.receiver_email"),
+            search.sql
+        ),
+        args,
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await?;
+    let mut seen = std::collections::HashSet::new();
+    Ok(rows
+        .into_iter()
+        .filter(|row| seen.insert(row.thread_id.clone()))
+        .take(SUGGEST_LIMIT)
+        .collect())
 }

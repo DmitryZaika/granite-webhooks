@@ -1,7 +1,7 @@
-use super::list::{folder_counts, list_page};
+use super::list::{folder_counts, list_page, suggestions};
 use super::schemas::{
-    EmailFolder, FolderCounts, ListQuery, MailboxPage, Purged, ThreadDetail, ThreadIds,
-    ThreadQuery, UnreadCount,
+    EmailFolder, FolderCounts, ListQuery, MailboxPage, Purged, SuggestQuery, SuggestScope,
+    SuggestionRow, ThreadDetail, ThreadIds, ThreadQuery, UnreadCount,
 };
 use super::sql::{
     Arg, Mailbox, Sql, company_scope, own_threads, received_message, unread_incoming,
@@ -439,4 +439,37 @@ pub async fn purge(
     .await?;
     tx.commit().await?;
     Ok(Json(Purged { purged: rows.len() }))
+}
+
+/// Suggest conversations while typing a search
+///
+/// The newest matching message of up to 8 conversations of a folder
+/// (needs 2 or more characters). `scope=admin` searches the whole company's
+/// mail (admins only; `sales_rep` narrows it to one user's mail).
+#[utoipa::path(
+    get,
+    path = "/v1/emails/search-suggestions",
+    operation_id = "suggest_email_threads",
+    tag = "emails",
+    params(SuggestQuery),
+    responses(
+        (status = 200, description = "Up to 8 conversations, newest first", body = Vec<SuggestionRow>),
+        (status = 400, description = "Missing term, unknown folder or scope", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Not an employee, or the admin scope without being an admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn suggest(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    MultiQuery(query): MultiQuery<SuggestQuery>,
+) -> ApiResult<Json<Vec<SuggestionRow>>> {
+    if query.scope == Some(SuggestScope::Admin) && !(user.is_admin || user.is_superuser) {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(
+        suggestions(&state.pool, &mailbox(&user), &query).await?,
+    ))
 }

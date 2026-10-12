@@ -10308,6 +10308,127 @@
           }
         ]
       }
+    },
+    "/v1/emails/search-suggestions": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Suggest conversations while typing a search",
+        "description": "The newest matching message of up to 8 conversations of a folder\n(needs 2 or more characters). `scope=admin` searches the whole company's\nmail (admins only; `sales_rep` narrows it to one user's mail).",
+        "operationId": "suggest_email_threads",
+        "parameters": [
+          {
+            "name": "term",
+            "in": "query",
+            "description": "What the user typed; fewer than 2 characters returns nothing.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "description": "Default `inbox` (`drafts` is `inbox` for the admin scope).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "A mailbox folder.",
+              "enum": [
+                "inbox",
+                "sent",
+                "trash",
+                "drafts"
+              ]
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "Default `employee`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose mail the suggestions search.",
+              "enum": [
+                "employee",
+                "admin"
+              ]
+            }
+          },
+          {
+            "name": "sales_rep",
+            "in": "query",
+            "description": "Admin scope: only mail sent by or to this user.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Up to 8 conversations, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SuggestionRow"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing term, unknown folder or scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an employee, or the admin scope without being an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -15405,6 +15526,67 @@
               "null"
             ],
             "description": "Stone name."
+          }
+        }
+      },
+      "SuggestionRow": {
+        "type": "object",
+        "description": "The newest matching message of a conversation.",
+        "required": [
+          "thread_id",
+          "body"
+        ],
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "description": "Conversation to open."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subject."
+          },
+          "body": {
+            "type": "string",
+            "description": "Plain text body (the client makes the snippet)."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sent."
+          },
+          "sender_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "From header."
+          },
+          "receiver_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "To header."
+          },
+          "sender_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sender's user or customer name."
+          },
+          "receiver_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Receiver's user or customer name."
           }
         }
       },
