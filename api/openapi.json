@@ -9267,7 +9267,7 @@
           "questionnaires"
         ],
         "summary": "List the caller's own questionnaires",
-        "description": "Questionnaires the caller made (not the company-wide ones), newest\nfirst, each with its live questions in creation order. Only these can be\nrenamed, deleted or have questions changed.",
+        "description": "Questionnaires the caller made (for an admin also the company-wide\nones), newest first, each with its live questions in creation order.\nOnly these can be renamed, deleted or have questions changed.",
         "operationId": "list_own_questionnaires",
         "responses": {
           "200": {
@@ -9325,7 +9325,7 @@
           "questionnaires"
         ],
         "summary": "Create a questionnaire",
-        "description": "A questionnaire of the caller's own with at least one question.",
+        "description": "A questionnaire of the caller's own with at least one question (admins\nmay start with none and add them with `POST .../questions`).",
         "operationId": "create_questionnaire",
         "requestBody": {
           "content": {
@@ -9349,7 +9349,7 @@
             }
           },
           "400": {
-            "description": "Empty or too long name or question, no questions",
+            "description": "Empty or too long name or question, no questions (employees)",
             "content": {
               "application/json": {
                 "schema": {

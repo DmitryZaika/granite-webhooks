@@ -214,3 +214,52 @@ async fn only_own_questionnaires_are_editable(pool: MySqlPool) {
         .await
         .assert_status_not_found();
 }
+
+#[test_db::test(seed)]
+async fn admins_also_manage_company_wide_questionnaires(pool: MySqlPool) {
+    let list = get(&pool, "/v1/questionnaires", sessions::ADMIN).await;
+    let names: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| q["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Remodel Discovery"]);
+    let server = server(pool.clone());
+    server
+        .patch("/v1/questionnaires/8720")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Remodel intake" }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    // Employees still only change their own.
+    server
+        .patch("/v1/questionnaires/8720")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "name": "Mine" }))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    // Another company's shared questionnaire stays out of reach.
+    server
+        .delete("/v1/questionnaires/8723")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[test_db::test(seed)]
+async fn admins_may_create_a_questionnaire_without_questions(pool: MySqlPool) {
+    let server = server(pool);
+    server
+        .post("/v1/questionnaires")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Kitchen", "questions": [] }))
+        .await
+        .assert_status(StatusCode::CREATED);
+    server
+        .post("/v1/questionnaires")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "name": "Kitchen", "questions": [] }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}

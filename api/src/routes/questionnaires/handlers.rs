@@ -34,15 +34,23 @@ fn checked(text: &str, max: usize, what: &str) -> ApiResult<String> {
     Ok(text.to_string())
 }
 
-/// A live questionnaire the caller made (only those can be edited).
+/// Admins also manage the company-wide questionnaires (no `user_id`).
+const fn is_admin(user: &SessionUser) -> bool {
+    user.is_admin || user.is_superuser
+}
+
+/// A live questionnaire the caller made, or for an admin a company-wide one
+/// (only those can be edited).
 async fn require_own(state: &AppState, user: &SessionUser, id: i32) -> ApiResult<()> {
     let found: Option<i32> = sqlx::query_scalar(
         "SELECT id FROM sales_questionnaires
-         WHERE id = ? AND company_id = ? AND user_id = ? AND deleted_at IS NULL",
+         WHERE id = ? AND company_id = ? AND deleted_at IS NULL
+           AND (user_id = ? OR (user_id IS NULL AND ?))",
     )
     .bind(id)
     .bind(user.company_id)
     .bind(user.id)
+    .bind(is_admin(user))
     .fetch_optional(&state.pool)
     .await?;
     found.map(|_| ()).ok_or(ApiError::NotFound)
@@ -50,9 +58,9 @@ async fn require_own(state: &AppState, user: &SessionUser, id: i32) -> ApiResult
 
 /// List the caller's own questionnaires
 ///
-/// Questionnaires the caller made (not the company-wide ones), newest
-/// first, each with its live questions in creation order. Only these can be
-/// renamed, deleted or have questions changed.
+/// Questionnaires the caller made (for an admin also the company-wide
+/// ones), newest first, each with its live questions in creation order.
+/// Only these can be renamed, deleted or have questions changed.
 #[utoipa::path(
     get,
     path = "/v1/questionnaires",
@@ -82,11 +90,13 @@ pub async fn list_own(
          FROM sales_questionnaires q
          LEFT JOIN sales_questionnaire_questions qq
            ON qq.questionnaire_id = q.id AND qq.deleted_at IS NULL
-         WHERE q.company_id = ? AND q.user_id = ? AND q.deleted_at IS NULL
+         WHERE q.company_id = ? AND q.deleted_at IS NULL
+           AND (q.user_id = ? OR (q.user_id IS NULL AND ?))
          ORDER BY q.created_at DESC, q.id DESC, qq.id",
     )
     .bind(user.company_id)
     .bind(user.id)
+    .bind(is_admin(&user))
     .fetch_all(&state.pool)
     .await?;
     let mut list: Vec<OwnQuestionnaire> = Vec::new();
@@ -108,7 +118,8 @@ pub async fn list_own(
 
 /// Create a questionnaire
 ///
-/// A questionnaire of the caller's own with at least one question.
+/// A questionnaire of the caller's own with at least one question (admins
+/// may start with none and add them with `POST .../questions`).
 #[utoipa::path(
     post,
     path = "/v1/questionnaires",
@@ -117,7 +128,7 @@ pub async fn list_own(
     request_body = NewQuestionnaire,
     responses(
         (status = 201, description = "Created", body = CreatedId),
-        (status = 400, description = "Empty or too long name or question, no questions", body = ErrorBody),
+        (status = 400, description = "Empty or too long name or question, no questions (employees)", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -130,7 +141,8 @@ pub async fn create(
     JsonBody(input): JsonBody<NewQuestionnaire>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
     let name = checked(&input.name, MAX_NAME, "Name")?;
-    if input.questions.is_empty() {
+    // Admins create it by name first and add questions on its edit page.
+    if input.questions.is_empty() && !is_admin(&user) {
         return Err(ApiError::BadRequest(
             "Add at least one questionnaire question.".into(),
         ));
