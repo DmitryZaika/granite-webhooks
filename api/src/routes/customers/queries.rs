@@ -134,6 +134,7 @@ pub async fn find_customer(
     pool: &MySqlPool,
     company_id: i32,
     customer_id: i32,
+    include_deleted: bool,
 ) -> Result<Option<CustomerDetail>, sqlx::Error> {
     let customer = sqlx::query_as::<_, CustomerDetail>(
         "SELECT c.id, c.name, c.address, c.phone, c.phone_2, ce.email, c.company_name,
@@ -146,10 +147,11 @@ pub async fn find_customer(
          FROM customers c
          LEFT JOIN customers_emails ce ON ce.id = c.email_id AND ce.customer_id = c.id
          LEFT JOIN users u ON u.id = c.sales_rep AND u.is_deleted = 0
-         WHERE c.id = ? AND c.company_id = ? AND c.deleted_at IS NULL",
+         WHERE c.id = ? AND c.company_id = ? AND (c.deleted_at IS NULL OR ?)",
     )
     .bind(customer_id)
     .bind(company_id)
+    .bind(include_deleted)
     .fetch_optional(pool)
     .await?;
     let Some(mut customer) = customer else {

@@ -211,7 +211,8 @@ pub async fn stage_history(
 /// deal, that deal is updated and moved instead (`created: false`). The deal
 /// belongs to the customer's sales rep, or the caller when there is none; a
 /// caller who is a sales rep becomes the rep of a customer without one. Drip
-/// emails and SMS of the stage are scheduled for lead customers.
+/// emails and SMS of the stage are scheduled for lead customers, and the
+/// customer is pushed to the company's CloudTalk contacts.
 #[utoipa::path(
     post,
     path = "/v1/deals",

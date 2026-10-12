@@ -1,5 +1,6 @@
 use crate::storage::Storage;
 use crate::telegram::TelegramBots;
+use crate::webhooks_client::WebhooksClient;
 use axum::http::{Method, header};
 use sqlx::MySqlPool;
 use std::sync::Arc;
@@ -20,6 +21,8 @@ pub struct AppState {
     /// The two Telegram bots (lead alerts, notifications), to check a user's
     /// link still works.
     pub telegram: TelegramBots,
+    /// The `webhooks` Lambda, for work it owns (CloudTalk contact sync).
+    pub webhooks: WebhooksClient,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -34,6 +37,7 @@ impl AppState {
             allowed_origins: parse_origins(allowed_origins).into(),
             storage: Storage::Disabled,
             telegram: TelegramBots::disabled(),
+            webhooks: WebhooksClient::disabled(),
         }
     }
 
@@ -49,13 +53,20 @@ impl AppState {
         self
     }
 
+    #[must_use]
+    pub fn with_webhooks(mut self, webhooks: WebhooksClient) -> Self {
+        self.webhooks = webhooks;
+        self
+    }
+
     pub fn from_env(pool: MySqlPool) -> Result<Self, MissingSessionSecret> {
         let secret = std::env::var("SESSION_SECRET").map_err(|_| MissingSessionSecret)?;
         let origins = std::env::var("API_ALLOWED_ORIGINS")
             .unwrap_or_else(|_| DEFAULT_ALLOWED_ORIGINS.to_string());
         Ok(Self::new(pool, &secret, &origins)
             .with_storage(Storage::from_env())
-            .with_telegram(TelegramBots::from_env()))
+            .with_telegram(TelegramBots::from_env())
+            .with_webhooks(WebhooksClient::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the

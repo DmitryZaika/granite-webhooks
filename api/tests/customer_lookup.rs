@@ -211,3 +211,23 @@ async fn search_validates_and_authenticates(pool: MySqlPool) {
         .json();
     assert_eq!(search_ids(&other), vec![2000]);
 }
+
+#[test_db::test(seed)]
+async fn deleted_customers_only_on_request(pool: MySqlPool) {
+    let app = server(pool);
+    app.get("/v1/customers/1003")
+        .with_session(sessions::REP)
+        .await
+        .assert_status_not_found();
+    let res = app
+        .get("/v1/customers/1003?include_deleted=true")
+        .with_session(sessions::REP)
+        .await;
+    res.assert_status_ok();
+    assert_eq!(res.json::<Value>()["name"], "Dan Deleted");
+    // Never another company's.
+    app.get("/v1/customers/2000?include_deleted=true")
+        .with_session(sessions::REP)
+        .await
+        .assert_status_not_found();
+}

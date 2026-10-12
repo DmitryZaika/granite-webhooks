@@ -599,7 +599,7 @@
           "customers"
         ],
         "summary": "Get one customer",
-        "description": "Returns a live customer of the caller's company with contact details,\nevery email address (primary first) and the assigned sales rep. 404 for\ndeleted customers and other companies' customers.",
+        "description": "Returns a customer of the caller's company with contact details, every\nemail address (primary first), the assigned sales rep and the lead form\nanswers. 404 for other companies' customers, and for deleted ones unless\n`include_deleted=true` (a deal page still shows its deleted customer).",
         "operationId": "get_customer",
         "parameters": [
           {
@@ -611,6 +611,15 @@
               "type": "integer",
               "format": "int32"
             }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "description": "Also return the customer when it was deleted.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -620,6 +629,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CustomerDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -6543,7 +6562,7 @@
           "deals"
         ],
         "summary": "Create a deal",
-        "description": "Puts the customer in `list_id`. When the customer already has an open\ndeal, that deal is updated and moved instead (`created: false`). The deal\nbelongs to the customer's sales rep, or the caller when there is none; a\ncaller who is a sales rep becomes the rep of a customer without one. Drip\nemails and SMS of the stage are scheduled for lead customers.",
+        "description": "Puts the customer in `list_id`. When the customer already has an open\ndeal, that deal is updated and moved instead (`created: false`). The deal\nbelongs to the customer's sales rep, or the caller when there is none; a\ncaller who is a sales rep becomes the rep of a customer without one. Drip\nemails and SMS of the stage are scheduled for lead customers, and the\ncustomer is pushed to the company's CloudTalk contacts.",
         "operationId": "create_deal",
         "requestBody": {
           "content": {

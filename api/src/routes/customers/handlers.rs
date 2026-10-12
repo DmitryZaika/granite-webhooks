@@ -2,8 +2,8 @@ use super::queries::{
     emails_by_customer_ids, find_customer, list_companies, list_customers, search_customers,
 };
 use super::schemas::{
-    CustomerDetail, CustomerSearchQuery, CustomerSearchRow, CustomersView, EmailsBatchRequest,
-    EmailsByCustomer, ListFilter, ListQuery, ListResponse, MAX_BATCH_IDS,
+    CustomerDetail, CustomerQuery, CustomerSearchQuery, CustomerSearchRow, CustomersView,
+    EmailsBatchRequest, EmailsByCustomer, ListFilter, ListQuery, ListResponse, MAX_BATCH_IDS,
 };
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -87,17 +87,19 @@ pub async fn emails_batch(
 
 /// Get one customer
 ///
-/// Returns a live customer of the caller's company with contact details,
-/// every email address (primary first) and the assigned sales rep. 404 for
-/// deleted customers and other companies' customers.
+/// Returns a customer of the caller's company with contact details, every
+/// email address (primary first), the assigned sales rep and the lead form
+/// answers. 404 for other companies' customers, and for deleted ones unless
+/// `include_deleted=true` (a deal page still shows its deleted customer).
 #[utoipa::path(
     get,
     path = "/v1/customers/{id}",
     operation_id = "get_customer",
     tag = "customers",
-    params(("id" = i32, Path, description = "Customer id")),
+    params(("id" = i32, Path, description = "Customer id"), CustomerQuery),
     responses(
         (status = 200, description = "The customer", body = CustomerDetail),
+        (status = 400, description = "Malformed query", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
         (status = 404, description = "No such customer in the caller's company", body = ErrorBody),
@@ -109,8 +111,9 @@ pub async fn get(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
     Path(id): Path<i32>,
+    MultiQuery(query): MultiQuery<CustomerQuery>,
 ) -> ApiResult<Json<CustomerDetail>> {
-    find_customer(&state.pool, user.company_id, id)
+    find_customer(&state.pool, user.company_id, id, query.include_deleted)
         .await?
         .map(Json)
         .ok_or(ApiError::NotFound)

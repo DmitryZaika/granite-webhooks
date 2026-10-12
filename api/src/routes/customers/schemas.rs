@@ -228,6 +228,15 @@ pub struct LeadAnswers {
     pub kitchen_stove: Option<String>,
 }
 
+/// Query of `GET /v1/customers/{id}`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct CustomerQuery {
+    /// Also return the customer when it was deleted.
+    #[serde(default)]
+    pub include_deleted: bool,
+}
+
 /// How `GET /v1/customers/search` matches `term`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
