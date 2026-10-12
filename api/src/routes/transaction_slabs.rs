@@ -9,7 +9,6 @@
 //! - `POST /v1/transactions/{id}/slabs/{slab_id}/replace` → swap it for a free slab
 //! - `PUT  /v1/transactions/{id}/slabs/{slab_id}/square-feet` → a room's square feet
 //! - `POST /v1/transactions/{id}/slabs`                   → add a free slab to a room
-//! - `POST /v1/transactions/{id}/rooms/remove`            → clear a room name
 //!
 //! Cutting from the employee page only marks the slab; the admin and shop
 //! pages (`with_remnants`) also tidy the slab's remnants as the Remix
@@ -41,7 +40,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(replace))
         .routes(routes!(square_feet))
         .routes(routes!(add))
-        .routes(routes!(remove_room))
 }
 
 /// Shop manager and shop worker positions.
@@ -968,52 +966,4 @@ fn hex_bytes(hex: &str) -> Option<Vec<u8>> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
         .collect()
-}
-
-/// Body of `POST /v1/transactions/{id}/rooms/remove`.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RoomName {
-    /// The room name to clear from the sale's slabs.
-    pub room: String,
-}
-
-/// Clear a room
-///
-/// Takes the room name off every slab of the sale in that room.
-#[utoipa::path(
-    post,
-    path = "/v1/transactions/{id}/rooms/remove",
-    operation_id = "remove_sale_room",
-    tag = "sales",
-    params(("id" = i32, Path, description = "Sale id")),
-    request_body = RoomName,
-    responses(
-        (status = 204, description = "Cleared"),
-        (status = 400, description = "No room", body = ErrorBody),
-        (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin or of the shop", body = ErrorBody),
-        (status = 404, description = "No such sale in the caller's company", body = ErrorBody),
-        (status = 500, description = "Database error", body = ErrorBody),
-    ),
-    security(("session_cookie" = []))
-)]
-pub async fn remove_room(
-    State(state): State<AppState>,
-    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
-    Path(id): Path<i32>,
-    JsonBody(input): JsonBody<RoomName>,
-) -> ApiResult<StatusCode> {
-    let pool = &state.pool;
-    own_sale(pool, &user, id).await?;
-    rework_only(pool, &user).await?;
-    if input.room.is_empty() {
-        return Err(ApiError::BadRequest("Pick a room".into()));
-    }
-    sqlx::query("UPDATE slab_inventory SET room = NULL WHERE sale_id = ? AND room = ?")
-        .bind(id)
-        .bind(&input.room)
-        .execute(pool)
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
 }

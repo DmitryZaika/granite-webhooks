@@ -21615,98 +21615,6 @@
         ]
       }
     },
-    "/v1/transactions/{id}/rooms/remove": {
-      "post": {
-        "tags": [
-          "sales"
-        ],
-        "summary": "Clear a room",
-        "description": "Takes the room name off every slab of the sale in that room.",
-        "operationId": "remove_sale_room",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Sale id",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RoomName"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Cleared"
-          },
-          "400": {
-            "description": "No room",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Caller is not an admin or of the shop",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such sale in the caller's company",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Database error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session_cookie": []
-          }
-        ]
-      }
-    },
     "/v1/instructions": {
       "get": {
         "tags": [
@@ -35772,20 +35680,6 @@
               "$ref": "#/components/schemas/FixtureInput"
             },
             "description": "Faucets to install: one free unit of each model is taken."
-          }
-        },
-        "additionalProperties": false
-      },
-      "RoomName": {
-        "type": "object",
-        "description": "Body of `POST /v1/transactions/{id}/rooms/remove`.",
-        "required": [
-          "room"
-        ],
-        "properties": {
-          "room": {
-            "type": "string",
-            "description": "The room name to clear from the sale's slabs."
           }
         },
         "additionalProperties": false
