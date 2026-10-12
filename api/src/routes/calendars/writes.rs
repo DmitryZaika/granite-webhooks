@@ -33,6 +33,16 @@ pub struct CalendarHidden {
     pub hidden: bool,
 }
 
+/// Path of `PUT /v1/calendars/{id}/hidden-users/{user_id}`.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Path)]
+pub struct HiddenUserPath {
+    /// Calendar id.
+    pub id: i32,
+    /// User id.
+    pub user_id: i32,
+}
+
 /// `POST /v1/calendars`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CreatedCalendar {
@@ -235,6 +245,56 @@ pub async fn delete(
     }
     sqlx::query("UPDATE calendars SET deleted_at = NOW() WHERE id = ?")
         .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Hide a calendar from one user, or show it again
+///
+/// A calendar hidden from a user is left off their schedule, with its events.
+#[utoipa::path(
+    put,
+    path = "/v1/calendars/{id}/hidden-users/{user_id}",
+    operation_id = "set_calendar_hidden_for_user",
+    tag = "schedule",
+    params(HiddenUserPath),
+    request_body = CalendarHidden,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "No such calendar or user in the caller's company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn set_hidden_for_user(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Path(path): Path<HiddenUserPath>,
+    JsonBody(input): JsonBody<CalendarHidden>,
+) -> ApiResult<StatusCode> {
+    find(&state.pool, user.company_id, path.id).await?;
+    let member: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE id = ? AND company_id = ? AND is_deleted = 0",
+    )
+    .bind(path.user_id)
+    .bind(user.company_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    if member.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    let query = if input.hidden {
+        "INSERT IGNORE INTO calendar_hidden_users (calendar_id, user_id, company_id) VALUES (?, ?, ?)"
+    } else {
+        "DELETE FROM calendar_hidden_users WHERE calendar_id = ? AND user_id = ? AND company_id = ?"
+    };
+    sqlx::query(query)
+        .bind(path.id)
+        .bind(path.user_id)
+        .bind(user.company_id)
         .execute(&state.pool)
         .await?;
     Ok(StatusCode::NO_CONTENT)

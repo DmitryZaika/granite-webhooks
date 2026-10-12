@@ -3646,6 +3646,66 @@
         ]
       }
     },
+    "/v1/users/employees": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List the company's employees",
+        "description": "The non-deleted employees of the caller's company by name (\"User {id}\"\nwhen blank), e.g. to hide a calendar from one of them.",
+        "operationId": "list_employees",
+        "responses": {
+          "200": {
+            "description": "Employees of the current company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserNameRow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/users/call-activity": {
       "get": {
         "tags": [
@@ -13973,8 +14033,19 @@
           "schedule"
         ],
         "summary": "List the calendars on the caller's schedule",
-        "description": "The company's live calendars except those hidden for everyone or from\nthe caller in Admin > Schedule. The built-in Templates, Installations and\nEstimates calendars come first and are created on the fly when a company\nlacks them (so every company has them).",
+        "description": "The company's live calendars except those hidden for everyone or from\nthe caller in Admin > Schedule. The built-in Templates, Installations and\nEstimates calendars come first and are created on the fly when a company\nlacks them (so every company has them). With `all=true` (admins), every\nlive calendar, hidden ones too, for Admin > Schedule.",
         "operationId": "list_calendars",
+        "parameters": [
+          {
+            "name": "all",
+            "in": "query",
+            "description": "Every live calendar, hidden ones too (admins only).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Calendars",
@@ -14000,7 +14071,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin (`all`: not an admin)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14330,6 +14401,158 @@
           },
           "404": {
             "description": "No such calendar in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/calendars/hidden-users": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Who each calendar is hidden from",
+        "description": "Every (calendar, user) pair an admin hid in Admin > Schedule.",
+        "operationId": "list_calendar_hidden_users",
+        "responses": {
+          "200": {
+            "description": "Pairs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HiddenUser"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/calendars/{id}/hidden-users/{user_id}": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Hide a calendar from one user, or show it again",
+        "description": "A calendar hidden from a user is left off their schedule, with its events.",
+        "operationId": "set_calendar_hidden_for_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Calendar id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarHidden"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such calendar or user in the caller's company",
             "content": {
               "application/json": {
                 "schema": {
@@ -27914,6 +28137,237 @@
         ]
       }
     },
+    "/v1/schedule/events": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "The schedule's events",
+        "description": "One-off events overlapping the range and repeating events that started\nbefore its end and repeat past its start (the page expands them), with\nthe customer named by a numeric title and the QuickBooks invoice. Events\nof calendars hidden for everyone or from the caller are left out.",
+        "operationId": "list_schedule_events",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "description": "Range start (ISO 8601).",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "Range end (ISO 8601).",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleEvents"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/people": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "The schedule's people",
+        "description": "The company's installers and template makers (one entry per role a user\nholds), by name, with their schedule colors.",
+        "operationId": "list_schedule_people",
+        "responses": {
+          "200": {
+            "description": "People",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SchedulePerson"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/people/{user_id}/color": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Set a person's schedule color",
+        "description": "Their events on the Installations or Templates calendar show in it.",
+        "operationId": "set_schedule_person_color",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonColor"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Not a schedule color, or not an installer or template maker of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/places/autocomplete": {
       "get": {
         "tags": [
@@ -31835,7 +32289,8 @@
           "id",
           "name",
           "color",
-          "is_system"
+          "is_system",
+          "is_hidden"
         ],
         "properties": {
           "id": {
@@ -31861,6 +32316,10 @@
           "is_system": {
             "type": "boolean",
             "description": "A built-in calendar (it cannot be renamed or deleted)."
+          },
+          "is_hidden": {
+            "type": "boolean",
+            "description": "Hidden from everyone's schedule (only `all=true` lists these)."
           }
         }
       },
@@ -37254,6 +37713,26 @@
           }
         }
       },
+      "HiddenUser": {
+        "type": "object",
+        "description": "A calendar an admin hid from one user.",
+        "required": [
+          "calendar_id",
+          "user_id"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The calendar."
+          },
+          "user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The user it is hidden from."
+          }
+        }
+      },
       "History": {
         "type": "object",
         "description": "`GET /v1/sms/{provider}/history`.",
@@ -40529,6 +41008,19 @@
           }
         }
       },
+      "PersonColor": {
+        "type": "object",
+        "description": "Body of `PUT /v1/schedule/people/{user_id}/color`.",
+        "required": [
+          "color"
+        ],
+        "properties": {
+          "color": {
+            "type": "string",
+            "description": "One of the schedule colors (`blue`, `red`, ...)."
+          }
+        }
+      },
       "PhoneCustomer": {
         "type": "object",
         "description": "The customer a phone now belongs to.",
@@ -43143,6 +43635,187 @@
           "thread_id": {
             "type": "string",
             "description": "Conversation it will start."
+          }
+        }
+      },
+      "ScheduleEvent": {
+        "type": "object",
+        "description": "An event on the schedule.",
+        "required": [
+          "id",
+          "title",
+          "start_date",
+          "end_date",
+          "all_day",
+          "created_user_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Event id."
+          },
+          "title": {
+            "type": "string",
+            "description": "Title (a customer id for customer events)."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Description."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address."
+          },
+          "start_date": {
+            "type": "string",
+            "description": "Start (UTC, ISO 8601)."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "End (UTC, ISO 8601)."
+          },
+          "all_day": {
+            "type": "boolean",
+            "description": "All day."
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Label color."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Status."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes."
+          },
+          "calendar_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Calendar."
+          },
+          "rrule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Repeat rule (RFC 5545), for repeating events."
+          },
+          "recurrence_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last repeat (UTC, ISO 8601)."
+          },
+          "created_user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Who made it."
+          },
+          "assigned_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The installer or template maker on it."
+          },
+          "sale_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its sale."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer, when the title is a customer id."
+          },
+          "qbo_invoice": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EventInvoice",
+                "description": "Its QuickBooks invoice (only when QuickBooks is connected)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ScheduleEvents": {
+        "type": "object",
+        "description": "`GET /v1/schedule/events`.",
+        "required": [
+          "events",
+          "quickbooks_connected"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScheduleEvent"
+            },
+            "description": "One-off events in the range and repeating events that may fall in it,\nby start; calendars hidden from the caller are left out."
+          },
+          "quickbooks_connected": {
+            "type": "boolean",
+            "description": "QuickBooks is on and connected: events show their invoices."
+          }
+        }
+      },
+      "SchedulePerson": {
+        "type": "object",
+        "description": "An installer or template maker.",
+        "required": [
+          "id",
+          "name",
+          "role",
+          "color"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "User id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name (\"Unnamed\" when blank)."
+          },
+          "role": {
+            "type": "string",
+            "description": "`installer` or `template`."
+          },
+          "color": {
+            "type": "string",
+            "description": "Their color on the schedule: the saved one, else one picked by id."
           }
         }
       },

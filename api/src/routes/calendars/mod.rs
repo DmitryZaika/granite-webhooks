@@ -19,4 +19,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::list, writes::create))
         .routes(routes!(writes::update, writes::delete))
         .routes(routes!(writes::set_hidden))
+        .routes(routes!(handlers::hidden_users))
+        .routes(routes!(writes::set_hidden_for_user))
 }

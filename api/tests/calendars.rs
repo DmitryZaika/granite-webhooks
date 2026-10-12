@@ -38,7 +38,7 @@ async fn built_in_calendars_are_created_and_listed_first(pool: MySqlPool) {
     assert_eq!(list[2]["is_system"], true);
     assert_eq!(
         list[3],
-        json!({ "id": 8701, "name": "Alpha", "color": "teal", "slug": null, "is_system": false })
+        json!({ "id": 8701, "name": "Alpha", "color": "teal", "slug": null, "is_system": false, "is_hidden": false })
     );
     // Calling again creates nothing more.
     server(pool.clone())

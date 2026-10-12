@@ -1,6 +1,7 @@
 //! Other users of the session user's company.
 //!
 //! - `GET /v1/users/sales-reps` → live users of the company holding the sales rep position
+//! - `GET /v1/users/employees` → the company's live employees
 //! - `GET /v1/users/call-activity` → reps' `CloudTalk` calls (admin)
 //! - `/v1/admin/users*` → managing users (see [`manage`])
 //!
@@ -17,6 +18,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(handlers::sales_reps))
+        .routes(routes!(handlers::employees))
         .routes(routes!(call_activity::call_activity))
         .routes(routes!(manage::list, manage::create))
         .routes(routes!(manage::get, manage::update, manage::delete))

@@ -1,10 +1,12 @@
-//! Schedule tools that use Google Maps.
+//! The schedule: its events and people (`board`) and the tools that use
+//! Google Maps.
 //!
 //! - `GET /v1/schedule/day-map` → a map of the company and a day's stops
 //! - `POST /v1/schedule/optimize-route` → reorder a day's stops by drive time
 //!
 //! Replaces the Remix `api.schedule-day-map` and `api.schedule-optimize-route`.
 
+pub mod board;
 pub mod route;
 
 use crate::auth::EmployeeUser;
@@ -29,6 +31,9 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(day_map))
         .routes(routes!(optimize_route))
+        .routes(routes!(board::events))
+        .routes(routes!(board::people))
+        .routes(routes!(board::set_color))
 }
 
 /// The company's address, trimmed; `None` when it has none.

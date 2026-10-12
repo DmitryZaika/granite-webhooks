@@ -16,4 +16,15 @@ pub struct Calendar {
     pub slug: Option<String>,
     /// A built-in calendar (it cannot be renamed or deleted).
     pub is_system: bool,
+    /// Hidden from everyone's schedule (only `all=true` lists these).
+    pub is_hidden: bool,
+}
+
+/// A calendar an admin hid from one user.
+#[derive(Debug, Clone, Serialize, FromRow, ToSchema)]
+pub struct HiddenUser {
+    /// The calendar.
+    pub calendar_id: i32,
+    /// The user it is hidden from.
+    pub user_id: i32,
 }
