@@ -14,7 +14,7 @@
 //! Replaces the Remix `api.email-templates*`, `api.sms.templates.order`,
 //! `api.quote-email-templates.order` and `api.emailTemplate.fill` routes.
 
-mod handlers;
+pub mod handlers;
 pub mod order;
 pub mod schemas;
 mod sms;

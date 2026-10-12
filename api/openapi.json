@@ -14413,6 +14413,377 @@
           }
         ]
       }
+    },
+    "/v1/sms-flows": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "List SMS flows",
+        "description": "The company's flows and the caller's own (not the per-customer AI flows),\ncompany flows first, newest first.",
+        "operationId": "list_sms_flows",
+        "responses": {
+          "200": {
+            "description": "Flows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Flows"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Create an SMS flow",
+        "description": "Errors come back as a token: `validation_failed`,\n`step_needs_template_or_text`, `invalid_template_body`,\n`template_has_custom_variables`, `sms_text_too_long`,\n`template_not_found`.",
+        "operationId": "create_sms_flow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewFlow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedFlow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid flow (see the token)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an employee, or not an admin for a company flow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms-flows/{id}": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Get an SMS flow",
+        "description": "One of the company's flows or the caller's own, including an AI flow\nthe caller confirmed for a customer.",
+        "operationId": "get_sms_flow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The flow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Flow"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such flow the caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Edit an SMS flow",
+        "description": "Replaces the name and steps of the caller's flow (admins: a company\nflow); customers already in it keep their place, on the new timing.",
+        "operationId": "update_sms_flow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlowUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Invalid flow (see the token)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The flow is not the caller's to change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such flow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Delete an SMS flow",
+        "description": "Customers in it stop receiving it.",
+        "operationId": "delete_sms_flow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The flow is not the caller's to delete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such flow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -15382,6 +15753,20 @@
               "null"
             ],
             "description": "By whom (name)."
+          }
+        }
+      },
+      "CreatedFlow": {
+        "type": "object",
+        "description": "`POST /v1/sms-flows`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The new flow."
           }
         }
       },
@@ -17530,6 +17915,173 @@
           }
         }
       },
+      "Flow": {
+        "type": "object",
+        "description": "A flow.",
+        "required": [
+          "id",
+          "name",
+          "scope",
+          "can_edit",
+          "steps"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The flow."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/TemplateScope"
+          },
+          "can_edit": {
+            "type": "boolean",
+            "description": "The caller may change it."
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlowStep"
+            },
+            "description": "In order."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was made."
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it last changed."
+          }
+        }
+      },
+      "FlowStep": {
+        "type": "object",
+        "description": "One step of a flow.",
+        "required": [
+          "id",
+          "position",
+          "channel",
+          "delay_minutes"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The step."
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 = first."
+          },
+          "channel": {
+            "$ref": "#/components/schemas/StepChannel"
+          },
+          "template_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The template it sends, if any."
+          },
+          "template_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The template's name (null when it is gone or not the company's)."
+          },
+          "custom_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its own text, when it has no template."
+          },
+          "template_body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The template's text, for display."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email subject of the step."
+          },
+          "template_subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The email template's subject, for display."
+          },
+          "delay_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes after the previous step (or the start)."
+          }
+        }
+      },
+      "FlowUpdate": {
+        "type": "object",
+        "description": "Body of `PUT /v1/sms-flows/{id}`.",
+        "required": [
+          "name",
+          "steps"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Up to 255 characters."
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StepInput"
+            },
+            "description": "1 to 20 steps; they replace the old ones."
+          }
+        }
+      },
+      "Flows": {
+        "type": "object",
+        "description": "`GET /v1/sms-flows`.",
+        "required": [
+          "flows",
+          "can_manage_company"
+        ],
+        "properties": {
+          "flows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Flow"
+            },
+            "description": "Company flows first, newest first."
+          },
+          "can_manage_company": {
+            "type": "boolean",
+            "description": "The caller may create and change company flows."
+          }
+        }
+      },
       "FolderCounts": {
         "type": "object",
         "description": "Thread counts of the caller's folders.",
@@ -18389,6 +18941,32 @@
               "$ref": "#/components/schemas/NewFile"
             },
             "description": "Files already uploaded with `POST /v1/uploads`."
+          }
+        }
+      },
+      "NewFlow": {
+        "type": "object",
+        "description": "Body of `POST /v1/sms-flows`.",
+        "required": [
+          "name",
+          "scope",
+          "steps"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Up to 255 characters."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/TemplateScope",
+            "description": "`company` (admins only) or `personal`."
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StepInput"
+            },
+            "description": "1 to 20 steps."
           }
         }
       },
@@ -21025,6 +21603,53 @@
             ],
             "format": "date-time",
             "description": "When it left; null for the current stage."
+          }
+        }
+      },
+      "StepChannel": {
+        "type": "string",
+        "description": "How a step is delivered.",
+        "enum": [
+          "sms",
+          "email"
+        ]
+      },
+      "StepInput": {
+        "type": "object",
+        "description": "A step as written in the flow editor.",
+        "required": [
+          "delay_minutes"
+        ],
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/StepChannel"
+          },
+          "template_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A template, or else `custom_text`."
+          },
+          "custom_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The step's own text (variables allowed, none of the author's own)."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email steps: the subject."
+          },
+          "delay_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes after the previous step, up to 400 days."
           }
         }
       },
