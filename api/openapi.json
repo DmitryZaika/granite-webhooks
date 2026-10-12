@@ -19603,6 +19603,328 @@
         ]
       }
     },
+    "/v1/instructions": {
+      "get": {
+        "tags": [
+          "instructions"
+        ],
+        "summary": "List instructions",
+        "description": "The rows of the company's (or the general) instruction tree; the client\nbuilds the tree from `parent_id` and `after_id`. An instruction limited to\nsome positions is left out unless the caller holds one of them, except\nwith `manage` (admins), which returns every row with its positions.",
+        "operationId": "list_instructions",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`company` (default) or `general` (shared by every company).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Which instructions to reorder.",
+              "enum": [
+                "company",
+                "general"
+              ]
+            }
+          },
+          {
+            "name": "manage",
+            "in": "query",
+            "description": "Admins: every row with its access, for editing (general rows only for\nsuper admins). Otherwise only the rows the caller's positions open.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Instructions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Instruction"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee, or `manage` without being an admin (`general`: super admin)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "instructions"
+        ],
+        "summary": "Add an instruction",
+        "description": "Puts it in the caller's company tree under `parent_id`, right after\n`after_id` (the sibling that followed `after_id` now follows it).",
+        "operationId": "create_instruction",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstructionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedInstruction"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No title, or a parent or sibling outside the tree",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/instructions/{id}": {
+      "put": {
+        "tags": [
+          "instructions"
+        ],
+        "summary": "Edit an instruction",
+        "description": "Saves its title, place (`parent_id`, `after_id`), text and the positions\nthat may read it.",
+        "operationId": "update_instruction",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instruction id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstructionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "No title, or a parent or sibling outside the tree",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such instruction the caller may edit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "instructions"
+        ],
+        "summary": "Delete an instruction",
+        "description": "Removes it from its tree.",
+        "operationId": "delete_instruction",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instruction id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such instruction the caller may delete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/instructions/order": {
       "put": {
         "tags": [
@@ -25406,6 +25728,20 @@
           }
         }
       },
+      "CreatedInstruction": {
+        "type": "object",
+        "description": "`{ id }` of a new instruction.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The new instruction."
+          }
+        }
+      },
       "CreatedModel": {
         "type": "object",
         "description": "Response of the create routes.",
@@ -29530,6 +29866,101 @@
             "description": "The rewritten draft."
           }
         }
+      },
+      "Instruction": {
+        "type": "object",
+        "description": "One instruction of the tree.",
+        "required": [
+          "id",
+          "position_ids"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Instruction id."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Title."
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Parent; null at the top level."
+          },
+          "after_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The sibling it follows; null for the first."
+          },
+          "rich_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Body HTML."
+          },
+          "position_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Positions that may read it; empty for everyone."
+          }
+        }
+      },
+      "InstructionInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/instructions` and `PUT /v1/instructions/{id}`.",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Title (required)."
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Parent; null at the top level."
+          },
+          "after_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The sibling it follows; null to come first."
+          },
+          "rich_text": {
+            "type": "string",
+            "description": "Body HTML."
+          },
+          "position_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Positions that may read it (empty for everyone); others are ignored."
+          }
+        },
+        "additionalProperties": false
       },
       "InstructionOrder": {
         "type": "object",
