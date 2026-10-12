@@ -91,3 +91,22 @@ async fn other_companies_customers_are_out_of_reach(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NOT_FOUND);
 }
+
+#[test_db::test(seed)]
+async fn a_customers_sales_list_their_sellers(pool: MySqlPool) {
+    let server = server(pool);
+    let res = server
+        .get("/v1/customers/1000/sales")
+        .with_session(sessions::REP)
+        .await;
+    res.assert_status_ok();
+    let sales: Value = res.json();
+    assert_eq!(sales[0]["id"], 7010);
+    assert_eq!(sales[0]["price"], "4200.00");
+    assert_eq!(sales[0]["seller_name"], "Rita Rep");
+    server
+        .get("/v1/customers/2000/sales")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}

@@ -235,3 +235,58 @@ pub async fn set_parent(
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+/// A sale to the customer, as the customer view lists it.
+#[derive(Debug, Serialize, FromRow, ToSchema)]
+pub struct CustomerSale {
+    /// Sale id.
+    pub id: i32,
+    /// When it was sold.
+    #[serde(serialize_with = "js_date")]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub sale_date: Option<DateTime<Utc>>,
+    /// Price, a decimal string.
+    pub price: Option<String>,
+    /// Seller's name.
+    pub seller_name: Option<String>,
+}
+
+/// List a customer's sales
+///
+/// The company's sales to the customer, newest first, with the seller.
+#[utoipa::path(
+    get,
+    path = "/v1/customers/{id}/sales",
+    operation_id = "list_customer_sales",
+    tag = "customers",
+    params(("id" = i32, Path, description = "Customer id")),
+    responses(
+        (status = 200, description = "Sales", body = Vec<CustomerSale>),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 404, description = "No such customer in the company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn sales(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+) -> ApiResult<Json<Vec<CustomerSale>>> {
+    in_company(&state.pool, user.company_id, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(
+        sqlx::query_as(
+            "SELECT s.id, s.sale_date, CAST(s.price AS CHAR) AS price, u.name AS seller_name
+             FROM sales s JOIN users u ON u.id = s.seller_id
+             WHERE s.customer_id = ? AND s.company_id = ?
+             ORDER BY s.sale_date DESC, s.id DESC",
+        )
+        .bind(id)
+        .bind(user.company_id)
+        .fetch_all(&state.pool)
+        .await?,
+    ))
+}

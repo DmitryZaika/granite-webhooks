@@ -36,4 +36,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(history::history))
         .routes(routes!(projects::projects))
         .routes(routes!(projects::set_parent))
+        .routes(routes!(projects::sales))
 }

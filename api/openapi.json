@@ -1491,6 +1491,88 @@
         ]
       }
     },
+    "/v1/customers/{id}/sales": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "List a customer's sales",
+        "description": "The company's sales to the customer, newest first, with the seller.",
+        "operationId": "list_customer_sales",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sales",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CustomerSale"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/users/sales-reps": {
       "get": {
         "tags": [
@@ -14313,6 +14395,13 @@
             "format": "date-time",
             "description": "When the customer was created."
           },
+          "invalid_lead": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the lead was marked invalid; null or empty for a valid one."
+          },
           "lead": {
             "$ref": "#/components/schemas/LeadAnswers",
             "description": "Lead form answers, as the lead sources send them (free text)."
@@ -14652,6 +14741,42 @@
               "null"
             ],
             "description": "Lead temperature: `hot`, `medium` or `cold`; null if not set."
+          }
+        }
+      },
+      "CustomerSale": {
+        "type": "object",
+        "description": "A sale to the customer, as the customer view lists it.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sale id."
+          },
+          "sale_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sold."
+          },
+          "price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Price, a decimal string."
+          },
+          "seller_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Seller's name."
           }
         }
       },
