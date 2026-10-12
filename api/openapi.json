@@ -21194,6 +21194,120 @@
           }
         ]
       }
+    },
+    "/v1/me/qbo-sales": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Get my QuickBooks sales this month",
+        "description": "The sum of the caller's classes in this month's Sales by Class report,\nwith the periods the sales goal panel shows.",
+        "operationId": "get_my_qbo_sales",
+        "responses": {
+          "200": {
+            "description": "Sales",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepSales"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/qbo-sales/customers": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "List my QuickBooks customers this month",
+        "description": "The customers in this month's Sales by Customer report for the caller's\nclasses, each with this month's invoices.",
+        "operationId": "list_my_qbo_sales_customers",
+        "responses": {
+          "200": {
+            "description": "Customers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepCustomers"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -23508,6 +23622,40 @@
           }
         }
       },
+      "CustomerSales": {
+        "type": "object",
+        "description": "A customer's sales to the rep this month.",
+        "required": [
+          "name",
+          "amount",
+          "invoices"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Customer name as `QuickBooks` has it."
+          },
+          "amount": {
+            "type": "number",
+            "format": "double",
+            "description": "Sales this month."
+          },
+          "qbo_customer_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`QuickBooks` customer id."
+          },
+          "invoices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SalesInvoice"
+            },
+            "description": "This month's invoices, oldest first."
+          }
+        }
+      },
       "CustomerSearchRow": {
         "type": "object",
         "description": "A customer matching a search, with their latest deal.",
@@ -23624,6 +23772,15 @@
             "description": "Built in: can be renamed but not deleted."
           }
         }
+      },
+      "CustomersStatus": {
+        "type": "string",
+        "description": "`ok`, `error` or `not_connected`.",
+        "enum": [
+          "ok",
+          "error",
+          "not_connected"
+        ]
       },
       "DashboardLayout": {
         "type": "object",
@@ -29240,6 +29397,110 @@
           }
         }
       },
+      "RepCustomers": {
+        "type": "object",
+        "description": "`GET /v1/me/qbo-sales/customers`.",
+        "required": [
+          "status",
+          "customers",
+          "total",
+          "currency"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/CustomersStatus"
+          },
+          "customers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerSales"
+            },
+            "description": "Customers, by their first invoice date."
+          },
+          "total": {
+            "type": "number",
+            "format": "double",
+            "description": "Sum of the customers' sales."
+          },
+          "currency": {
+            "type": "string",
+            "description": "Currency code."
+          }
+        }
+      },
+      "RepSales": {
+        "type": "object",
+        "description": "`GET /v1/me/qbo-sales`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/SalesStatus"
+          },
+          "amount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The rep's classes' sales this month."
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Currency code."
+          },
+          "start_period": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First day of the report."
+          },
+          "end_period": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last day of the report (today)."
+          },
+          "month_end_period": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last day of the month."
+          },
+          "week_end_period": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sunday of this week."
+          },
+          "days_remaining_in_week": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Days left in the week, today included.",
+            "minimum": 0
+          },
+          "days_remaining_in_month": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Days left in the month, today included.",
+            "minimum": 0
+          }
+        }
+      },
       "RoomInput": {
         "type": "object",
         "description": "One room of a sale being saved.",
@@ -29648,6 +29909,41 @@
           }
         }
       },
+      "SalesInvoice": {
+        "type": "object",
+        "description": "An invoice behind a customer's sales.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`QuickBooks` invoice id."
+          },
+          "doc_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Invoice number."
+          },
+          "total_amt": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Total."
+          },
+          "txn_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Invoice date."
+          }
+        }
+      },
       "SalesRep": {
         "type": "object",
         "description": "A rep who texts through the provider.",
@@ -29732,6 +30028,15 @@
             "description": "Deals created this month."
           }
         }
+      },
+      "SalesStatus": {
+        "type": "string",
+        "description": "`ok`, `error`, or `unavailable` when the company does not use\n`QuickBooks` (or the rep has no name to match).",
+        "enum": [
+          "ok",
+          "error",
+          "unavailable"
+        ]
       },
       "SamplesInput": {
         "type": "object",

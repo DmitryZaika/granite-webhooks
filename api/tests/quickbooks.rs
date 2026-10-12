@@ -73,6 +73,18 @@ async fn server(pool: &MySqlPool, access_expires_in: i64) -> (TestServer, Arc<Mu
                 if q.starts_with("select Id, CustomerRef from Invoice") {
                     return Json(json!({ "QueryResponse": { "Invoice": [{ "Id": "10", "CustomerRef": { "value": "77" } }] } }));
                 }
+                if q == "select * from Class MAXRESULTS 1000" {
+                    return Json(json!({ "QueryResponse": { "Class": [
+                        { "Id": "1", "Name": "Rita", "FullyQualifiedName": "Rita" },
+                        { "Id": "2", "Name": "Kitchens", "FullyQualifiedName": "Rita:Kitchens" },
+                        { "Id": "3", "Name": "Mark", "FullyQualifiedName": "Mark" },
+                    ] } }));
+                }
+                if q.contains("from Invoice where TxnDate >=") {
+                    return Json(json!({ "QueryResponse": { "Invoice": [
+                        { "Id": "9", "DocNumber": "1001", "TxnDate": "2026-05-02", "TotalAmt": 120, "CustomerRef": { "value": "42", "name": "Alice Lead" } },
+                    ] } }));
+                }
                 if q.contains("where CustomerRef = '42'") {
                     return Json(json!({ "QueryResponse": { "Invoice": [
                         { "Id": "8", "TxnDate": "2026-04-01", "TotalAmt": 50, "Balance": 0, "ShipAddr": { "Line1": "1 Main", "City": "Carmel" } },
@@ -86,6 +98,29 @@ async fn server(pool: &MySqlPool, access_expires_in: i64) -> (TestServer, Arc<Mu
             assert_eq!(id, "9");
             Json(json!({ "Invoice": invoice() }))
         }))
+        .route(
+            "/v3/company/555/reports/ClassSales",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                assert_eq!(query["accounting_method"], "Accrual");
+                Json(json!({ "Header": { "Currency": "USD", "StartPeriod": query["start_date"] },
+                    "Rows": { "Row": [
+                        { "ColData": [{ "value": "Rita" }, { "value": "1,000" }] },
+                        { "ColData": [{ "value": "Rita/Kitchens" }, { "value": "250.5" }] },
+                        { "ColData": [{ "value": "Mark" }, { "value": "99" }] },
+                    ] } }))
+            }),
+        )
+        .route(
+            "/v3/company/555/reports/CustomerSales",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                assert_eq!(query["class"], "1,2");
+                Json(json!({ "Header": { "Currency": "USD" }, "Rows": { "Row": [
+                    { "ColData": [{ "value": "Alice Lead", "id": "42" }, { "value": "120" }] },
+                    { "ColData": [{ "value": "Zero Co", "id": "43" }, { "value": "0" }] },
+                    { "group": "GrandTotal", "Summary": { "ColData": [{ "value": "TOTAL" }, { "value": "120" }] } },
+                ] } }))
+            }),
+        )
         .route("/v3/company/555/invoice/{id}/pdf", get(|| async { ([("content-type", "application/pdf")], b"%PDF-qbo".to_vec()) }))
         .route(
             "/v3/company/555/invoice",
@@ -192,4 +227,42 @@ async fn a_company_without_quickbooks_says_so(pool: MySqlPool) {
         body,
         json!({ "status": "not_connected", "invoices": [], "qbo_id": null })
     );
+}
+
+#[test_db::test(seed)]
+async fn a_rep_sees_their_class_sales_and_customers(pool: MySqlPool) {
+    let (server, _) = server(&pool, 3600).await;
+    sqlx::query("UPDATE company SET qbo_access_token = ? WHERE id = 100")
+        .bind(encrypt(&KEY, "new-access"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let sales: Value = server
+        .get("/v1/me/qbo-sales")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(sales["status"], "ok");
+    assert_eq!(sales["amount"], 1250.5);
+    assert_eq!(sales["currency"], "USD");
+    assert!(sales["days_remaining_in_month"].as_u64().unwrap() >= 1);
+    let customers: Value = server
+        .get("/v1/me/qbo-sales/customers")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(customers["status"], "ok");
+    assert_eq!(customers["total"], 120.0);
+    assert_eq!(customers["customers"].as_array().unwrap().len(), 1);
+    assert_eq!(customers["customers"][0]["qbo_customer_id"], "42");
+    assert_eq!(
+        customers["customers"][0]["invoices"][0]["doc_number"],
+        "1001"
+    );
+    let other: Value = common::server(pool)
+        .get("/v1/me/qbo-sales")
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .await
+        .json();
+    assert_eq!(other["status"], "unavailable");
 }
