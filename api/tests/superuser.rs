@@ -87,3 +87,37 @@ async fn super_admins_switch_signature_access(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 }
+
+#[test_db::test(seed)]
+async fn super_admins_read_widget_analytics(pool: MySqlPool) {
+    make_super(&pool).await;
+    sqlx::query(
+        "INSERT INTO widget_analytics_events (user_id, company_id, widget_id, action, target) VALUES
+           (100, 100, 'leaderboard', 'click', 'row'), (100, 100, 'leaderboard', 'click', 'row'),
+           (100, 100, 'leaderboard', 'add', 'dashboard')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO user_dashboard_widgets (user_id, company_id, widget_id, position)
+         VALUES (100, 100, 'leaderboard', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool);
+    let body: Value = server
+        .get("/v1/superuser/widget-analytics")
+        .with_session(sessions::SUPER_ADMIN)
+        .await
+        .json();
+    assert_eq!(body["top_used"][0]["uses"], 2);
+    assert_eq!(body["events"].as_array().unwrap().len(), 3);
+    assert_eq!(body["current_widgets"][0]["widget_id"], "leaderboard");
+    server
+        .get("/v1/superuser/widget-analytics")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(axum::http::StatusCode::FORBIDDEN);
+}

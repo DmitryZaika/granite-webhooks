@@ -23664,6 +23664,63 @@
         ]
       }
     },
+    "/v1/superuser/widget-analytics": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Dashboard widget analytics",
+        "description": "How every company's users use their dashboard widgets: uses per widget,\nall events and the widgets each dashboard has. Super admins only.",
+        "operationId": "get_widget_analytics",
+        "responses": {
+          "200": {
+            "description": "The analytics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WidgetAnalytics"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a super admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/transactions": {
       "get": {
         "tags": [
@@ -44155,6 +44212,38 @@
           "remove"
         ]
       },
+      "WidgetAnalytics": {
+        "type": "object",
+        "description": "Dashboard widget analytics.",
+        "required": [
+          "top_used",
+          "events",
+          "current_widgets"
+        ],
+        "properties": {
+          "top_used": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WidgetUse"
+            },
+            "description": "Uses per user, widget and target, most first."
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WidgetEvent"
+            },
+            "description": "Every event, newest first."
+          },
+          "current_widgets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardWidget"
+            },
+            "description": "Every user's dashboard widgets, by company, user and position."
+          }
+        }
+      },
       "WidgetEvent": {
         "type": "object",
         "description": "One use of a dashboard widget, for product analytics.",
@@ -44175,6 +44264,61 @@
           "target": {
             "type": "string",
             "description": "What in the widget was used, e.g. `quick-links` or `sales-goal`;\n1 to 64 characters after trimming."
+          }
+        }
+      },
+      "WidgetUse": {
+        "type": "object",
+        "description": "How often users clicked or changed something on a widget.",
+        "required": [
+          "company_id",
+          "user_id",
+          "widget_id",
+          "target",
+          "action",
+          "uses"
+        ],
+        "properties": {
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The company."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          },
+          "user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The user."
+          },
+          "user_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their name."
+          },
+          "widget_id": {
+            "type": "string",
+            "description": "The widget."
+          },
+          "target": {
+            "type": "string",
+            "description": "What was clicked or changed."
+          },
+          "action": {
+            "type": "string",
+            "description": "`click` or `change`."
+          },
+          "uses": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many times."
           }
         }
       }

@@ -27,6 +27,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(onboarding_feedbacks))
         .routes(routes!(signature_access))
         .routes(routes!(set_signature_access))
+        .routes(routes!(widget_analytics))
 }
 
 const fn super_only(user: &SessionUser) -> ApiResult<()> {
@@ -253,4 +254,144 @@ pub async fn set_signature_access(
         .execute(&state.pool)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// How often users clicked or changed something on a widget.
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+pub struct WidgetUse {
+    /// The company.
+    pub company_id: i32,
+    /// Its name.
+    pub company_name: Option<String>,
+    /// The user.
+    pub user_id: i32,
+    /// Their name.
+    pub user_name: Option<String>,
+    /// The widget.
+    pub widget_id: String,
+    /// What was clicked or changed.
+    pub target: String,
+    /// `click` or `change`.
+    pub action: String,
+    /// How many times.
+    pub uses: i64,
+}
+
+/// A widget event.
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+pub struct WidgetEvent {
+    /// Event id.
+    pub id: i32,
+    /// The company.
+    pub company_id: i32,
+    /// Its name.
+    pub company_name: Option<String>,
+    /// The user.
+    pub user_id: i32,
+    /// Their name.
+    pub user_name: Option<String>,
+    /// Their email.
+    pub user_email: Option<String>,
+    /// The widget.
+    pub widget_id: String,
+    /// What happened.
+    pub action: String,
+    /// On what.
+    pub target: String,
+    /// When.
+    #[serde(serialize_with = "js_date")]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+/// A widget on a user's dashboard.
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+pub struct DashboardWidget {
+    /// The company.
+    pub company_id: i32,
+    /// Its name.
+    pub company_name: Option<String>,
+    /// The user.
+    pub user_id: i32,
+    /// Their name.
+    pub user_name: Option<String>,
+    /// Their email.
+    pub user_email: Option<String>,
+    /// The widget.
+    pub widget_id: String,
+    /// Its place on the dashboard.
+    pub position: i32,
+}
+
+/// Dashboard widget analytics.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WidgetAnalytics {
+    /// Uses per user, widget and target, most first.
+    pub top_used: Vec<WidgetUse>,
+    /// Every event, newest first.
+    pub events: Vec<WidgetEvent>,
+    /// Every user's dashboard widgets, by company, user and position.
+    pub current_widgets: Vec<DashboardWidget>,
+}
+
+/// Dashboard widget analytics
+///
+/// How every company's users use their dashboard widgets: uses per widget,
+/// all events and the widgets each dashboard has. Super admins only.
+#[utoipa::path(
+    get,
+    path = "/v1/superuser/widget-analytics",
+    operation_id = "get_widget_analytics",
+    tag = "superuser",
+    responses(
+        (status = 200, description = "The analytics", body = WidgetAnalytics),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a super admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn widget_analytics(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+) -> ApiResult<Json<WidgetAnalytics>> {
+    super_only(&user)?;
+    let pool = &state.pool;
+    let top_used = sqlx::query_as(
+        "SELECT e.company_id, c.name AS company_name, e.user_id, u.name AS user_name, e.widget_id,
+                e.target, e.action, COUNT(*) AS uses
+           FROM widget_analytics_events e
+           LEFT JOIN users u ON u.id = e.user_id
+           LEFT JOIN company c ON c.id = e.company_id
+          WHERE e.action IN ('click', 'change')
+          GROUP BY e.company_id, c.name, e.user_id, u.name, e.widget_id, e.target, e.action
+          ORDER BY uses DESC, e.user_id ASC, e.widget_id ASC, e.target ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    let events = sqlx::query_as(
+        "SELECT e.id, e.company_id, c.name AS company_name, e.user_id, u.name AS user_name,
+                u.email AS user_email, e.widget_id, e.action, e.target, e.created_at
+           FROM widget_analytics_events e
+           LEFT JOIN users u ON u.id = e.user_id
+           LEFT JOIN company c ON c.id = e.company_id
+          ORDER BY e.created_at DESC, e.id DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    let current_widgets = sqlx::query_as(
+        "SELECT w.company_id, c.name AS company_name, w.user_id, u.name AS user_name,
+                u.email AS user_email, w.widget_id, w.position
+           FROM user_dashboard_widgets w
+           LEFT JOIN users u ON u.id = w.user_id
+           LEFT JOIN company c ON c.id = w.company_id
+          ORDER BY c.name ASC, u.name ASC, w.position ASC, w.widget_id ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(Json(WidgetAnalytics {
+        top_used,
+        events,
+        current_widgets,
+    }))
 }
