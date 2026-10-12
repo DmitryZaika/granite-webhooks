@@ -3,6 +3,7 @@ use super::schemas::{Upload, UploadRequest};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::routes::emails::attachment_token;
 use crate::state::AppState;
 use crate::thumbnails::IMAGE_CONTENT_TYPES;
 use axum::Json;
@@ -16,7 +17,8 @@ use axum::http::StatusCode;
 /// record's route, e.g. `PUT /v1/stones/{id}` (`image_url`),
 /// `POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route
 /// also makes the thumbnail. Inventory folders are for admins; `deals` for
-/// any employee and also takes documents.
+/// any employee and also takes documents; `emails` for any employee, any
+/// file, and the response has the `token` `POST /v1/emails` asks for.
 #[utoipa::path(
     post,
     path = "/v1/uploads",
@@ -39,12 +41,14 @@ pub async fn create(
     JsonBody(request): JsonBody<UploadRequest>,
 ) -> ApiResult<(StatusCode, Json<Upload>)> {
     let is_deal = request.folder == UploadFolder::Deals;
-    if !(is_deal || user.is_admin || user.is_superuser) {
+    let is_email = request.folder == UploadFolder::Emails;
+    if !(is_deal || is_email || user.is_admin || user.is_superuser) {
         return Err(ApiError::Forbidden);
     }
     let content_type = request.content_type.trim().to_lowercase();
     let allowed = IMAGE_CONTENT_TYPES.contains(&content_type.as_str())
-        || (is_deal && DOCUMENT_CONTENT_TYPES.contains(&content_type.as_str()));
+        || (is_deal && DOCUMENT_CONTENT_TYPES.contains(&content_type.as_str()))
+        || (is_email && is_mime_type(&content_type));
     if !allowed {
         return Err(ApiError::BadRequest(format!(
             "unsupported content type: {content_type}"
@@ -58,7 +62,28 @@ pub async fn create(
     );
     let upload_url = state.storage.presign_put(&key, &content_type).await?;
     let url = state.storage.public_url(&key)?;
-    Ok((StatusCode::CREATED, Json(Upload { upload_url, url })))
+    let token = is_email.then(|| attachment_token::sign(&state.session_secret, &url, user.id));
+    Ok((
+        StatusCode::CREATED,
+        Json(Upload {
+            upload_url,
+            url,
+            token,
+        }),
+    ))
+}
+
+/// `type/subtype` of token characters.
+fn is_mime_type(value: &str) -> bool {
+    let token = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "!#$&-^_.+".contains(c))
+    };
+    value
+        .split_once('/')
+        .is_some_and(|(kind, sub)| token(kind) && token(sub))
 }
 
 /// Document types a deal may hold besides images.
@@ -91,6 +116,7 @@ fn extension(file_name: &str, content_type: &str) -> String {
             "application/pdf" => "pdf",
             "text/csv" => "csv",
             "text/plain" => "txt",
+            "application/zip" => "zip",
             _ => "bin",
         }
         .to_string()
@@ -101,6 +127,14 @@ fn extension(file_name: &str, content_type: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::extension;
+
+    #[test]
+    fn mime_types() {
+        assert!(super::is_mime_type("application/vnd.ms-excel"));
+        assert!(super::is_mime_type("video/mp4"));
+        assert!(!super::is_mime_type("text"));
+        assert!(!super::is_mime_type("text/html; x"));
+    }
 
     #[test]
     fn extensions() {

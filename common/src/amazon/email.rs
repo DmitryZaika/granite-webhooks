@@ -88,9 +88,69 @@ pub async fn send_message_from(
     Ok(output.message_id().unwrap_or("").to_string())
 }
 
+/// The `Message-ID` SES gives a message it sent: `<id>@<region>.amazonses.com`
+/// (`email.amazonses.com` in us-east-1), without angle brackets. Replies
+/// carry it in `In-Reply-To`, which threads them.
+pub fn ses_message_id(ses_id: &str, region: &str) -> String {
+    if ses_id.contains('@') {
+        return ses_id.to_string();
+    }
+    let host = if region == "us-east-1" {
+        "email"
+    } else {
+        region
+    };
+    format!("{ses_id}@{host}.amazonses.com")
+}
+
+pub const SES_REGION: &str = "us-east-2";
+
+/// Sends a complete MIME message to `destinations` (To, Cc and Bcc; Bcc is
+/// not in the headers). Returns the message's `Message-ID` (see
+/// [`ses_message_id`]).
+pub async fn send_raw_message(raw: Vec<u8>, destinations: Vec<String>) -> Result<String, Error> {
+    let region_provider = RegionProviderChain::first_try(Region::new(SES_REGION));
+    let shared_config = aws_config::from_env().region(region_provider).load().await;
+    let client = Client::new(&shared_config);
+    let destination = Destination::builder()
+        .set_to_addresses(Some(destinations))
+        .build();
+    let content = EmailContent::builder()
+        .raw(
+            aws_sdk_sesv2::types::RawMessage::builder()
+                .data(aws_sdk_sesv2::primitives::Blob::new(raw))
+                .build()
+                .expect("raw message has data"),
+        )
+        .build();
+    let output = client
+        .send_email()
+        .destination(destination)
+        .content(content)
+        .send()
+        .await?;
+    Ok(ses_message_id(
+        output.message_id().unwrap_or(""),
+        SES_REGION,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ses_message_id_adds_the_region_host() {
+        assert_eq!(
+            ses_message_id("010f-abc", "us-east-2"),
+            "010f-abc@us-east-2.amazonses.com"
+        );
+        assert_eq!(
+            ses_message_id("010f-abc", "us-east-1"),
+            "010f-abc@email.amazonses.com"
+        );
+        assert_eq!(ses_message_id("x@y.com", "us-east-2"), "x@y.com");
+    }
 
     #[test]
     fn extract_email_address_unwraps_display_name() {

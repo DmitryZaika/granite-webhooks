@@ -7,6 +7,7 @@ use crate::cloudtalk::receive::{
 use crate::google::receive::address_information;
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
+use crate::outbound::send_handler as send_email;
 use crate::ringcentral::receive::{
     call_received as ringcentral_call_received, sms_notification as ringcentral_sms_notification,
     sms_received as ringcentral_sms_received, sms_sent as ringcentral_sms_sent, sync_ringcentral,
@@ -80,6 +81,7 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         )
         .route("/ses/read-receipt", post(read_receipt_handler))
         .route("/ses/receive-email", post(receive_handler))
+        .route("/email/send", post(send_email))
         .route("/cloudtalk/sms", post(cloudtalk_sms_received_unscoped))
         .route("/cloudtalk/sms/{company_id}", post(cloudtalk_sms_received))
         .route("/cloudtalk/sms/sent/{company_id}", post(cloudtalk_sms_sent))

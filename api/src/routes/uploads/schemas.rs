@@ -13,6 +13,8 @@ pub enum UploadFolder {
     Faucets,
     /// Photos and documents attached to a deal (any employee may upload).
     Deals,
+    /// Attachments of an email being sent (any employee, any file type).
+    Emails,
 }
 
 impl UploadFolder {
@@ -22,6 +24,7 @@ impl UploadFolder {
             Self::Sinks => "sinks",
             Self::Faucets => "faucets",
             Self::Deals => "deals",
+            Self::Emails => "emails",
         }
     }
 }
@@ -36,8 +39,8 @@ pub struct UploadRequest {
     pub file_name: String,
     /// MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,
     /// `image/gif`, `image/heic` or `image/heif`; for `deals` also PDF, Word,
-    /// Excel, CSV and plain text. Send the same value as the `Content-Type`
-    /// header of the `PUT`.
+    /// Excel, CSV and plain text; for `emails` any type. Send the same value
+    /// as the `Content-Type` header of the `PUT`.
     pub content_type: String,
 }
 
@@ -49,4 +52,8 @@ pub struct Upload {
     pub upload_url: String,
     /// Public URL of the file once uploaded; pass it to the record's route.
     pub url: String,
+    /// `emails` only: proof the caller uploaded `url`; send it with the
+    /// attachment to `POST /v1/emails`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }

@@ -8,15 +8,18 @@
 //! - `GET  /v1/emails/threads/{thread_id}`        → one conversation
 //! - `POST /v1/emails/threads/{thread_id}/read`   → mark an opened conversation read
 //! - `POST /v1/emails/threads/{mark-read,mark-unread,delete,restore,purge}` → bulk changes
+//! - `POST /v1/emails`                            → send (or schedule) an email
 //!
 //! Replaces the Remix `employee.emails*` loaders and `api.emails.*` routes.
-//! Sending mail lives in the `webhooks` Lambda (it owns SES).
+//! The `webhooks` Lambda builds and sends the MIME message (it owns SES).
 
+pub mod attachment_token;
 pub mod deal_history;
 mod handlers;
 mod list;
 mod names;
 pub mod schemas;
+mod send;
 pub mod sql;
 pub mod thread;
 
@@ -37,4 +40,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::purge))
         .routes(routes!(handlers::suggest))
         .routes(routes!(deal_history::deal_emails))
+        .routes(routes!(send::send))
 }

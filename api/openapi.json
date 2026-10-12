@@ -4872,7 +4872,7 @@
           "uploads"
         ],
         "summary": "Start an upload",
-        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`),\n`POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route\nalso makes the thumbnail. Inventory folders are for admins; `deals` for\nany employee and also takes documents.",
+        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`),\n`POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route\nalso makes the thumbnail. Inventory folders are for admins; `deals` for\nany employee and also takes documents; `emails` for any employee, any\nfile, and the response has the `token` `POST /v1/emails` asks for.",
         "operationId": "create_upload",
         "requestBody": {
           "content": {
@@ -10518,6 +10518,93 @@
           }
         ]
       }
+    },
+    "/v1/emails": {
+      "post": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Send an email",
+        "description": "Sends the email now, or schedules it with `send_at`. Recipients are\nlower-cased and deduplicated (`cc` drops `to` addresses, `bcc` drops\nboth). Several `to` recipients without `cc`, `bcc`, `thread_id` or\n`send_together` each get their own message and conversation. Each message\nis recorded with its participants and attachments, and the deal's\ncustomer gets the recipients' new addresses.",
+        "operationId": "send_email",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendEmailRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Sent, or scheduled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendEmailResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid recipients, empty email, unknown deal, bad send time, an attachment the caller may not use, or an address SES refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error, or sent but not recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Sending failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -14613,6 +14700,157 @@
           }
         }
       },
+      "SendAttachment": {
+        "type": "object",
+        "description": "A file attached to an email being sent.",
+        "required": [
+          "url",
+          "filename",
+          "content_type"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "URL of the file."
+          },
+          "filename": {
+            "type": "string",
+            "description": "File name shown to the recipient."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "MIME type, e.g. `application/pdf`."
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The upload's `token`; absent for attachments of a conversation."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SendEmailRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/emails`.",
+        "required": [
+          "to"
+        ],
+        "properties": {
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Recipients; at least one. Several without `cc`, `bcc`, `thread_id` or\n`send_together` each get their own message and conversation."
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Copy recipients (at most 25)."
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Blind copy recipients (at most 25)."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Subject (at most 300 characters)."
+          },
+          "body": {
+            "type": "string",
+            "description": "The note: editor HTML or plain text. `{{variables}}` are filled per\nrecipient. Required unless there are attachments."
+          },
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reply in this conversation (threads the message after its last one)."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Deal the email is about; its customer gets the recipients' addresses."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Customer the email is about, when there is no deal."
+          },
+          "send_together": {
+            "type": "boolean",
+            "description": "Send one message to all `to` recipients."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SendAttachment"
+            },
+            "description": "Files uploaded with `POST /v1/uploads` (folder `emails`, with their\n`token`), or attachments of a conversation the caller may read."
+          },
+          "template_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Email template the note came from (orders the template picker)."
+          },
+          "send_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Send later instead (within 90 days)."
+          },
+          "cancel_if_customer_messages": {
+            "type": "boolean",
+            "description": "With `send_at`: cancel when the customer writes first."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SendEmailResult": {
+        "type": "object",
+        "description": "Result of `POST /v1/emails`.",
+        "required": [
+          "sent",
+          "delayed",
+          "thread_ids"
+        ],
+        "properties": {
+          "sent": {
+            "type": "integer",
+            "description": "Messages sent (0 when scheduled).",
+            "minimum": 0
+          },
+          "delayed": {
+            "type": "boolean",
+            "description": "The email was scheduled for `send_at`."
+          },
+          "thread_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Conversations the messages went to."
+          }
+        }
+      },
       "SentSms": {
         "type": "object",
         "description": "Texts the signed-in user sent through the company's SMS provider.",
@@ -16181,6 +16419,13 @@
           "url": {
             "type": "string",
             "description": "Public URL of the file once uploaded; pass it to the record's route."
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`emails` only: proof the caller uploaded `url`; send it with the\nattachment to `POST /v1/emails`."
           }
         }
       },
@@ -16191,7 +16436,8 @@
           "stones",
           "sinks",
           "faucets",
-          "deals"
+          "deals",
+          "emails"
         ]
       },
       "UploadRequest": {
@@ -16213,7 +16459,7 @@
           },
           "content_type": {
             "type": "string",
-            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`; for `deals` also PDF, Word,\nExcel, CSV and plain text. Send the same value as the `Content-Type`\nheader of the `PUT`."
+            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`; for `deals` also PDF, Word,\nExcel, CSV and plain text; for `emails` any type. Send the same value\nas the `Content-Type` header of the `PUT`."
           }
         },
         "additionalProperties": false

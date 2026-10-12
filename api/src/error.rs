@@ -25,6 +25,12 @@ pub enum ApiError {
     Database(#[from] sqlx::Error),
     #[error(transparent)]
     Storage(#[from] crate::storage::StorageError),
+    /// A service the route depends on failed (e.g. sending mail).
+    #[error("{0}")]
+    Upstream(String),
+    /// The work was partly done and could not be finished.
+    #[error("{0}")]
+    Internal(String),
 }
 
 impl IntoResponse for ApiError {
@@ -35,6 +41,8 @@ impl IntoResponse for ApiError {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::Upstream(_) => StatusCode::BAD_GATEWAY,
+            Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::Storage(crate::storage::StorageError::Disabled) => {
                 StatusCode::SERVICE_UNAVAILABLE
             }

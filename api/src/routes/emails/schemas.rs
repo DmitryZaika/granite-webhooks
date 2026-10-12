@@ -305,3 +305,70 @@ pub struct SuggestionRow {
     /// Receiver's user or customer name.
     pub receiver_name: Option<String>,
 }
+
+/// Body of `POST /v1/emails`.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SendEmailRequest {
+    /// Recipients; at least one. Several without `cc`, `bcc`, `thread_id` or
+    /// `send_together` each get their own message and conversation.
+    pub to: Vec<String>,
+    /// Copy recipients (at most 25).
+    #[serde(default)]
+    pub cc: Vec<String>,
+    /// Blind copy recipients (at most 25).
+    #[serde(default)]
+    pub bcc: Vec<String>,
+    /// Subject (at most 300 characters).
+    #[serde(default)]
+    pub subject: String,
+    /// The note: editor HTML or plain text. `{{variables}}` are filled per
+    /// recipient. Required unless there are attachments.
+    #[serde(default)]
+    pub body: String,
+    /// Reply in this conversation (threads the message after its last one).
+    pub thread_id: Option<String>,
+    /// Deal the email is about; its customer gets the recipients' addresses.
+    pub deal_id: Option<i32>,
+    /// Customer the email is about, when there is no deal.
+    pub customer_id: Option<i32>,
+    /// Send one message to all `to` recipients.
+    #[serde(default)]
+    pub send_together: bool,
+    /// Files uploaded with `POST /v1/uploads` (folder `emails`, with their
+    /// `token`), or attachments of a conversation the caller may read.
+    #[serde(default)]
+    pub attachments: Vec<SendAttachment>,
+    /// Email template the note came from (orders the template picker).
+    pub template_id: Option<i32>,
+    /// Send later instead (within 90 days).
+    pub send_at: Option<DateTime<Utc>>,
+    /// With `send_at`: cancel when the customer writes first.
+    #[serde(default)]
+    pub cancel_if_customer_messages: bool,
+}
+
+/// A file attached to an email being sent.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SendAttachment {
+    /// URL of the file.
+    pub url: String,
+    /// File name shown to the recipient.
+    pub filename: String,
+    /// MIME type, e.g. `application/pdf`.
+    pub content_type: String,
+    /// The upload's `token`; absent for attachments of a conversation.
+    pub token: Option<String>,
+}
+
+/// Result of `POST /v1/emails`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SendEmailResult {
+    /// Messages sent (0 when scheduled).
+    pub sent: usize,
+    /// The email was scheduled for `send_at`.
+    pub delayed: bool,
+    /// Conversations the messages went to.
+    pub thread_ids: Vec<String>,
+}
