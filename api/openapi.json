@@ -22529,6 +22529,421 @@
         ]
       }
     },
+    "/v1/quote-settings": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Get the quote settings",
+        "description": "The company's measurement defaults for new quotes (defaults when none\nare saved).",
+        "operationId": "get_quote_settings",
+        "responses": {
+          "200": {
+            "description": "The settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Save the quote settings",
+        "description": "Saves the company's measurement rounding and default counter depth.",
+        "operationId": "save_quote_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteSettingsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Depth not in (0, 120]",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-email-templates": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List quote email templates",
+        "description": "The company's templates by sequence, then the caller's own (`personal`).",
+        "operationId": "list_quote_email_templates",
+        "responses": {
+          "200": {
+            "description": "Templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QuoteEmailTemplate"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Add a quote email template",
+        "description": "Adds a company template every sales rep can use, at `sequence`.",
+        "operationId": "create_quote_email_template",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteEmailTemplateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added"
+          },
+          "400": {
+            "description": "No name or no subject",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-email-templates/{id}": {
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Save a quote email template",
+        "description": "Saves a company template and moves it to `sequence`.",
+        "operationId": "update_quote_email_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteEmailTemplateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "No name or no subject",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Delete a quote email template",
+        "description": "Deletes a company template and renumbers the others.",
+        "operationId": "delete_quote_email_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/reports/cut-slabs": {
       "get": {
         "tags": [
@@ -38586,6 +39001,78 @@
         },
         "additionalProperties": false
       },
+      "QuoteEmailTemplate": {
+        "type": "object",
+        "description": "A default for emailing quotes.",
+        "required": [
+          "id",
+          "personal",
+          "name",
+          "subject",
+          "body",
+          "sequence"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Template id."
+          },
+          "personal": {
+            "type": "boolean",
+            "description": "The caller's own template (only they see it); false for company ones."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Email subject."
+          },
+          "body": {
+            "type": "string",
+            "description": "Email body; links to the quote with `[QuoteLink]` or `[PDFLink]`."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Order among the company's templates."
+          }
+        }
+      },
+      "QuoteEmailTemplateInput": {
+        "type": "object",
+        "description": "Body of creating or saving a company quote email template.",
+        "required": [
+          "name",
+          "subject",
+          "body"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name; required, at most 120 characters (longer is cut)."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Subject; required, at most 255 characters (longer is cut)."
+          },
+          "body": {
+            "type": "string",
+            "description": "Body; `[PDFLink]` is added when it has no quote link."
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Position among the company's templates (1 = first)."
+          }
+        },
+        "additionalProperties": false
+      },
       "QuotePaymentTerm": {
         "type": "object",
         "description": "Payment terms a quote can show.",
@@ -38639,6 +39126,52 @@
           "terms": {
             "type": "string",
             "description": "The terms text; required, at most 5000 characters (longer is cut)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuoteSettings": {
+        "type": "object",
+        "description": "Company defaults for new quotes.",
+        "required": [
+          "units",
+          "rounding",
+          "default_depth"
+        ],
+        "properties": {
+          "units": {
+            "type": "string",
+            "description": "Always `in`."
+          },
+          "rounding": {
+            "type": "number",
+            "format": "double",
+            "description": "Measurements round to this many inches: 0.5, 0.25, 0.125 or 0.0625."
+          },
+          "default_depth": {
+            "type": "number",
+            "format": "double",
+            "description": "Default counter depth in inches."
+          }
+        }
+      },
+      "QuoteSettingsInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/quote-settings`.",
+        "required": [
+          "rounding",
+          "default_depth"
+        ],
+        "properties": {
+          "rounding": {
+            "type": "number",
+            "format": "double",
+            "description": "0.5, 0.25, 0.125 or 0.0625; anything else reads as 0.0625."
+          },
+          "default_depth": {
+            "type": "number",
+            "format": "double",
+            "description": "Inches, more than 0 and at most 120 (rounded to hundredths)."
           }
         },
         "additionalProperties": false
