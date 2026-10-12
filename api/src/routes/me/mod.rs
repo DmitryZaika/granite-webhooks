@@ -4,6 +4,8 @@
 //! - `GET /v1/me/positions` → position ids in the company the request acts in
 //! - `GET /v1/me/sales-goal` → monthly sales goal; `PUT` sets it
 //! - `GET /v1/me/telegram`   → Telegram link status per bot (checked with Telegram)
+//! - `PUT /v1/me/sidebar-pin` → keep the desktop sidebar open
+//! - `GET /v1/me/marketing-companies` → companies the user markets for
 //! - `/v1/me/todos`, `/v1/me/todo-order` → the to-do list (see [`todos`])
 
 mod handlers;
@@ -20,6 +22,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::positions))
         .routes(routes!(handlers::sales_goal, handlers::set_sales_goal))
         .routes(routes!(handlers::telegram))
+        .routes(routes!(handlers::set_sidebar_pin))
+        .routes(routes!(handlers::marketing_companies))
         .routes(routes!(todos::list, todos::create))
         .routes(routes!(todos::update, todos::delete))
         .routes(routes!(todos::set_done))

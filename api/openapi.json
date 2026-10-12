@@ -292,6 +292,116 @@
         ]
       }
     },
+    "/v1/me/sidebar-pin": {
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Pin or unpin my sidebar",
+        "description": "Saves whether the desktop sidebar stays open (`pined_bar` on `GET /v1/me`).",
+        "operationId": "set_sidebar_pin",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SidebarPin"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/marketing-companies": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "List the companies I market for",
+        "description": "Live companies where the signed-in user holds the External Marketing\nposition, for the marketing portal's company switcher.",
+        "operationId": "list_marketing_companies",
+        "responses": {
+          "200": {
+            "description": "Companies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MarketingCompany"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/todos": {
       "get": {
         "tags": [
@@ -2512,6 +2622,333 @@
           },
           "403": {
             "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/customer-sources": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "List customer sources",
+        "description": "The company's live sources, built-in ones first, then by label.",
+        "operationId": "list_customer_sources",
+        "responses": {
+          "200": {
+            "description": "Sources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CustomerSource"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Add a customer source",
+        "description": "Its key and label are the name.",
+        "operationId": "create_customer_source",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceName"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedSource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A source with that name exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/customer-sources/{id}": {
+      "put": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Rename a customer source",
+        "description": "A built-in source only changes its label; a custom one also changes its\nkey, and its customers move to the new name.",
+        "operationId": "rename_customer_source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceName"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Renamed"
+          },
+          "400": {
+            "description": "Empty or too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such source in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A source with that name exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Delete a customer source",
+        "description": "Hides a custom source from the dropdown; its customers keep it.",
+        "operationId": "delete_customer_source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "A built-in source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such source in the caller's company",
             "content": {
               "application/json": {
                 "schema": {
@@ -17306,6 +17743,21 @@
           }
         }
       },
+      "CreatedSource": {
+        "type": "object",
+        "description": "`POST /v1/customer-sources`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The new source.",
+            "minimum": 0
+          }
+        }
+      },
       "CreatedStone": {
         "type": "object",
         "description": "Response of `POST /v1/stones`.",
@@ -18019,6 +18471,35 @@
             ],
             "format": "int32",
             "description": "Board group of that deal's list; null when there is no deal."
+          }
+        }
+      },
+      "CustomerSource": {
+        "type": "object",
+        "description": "A customer source.",
+        "required": [
+          "id",
+          "source_key",
+          "label",
+          "is_system"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The source."
+          },
+          "source_key": {
+            "type": "string",
+            "description": "Stored on customers (`customers.source`)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Shown in the dropdown."
+          },
+          "is_system": {
+            "type": "boolean",
+            "description": "Built in: can be renamed but not deleted."
           }
         }
       },
@@ -20414,6 +20895,25 @@
           }
         }
       },
+      "MarketingCompany": {
+        "type": "object",
+        "description": "A company the user does marketing for.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The company."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          }
+        }
+      },
       "Message": {
         "type": "object",
         "description": "One message.",
@@ -22786,6 +23286,19 @@
           }
         }
       },
+      "SidebarPin": {
+        "type": "object",
+        "description": "Body of `PUT /v1/me/sidebar-pin`.",
+        "required": [
+          "pinned"
+        ],
+        "properties": {
+          "pinned": {
+            "type": "boolean",
+            "description": "Keep the desktop sidebar open instead of expanding on hover."
+          }
+        }
+      },
       "Sink": {
         "type": "object",
         "description": "A sink model the company sells, with how many units are free to sell.",
@@ -23307,6 +23820,19 @@
               "$ref": "#/components/schemas/DripList"
             },
             "description": "With `scope=company`: deal lists for drips."
+          }
+        }
+      },
+      "SourceName": {
+        "type": "object",
+        "description": "Body of `POST /v1/customer-sources` and `PUT /v1/customer-sources/{id}`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "1 to 255 characters."
           }
         }
       },

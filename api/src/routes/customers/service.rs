@@ -13,7 +13,7 @@ const DEAL_DELETED_PREFIX: &str = "deal_deleted:";
 /// Who the audit trail credits with a lead's first assignment.
 const SALES_MANAGER_AUDIT_NAME: &str = "sales manager";
 /// Sources every company has, besides its own (`customer_sources`).
-const BUILTIN_SOURCES: &[&str] = &[
+pub const BUILTIN_SOURCES: &[&str] = &[
     "check-in",
     "leads",
     "call-in",

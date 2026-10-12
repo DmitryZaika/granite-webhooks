@@ -256,3 +256,41 @@ async fn telegram_links_stay_when_telegram_cannot_be_reached(pool: MySqlPool) {
         (Some(900_101), Some(910_101))
     );
 }
+
+#[test_db::test(seed)]
+async fn the_sidebar_pin_is_saved(pool: MySqlPool) {
+    let server = common::server(pool.clone());
+    for pinned in [true, false] {
+        server
+            .put("/v1/me/sidebar-pin")
+            .with_session(sessions::REP)
+            .json(&serde_json::json!({ "pinned": pinned }))
+            .await
+            .assert_status(axum::http::StatusCode::NO_CONTENT);
+        let saved: bool = sqlx::query_scalar("SELECT pined_bar <> 0 FROM users WHERE id = 100")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(saved, pinned);
+    }
+}
+
+#[test_db::test(seed)]
+async fn marketing_companies_are_those_of_the_position(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (104, 7, 101), (104, 1, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = common::server(pool);
+    let body: serde_json::Value = server
+        .get("/v1/me/marketing-companies")
+        .with_session(sessions::VIEWER)
+        .await
+        .json();
+    assert_eq!(
+        body,
+        serde_json::json!([{ "id": 101, "name": "Other Granite Co" }])
+    );
+}

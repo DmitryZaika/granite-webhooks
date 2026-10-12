@@ -169,3 +169,85 @@ pub async fn telegram(
     }
     Ok(Json(status))
 }
+
+/// Body of `PUT /v1/me/sidebar-pin`.
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct SidebarPin {
+    /// Keep the desktop sidebar open instead of expanding on hover.
+    pub pinned: bool,
+}
+
+/// Pin or unpin my sidebar
+///
+/// Saves whether the desktop sidebar stays open (`pined_bar` on `GET /v1/me`).
+#[utoipa::path(
+    put,
+    path = "/v1/me/sidebar-pin",
+    operation_id = "set_sidebar_pin",
+    tag = "me",
+    request_body = SidebarPin,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn set_sidebar_pin(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    JsonBody(input): JsonBody<SidebarPin>,
+) -> ApiResult<axum::http::StatusCode> {
+    sqlx::query("UPDATE users SET pined_bar = ? WHERE id = ?")
+        .bind(input.pinned)
+        .bind(user.id)
+        .execute(&state.pool)
+        .await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// `positions.id` of an outside marketing agency.
+const EXTERNAL_MARKETING_POSITION: i32 = 7;
+
+/// A company the user does marketing for.
+#[derive(Debug, serde::Serialize, sqlx::FromRow, utoipa::ToSchema)]
+pub struct MarketingCompany {
+    /// The company.
+    pub id: i32,
+    /// Its name.
+    pub name: String,
+}
+
+/// List the companies I market for
+///
+/// Live companies where the signed-in user holds the External Marketing
+/// position, for the marketing portal's company switcher.
+#[utoipa::path(
+    get,
+    path = "/v1/me/marketing-companies",
+    operation_id = "list_marketing_companies",
+    tag = "me",
+    responses(
+        (status = 200, description = "Companies", body = [MarketingCompany]),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn marketing_companies(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+) -> ApiResult<Json<Vec<MarketingCompany>>> {
+    let companies = sqlx::query_as(
+        "SELECT c.id, c.name FROM company c
+           JOIN users_positions up ON up.company_id = c.id
+          WHERE up.user_id = ? AND up.position_id = ? AND c.deleted_at IS NULL
+          ORDER BY c.name",
+    )
+    .bind(user.id)
+    .bind(EXTERNAL_MARKETING_POSITION)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(companies))
+}
