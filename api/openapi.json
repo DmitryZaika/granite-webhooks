@@ -20354,6 +20354,83 @@
           }
         ]
       }
+    },
+    "/v1/ai/email-template": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Draft an email template",
+        "description": "Writes a template name, subject and HTML body from a description, using\nthe built-in `{{variables}}` where it can.",
+        "operationId": "draft_email_template",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailTemplateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailTemplateDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty description",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI failed or answered without a template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -23749,6 +23826,29 @@
           "can_edit": {
             "type": "boolean",
             "description": "The caller may edit or delete it (only their own templates)."
+          }
+        }
+      },
+      "EmailTemplateDraft": {
+        "type": "object",
+        "description": "A drafted template.",
+        "required": [
+          "template_name",
+          "template_subject",
+          "template_body"
+        ],
+        "properties": {
+          "template_name": {
+            "type": "string",
+            "description": "A short name for the template."
+          },
+          "template_subject": {
+            "type": "string",
+            "description": "Subject line; may hold `{{variables}}`."
+          },
+          "template_body": {
+            "type": "string",
+            "description": "HTML body; may hold `{{variables}}`."
           }
         }
       },
