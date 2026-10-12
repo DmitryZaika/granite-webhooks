@@ -18372,7 +18372,7 @@
           "catalog"
         ],
         "summary": "List the image library",
-        "description": "The company's images by name (at most 200).",
+        "description": "The company's images by name (at most 200 matching `name`, else the\nwhole library).",
         "operationId": "list_images",
         "parameters": [
           {
@@ -18443,7 +18443,7 @@
           "catalog"
         ],
         "summary": "List the documents",
-        "description": "The company's documents by name (at most 200).",
+        "description": "The company's documents by name (at most 200 matching `name`, else the\nwhole library).",
         "operationId": "list_documents",
         "parameters": [
           {
@@ -18482,6 +18482,250 @@
           },
           "403": {
             "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Add a document",
+        "description": "Puts a file uploaded to the `documents` folder (`POST /v1/uploads`) in the\ncompany's library under `name`.",
+        "operationId": "create_document",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewDocument"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or not an uploaded document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/documents/{id}": {
+      "put": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Edit a document",
+        "description": "Renames it; with `url`, its file is replaced by a new upload and the old\nfile (and its page preview) is deleted from storage.",
+        "operationId": "update_document",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Document id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or not an uploaded document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Delete a document",
+        "description": "Takes it out of the library. The file stays in storage: emails may\nalready carry it.",
+        "operationId": "delete_document",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Document id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document in the caller's company",
             "content": {
               "application/json": {
                 "schema": {
@@ -25951,6 +26195,27 @@
           }
         }
       },
+      "DocumentUpdate": {
+        "type": "object",
+        "description": "Body of `PUT /v1/documents/{id}`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "New name (1–255 characters)."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A newly uploaded file replacing the old one; leave out to keep it."
+          }
+        },
+        "additionalProperties": false
+      },
       "DoneInput": {
         "type": "object",
         "description": "Body of `POST /v1/notifications/done`.",
@@ -29241,6 +29506,25 @@
             "description": "The customer's signature (image data URL); required."
           }
         }
+      },
+      "NewDocument": {
+        "type": "object",
+        "description": "Body of `POST /v1/documents`.",
+        "required": [
+          "name",
+          "url"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name in the library (1–255 characters)."
+          },
+          "url": {
+            "type": "string",
+            "description": "URL of the file uploaded to the `documents` folder."
+          }
+        },
+        "additionalProperties": false
       },
       "NewFile": {
         "type": "object",
@@ -34468,6 +34752,7 @@
           "events",
           "quotes",
           "template-images",
+          "documents",
           "email-templates"
         ]
       },
@@ -34490,7 +34775,7 @@
           },
           "content_type": {
             "type": "string",
-            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`; for `deals` also PDF, Word,\nExcel, CSV and plain text; for `emails` and `email-templates` any type. Send the same value\nas the `Content-Type` header of the `PUT`."
+            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`; for `deals` and `documents` also PDF, Word,\nExcel, CSV and plain text; for `emails` and `email-templates` any type. Send the same value\nas the `Content-Type` header of the `PUT`."
           }
         },
         "additionalProperties": false

@@ -56,7 +56,8 @@ pub async fn create(
     }
     let content_type = request.content_type.trim().to_lowercase();
     let allowed = IMAGE_CONTENT_TYPES.contains(&content_type.as_str())
-        || (is_deal && DOCUMENT_CONTENT_TYPES.contains(&content_type.as_str()))
+        || ((is_deal || request.folder == UploadFolder::Documents)
+            && DOCUMENT_CONTENT_TYPES.contains(&content_type.as_str()))
         || ((is_email || request.folder == UploadFolder::EmailTemplates)
             && is_mime_type(&content_type));
     if !allowed {

@@ -23,6 +23,8 @@ pub enum UploadFolder {
     /// Images in rich-text email templates and bodies (any employee; images).
     #[serde(rename = "template-images")]
     TemplateImages,
+    /// The company's document library (admins; images and documents).
+    Documents,
     /// Files sent with every email of a template (admins; any file type).
     #[serde(rename = "email-templates")]
     EmailTemplates,
@@ -40,6 +42,7 @@ impl UploadFolder {
             Self::Quotes => "quotes",
             Self::TemplateImages => "template-images",
             Self::EmailTemplates => "email-templates",
+            Self::Documents => "documents",
         }
     }
 }
@@ -53,7 +56,7 @@ pub struct UploadRequest {
     /// Original file name; only its extension is kept.
     pub file_name: String,
     /// MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,
-    /// `image/gif`, `image/heic` or `image/heif`; for `deals` also PDF, Word,
+    /// `image/gif`, `image/heic` or `image/heif`; for `deals` and `documents` also PDF, Word,
     /// Excel, CSV and plain text; for `emails` and `email-templates` any type. Send the same value
     /// as the `Content-Type` header of the `PUT`.
     pub content_type: String,

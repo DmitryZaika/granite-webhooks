@@ -182,13 +182,19 @@ async fn library(
         sql.push(" AND name LIKE ")
             .push_bind(format!("%{}%", escape_like(name)));
     }
-    sql.push(" ORDER BY name LIMIT 200");
+    // A search fills a picker; the whole library is a page of its own.
+    sql.push(if name.is_empty() {
+        " ORDER BY name, id LIMIT 2000"
+    } else {
+        " ORDER BY name, id LIMIT 200"
+    });
     sql.build_query_as().fetch_all(&state.pool).await
 }
 
 /// List the image library
 ///
-/// The company's images by name (at most 200).
+/// The company's images by name (at most 200 matching `name`, else the
+/// whole library).
 #[utoipa::path(
     get,
     path = "/v1/images",
@@ -215,7 +221,8 @@ pub async fn images(
 
 /// List the documents
 ///
-/// The company's documents by name (at most 200).
+/// The company's documents by name (at most 200 matching `name`, else the
+/// whole library).
 #[utoipa::path(
     get,
     path = "/v1/documents",
