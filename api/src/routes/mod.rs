@@ -49,6 +49,7 @@ pub mod superuser;
 pub mod supports;
 pub mod survey_results;
 pub mod templates;
+pub mod transaction_slabs;
 pub mod transactions;
 pub mod uploads;
 pub mod users;
@@ -90,6 +91,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(bug_reports::router())
         .merge(superuser::router())
         .merge(transactions::router())
+        .merge(transaction_slabs::router())
         .merge(instructions::router())
         .merge(events::router())
         .merge(schedule::router())

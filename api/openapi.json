@@ -20872,6 +20872,841 @@
         ]
       }
     },
+    "/v1/transactions/{id}": {
+      "get": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Get a transaction",
+        "description": "The sale with its customer and seller, its slabs (with their cut state,\nsize, room and remnants) and its sinks.",
+        "operationId": "get_transaction",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such sale (with a customer and seller) in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/transactions/{id}/slabs/{slab_id}/cut": {
+      "post": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Mark a slab cut",
+        "description": "Stamps the slab's cut date (once) and updates the sale's status; with\n`with_remnants` (admins and the shop) its unsold remnants are deleted.",
+        "operationId": "cut_sale_slab",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "slab_id",
+            "in": "path",
+            "description": "Slab id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CutOptions"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Cut"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or of the shop (`with_remnants`: an admin or of the shop)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such slab on a sale of the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/transactions/{id}/slabs/{slab_id}/uncut": {
+      "post": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Mark a slab uncut",
+        "description": "Clears the slab's cut date and updates the sale's status. With\n`with_remnants` (admins and the shop) the slab's full size (its own when\nit is a remnant, else its stone's) goes back to its parent and to its\npieces: sold pieces take it and unsold ones are deleted, or else the\nfirst unsold piece takes it and the others are deleted.",
+        "operationId": "uncut_sale_slab",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "slab_id",
+            "in": "path",
+            "description": "Slab id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CutOptions"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Uncut"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or of the shop (`with_remnants`: an admin or of the shop)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such slab on a sale of the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/transactions/{id}/slabs/{slab_id}/partial-cut": {
+      "post": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Record a cut piece",
+        "description": "Records the size of a piece cut from the slab (the\n`admin|shop.transactions.edit` `partial-cut` bookkeeping): it resizes the\nfirst piece with `replace_first`, else adds a piece copying the slab's\nsale details; unless `add_another`, the slab is then marked cut.",
+        "operationId": "partial_cut_sale_slab",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "slab_id",
+            "in": "path",
+            "description": "Slab id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PartialCut"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded"
+          },
+          "400": {
+            "description": "Length or width not above zero",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such slab on a sale of the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/transactions/{id}/slabs/{slab_id}/remove": {
+      "post": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Take a slab off a sale",
+        "description": "Deletes the slab's unsold remnants and frees it (its room and sale\ndetails are cleared).",
+        "operationId": "remove_sale_slab",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "slab_id",
+            "in": "path",
+            "description": "Slab id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such slab on a sale of the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/transactions/{id}/slabs/{slab_id}/replace": {
+      "post": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Swap a slab",
+        "description": "Puts a free slab on the sale with the old slab's room and sale details\n(and cut state), deletes the old slab's unsold remnants and frees it.",
+        "operationId": "replace_sale_slab",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "slab_id",
+            "in": "path",
+            "description": "Slab id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Replacement"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Swapped"
+          },
+          "400": {
+            "description": "The new slab is not a free slab of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such slab on a sale of the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/transactions/{id}/slabs/{slab_id}/square-feet": {
+      "put": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Set a slab's square feet",
+        "description": "The square feet of the room the slab is in, as the shop measured it.",
+        "operationId": "set_sale_slab_square_feet",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "slab_id",
+            "in": "path",
+            "description": "Slab id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SquareFeet"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Not a number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such slab on a sale of the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/transactions/{id}/slabs": {
+      "post": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Add a slab to a room",
+        "description": "Puts a free slab on the sale in the room, with the details of the\nroom's first slab (its seam, edge, price...).",
+        "operationId": "add_sale_slab",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddedSlab"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Added"
+          },
+          "400": {
+            "description": "No room, a bad room id, or not a free slab of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such sale in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/transactions/{id}/rooms/remove": {
+      "post": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Clear a room",
+        "description": "Takes the room name off every slab of the sale in that room.",
+        "operationId": "remove_sale_room",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomName"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Cleared"
+          },
+          "400": {
+            "description": "No room",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such sale in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/instructions": {
       "get": {
         "tags": [
@@ -25527,6 +26362,33 @@
         },
         "additionalProperties": false
       },
+      "AddedSlab": {
+        "type": "object",
+        "description": "Body of `POST /v1/transactions/{id}/slabs`.",
+        "required": [
+          "slab_id",
+          "room"
+        ],
+        "properties": {
+          "slab_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "A free slab of the company."
+          },
+          "room": {
+            "type": "string",
+            "description": "The room it goes to."
+          },
+          "room_uuid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That room's id (hex), when it has one."
+          }
+        },
+        "additionalProperties": false
+      },
       "Address": {
         "type": "object",
         "description": "An address of an invoice.",
@@ -28033,6 +28895,17 @@
           "error",
           "not_connected"
         ]
+      },
+      "CutOptions": {
+        "type": "object",
+        "description": "Body of the cut and uncut operations.",
+        "properties": {
+          "with_remnants": {
+            "type": "boolean",
+            "description": "Admins and the shop: on cut, drop the slab's unsold remnants; on\nuncut, give the whole size back to its parent and remnants."
+          }
+        },
+        "additionalProperties": false
       },
       "DashboardLayout": {
         "type": "object",
@@ -33330,6 +34203,35 @@
           }
         }
       },
+      "PartialCut": {
+        "type": "object",
+        "description": "Body of `POST /v1/transactions/{id}/slabs/{slab_id}/partial-cut`.",
+        "required": [
+          "length",
+          "width"
+        ],
+        "properties": {
+          "length": {
+            "type": "number",
+            "format": "double",
+            "description": "Length of the piece."
+          },
+          "width": {
+            "type": "number",
+            "format": "double",
+            "description": "Width of the piece."
+          },
+          "add_another": {
+            "type": "boolean",
+            "description": "More pieces follow: the slab is not marked cut yet."
+          },
+          "replace_first": {
+            "type": "boolean",
+            "description": "Resize the first piece instead of adding one."
+          }
+        },
+        "additionalProperties": false
+      },
       "Participant": {
         "type": "object",
         "description": "An address on a message (no BCC).",
@@ -34767,6 +35669,21 @@
           }
         }
       },
+      "Replacement": {
+        "type": "object",
+        "description": "Body of `POST /v1/transactions/{id}/slabs/{slab_id}/replace`.",
+        "required": [
+          "new_slab_id"
+        ],
+        "properties": {
+          "new_slab_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The free slab to put on the sale instead."
+          }
+        },
+        "additionalProperties": false
+      },
       "RoomInput": {
         "type": "object",
         "description": "One room of a sale being saved.",
@@ -34855,6 +35772,20 @@
               "$ref": "#/components/schemas/FixtureInput"
             },
             "description": "Faucets to install: one free unit of each model is taken."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RoomName": {
+        "type": "object",
+        "description": "Body of `POST /v1/transactions/{id}/rooms/remove`.",
+        "required": [
+          "room"
+        ],
+        "properties": {
+          "room": {
+            "type": "string",
+            "description": "The room name to clear from the sale's slabs."
           }
         },
         "additionalProperties": false
@@ -34971,6 +35902,61 @@
               "null"
             ],
             "description": "Price charged for the unit, decimal string; null if not set."
+          }
+        }
+      },
+      "SaleHeader": {
+        "type": "object",
+        "description": "The sale's header.",
+        "required": [
+          "id",
+          "customer_id",
+          "seller_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sale id."
+          },
+          "customer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Customer name."
+          },
+          "sale_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sold."
+          },
+          "seller_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Seller id."
+          },
+          "seller_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Seller name."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Project address."
           }
         }
       },
@@ -35143,6 +36129,66 @@
           }
         }
       },
+      "SaleSinkRow": {
+        "type": "object",
+        "description": "A sink on the sale.",
+        "required": [
+          "id",
+          "sink_type_id",
+          "is_deleted",
+          "slab_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sink unit id."
+          },
+          "sink_type_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sink model id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model name."
+          },
+          "price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Price."
+          },
+          "is_deleted": {
+            "type": "boolean",
+            "description": "Always false (deleted units are left out)."
+          },
+          "slab_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Slab it is cut into."
+          },
+          "room": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That slab's room."
+          },
+          "room_uuid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That slab's room id (hex)."
+          }
+        }
+      },
       "SaleSlab": {
         "type": "object",
         "description": "A slab used in a room.",
@@ -35159,6 +36205,105 @@
           "is_full": {
             "type": "boolean",
             "description": "`true` when the whole slab is sold. `false` when only part of it is:\nselling then leaves a remnant (a child slab) in the yard."
+          }
+        }
+      },
+      "SaleSlabRow": {
+        "type": "object",
+        "description": "A slab on the sale.",
+        "required": [
+          "id",
+          "stone_id",
+          "child_count"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Slab id."
+          },
+          "stone_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stone id."
+          },
+          "bundle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bundle."
+          },
+          "stone_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stone name."
+          },
+          "cut_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was cut."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes."
+          },
+          "square_feet": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Square feet of its room."
+          },
+          "length": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Length (inches, as entered)."
+          },
+          "width": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Width (inches, as entered)."
+          },
+          "room_uuid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Room id (hex)."
+          },
+          "room": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Room name."
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The slab it was cut from."
+          },
+          "child_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Live pieces cut from it."
           }
         }
       },
@@ -36374,6 +37519,21 @@
             "description": "1 to 255 characters."
           }
         }
+      },
+      "SquareFeet": {
+        "type": "object",
+        "description": "Body of `PUT /v1/transactions/{id}/slabs/{slab_id}/square-feet`.",
+        "properties": {
+          "square_feet": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The room's square feet; null to clear."
+          }
+        },
+        "additionalProperties": false
       },
       "StageOrder": {
         "type": "object",
@@ -38159,6 +39319,35 @@
           "square_feet": {
             "type": "string",
             "description": "Square feet of those slabs, decimal string; \"0.00\" when no slab has a size."
+          }
+        }
+      },
+      "TransactionDetail": {
+        "type": "object",
+        "description": "A transaction as its dialog shows it.",
+        "required": [
+          "sale",
+          "slabs",
+          "sinks"
+        ],
+        "properties": {
+          "sale": {
+            "$ref": "#/components/schemas/SaleHeader",
+            "description": "The sale."
+          },
+          "slabs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SaleSlabRow"
+            },
+            "description": "Its slabs, in order."
+          },
+          "sinks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SaleSinkRow"
+            },
+            "description": "Its sinks."
           }
         }
       },

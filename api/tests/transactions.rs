@@ -9,7 +9,7 @@ use sqlx::MySqlPool;
 // (Kitchen, 30.25 sq ft; sinks Composite Black x2 and Bar Prep Sink), sale
 // 7011 (Zoë, by Mark) with slab 6073; 7012 has no customer and is not listed.
 
-fn row<'a>(rows: &'a Value, id: i64) -> &'a Value {
+fn row(rows: &Value, id: i64) -> &Value {
     rows.as_array()
         .unwrap()
         .iter()
