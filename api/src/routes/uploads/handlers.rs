@@ -17,7 +17,7 @@ use axum::http::StatusCode;
 /// record's route, e.g. `PUT /v1/stones/{id}` (`image_url`),
 /// `POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route
 /// also makes the thumbnail. Inventory folders are for admins; `deals` for
-/// any employee and also takes documents; `emails` for any employee, any
+/// (and `events`) any employee and also take documents; `emails` for any employee, any
 /// file, and the response has the `token` `POST /v1/emails` asks for.
 #[utoipa::path(
     post,
@@ -40,7 +40,7 @@ pub async fn create(
     EmployeeUser(user): EmployeeUser,
     JsonBody(request): JsonBody<UploadRequest>,
 ) -> ApiResult<(StatusCode, Json<Upload>)> {
-    let is_deal = request.folder == UploadFolder::Deals;
+    let is_deal = matches!(request.folder, UploadFolder::Deals | UploadFolder::Events);
     let is_email = request.folder == UploadFolder::Emails;
     if !(is_deal || is_email || user.is_admin || user.is_superuser) {
         return Err(ApiError::Forbidden);

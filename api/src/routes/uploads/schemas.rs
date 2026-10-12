@@ -15,6 +15,9 @@ pub enum UploadFolder {
     Deals,
     /// Attachments of an email being sent (any employee, any file type).
     Emails,
+    /// Schedule event attachments and comment files (any employee; images
+    /// and documents).
+    Events,
 }
 
 impl UploadFolder {
@@ -25,6 +28,7 @@ impl UploadFolder {
             Self::Faucets => "faucets",
             Self::Deals => "deals",
             Self::Emails => "emails",
+            Self::Events => "events",
         }
     }
 }

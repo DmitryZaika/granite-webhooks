@@ -7351,7 +7351,7 @@
           "uploads"
         ],
         "summary": "Start an upload",
-        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`),\n`POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route\nalso makes the thumbnail. Inventory folders are for admins; `deals` for\nany employee and also takes documents; `emails` for any employee, any\nfile, and the response has the `token` `POST /v1/emails` asks for.",
+        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`),\n`POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route\nalso makes the thumbnail. Inventory folders are for admins; `deals` for\n(and `events`) any employee and also take documents; `emails` for any employee, any\nfile, and the response has the `token` `POST /v1/emails` asks for.",
         "operationId": "create_upload",
         "requestBody": {
           "content": {
@@ -17178,6 +17178,1027 @@
           }
         ]
       }
+    },
+    "/v1/events": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Add an event",
+        "description": "Puts an event on one of the company's calendars, optionally copying\ncomments and attachments from another event.",
+        "operationId": "create_event",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid field or unknown calendar",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Edit an event",
+        "description": "Saves every field, logs what changed in the event's history, and\nre-times its appointment reminders when it moved.",
+        "operationId": "update_event",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Invalid field or unknown calendar",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Delete an event",
+        "description": "Hides the event and cancels its pending appointment reminders.",
+        "operationId": "delete_event",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/search": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Search events",
+        "description": "The company's events whose title, customer (for a title that is a\ncustomer id), location, description or notes contain `q`, newest first.",
+        "operationId": "search_events",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Part of the title, customer name, location, description or notes.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many, 1 to 50 (default 25).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FoundEvent"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}/details": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Get an event's comments, files and history",
+        "description": "Everything the event panel shows besides the event itself, oldest first.",
+        "operationId": "get_event_details",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}/comments": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Comment on an event",
+        "description": "Adds a comment signed with the caller's name.",
+        "operationId": "add_event_comment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added"
+          },
+          "400": {
+            "description": "Empty or too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}/comments/{comment_id}": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Edit my comment",
+        "description": "Only the author can edit a comment.",
+        "operationId": "edit_event_comment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "comment_id",
+            "in": "path",
+            "description": "Comment id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Empty or too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's comment on this event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Delete my comment",
+        "description": "Only the author can delete a comment.",
+        "operationId": "delete_event_comment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "comment_id",
+            "in": "path",
+            "description": "Comment id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's comment on this event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}/photos": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Post files in an event's comments",
+        "description": "Files already uploaded with `POST /v1/uploads` (folder `events`).",
+        "operationId": "add_event_photos",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhotosInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Posted"
+          },
+          "400": {
+            "description": "No files, or a URL that was not uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}/photos/{photo_id}": {
+      "delete": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Delete my comment file",
+        "description": "Only the poster can delete it; the stored file goes once nothing uses it.",
+        "operationId": "delete_event_photo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "photo_id",
+            "in": "path",
+            "description": "File id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's file on this event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}/attachments": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Attach files to an event",
+        "description": "Files already uploaded with `POST /v1/uploads` (folder `events`); the\nkind comes from the extension.",
+        "operationId": "add_event_attachments",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Attached"
+          },
+          "400": {
+            "description": "No files, an unsupported type, or a URL that was not uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}/attachments/{attachment_id}": {
+      "delete": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Remove an attachment",
+        "description": "Any employee may remove one; the stored file goes once nothing uses it.",
+        "operationId": "delete_event_attachment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "attachment_id",
+            "in": "path",
+            "description": "Attachment id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such attachment on this event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -17699,6 +18720,42 @@
           }
         }
       },
+      "AttachmentFile": {
+        "type": "object",
+        "description": "A file to attach.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Uploaded to the `events` folder (`POST /v1/uploads`)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File name to show; defaults to the URL's last part."
+          }
+        }
+      },
+      "AttachmentsInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/events/{id}/attachments`.",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentFile"
+            },
+            "description": "Documents (pdf, Word, Excel, csv, txt) or images."
+          }
+        }
+      },
       "BoardDeal": {
         "type": "object",
         "description": "A deal card of the board.",
@@ -18083,6 +19140,19 @@
           }
         }
       },
+      "CommentInput": {
+        "type": "object",
+        "description": "Body of the comment routes.",
+        "required": [
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "1 to 2000 characters (trimmed)."
+          }
+        }
+      },
       "CompanyFeatures": {
         "type": "object",
         "description": "What the company the request acts in has switched on or set up. Pages use\nit to decide which features, widgets and links to offer.",
@@ -18255,6 +19325,21 @@
               "null"
             ],
             "description": "By whom (name)."
+          }
+        }
+      },
+      "CreatedEvent": {
+        "type": "object",
+        "description": "`POST /v1/events`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The new event.",
+            "minimum": 0
           }
         }
       },
@@ -20191,6 +21276,420 @@
           }
         }
       },
+      "EventAttachment": {
+        "type": "object",
+        "description": "A document or image attached to the event.",
+        "required": [
+          "id",
+          "event_id",
+          "url",
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The attachment."
+          },
+          "event_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its event."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where it is stored."
+          },
+          "name": {
+            "type": "string",
+            "description": "File name."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`document` or `image`."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was attached."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who attached it."
+          }
+        }
+      },
+      "EventComment": {
+        "type": "object",
+        "description": "A comment on an event.",
+        "required": [
+          "id",
+          "event_id",
+          "content"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The comment."
+          },
+          "event_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its event."
+          },
+          "content": {
+            "type": "string",
+            "description": "The text."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was written."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Author's name."
+          }
+        }
+      },
+      "EventDetails": {
+        "type": "object",
+        "description": "`GET /v1/events/{id}/details`.",
+        "required": [
+          "comments",
+          "photos",
+          "attachments",
+          "history",
+          "creator"
+        ],
+        "properties": {
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventComment"
+            },
+            "description": "Oldest first."
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventPhoto"
+            },
+            "description": "Files posted in the comments, oldest first."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventAttachment"
+            },
+            "description": "Attachments, oldest first."
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventHistoryItem"
+            },
+            "description": "History, oldest first."
+          },
+          "creator": {
+            "$ref": "#/components/schemas/EventPerson",
+            "description": "Who made the event."
+          },
+          "assignee": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EventPerson",
+                "description": "Who it is assigned to."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "viewer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's name (comments are theirs when the author matches)."
+          }
+        }
+      },
+      "EventHistoryItem": {
+        "type": "object",
+        "description": "A line of the event's history.",
+        "required": [
+          "id",
+          "event_id",
+          "action",
+          "message"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The line."
+          },
+          "event_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its event."
+          },
+          "action": {
+            "type": "string",
+            "description": "e.g. `created`, `date_updated`."
+          },
+          "message": {
+            "type": "string",
+            "description": "Shown text."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who."
+          }
+        }
+      },
+      "EventInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/events` and `PUT /v1/events/{id}`.",
+        "required": [
+          "title",
+          "start_date",
+          "end_date"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "1 to 255 characters."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Longer text."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Internal notes."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address, up to 500 characters."
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Label color (default `blue`)."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Default `scheduled`."
+          },
+          "all_day": {
+            "type": "boolean",
+            "description": "All-day event."
+          },
+          "calendar_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The company calendar it is on; required."
+          },
+          "rrule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "iCalendar repeat rule, up to 500 characters."
+          },
+          "recurrence_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last repeat, UTC `YYYY-MM-DD HH:MM:SS` (only with `rrule`)."
+          },
+          "start_date": {
+            "type": "string",
+            "description": "Start, UTC `YYYY-MM-DD HH:MM:SS`."
+          },
+          "end_date": {
+            "type": "string",
+            "description": "End, UTC `YYYY-MM-DD HH:MM:SS`; not before the start."
+          },
+          "assigned_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The user it is assigned to."
+          },
+          "sale_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The sale it is for."
+          },
+          "qbo_invoice": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EventInvoice",
+                "description": "Link or unlink the QuickBooks invoice; leave out to keep it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "copy_from_event_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Create only: copy comments, comment files and these attachments\nfrom this event of the company."
+          },
+          "copy_attachment_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Create only: attachments of `copy_from_event_id` to copy."
+          }
+        }
+      },
+      "EventInvoice": {
+        "type": "object",
+        "description": "The QuickBooks invoice shown on an event.",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "QuickBooks invoice id (digits); empty or null unlinks the invoice."
+          },
+          "number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its number as shown in QuickBooks."
+          }
+        }
+      },
+      "EventPerson": {
+        "type": "object",
+        "description": "A user on the event.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The user."
+          },
+          "name": {
+            "type": "string",
+            "description": "Their name."
+          }
+        }
+      },
+      "EventPhoto": {
+        "type": "object",
+        "description": "A file posted in the event's comments.",
+        "required": [
+          "id",
+          "event_id",
+          "url",
+          "name",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The file."
+          },
+          "event_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its event."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where it is stored."
+          },
+          "name": {
+            "type": "string",
+            "description": "Last part of the URL."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was posted."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Poster's name."
+          },
+          "source": {
+            "type": "string",
+            "description": "Always `photo`."
+          }
+        }
+      },
       "Faucet": {
         "type": "object",
         "description": "A faucet model the company sells, with how many units are free to sell.",
@@ -20698,6 +22197,129 @@
             "type": "integer",
             "format": "int64",
             "description": "Draft threads."
+          }
+        }
+      },
+      "FoundEvent": {
+        "type": "object",
+        "description": "An event found by the search.",
+        "required": [
+          "id",
+          "title",
+          "start_date",
+          "end_date",
+          "all_day",
+          "created_user_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The event."
+          },
+          "title": {
+            "type": "string",
+            "description": "Title (a bare number is a customer id)."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Longer text."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Internal notes."
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start (UTC)."
+          },
+          "end_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End (UTC)."
+          },
+          "all_day": {
+            "type": "boolean",
+            "description": "All-day event."
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Label color."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "e.g. `scheduled`."
+          },
+          "calendar_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its calendar."
+          },
+          "rrule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Repeat rule."
+          },
+          "recurrence_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Last repeat (UTC)."
+          },
+          "created_user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Who made it."
+          },
+          "assigned_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Who it is assigned to."
+          },
+          "sale_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its sale."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer named by the title."
           }
         }
       },
@@ -22207,6 +23829,22 @@
               "null"
             ],
             "description": "Their name."
+          }
+        }
+      },
+      "PhotosInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/events/{id}/photos`.",
+        "required": [
+          "urls"
+        ],
+        "properties": {
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Files uploaded to the `events` folder (`POST /v1/uploads`)."
           }
         }
       },
@@ -25984,7 +27622,8 @@
           "sinks",
           "faucets",
           "deals",
-          "emails"
+          "emails",
+          "events"
         ]
       },
       "UploadRequest": {
