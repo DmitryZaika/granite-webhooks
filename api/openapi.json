@@ -393,6 +393,91 @@
             "session_cookie": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Create a customer",
+        "description": "Saves a customer with its addresses (an address of another customer is\nrefused). Without a sales rep, a sales rep creating a customer (other\nthan a walk-in) becomes its rep. An assigned customer gets an open deal\nand an audit line; the telephony address books are updated.",
+        "operationId": "create_customer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedCustomer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, unknown source or sales rep",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An address belongs to another customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/customers/emails/batch": {
@@ -665,6 +750,290 @@
           },
           "404": {
             "description": "No such customer in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Change a customer",
+        "description": "Saves the contact details, source and addresses (exactly `emails`, the\nfirst one primary). A new sales rep is recorded in the audit trail (with\nthe sales manager's original assignment of a lead first), stamps the\nfirst assignment date, and gets the open deal.",
+        "operationId": "update_customer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Missing name, unknown source or sales rep",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live customer in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An address belongs to another customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/customers/{id}/sales-rep": {
+      "put": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Assign a customer's sales rep",
+        "description": "Records the change in the audit trail, stamps the first assignment\ndate, gives the rep the open deal and two reminders (text within a\nday, check within three).",
+        "operationId": "set_customer_sales_rep",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SalesRepInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Unknown sales rep",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live customer in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/customers/{id}/temperature": {
+      "put": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Set a lead's temperature",
+        "description": "`hot`, `medium` or `cold`, or null to clear it.",
+        "operationId": "set_customer_temperature",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemperatureInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Unknown temperature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live customer in the company",
             "content": {
               "application/json": {
                 "schema": {
@@ -13405,6 +13774,28 @@
           }
         }
       },
+      "CreatedCustomer": {
+        "type": "object",
+        "description": "Result of `POST /v1/customers`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "New customer id."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The open deal of an assigned customer."
+          }
+        }
+      },
       "CreatedDeal": {
         "type": "object",
         "description": "A deal created for the customer.",
@@ -13864,6 +14255,86 @@
             "description": "Notes of the live deals, pinned first, with comments."
           }
         }
+      },
+      "CustomerInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/customers` and `PUT /v1/customers/{id}`.",
+        "required": [
+          "name",
+          "source"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Contact name (required)."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Main phone."
+          },
+          "phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Second phone."
+          },
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every email address, primary first (replaces the saved ones)."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address."
+          },
+          "your_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's message."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company of a business customer."
+          },
+          "referral_source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReferralSource",
+                "description": "How they heard of the company (create only)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "type": "string",
+            "description": "Lead source: built in (`check-in`, `leads`, `call-in`, `other`) or one\nof the company's sources (1–255 characters)."
+          },
+          "sales_rep": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Assigned sales rep (user id), or null."
+          }
+        },
+        "additionalProperties": false
       },
       "CustomerProjects": {
         "type": "object",
@@ -17236,6 +17707,19 @@
           }
         }
       },
+      "ReferralSource": {
+        "type": "string",
+        "description": "How a customer heard of the company.",
+        "enum": [
+          "google",
+          "facebook",
+          "referral",
+          "flyer",
+          "drive-thru",
+          "instagram",
+          "other"
+        ]
+      },
       "ReorderBody": {
         "type": "object",
         "description": "Body of `POST /v1/deals/reorder`.",
@@ -17668,6 +18152,21 @@
             "description": "Goal for each month, decimal string in USD (e.g. \"50000.00\"); null\nwhen the user has not set one (the dashboard then assumes $50,000)."
           }
         }
+      },
+      "SalesRepInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/customers/{id}/sales-rep`.",
+        "properties": {
+          "sales_rep": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The new sales rep (user id), or null to unassign."
+          }
+        },
+        "additionalProperties": false
       },
       "SalesStats": {
         "type": "object",
@@ -19170,6 +19669,33 @@
             "description": "Telegram user id of the notifications bot; null when not configured."
           }
         }
+      },
+      "Temperature": {
+        "type": "string",
+        "description": "Lead temperature.",
+        "enum": [
+          "hot",
+          "medium",
+          "cold"
+        ]
+      },
+      "TemperatureInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/customers/{id}/temperature`.",
+        "properties": {
+          "temperature": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Temperature",
+                "description": "`hot`, `medium`, `cold`, or null to clear."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "TemplateAttachment": {
         "type": "object",

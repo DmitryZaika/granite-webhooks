@@ -47,23 +47,42 @@ impl WebhooksClient {
     /// Pushes a customer to the company's CloudTalk address book. Best
     /// effort: companies without CloudTalk, and failures, are only logged.
     pub async fn sync_cloudtalk_contact(&self, company_id: i32, customer_id: i32) {
+        self.sync_contact("cloudtalk", company_id, customer_id)
+            .await;
+    }
+
+    /// Pushes a customer to the company's RingCentral contacts (best effort).
+    pub async fn sync_ringcentral_contact(&self, company_id: i32, customer_id: i32) {
+        self.sync_contact("ringcentral", company_id, customer_id)
+            .await;
+    }
+
+    /// Both telephony address books (best effort).
+    pub async fn sync_contacts(&self, company_id: i32, customer_id: i32) {
+        tokio::join!(
+            self.sync_cloudtalk_contact(company_id, customer_id),
+            self.sync_ringcentral_contact(company_id, customer_id)
+        );
+    }
+
+    async fn sync_contact(&self, provider: &str, company_id: i32, customer_id: i32) {
         let Some(target) = &self.target else {
             return;
         };
         let (url, key) = target.as_ref();
         let result = self
             .http
-            .post(format!("{url}/cloudtalk/sync/{company_id}/{customer_id}"))
+            .post(format!("{url}/{provider}/sync/{company_id}/{customer_id}"))
             .header("Authorization", key)
             .send()
             .await;
         match result {
             Ok(response) if response.status().is_success() => {}
             Ok(response) => {
-                tracing::info!(status = %response.status(), customer_id, "cloudtalk sync skipped");
+                tracing::info!(status = %response.status(), provider, customer_id, "contact sync skipped");
             }
             Err(err) => {
-                tracing::warn!(error = %err.without_url(), customer_id, "cloudtalk sync failed");
+                tracing::warn!(error = %err.without_url(), provider, customer_id, "contact sync failed");
             }
         }
     }
