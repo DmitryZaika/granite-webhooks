@@ -46,4 +46,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(phones::sms_contacts))
         .routes(routes!(phones::link_phone))
         .routes(routes!(phones::from_phone))
+        .routes(routes!(phones::by_phone))
 }

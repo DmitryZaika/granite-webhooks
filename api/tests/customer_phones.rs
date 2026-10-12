@@ -103,3 +103,25 @@ async fn an_unknown_phone_becomes_a_customer(pool: MySqlPool) {
     empty.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(empty.json::<Value>()["error"], "empty_name");
 }
+
+#[test_db::test(seed)]
+async fn a_caller_is_found_by_either_phone(pool: MySqlPool) {
+    let server = server(pool);
+    let find = |phone: &str| {
+        let request = server
+            .get(&format!("/v1/customers/by-phone?phone={phone}"))
+            .with_session(sessions::REP);
+        async move { request.await.json::<Value>() }
+    };
+    assert_eq!(
+        find("%2B13175550100").await,
+        json!({ "customer_id": 1000, "customer_name": "Alice Lead" })
+    );
+    // Alice's second phone.
+    assert_eq!(find("3175550101").await["customer_id"], 1000);
+    assert_eq!(
+        find("4635550200").await,
+        json!({ "customer_id": null, "customer_name": null })
+    );
+    assert_eq!(find("").await["customer_id"], Value::Null);
+}

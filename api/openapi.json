@@ -1987,6 +1987,74 @@
         ]
       }
     },
+    "/v1/customers/by-phone": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Find who a phone belongs to",
+        "description": "The company's live customer whose phone or second phone is this number\n(with or without the country code), for an incoming call.",
+        "operationId": "find_customer_by_phone",
+        "parameters": [
+          {
+            "name": "phone",
+            "in": "query",
+            "description": "A phone in any format.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The customer, or nulls",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneOwner"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/users/sales-reps": {
       "get": {
         "tags": [
@@ -19843,6 +19911,27 @@
           "phone_digits": {
             "type": "string",
             "description": "10 to 15 digits."
+          }
+        }
+      },
+      "PhoneOwner": {
+        "type": "object",
+        "description": "`GET /v1/customers/by-phone`: the customer, if any.",
+        "properties": {
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer with this phone (or second phone); null when none."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their name."
           }
         }
       },

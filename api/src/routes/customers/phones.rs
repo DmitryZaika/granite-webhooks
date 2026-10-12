@@ -3,8 +3,10 @@
 //! - `GET  /v1/customers/sms-contacts`  → customers and suppliers to text
 //! - `POST /v1/customers/{id}/phone`    → link a texting phone to a customer
 //! - `POST /v1/customers/from-phone`    → a new customer for an unknown phone
+//! - `GET  /v1/customers/by-phone`      → who an incoming call is from
 //!
-//! Replace the Remix `api.customers.{sms-search,link-phone,create-from-phone}`.
+//! Replace the Remix `api.customers.{sms-search,link-phone,create-from-phone}`
+//! and `api.{cloudtalk,ringcentral}.resolveCaller`.
 
 use super::fuzzy::find_by_name;
 use crate::auth::EmployeeUser;
@@ -60,6 +62,24 @@ pub struct NewPhoneCustomer {
     pub phone_digits: String,
     /// The customer's name (at most 200 characters are kept).
     pub name: String,
+}
+
+/// Query of `GET /v1/customers/by-phone`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ByPhoneQuery {
+    /// A phone in any format.
+    #[serde(default)]
+    pub phone: String,
+}
+
+/// `GET /v1/customers/by-phone`: the customer, if any.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PhoneOwner {
+    /// The customer with this phone (or second phone); null when none.
+    pub customer_id: Option<i32>,
+    /// Their name.
+    pub customer_name: Option<String>,
 }
 
 /// The customer a phone now belongs to.
@@ -173,6 +193,71 @@ pub async fn sms_contacts(
     Ok(Json(SmsContacts {
         customers,
         suppliers,
+    }))
+}
+
+/// Find who a phone belongs to
+///
+/// The company's live customer whose phone or second phone is this number
+/// (with or without the country code), for an incoming call.
+#[utoipa::path(
+    get,
+    path = "/v1/customers/by-phone",
+    operation_id = "find_customer_by_phone",
+    tag = "customers",
+    params(ByPhoneQuery),
+    responses(
+        (status = 200, description = "The customer, or nulls", body = PhoneOwner),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn by_phone(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    MultiQuery(query): MultiQuery<ByPhoneQuery>,
+) -> ApiResult<Json<PhoneOwner>> {
+    let digits: String = query.phone.chars().filter(char::is_ascii_digit).collect();
+    let last10: String = digits
+        .chars()
+        .skip(digits.len().saturating_sub(10))
+        .collect();
+    if last10.is_empty() {
+        return Ok(Json(PhoneOwner {
+            customer_id: None,
+            customer_name: None,
+        }));
+    }
+    let with_code = if last10.len() == 10 {
+        format!("1{last10}")
+    } else {
+        last10.clone()
+    };
+    let clean = |column: &str| {
+        format!(
+            "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE({column}, ''), '-', ''), ' ', ''), '(', ''), ')', ''), '+', ''), '.', '')"
+        )
+    };
+    let found: Option<(i32, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT id, name FROM customers
+          WHERE company_id = ? AND deleted_at IS NULL
+            AND ({phone} IN (?, ?) OR {phone_2} IN (?, ?))
+          LIMIT 1",
+        phone = clean("phone"),
+        phone_2 = clean("phone_2"),
+    )))
+    .bind(user.company_id)
+    .bind(&last10)
+    .bind(&with_code)
+    .bind(&last10)
+    .bind(&with_code)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(Json(PhoneOwner {
+        customer_id: found.as_ref().map(|found| found.0),
+        customer_name: found.and_then(|found| found.1),
     }))
 }
 
