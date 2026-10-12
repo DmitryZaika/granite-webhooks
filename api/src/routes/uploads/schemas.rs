@@ -20,6 +20,9 @@ pub enum UploadFolder {
     Events,
     /// Slab pictures for a quote's layout (any employee; images).
     Quotes,
+    /// Images in rich-text email templates and bodies (any employee; images).
+    #[serde(rename = "template-images")]
+    TemplateImages,
 }
 
 impl UploadFolder {
@@ -32,6 +35,7 @@ impl UploadFolder {
             Self::Emails => "emails",
             Self::Events => "events",
             Self::Quotes => "quotes",
+            Self::TemplateImages => "template-images",
         }
     }
 }

@@ -265,3 +265,61 @@ async fn fill_uses_the_caller_and_the_customer(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 }
+
+#[test_db::test(seed)]
+async fn any_employee_uploads_template_images(pool: MySqlPool) {
+    let (server, _) = common::server_with_storage(pool);
+    let res = server
+        .post("/v1/uploads")
+        .with_session(sessions::REP)
+        .json(&json!({ "folder": "template-images", "file_name": "logo.png", "content_type": "image/png" }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    assert!(
+        res.json::<Value>()["url"]
+            .as_str()
+            .unwrap()
+            .contains("template-images/")
+    );
+    server
+        .post("/v1/uploads")
+        .with_session(sessions::REP)
+        .json(&json!({ "folder": "template-images", "file_name": "a.pdf", "content_type": "application/pdf" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+#[test_db::test(seed)]
+async fn employees_read_stored_files_through_the_api(pool: MySqlPool) {
+    let (server, storage) = common::server_with_storage(pool);
+    storage
+        .put("emails/a.pdf", b"%PDF-1.4".to_vec(), "application/pdf")
+        .await
+        .unwrap();
+    storage
+        .put("emails/a.html", b"<p>".to_vec(), "text/html")
+        .await
+        .unwrap();
+    let url = storage.public_url("emails/a.pdf").unwrap();
+    let res = server
+        .get(&format!("/v1/uploads/file?url={}", urlencoding(&url)))
+        .with_session(sessions::REP)
+        .await;
+    res.assert_status_ok();
+    assert_eq!(res.as_bytes().as_ref(), b"%PDF-1.4");
+    let html = storage.public_url("emails/a.html").unwrap();
+    server
+        .get(&format!("/v1/uploads/file?url={}", urlencoding(&html)))
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    server
+        .get("/v1/uploads/file?url=https%3A%2F%2Felsewhere.test%2Fa.pdf")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+fn urlencoding(value: &str) -> String {
+    percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
+}

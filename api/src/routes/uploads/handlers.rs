@@ -7,8 +7,12 @@ use crate::routes::emails::attachment_token;
 use crate::state::AppState;
 use crate::thumbnails::IMAGE_CONTENT_TYPES;
 use axum::Json;
-use axum::extract::State;
-use axum::http::StatusCode;
+use axum::extract::{Query, State};
+use axum::http::{StatusCode, header};
+use axum::response::IntoResponse;
+use percent_encoding::percent_decode_str;
+use serde::Deserialize;
+use utoipa::IntoParams;
 
 /// Start an upload
 ///
@@ -17,7 +21,8 @@ use axum::http::StatusCode;
 /// record's route, e.g. `PUT /v1/stones/{id}` (`image_url`),
 /// `POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route
 /// also makes the thumbnail. Inventory folders are for admins; `deals` for
-/// (and `events`) any employee and also take documents; `emails` for any employee, any
+/// (and `events`) any employee and also take documents; `quotes` and
+/// `template-images` any employee, images only; `emails` for any employee, any
 /// file, and the response has the `token` `POST /v1/emails` asks for.
 #[utoipa::path(
     post,
@@ -42,7 +47,10 @@ pub async fn create(
 ) -> ApiResult<(StatusCode, Json<Upload>)> {
     let is_deal = matches!(request.folder, UploadFolder::Deals | UploadFolder::Events);
     let is_email = request.folder == UploadFolder::Emails;
-    let is_quote = request.folder == UploadFolder::Quotes;
+    let is_quote = matches!(
+        request.folder,
+        UploadFolder::Quotes | UploadFolder::TemplateImages
+    );
     if !(is_deal || is_email || is_quote || user.is_admin || user.is_superuser) {
         return Err(ApiError::Forbidden);
     }
@@ -144,4 +152,65 @@ mod tests {
         assert_eq!(extension("weird.x/y", "image/webp"), ".webp");
         assert_eq!(extension("a.toolongext", "image/gif"), ".gif");
     }
+}
+
+/// Query of `GET /v1/uploads/file`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FileQuery {
+    /// Public URL of a file in the bucket.
+    pub url: String,
+}
+
+/// Fetch a stored file through the API
+///
+/// Returns the bytes of an image or document in the storage bucket, for the
+/// browser to attach it to an email (the bucket sends no CORS headers).
+/// Other URLs and other file types are refused.
+#[utoipa::path(
+    get,
+    path = "/v1/uploads/file",
+    operation_id = "fetch_uploaded_file",
+    tag = "uploads",
+    params(FileQuery),
+    responses(
+        (status = 200, description = "The file", content_type = "application/octet-stream", body = Vec<u8>),
+        (status = 400, description = "Not an image or document in the bucket", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 404, description = "No such file", body = ErrorBody),
+        (status = 500, description = "Storage error", body = ErrorBody),
+        (status = 503, description = "No bucket configured", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn file(
+    State(state): State<AppState>,
+    _employee: EmployeeUser,
+    Query(query): Query<FileQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let disallowed = || ApiError::BadRequest("Invalid or disallowed URL".into());
+    let key = state
+        .storage
+        .key_for_url(query.url.trim())
+        .ok_or_else(disallowed)?;
+    let key = percent_decode_str(&key).decode_utf8_lossy().into_owned();
+    let object = state.storage.get(&key).await?.ok_or(ApiError::NotFound)?;
+    let mime = object
+        .content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !(mime.starts_with("image/") || DOCUMENT_CONTENT_TYPES[..5].contains(&mime.as_str())) {
+        return Err(disallowed());
+    }
+    Ok((
+        [
+            (header::CONTENT_TYPE, object.content_type),
+            (header::CACHE_CONTROL, "private, max-age=3600".to_string()),
+        ],
+        object.bytes,
+    ))
 }
