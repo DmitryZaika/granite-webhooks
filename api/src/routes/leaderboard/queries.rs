@@ -44,10 +44,20 @@ pub struct LeaderboardInput {
     pub from: Option<NaiveDate>,
 }
 
-/// `AND <column> >= <from>` when the window has a start.
-fn push_window(q: &mut QueryBuilder<MySql>, column: &str, from: Option<NaiveDate>) {
-    if let Some(from) = from {
+/// A reporting window: `from` inclusive, `to` exclusive; open ends are unbounded.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Window {
+    pub from: Option<NaiveDate>,
+    pub to: Option<NaiveDate>,
+}
+
+/// `AND <column> >= <from> AND <column> < <to>` for the window's ends.
+fn push_window(q: &mut QueryBuilder<MySql>, column: &str, window: Window) {
+    if let Some(from) = window.from {
         q.push(format_args!(" AND {column} >= ")).push_bind(from);
+    }
+    if let Some(to) = window.to {
+        q.push(format_args!(" AND {column} < ")).push_bind(to);
     }
 }
 
@@ -75,7 +85,7 @@ pub async fn leaderboard_rows(
         )
         .push_bind(company_id)
         .push(" AND l.awarded_at >= src.counts_from");
-        push_window(&mut q, "l.awarded_at", from);
+        push_window(&mut q, "l.awarded_at", Window { from, to: None });
         q.push(
             " GROUP BY l.user_id, l.task_id
              ),
@@ -100,7 +110,7 @@ pub async fn leaderboard_rows(
             " AND d.is_won = 1 AND d.deleted_at IS NULL AND c.deleted_at IS NULL
               AND d.user_id IS NOT NULL AND d.updated_at >= src.counts_from",
         );
-    push_window(&mut q, "d.updated_at", from);
+    push_window(&mut q, "d.updated_at", Window { from, to: None });
     q.push(" GROUP BY d.user_id),");
 
     // Each distinct (deal, stage) entered, except the deal's first row.
@@ -119,7 +129,7 @@ pub async fn leaderboard_rows(
            WHERE h.entered_at >= src.counts_from AND c.company_id = ",
     )
     .push_bind(company_id);
-    push_window(&mut q, "h.entered_at", from);
+    push_window(&mut q, "h.entered_at", Window { from, to: None });
     q.push(
         " AND d.deleted_at IS NULL AND c.deleted_at IS NULL AND d.user_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM deal_stage_history h2
@@ -127,7 +137,7 @@ pub async fn leaderboard_rows(
          GROUP BY d.user_id),",
     );
 
-    push_call_sms_ctes(&mut q, company_id, from);
+    push_call_sms_ctes(&mut q, company_id, Window { from, to: None });
 
     q.push(
         ", reps AS (
@@ -196,7 +206,7 @@ pub async fn leaderboard_rows(
 /// CTEs ending in `call_sms_totals(user_id, conversations, voicemails,
 /// attempts, sms, emails, call_points, sms_points, email_points)`.
 #[allow(clippy::too_many_lines)]
-fn push_call_sms_ctes(q: &mut QueryBuilder<MySql>, company_id: i32, from: Option<NaiveDate>) {
+fn push_call_sms_ctes(q: &mut QueryBuilder<MySql>, company_id: i32, window: Window) {
     // Calls: a 'pending' call scores nothing; attempts and voicemails are
     // capped per rep, number and day; a NULL number never pools with another.
     q.push(
@@ -213,7 +223,7 @@ fn push_call_sms_ctes(q: &mut QueryBuilder<MySql>, company_id: i32, from: Option
         " AND pcp.user_id IS NOT NULL AND pcp.outcome <> 'pending'
           AND pcp.started_at >= src.counts_from",
     );
-    push_window(q, "pcp.started_at", from);
+    push_window(q, "pcp.started_at", window);
     q.push(
         "),
           call_ranked AS (
@@ -290,7 +300,7 @@ fn push_call_sms_ctes(q: &mut QueryBuilder<MySql>, company_id: i32, from: Option
             " AND m.direction = 'outbound' AND m.status = 'sent' AND m.is_echo = 0
               AND m.is_automated = 0 AND m.created_date >= src.counts_from",
         );
-        push_window(q, "m.created_date", from);
+        push_window(q, "m.created_date", window);
     }
     q.push(
         "),
@@ -322,7 +332,7 @@ fn push_call_sms_ctes(q: &mut QueryBuilder<MySql>, company_id: i32, from: Option
               AND COALESCE(e.is_draft, 0) = 0 AND e.is_automated = 0
               AND e.message_id IS NOT NULL AND e.sent_at >= src.counts_from",
         );
-    push_window(q, "e.sent_at", from);
+    push_window(q, "e.sent_at", window);
     q.push(
         " GROUP BY e.sender_user_id),
           call_sms_users AS (
@@ -346,4 +356,65 @@ fn push_call_sms_ctes(q: &mut QueryBuilder<MySql>, company_id: i32, from: Option
               LEFT JOIN email_totals m ON m.user_id = u.user_id
           )",
     );
+}
+
+/// `positions.id` of check-in kiosks and installers: they make no calls.
+const NO_CALLS_POSITIONS: [i32; 2] = [8, 6];
+
+/// A user's calls and hand-sent texts in a window.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow, utoipa::ToSchema)]
+pub struct CallSmsPointsRow {
+    /// The user.
+    pub user_id: i32,
+    /// Their name, else their email, else "Colleague".
+    pub name: String,
+    /// Real conversations.
+    pub conversations: i64,
+    /// Voicemails left (capped per number and day).
+    pub voicemails: i64,
+    /// Unanswered attempts (capped per number and day).
+    pub attempts: i64,
+    /// Hand-sent texts (capped per number and day).
+    pub sms: i64,
+    /// Call and text points.
+    pub points: i64,
+}
+
+/// The admin "Calls & SMS points" table.
+///
+/// Every live user of the company who can make calls (super users, and
+/// everyone without a check-in or installer position) with their call and
+/// text points in the window, best first.
+pub async fn call_sms_points_by_user(
+    pool: &MySqlPool,
+    company_id: i32,
+    window: Window,
+) -> Result<Vec<CallSmsPointsRow>, sqlx::Error> {
+    let mut q = QueryBuilder::<MySql>::new("WITH");
+    push_call_sms_ctes(&mut q, company_id, window);
+    q.push(
+        " SELECT u.id AS user_id,
+                 COALESCE(NULLIF(TRIM(u.name), ''), NULLIF(TRIM(u.email), ''), 'Colleague') AS name,
+                 CAST(COALESCE(t.conversations, 0) AS SIGNED) AS conversations,
+                 CAST(COALESCE(t.voicemails, 0) AS SIGNED) AS voicemails,
+                 CAST(COALESCE(t.attempts, 0) AS SIGNED) AS attempts,
+                 CAST(COALESCE(t.sms, 0) AS SIGNED) AS sms,
+                 CAST(COALESCE(t.call_points, 0) + COALESCE(t.sms_points, 0) AS SIGNED) AS points
+            FROM users u
+            LEFT JOIN call_sms_totals t ON t.user_id = u.id
+           WHERE u.company_id = ",
+    )
+    .push_bind(company_id)
+    .push(
+        " AND u.is_deleted = 0
+          AND (u.is_superuser = 1 OR NOT EXISTS (
+                SELECT 1 FROM users_positions up
+                 WHERE up.user_id = u.id AND up.company_id = u.company_id
+                   AND up.position_id IN (",
+    )
+    .push_bind(NO_CALLS_POSITIONS[0])
+    .push(", ")
+    .push_bind(NO_CALLS_POSITIONS[1])
+    .push("))) ORDER BY points DESC, u.name ASC, u.id ASC");
+    q.build_query_as().fetch_all(pool).await
 }
