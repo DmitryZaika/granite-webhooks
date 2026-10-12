@@ -19299,6 +19299,310 @@
         ]
       }
     },
+    "/v1/supports": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "List the supports",
+        "description": "The company's supports with their pictures (thumbnails have `-icon`\nbefore the extension), by name.",
+        "operationId": "list_supports",
+        "responses": {
+          "200": {
+            "description": "Supports by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LibraryFile"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Add a support",
+        "description": "A picture uploaded to the `supports` folder (`POST /v1/uploads`) under\n`name`; its thumbnail is made now.",
+        "operationId": "create_support",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewSupport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or not an uploaded picture",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/supports/{id}": {
+      "put": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Edit a support",
+        "description": "Renames it; with `url`, its picture is replaced by a new upload and the\nold picture and thumbnail are deleted from storage.",
+        "operationId": "update_support",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Support id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupportUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or not an uploaded picture",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such support in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Delete a support",
+        "description": "Removes it from the company's supports.",
+        "operationId": "delete_support",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Support id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such support in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/instructions/order": {
       "put": {
         "tags": [
@@ -30418,6 +30722,25 @@
           }
         }
       },
+      "NewSupport": {
+        "type": "object",
+        "description": "Body of `POST /v1/supports`.",
+        "required": [
+          "name",
+          "url"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name (1–100 characters)."
+          },
+          "url": {
+            "type": "string",
+            "description": "URL of the picture uploaded to the `supports` folder."
+          }
+        },
+        "additionalProperties": false
+      },
       "NextActivity": {
         "type": "object",
         "description": "The unfinished activity due first on a deal.",
@@ -34682,6 +35005,27 @@
           }
         }
       },
+      "SupportUpdate": {
+        "type": "object",
+        "description": "Body of `PUT /v1/supports/{id}`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "New name (1–100 characters)."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A newly uploaded picture replacing the old one; leave out to keep it."
+          }
+        },
+        "additionalProperties": false
+      },
       "SurveyRun": {
         "type": "object",
         "description": "What a run did.",
@@ -35475,6 +35819,7 @@
           "template-images",
           "documents",
           "images",
+          "supports",
           "email-templates"
         ]
       },
