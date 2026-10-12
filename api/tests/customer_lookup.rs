@@ -185,6 +185,10 @@ async fn phone_email_and_company_search(pool: MySqlPool) {
         ("?by=company&term=Erin", vec![1004]),
         ("?by=company&term=Hank", vec![1007]),
         ("?by=company&term=Alice", vec![]),
+        // Every word somewhere in the address.
+        ("?by=address&term=oak%205", vec![1004]),
+        ("?by=address&term=main", vec![1000]),
+        ("?by=address&term=nowhere", vec![]),
     ] {
         let rows = search(pool.clone(), query).await;
         assert_eq!(search_ids(&rows), expected, "{query}");

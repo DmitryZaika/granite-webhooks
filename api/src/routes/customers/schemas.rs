@@ -252,6 +252,8 @@ pub enum CustomerSearchBy {
     Email,
     /// Company name, tolerating typos.
     Company,
+    /// Every word typed appears in the address ("123 main" finds "123 N Main St").
+    Address,
 }
 
 /// Query string of `GET /v1/customers/search`.
@@ -260,7 +262,7 @@ pub enum CustomerSearchBy {
 pub struct CustomerSearchQuery {
     /// What the user typed. Required (may be empty for phone search).
     pub term: String,
-    /// Which field to match: `name` (default), `phone`, `email`, `company`.
+    /// Which field to match: `name` (default), `phone`, `email`, `company`, `address`.
     #[serde(default)]
     #[param(inline)]
     pub by: CustomerSearchBy,

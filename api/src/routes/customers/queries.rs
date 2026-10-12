@@ -226,7 +226,7 @@ pub async fn search_customers(
             matches_name_fuzzy(row.company_name.as_deref().unwrap_or_default(), term)
                 || company_contains(row)
         }),
-        CustomerSearchBy::Phone | CustomerSearchBy::Email => {}
+        CustomerSearchBy::Phone | CustomerSearchBy::Email | CustomerSearchBy::Address => {}
     }
     rows.truncate(SEARCH_RESULTS);
 
@@ -322,6 +322,21 @@ fn push_search_filter(
             sql.push(" THEN 0 WHEN ");
             push_phone_match(sql, format!("%{digits}%"), format!("%{last10}%"));
             sql.push(" THEN 1 ELSE 2 END, c.name ASC");
+            15
+        }
+        CustomerSearchBy::Address => {
+            let words: Vec<&str> = term.split_whitespace().take(6).collect();
+            sql.push(" AND c.address IS NOT NULL");
+            if words.is_empty() {
+                sql.push(" AND 1 = 0");
+            }
+            for word in &words {
+                sql.push(" AND c.address LIKE ").push_bind(format!("%{word}%"));
+            }
+            push_owner_rank(sql, user_id);
+            sql.push(" CASE WHEN c.address LIKE ")
+                .push_bind(prefix.clone())
+                .push(" THEN 0 ELSE 1 END, c.name ASC");
             15
         }
         CustomerSearchBy::Email => {
