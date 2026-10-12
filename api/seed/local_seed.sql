@@ -456,3 +456,23 @@ INSERT INTO email_templates (id, template_name, template_subject, template_body,
   (8670, 'Quoted drip', 'Your quote', 'Hi', 100, NULL, 101, 2, 1);
 INSERT INTO cloudtalk_sms_templates (id, company_id, user_id, name, body, lead_list_id, hour_delay, position) VALUES
   (8671, 100, NULL, 'Quoted sms', 'Hi', 101, 1, 0);
+
+-- ---- Sales questionnaires (/v1/questionnaires, /v1/deals/{id}/questionnaires). Ids 8720+.
+-- 8720 shared by company 100, 8721 Dina's own, 8722 Rita's own (not Dina's),
+-- 8723 company 101's, 8724 deleted. Question 8732 is deleted. Deal 8600 has
+-- an answer to 8730.
+INSERT INTO sales_questionnaires (id, name, company_id, user_id, created_at, deleted_at) VALUES
+  (8720, 'Remodel Discovery', 100, NULL, '2026-04-01 10:00:00', NULL),
+  (8721, 'Dina checklist',    100, 107,  '2026-04-02 10:00:00', NULL),
+  (8722, 'Rita checklist',    100, 100,  '2026-04-03 10:00:00', NULL),
+  (8723, 'Other company',     101, NULL, '2026-04-04 10:00:00', NULL),
+  (8724, 'Deleted',           100, 107,  '2026-04-05 10:00:00', '2026-04-06 00:00:00');
+INSERT INTO sales_questionnaire_questions (id, questionnaire_id, question, deleted_at) VALUES
+  (8730, 8720, 'What type of remodel?', NULL),
+  (8731, 8720, 'Budget?',               NULL),
+  (8732, 8720, 'Old question',          '2026-04-02 00:00:00'),
+  (8733, 8721, 'Sink style?',           NULL),
+  (8734, 8722, 'Rita only?',            NULL),
+  (8735, 8723, 'Other?',                NULL);
+INSERT INTO sales_questionnaire_responses (deal_id, question_id, answer, answered_by) VALUES
+  (8600, 8730, 'Kitchen', 107);

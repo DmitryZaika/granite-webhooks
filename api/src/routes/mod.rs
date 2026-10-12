@@ -18,6 +18,7 @@ pub mod fixtures;
 pub mod leaderboard;
 pub mod me;
 pub mod public;
+pub mod questionnaires;
 pub mod sales;
 pub mod sinks;
 pub mod slabs;
@@ -49,4 +50,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(leaderboard::router())
         .merge(deals::router())
         .merge(calendars::router())
+        .merge(questionnaires::router())
 }

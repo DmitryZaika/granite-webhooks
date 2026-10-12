@@ -8657,6 +8657,907 @@
           }
         ]
       }
+    },
+    "/v1/questionnaires": {
+      "get": {
+        "tags": [
+          "questionnaires"
+        ],
+        "summary": "List the caller's own questionnaires",
+        "description": "Questionnaires the caller made (not the company-wide ones), newest\nfirst, each with its live questions in creation order. Only these can be\nrenamed, deleted or have questions changed.",
+        "operationId": "list_own_questionnaires",
+        "responses": {
+          "200": {
+            "description": "Questionnaires, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OwnQuestionnaire"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "questionnaires"
+        ],
+        "summary": "Create a questionnaire",
+        "description": "A questionnaire of the caller's own with at least one question.",
+        "operationId": "create_questionnaire",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewQuestionnaire"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or too long name or question, no questions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/questionnaires/{id}": {
+      "delete": {
+        "tags": [
+          "questionnaires"
+        ],
+        "summary": "Delete a questionnaire",
+        "description": "Soft-deletes one of the caller's questionnaires with its questions, and\nunsets it as the caller's default.",
+        "operationId": "delete_questionnaire",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Questionnaire id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not one of the caller's questionnaires",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "questionnaires"
+        ],
+        "summary": "Rename a questionnaire",
+        "description": "Only the caller's own questionnaires.",
+        "operationId": "rename_questionnaire",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Questionnaire id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NameInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Renamed"
+          },
+          "400": {
+            "description": "Empty or too long name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not one of the caller's questionnaires",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/questionnaires/{id}/questions": {
+      "post": {
+        "tags": [
+          "questionnaires"
+        ],
+        "summary": "Add a question to a questionnaire",
+        "description": "Appends a question to one of the caller's own questionnaires.",
+        "operationId": "add_questionnaire_question",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Questionnaire id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or too long question",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not one of the caller's questionnaires",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/questionnaires/{id}/questions/{question_id}": {
+      "delete": {
+        "tags": [
+          "questionnaires"
+        ],
+        "summary": "Delete a question",
+        "description": "Soft-deletes a question of one of the caller's own questionnaires.",
+        "operationId": "delete_questionnaire_question",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Questionnaire id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "question_id",
+            "in": "path",
+            "description": "Question id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live question in one of the caller's questionnaires",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "questionnaires"
+        ],
+        "summary": "Edit a question",
+        "description": "Rewrites a live question of one of the caller's own questionnaires;\nanswers already given stay attached to it.",
+        "operationId": "update_questionnaire_question",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Questionnaire id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "question_id",
+            "in": "path",
+            "description": "Question id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Updated"
+          },
+          "400": {
+            "description": "Empty or too long question",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live question in one of the caller's questionnaires",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/questionnaires": {
+      "get": {
+        "tags": [
+          "questionnaires"
+        ],
+        "summary": "List the questionnaires of a deal with its answers",
+        "description": "The company's shared questionnaires and the caller's own (those with\nquestions), by id, each question with the deal's answer (empty when not\nanswered).",
+        "operationId": "list_deal_questionnaires",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Questionnaires with answers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DealQuestionnaire"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/deals/{id}/questionnaire-answers": {
+      "put": {
+        "tags": [
+          "questionnaires"
+        ],
+        "summary": "Save a deal's questionnaire answers",
+        "description": "Upserts each answer (questions of questionnaires the caller cannot use\nare ignored). With `create_note`, the non-empty answers are also added to\nthe deal as a note (which notifies the deal's people); that needs at\nleast one answer and fits 5000 characters.",
+        "operationId": "save_deal_questionnaire_answers",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswersInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswersSaved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Answer too long, or a note without answers or over 5000 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/default-questionnaire": {
+      "get": {
+        "tags": [
+          "questionnaires"
+        ],
+        "summary": "Get the caller's default questionnaire",
+        "description": "The questionnaire the deal Questionnaire tab opens first; null when unset.",
+        "operationId": "get_default_questionnaire",
+        "responses": {
+          "200": {
+            "description": "The default",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefaultQuestionnaire"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "questionnaires"
+        ],
+        "summary": "Set the caller's default questionnaire",
+        "description": "Any live questionnaire the caller can use (shared or their own).",
+        "operationId": "set_default_questionnaire",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DefaultQuestionnaire"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefaultQuestionnaire"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing questionnaire id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such questionnaire the caller can use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -8883,6 +9784,82 @@
           }
         },
         "additionalProperties": false
+      },
+      "AnswerInput": {
+        "type": "object",
+        "description": "One answer.",
+        "required": [
+          "question_id",
+          "answer"
+        ],
+        "properties": {
+          "question_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Question id (of a questionnaire the caller can use)."
+          },
+          "answer": {
+            "type": "string",
+            "description": "Answer, up to 10000 characters; empty clears it."
+          }
+        }
+      },
+      "AnsweredQuestion": {
+        "type": "object",
+        "description": "A question with the deal's answer.",
+        "required": [
+          "id",
+          "question",
+          "answer"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Question id."
+          },
+          "question": {
+            "type": "string",
+            "description": "The question."
+          },
+          "answer": {
+            "type": "string",
+            "description": "The deal's answer; empty when not answered."
+          }
+        }
+      },
+      "AnswersInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/deals/{id}/questionnaire-answers`.",
+        "required": [
+          "answers"
+        ],
+        "properties": {
+          "answers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnswerInput"
+            },
+            "description": "Answers to save; questions the caller cannot use are ignored."
+          },
+          "create_note": {
+            "type": "boolean",
+            "description": "Also add the answered questions to the deal as a note."
+          }
+        }
+      },
+      "AnswersSaved": {
+        "type": "object",
+        "description": "Result of saving answers.",
+        "required": [
+          "note_created"
+        ],
+        "properties": {
+          "note_created": {
+            "type": "boolean",
+            "description": "A note was added to the deal."
+          }
+        }
       },
       "AttachedCounts": {
         "type": "object",
@@ -10328,6 +11305,33 @@
           }
         }
       },
+      "DealQuestionnaire": {
+        "type": "object",
+        "description": "A questionnaire with the deal's answers.",
+        "required": [
+          "id",
+          "name",
+          "questions"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Questionnaire id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnsweredQuestion"
+            },
+            "description": "Questions in creation order."
+          }
+        }
+      },
       "DealStatus": {
         "type": "string",
         "description": "Where a deal is in its life: still being worked (`open`), `won` or `lost`.",
@@ -10336,6 +11340,20 @@
           "won",
           "lost"
         ]
+      },
+      "DefaultQuestionnaire": {
+        "type": "object",
+        "description": "The caller's default questionnaire.",
+        "properties": {
+          "questionnaire_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Questionnaire id, or null when none is set."
+          }
+        }
       },
       "DocumentRename": {
         "type": "object",
@@ -10885,6 +11903,19 @@
           }
         }
       },
+      "NameInput": {
+        "type": "object",
+        "description": "Body renaming a questionnaire.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "New name, 1 to 255 characters."
+          }
+        }
+      },
       "NewFile": {
         "type": "object",
         "description": "One uploaded file to attach.",
@@ -10918,6 +11949,27 @@
               "$ref": "#/components/schemas/NewFile"
             },
             "description": "Files already uploaded with `POST /v1/uploads`."
+          }
+        }
+      },
+      "NewQuestionnaire": {
+        "type": "object",
+        "description": "Body of `POST /v1/questionnaires`.",
+        "required": [
+          "name",
+          "questions"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name, 1 to 255 characters."
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "At least one question, each 1 to 5000 characters."
           }
         }
       },
@@ -11146,6 +12198,41 @@
               "null"
             ],
             "description": "Why it was lost; only with `lost`."
+          }
+        }
+      },
+      "OwnQuestionnaire": {
+        "type": "object",
+        "description": "A questionnaire the caller made.",
+        "required": [
+          "id",
+          "name",
+          "questions"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Questionnaire id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was made."
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Question"
+            },
+            "description": "Questions in creation order."
           }
         }
       },
@@ -11502,6 +12589,38 @@
           "slabs": {
             "$ref": "#/components/schemas/SlabCounts",
             "description": "Slabs in the yard (own and linked stones)."
+          }
+        }
+      },
+      "Question": {
+        "type": "object",
+        "description": "A question of a questionnaire.",
+        "required": [
+          "id",
+          "question"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Question id."
+          },
+          "question": {
+            "type": "string",
+            "description": "The question."
+          }
+        }
+      },
+      "QuestionInput": {
+        "type": "object",
+        "description": "Body of a question write.",
+        "required": [
+          "question"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The question, 1 to 5000 characters."
           }
         }
       },
@@ -13543,6 +14662,10 @@
     {
       "name": "schedule",
       "description": "Calendars and events of the company schedule"
+    },
+    {
+      "name": "questionnaires",
+      "description": "Sales discovery questionnaires and the answers per deal"
     },
     {
       "name": "deals",
