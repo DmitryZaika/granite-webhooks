@@ -73,7 +73,7 @@ const SELECT: &str =
   FROM emails e
   LEFT JOIN users u_sender ON u_sender.id = e.sender_user_id";
 
-fn history_sql(filter: &str, args: Vec<Arg>) -> Sql {
+pub(crate) fn history_sql(filter: &str, args: Vec<Arg>) -> Sql {
     Sql::new(
         format!(
             "{SELECT}
@@ -114,7 +114,7 @@ async fn deal_thread_emails(
     Ok(merge(by_deal, by_customer))
 }
 
-async fn address_emails(
+pub(crate) async fn address_emails(
     pool: &MySqlPool,
     company_id: i32,
     addresses: &[String],
@@ -142,7 +142,7 @@ async fn address_emails(
 }
 
 /// `mergeEmailHistoryById`: first list wins, then newest first.
-fn merge(first: Vec<HistoryEmail>, extra: Vec<HistoryEmail>) -> Vec<HistoryEmail> {
+pub(crate) fn merge(first: Vec<HistoryEmail>, extra: Vec<HistoryEmail>) -> Vec<HistoryEmail> {
     let mut seen: HashSet<i32> = first.iter().map(|e| e.id).collect();
     let mut merged = first;
     for email in extra {
@@ -154,7 +154,7 @@ fn merge(first: Vec<HistoryEmail>, extra: Vec<HistoryEmail>) -> Vec<HistoryEmail
     merged
 }
 
-fn with_thread_attachments(mut emails: Vec<HistoryEmail>) -> Vec<HistoryEmail> {
+pub(crate) fn with_thread_attachments(mut emails: Vec<HistoryEmail>) -> Vec<HistoryEmail> {
     let threads: HashSet<String> = emails
         .iter()
         .filter(|e| e.has_attachments)
@@ -296,9 +296,10 @@ fn history_message_id(existing: Option<&str>) -> String {
     }
 }
 
-/// Records sent list drips that never made it into `emails`, so the history
-/// shows them (`ensureSentScheduledEmailsInHistory`). Best effort.
-async fn record_missing_sends(pool: &MySqlPool, deal_id: i64, customer_id: i32) {
+/// Records sent list drips of the customer (of one deal, when given) that
+/// never made it into `emails`, so the history shows them
+/// (`ensureSentScheduledEmailsInHistory`). Best effort.
+pub(crate) async fn record_missing_sends(pool: &MySqlPool, deal_id: Option<i64>, customer_id: i32) {
     let missing: Result<Vec<MissingSend>, sqlx::Error> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT se.id, CAST(se.deal_id AS SIGNED) AS deal_id, se.user_id, se.company_id, se.sent_at,
                 se.message_id, et.template_subject, et.template_body, {RECIPIENT} AS recipient_email,
@@ -318,10 +319,11 @@ async fn record_missing_sends(pool: &MySqlPool, deal_id: i64, customer_id: i32) 
                 WHERE e.deleted_at IS NULL AND e.deal_id = se.deal_id AND e.sender_user_id = se.user_id
                   AND e.subject = et.template_subject AND e.sent_at IS NOT NULL AND se.sent_at IS NOT NULL
                   AND ABS(TIMESTAMPDIFF(SECOND, e.sent_at, se.sent_at)) <= 120)
-           AND se.customer_id = ? AND se.deal_id = ?
+           AND se.customer_id = ? AND (? IS NULL OR se.deal_id = ?)
          ORDER BY se.id"
     )))
     .bind(customer_id)
+    .bind(deal_id)
     .bind(deal_id)
     .fetch_all(pool)
     .await;
@@ -466,7 +468,7 @@ pub async fn deal_emails(
         .filter(|a| !a.is_empty())
         .collect();
 
-    record_missing_sends(&state.pool, id, customer_id).await;
+    record_missing_sends(&state.pool, Some(id), customer_id).await;
 
     let thread_emails = with_thread_attachments(
         deal_thread_emails(&state.pool, user.company_id, id, customer_id).await?,

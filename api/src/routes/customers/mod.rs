@@ -4,12 +4,14 @@
 //! - `POST /v1/customers/emails/batch` → every email of the given customers, primary first
 //! - `GET  /v1/customers/search`       → customers matching a name, phone, email or company
 //! - `GET  /v1/customers/{id}`         → one customer with contact details
+//! - `GET  /v1/customers/{id}/history` → deals, reassignments, emails, activities and notes
 //!
 //! Replaces `loadCustomersListPage` in the Remix app
 //! (`app/utils/customersListLoader.server.ts`).
 
 mod fuzzy;
 mod handlers;
+mod history;
 pub mod queries;
 pub mod schemas;
 
@@ -22,4 +24,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::emails_batch))
         .routes(routes!(handlers::search))
         .routes(routes!(handlers::get))
+        .routes(routes!(history::history))
 }

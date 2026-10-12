@@ -691,6 +691,85 @@
         ]
       }
     },
+    "/v1/customers/{id}/history": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Get a customer's history",
+        "description": "The customer dialog's history: creation and assignment, deals (live,\ncreated, deleted, won or lost), reassignments, email history (first\nrecording drips that were sent but are missing from it) and the\nactivities and notes of the live deals. Deleted customers included.",
+        "operationId": "get_customer_history",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerHistory"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/users/sales-reps": {
       "get": {
         "tags": [
@@ -12988,6 +13067,40 @@
           }
         }
       },
+      "ClosedDeal": {
+        "type": "object",
+        "description": "A won or lost deal.",
+        "required": [
+          "id",
+          "outcome"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal id."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`won` or `lost`."
+          },
+          "lost_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it was lost."
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it left its last stage."
+          }
+        }
+      },
       "Color": {
         "type": "object",
         "description": "A stone color tag.",
@@ -13118,6 +13231,35 @@
             "type": "integer",
             "format": "int64",
             "description": "All deals, whatever their state."
+          }
+        }
+      },
+      "CreatedDeal": {
+        "type": "object",
+        "description": "A deal created for the customer.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal id."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "By whom (name)."
           }
         }
       },
@@ -13431,6 +13573,124 @@
           "lead": {
             "$ref": "#/components/schemas/LeadAnswers",
             "description": "Lead form answers, as the lead sources send them (free text)."
+          }
+        }
+      },
+      "CustomerHistory": {
+        "type": "object",
+        "description": "Everything the customer dialog shows besides the contact details\n(`GET /v1/customers/{id}`).",
+        "required": [
+          "deals",
+          "reassignments",
+          "created_deals",
+          "deleted_deals",
+          "closed_deals",
+          "emails",
+          "activities",
+          "notes"
+        ],
+        "properties": {
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who created the customer (name), if recorded."
+          },
+          "assigned_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the customer was first assigned to a sales rep."
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the customer was deleted; null when live."
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Parent customer (a project of another customer)."
+          },
+          "first_rep_deal_created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the first live deal was created (the lead reached a sales rep)."
+          },
+          "initial_sales_rep_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sales rep of that first deal."
+          },
+          "deals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryDeal"
+            },
+            "description": "Live deals in live stages, newest first."
+          },
+          "reassignments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Reassignment"
+            },
+            "description": "Reassignments of the customer, oldest first."
+          },
+          "created_deals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreatedDeal"
+            },
+            "description": "Every deal ever made for the customer, oldest first."
+          },
+          "deleted_deals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeletedDeal"
+            },
+            "description": "Deleted deals."
+          },
+          "closed_deals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClosedDeal"
+            },
+            "description": "Won or lost deals."
+          },
+          "emails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryEmail"
+            },
+            "description": "Email history (by address and as a participant), newest first."
+          },
+          "activities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryActivity"
+            },
+            "description": "Activities of the live deals, latest first."
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryNote"
+            },
+            "description": "Notes of the live deals, pinned first, with comments."
           }
         }
       },
@@ -14228,6 +14488,35 @@
           }
         }
       },
+      "DeletedDeal": {
+        "type": "object",
+        "description": "A deleted deal.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal id."
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When."
+          },
+          "deleted_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "By whom (name), when recorded."
+          }
+        }
+      },
       "DocumentRename": {
         "type": "object",
         "description": "Body of `PATCH /v1/deals/{id}/documents/{document_id}`.",
@@ -14849,6 +15138,166 @@
           }
         }
       },
+      "HistoryActivity": {
+        "type": "object",
+        "description": "An activity of one of the customer's deals.",
+        "required": [
+          "id",
+          "deal_id",
+          "company_id",
+          "name",
+          "priority",
+          "is_completed"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Activity id."
+          },
+          "deal_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal."
+          },
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company."
+          },
+          "name": {
+            "type": "string",
+            "description": "What to do."
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Store wall time `YYYY-MM-DDTHH:MM:SS`, or null."
+          },
+          "priority": {
+            "type": "string",
+            "description": "`low`, `medium` or `high`."
+          },
+          "is_completed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 when done."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was done."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was created."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "By whom (name)."
+          },
+          "deal_list_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stage the deal is in."
+          }
+        }
+      },
+      "HistoryComment": {
+        "type": "object",
+        "description": "A comment on a note.",
+        "required": [
+          "id",
+          "note_id",
+          "content"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Comment id."
+          },
+          "note_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Note."
+          },
+          "content": {
+            "type": "string",
+            "description": "Text."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "By whom (name)."
+          }
+        }
+      },
+      "HistoryDeal": {
+        "type": "object",
+        "description": "A live deal of the customer.",
+        "required": [
+          "id",
+          "list_name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal id."
+          },
+          "amount": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Amount, a decimal string."
+          },
+          "lost_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it was lost."
+          },
+          "list_name": {
+            "type": "string",
+            "description": "Stage name."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was created."
+          }
+        }
+      },
       "HistoryEmail": {
         "type": "object",
         "description": "A message of a deal's or customer's email history.",
@@ -14939,6 +15388,66 @@
           "thread_has_attachments": {
             "type": "boolean",
             "description": "Some message of the conversation has attachments."
+          }
+        }
+      },
+      "HistoryNote": {
+        "type": "object",
+        "description": "A note of one of the customer's deals.",
+        "required": [
+          "id",
+          "deal_id",
+          "company_id",
+          "content",
+          "is_pinned",
+          "comments"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Note id."
+          },
+          "deal_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deal."
+          },
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company."
+          },
+          "content": {
+            "type": "string",
+            "description": "Text."
+          },
+          "is_pinned": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 when pinned."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "By whom (name)."
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryComment"
+            },
+            "description": "Comments, oldest first."
           }
         }
       },
@@ -16314,6 +16823,34 @@
           }
         },
         "additionalProperties": false
+      },
+      "Reassignment": {
+        "type": "object",
+        "description": "A reassignment of the customer.",
+        "properties": {
+          "reassigned_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who reassigned."
+          },
+          "reassigned_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "To whom."
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When."
+          }
+        }
       },
       "Recipient": {
         "type": "object",
