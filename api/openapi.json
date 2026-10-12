@@ -770,6 +770,177 @@
         ]
       }
     },
+    "/v1/customers/{id}/projects": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "List a customer's projects",
+        "description": "The live customers of the family the customer belongs to (its parent and\nthe parent's projects, or the customer and its own projects), by name,\nwith their addresses, newest deal stage and sales.",
+        "operationId": "list_customer_projects",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The family",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerProjects"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/customers/{id}/parent": {
+      "put": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Link a customer under a parent",
+        "description": "Makes the customer a project of `parent_id` (both of the company).",
+        "operationId": "set_customer_parent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Linked"
+          },
+          "400": {
+            "description": "A customer cannot be its own parent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Customer or parent not in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/users/sales-reps": {
       "get": {
         "tags": [
@@ -13694,6 +13865,28 @@
           }
         }
       },
+      "CustomerProjects": {
+        "type": "object",
+        "description": "The projects of a customer's family.",
+        "required": [
+          "parent_id",
+          "customers"
+        ],
+        "properties": {
+          "parent_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The parent of the family (the customer itself when it has none)."
+          },
+          "customers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectCustomer"
+            },
+            "description": "The parent and its projects, by name."
+          }
+        }
+      },
       "CustomerRow": {
         "type": "object",
         "description": "One row of the customers table. Field names match the Remix\n`CustomersListCustomer` type exactly, including `customerTemperature`.",
@@ -16181,6 +16374,21 @@
           }
         }
       },
+      "ParentInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/customers/{id}/parent`.",
+        "required": [
+          "parent_id"
+        ],
+        "properties": {
+          "parent_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The customer this one becomes a project of."
+          }
+        },
+        "additionalProperties": false
+      },
       "Participant": {
         "type": "object",
         "description": "An address on a message (no BCC).",
@@ -16433,6 +16641,162 @@
           "medium",
           "high"
         ]
+      },
+      "ProjectCustomer": {
+        "type": "object",
+        "description": "One customer of the family.",
+        "required": [
+          "id",
+          "emails",
+          "sales"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Primary email address."
+          },
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every address, primary first."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address."
+          },
+          "sales_rep_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sales rep's name."
+          },
+          "deal_stage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stage of the newest live deal."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Lead source."
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "City."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "State."
+          },
+          "postal_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ZIP code."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company name."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes."
+          },
+          "sales": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectSale"
+            },
+            "description": "Sales to the customer."
+          }
+        }
+      },
+      "ProjectSale": {
+        "type": "object",
+        "description": "A sale to a customer of the family.",
+        "required": [
+          "id",
+          "customer_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sale id."
+          },
+          "customer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer."
+          },
+          "price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Price, a decimal string."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address of the job."
+          },
+          "sale_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sold."
+          }
+        }
       },
       "PublicCompany": {
         "type": "object",

@@ -5,6 +5,7 @@
 //! - `GET  /v1/customers/search`       → customers matching a name, phone, email or company
 //! - `GET  /v1/customers/{id}`         → one customer with contact details
 //! - `GET  /v1/customers/{id}/history` → deals, reassignments, emails, activities and notes
+//! - `GET  /v1/customers/{id}/projects`, `PUT /v1/customers/{id}/parent` → linked projects
 //!
 //! Replaces `loadCustomersListPage` in the Remix app
 //! (`app/utils/customersListLoader.server.ts`).
@@ -12,6 +13,7 @@
 mod fuzzy;
 mod handlers;
 mod history;
+mod projects;
 pub mod queries;
 pub mod schemas;
 
@@ -25,4 +27,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::search))
         .routes(routes!(handlers::get))
         .routes(routes!(history::history))
+        .routes(routes!(projects::projects))
+        .routes(routes!(projects::set_parent))
 }
