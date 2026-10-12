@@ -330,8 +330,20 @@ pub async fn update(
     .execute(&mut *tx)
     .await?;
     set_colors(&mut tx, id, &input.color_ids).await?;
+    // Another stone can point at the same photo; it keeps it.
+    let shared = match (&new_url, &current_url) {
+        (Some(_), Some(old)) => {
+            sqlx::query_scalar::<_, i32>("SELECT id FROM stones WHERE url = ? AND id <> ? LIMIT 1")
+                .bind(old)
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .is_some()
+        }
+        _ => true,
+    };
     tx.commit().await?;
-    if let (Some(_), Some(old)) = (&new_url, &current_url) {
+    if let (false, Some(old)) = (shared, &current_url) {
         uploads::remove(&state.storage, old).await;
     }
     Ok(StatusCode::NO_CONTENT)

@@ -391,7 +391,7 @@ async fn stone_writes_validate_everything(pool: MySqlPool) {
 
 #[test_db::test(seed)]
 async fn editing_keeps_or_replaces_the_image(pool: MySqlPool) {
-    let (server, storage) = server_with_storage(pool);
+    let (server, storage) = server_with_storage(pool.clone());
     let first = upload(&server, &storage, "stones").await;
     let id = server
         .post("/v1/stones")
@@ -443,6 +443,21 @@ async fn editing_keeps_or_replaces_the_image(pool: MySqlPool) {
         keys.contains(&key(&second)) && keys.contains(&icon(&second)),
         "{keys:?}"
     );
+
+    // A photo another stone also uses stays when it is replaced.
+    sqlx::query("UPDATE stones SET url = ? WHERE id = 3001")
+        .bind(&second)
+        .execute(&pool)
+        .await
+        .unwrap();
+    body["image_url"] = json!(upload(&server, &storage, "stones").await);
+    server
+        .put(&format!("/v1/stones/{id}"))
+        .with_session(sessions::ADMIN)
+        .json(&body)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(storage.memory_keys().contains(&key(&second)));
 
     // Seed stones keep images outside the bucket untouched.
     let mut seed = stone_body(None);
