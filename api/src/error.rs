@@ -31,18 +31,25 @@ pub enum ApiError {
     /// The work was partly done and could not be finished.
     #[error("{0}")]
     Internal(String),
+    /// Wrong credentials (sign-in), with the reason for the user.
+    #[error("{0}")]
+    Unauthenticated(String),
+    /// Too many attempts; try again later.
+    #[error("{0}")]
+    TooManyRequests(String),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self {
-            Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::Unauthorized | Self::Unauthenticated(_) => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::Storage(crate::storage::StorageError::Disabled) => {
                 StatusCode::SERVICE_UNAVAILABLE
             }

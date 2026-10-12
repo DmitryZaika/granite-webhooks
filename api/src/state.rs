@@ -54,6 +54,10 @@ pub struct AppState {
     pub job_key: Option<Arc<str>>,
     /// Where the contract templates are read from (a stub in tests).
     pub contract_templates_base: Arc<str>,
+    /// Domain and `Secure` flag of the session cookie the auth routes set.
+    pub cookie: crate::auth::cookie::CookieConfig,
+    /// The app's public URL (`APP_URL`), the base of links sent by email.
+    pub app_url: Arc<str>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -81,7 +85,21 @@ impl AppState {
             qbo: Qbo::disabled(),
             job_key: None,
             contract_templates_base: Arc::from(crate::routes::sales::contract::TEMPLATES_BASE),
+            cookie: crate::auth::cookie::CookieConfig::default(),
+            app_url: Arc::from("http://localhost:5173"),
         }
+    }
+
+    #[must_use]
+    pub fn with_cookie(mut self, cookie: crate::auth::cookie::CookieConfig) -> Self {
+        self.cookie = cookie;
+        self
+    }
+
+    #[must_use]
+    pub fn with_app_url(mut self, url: &str) -> Self {
+        self.app_url = Arc::from(url.trim().trim_end_matches('/'));
+        self
     }
 
     #[must_use]
@@ -164,7 +182,11 @@ impl AppState {
             .with_ai(Ai::from_env())
             .with_transcriber(Transcriber::from_env())
             .with_qbo(Qbo::from_env())
-            .with_job_key(&std::env::var("LAMBDA_KEY").unwrap_or_default()))
+            .with_job_key(&std::env::var("LAMBDA_KEY").unwrap_or_default())
+            .with_cookie(cookie_config_from_env())
+            .with_app_url(
+                &std::env::var("APP_URL").unwrap_or_else(|_| "https://granite-manager.com".into()),
+            ))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the
@@ -186,6 +208,20 @@ impl AppState {
                 Method::DELETE,
             ])
             .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+    }
+}
+
+/// `SESSION_COOKIE_DOMAIN` (default `.granite-manager.com`; `none` for
+/// host-only) and `SESSION_COOKIE_SECURE` (default on; `false` for local HTTP).
+fn cookie_config_from_env() -> crate::auth::cookie::CookieConfig {
+    let domain =
+        std::env::var("SESSION_COOKIE_DOMAIN").unwrap_or_else(|_| ".granite-manager.com".into());
+    let domain = domain.trim();
+    crate::auth::cookie::CookieConfig {
+        domain: (!domain.is_empty() && !domain.eq_ignore_ascii_case("none"))
+            .then(|| domain.to_string()),
+        secure: !std::env::var("SESSION_COOKIE_SECURE")
+            .is_ok_and(|value| value.trim().eq_ignore_ascii_case("false")),
     }
 }
 

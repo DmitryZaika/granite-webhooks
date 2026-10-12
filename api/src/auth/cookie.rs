@@ -63,15 +63,104 @@ pub fn decode_session(value: &str, secret: &str) -> Option<SessionData> {
     serde_json::from_slice(&json).ok()
 }
 
+/// Every key of a verified session, unknown ones (OAuth state, QuickBooks
+/// tokens, flash messages) included, so a rewrite can keep them.
+pub fn decode_session_map(
+    value: &str,
+    secret: &str,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    decode_session(value, secret)?;
+    let payload = value.rsplit_once('.')?.0;
+    let json = STANDARD.decode(payload).ok()?;
+    serde_json::from_slice(&json).ok()
+}
+
 /// Inverse of [`decode_session`]; returns the percent-encoded cookie value.
 pub fn encode_session(data: &SessionData, secret: &str) -> String {
-    let json = serde_json::to_vec(data).expect("session data serializes");
+    encode_json(
+        &serde_json::to_vec(data).expect("session data serializes"),
+        secret,
+    )
+}
+
+/// [`encode_session`] for a whole session map (see [`decode_session_map`]).
+pub fn encode_session_map(
+    data: &serde_json::Map<String, serde_json::Value>,
+    secret: &str,
+) -> String {
+    encode_json(
+        &serde_json::to_vec(data).expect("session data serializes"),
+        secret,
+    )
+}
+
+fn encode_json(json: &[u8], secret: &str) -> String {
     let payload = STANDARD.encode(json);
     let mut mac =
         HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     let signature = STANDARD_NO_PAD.encode(mac.finalize().into_bytes());
     utf8_percent_encode(&format!("{payload}.{signature}"), COOKIE_VALUE_ENCODE).to_string()
+}
+
+/// Where the session cookie is set: the shared parent domain (so the API
+/// and every company subdomain see it), and whether it is HTTPS only.
+#[derive(Debug, Clone, Default)]
+pub struct CookieConfig {
+    /// `Domain` attribute, e.g. `.granite-manager.com`; host-only when None.
+    pub domain: Option<String>,
+    /// `Secure` attribute (off only for plain-HTTP local development).
+    pub secure: bool,
+}
+
+/// Seconds a session lives (`SESSION_MAX_AGE_SECONDS`: 60 days).
+pub const SESSION_MAX_AGE_SECONDS: i64 = 60 * 60 * 24 * 60;
+
+impl CookieConfig {
+    fn attributes(&self, max_age: i64, with_domain: bool) -> String {
+        let mut attributes = format!("Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax");
+        if self.secure {
+            attributes.push_str("; Secure");
+        }
+        if with_domain && let Some(domain) = &self.domain {
+            attributes.push_str("; Domain=");
+            attributes.push_str(domain);
+        }
+        attributes
+    }
+
+    /// `Set-Cookie` values that store `value` as the session. With a shared
+    /// domain, a leftover host-only session cookie is cleared first so the
+    /// browser never sends two.
+    pub fn set_session(&self, value: &str) -> Vec<String> {
+        let mut cookies = Vec::new();
+        if self.domain.is_some() {
+            cookies.push(format!(
+                "{SESSION_COOKIE_NAME}=; {}",
+                self.attributes(0, false)
+            ));
+        }
+        cookies.push(format!(
+            "{SESSION_COOKIE_NAME}={value}; {}",
+            self.attributes(SESSION_MAX_AGE_SECONDS, true)
+        ));
+        cookies
+    }
+
+    /// `Set-Cookie` values that delete the session cookie (shared and host-only).
+    pub fn clear_session(&self) -> Vec<String> {
+        let mut cookies = vec![format!(
+            "{SESSION_COOKIE_NAME}=; {}",
+            self.attributes(0, true)
+        )];
+        if self.domain.is_some() {
+            cookies.push(format!(
+                "{SESSION_COOKIE_NAME}=; {}",
+                self.attributes(0, false)
+            ));
+        }
+        cookies
+    }
 }
 
 /// `encodeURIComponent` leaves these unescaped.
@@ -123,6 +212,44 @@ mod tests {
         let tampered = value.replacen("eyJ", "eyK", 1);
         assert!(decode_session(&tampered, "test-secret").is_none());
         assert!(decode_session("no-dot", "test-secret").is_none());
+    }
+
+    #[test]
+    fn session_maps_keep_unknown_keys() {
+        let header = format!("theme=dark; {WITH_FLASH}");
+        let value = cookie_value(&header, SESSION_COOKIE_NAME).unwrap();
+        let mut map = decode_session_map(&value, "test-secret").unwrap();
+        assert!(map.contains_key("__flash_message__"));
+        map.insert("activeCompanyId".into(), 100.into());
+        let encoded = encode_session_map(&map, "test-secret");
+        let decoded = cookie_value(&format!("__session={encoded}"), SESSION_COOKIE_NAME).unwrap();
+        let back = decode_session_map(&decoded, "test-secret").unwrap();
+        assert_eq!(back["activeCompanyId"], 100);
+        assert!(back.contains_key("__flash_message__"));
+        assert!(decode_session_map(&decoded, "other").is_none());
+    }
+
+    #[test]
+    fn cookie_attributes() {
+        let shared = CookieConfig {
+            domain: Some(".granite-manager.com".into()),
+            secure: true,
+        };
+        let set = shared.set_session("abc");
+        assert_eq!(
+            set[0],
+            "__session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure"
+        );
+        assert_eq!(
+            set[1],
+            "__session=abc; Path=/; Max-Age=5184000; HttpOnly; SameSite=Lax; Secure; Domain=.granite-manager.com"
+        );
+        assert_eq!(shared.clear_session().len(), 2);
+        let local = CookieConfig::default();
+        assert_eq!(
+            local.set_session("abc"),
+            ["__session=abc; Path=/; Max-Age=5184000; HttpOnly; SameSite=Lax"]
+        );
     }
 
     #[test]

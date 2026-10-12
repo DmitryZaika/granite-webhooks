@@ -30030,6 +30030,382 @@
         ]
       }
     },
+    "/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign in",
+        "description": "Checks the email and password; on success creates a session (60 days),\nsets it as the `__session` cookie (HttpOnly, SameSite=Lax, Secure in\nproduction) and says where the user starts. Too many failed attempts\nfor the email answer 429 until the 15-minute window passes. A wrong\nemail and a wrong password answer the same 401.",
+        "operationId": "sign_in",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in; the session cookie is set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Email or password missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Incorrect email or password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign out",
+        "description": "Ends the request's session (it no longer signs anyone in, even if the\ncookie is replayed) and clears the cookie. Always answers 204.",
+        "operationId": "sign_out",
+        "responses": {
+          "204": {
+            "description": "Signed out; the cookie is cleared"
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/session": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The current session",
+        "description": "The signed-in user (for a super admin, in the company they act in), the\npath they start at, the acting company's subdomain and the companies a\nsuper admin can switch to. 401 when signed out.",
+        "operationId": "get_auth_session",
+        "responses": {
+          "200": {
+            "description": "Signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/active-company": {
+      "put": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Act in another company",
+        "description": "A super admin picks which of their companies requests act in; the\nchoice is kept in the session cookie (its other contents stay).",
+        "operationId": "set_active_company",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActiveCompany"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Switched; the cookie is updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a super admin of that company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/password-reset": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Email a password reset link",
+        "description": "When the email belongs to an account (and none was sent to it in the last\nminute), stores a new one-hour link (older ones stop working) and emails\nit. Always answers 202 the same way, so it does not tell which emails\nhave accounts.",
+        "operationId": "request_password_reset",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "If the account exists, a link is on its way"
+          },
+          "400": {
+            "description": "Not an email address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The email could not be sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/password-reset/{token}": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Check a reset link",
+        "description": "204 while the link can still set a password, 404 when it is unknown,\nused or expired.",
+        "operationId": "check_password_reset",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The token from the emailed link",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The link works"
+          },
+          "404": {
+            "description": "Invalid or expired link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Set a new password",
+        "description": "Uses a reset link once: sets the password (bcrypt), spends the link and\nends every session of the user.",
+        "operationId": "reset_password",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The token from the emailed link",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Password set; sign in again"
+          },
+          "400": {
+            "description": "Password too short",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Invalid or expired link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/ai/improve": {
       "post": {
         "tags": [
@@ -31653,6 +32029,20 @@
   },
   "components": {
     "schemas": {
+      "ActiveCompany": {
+        "type": "object",
+        "description": "Body of `PUT /v1/auth/active-company`.",
+        "required": [
+          "company_id"
+        ],
+        "properties": {
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "A company the caller holds the Super Admin position in."
+          }
+        }
+      },
       "ActiveFlow": {
         "type": "object",
         "description": "An SMS flow running (or failed) on the phone.",
@@ -32658,6 +33048,39 @@
           "passed": {
             "type": "boolean",
             "description": "Every answer was right."
+          }
+        }
+      },
+      "AuthSession": {
+        "type": "object",
+        "description": "`GET /v1/auth/session` and the login result.",
+        "required": [
+          "user",
+          "home_path",
+          "switchable_companies"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/SessionUser",
+            "description": "The signed-in user (the company is the one requests act in)."
+          },
+          "home_path": {
+            "type": "string",
+            "description": "Where the user starts: their portal, or `/employee`."
+          },
+          "company_subdomain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The subdomain of the acting company, for its own host\n(`{subdomain}.granite-manager.com`); null when it has none."
+          },
+          "switchable_companies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SwitchableCompany"
+            },
+            "description": "Companies a super admin can switch to (empty for everyone else)."
           }
         }
       },
@@ -40437,6 +40860,24 @@
         ],
         "description": "`GET /v1/customers` returns `CustomerRow`s, or `CompanyRow`s when `view=companies`."
       },
+      "LoginInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/auth/login`.",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Login email (any case)."
+          },
+          "password": {
+            "type": "string",
+            "description": "Password."
+          }
+        }
+      },
       "LostReason": {
         "type": "object",
         "description": "How often a rep lost for a reason.",
@@ -41283,6 +41724,19 @@
           }
         },
         "additionalProperties": false
+      },
+      "NewPassword": {
+        "type": "object",
+        "description": "Body of `POST /v1/auth/password-reset/{token}`.",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "At least 8 characters."
+          }
+        }
       },
       "NewPhoneCustomer": {
         "type": "object",
@@ -44275,6 +44729,19 @@
           }
         },
         "additionalProperties": false
+      },
+      "ResetRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/auth/password-reset`.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The account's email."
+          }
+        }
       },
       "RoomInput": {
         "type": "object",
@@ -47829,6 +48296,25 @@
           }
         }
       },
+      "SwitchableCompany": {
+        "type": "object",
+        "description": "A company the super admin may act in.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          }
+        }
+      },
       "TableCustomer": {
         "type": "object",
         "description": "A customer of the table.",
@@ -49623,6 +50109,10 @@
     {
       "name": "quotes",
       "description": "Quote tools"
+    },
+    {
+      "name": "auth",
+      "description": "Sign-in, sign-out, password reset and the session cookie"
     },
     {
       "name": "delayed",

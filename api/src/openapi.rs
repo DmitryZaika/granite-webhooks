@@ -35,6 +35,7 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         (name = "places", description = "Address suggestions from Google Places"),
         (name = "calls", description = "Calls through the company's telephony provider"),
         (name = "quotes", description = "Quote tools"),
+        (name = "auth", description = "Sign-in, sign-out, password reset and the session cookie"),
         (name = "delayed", description = "Scheduled emails and texts"),
         (name = "ai-usage", description = "AI usage for the super-user dashboard"),
         (name = "ai", description = "AI helpers for writing messages"),
