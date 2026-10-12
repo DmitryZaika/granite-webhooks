@@ -1,5 +1,6 @@
 //! The public showroom: catalogs anyone may browse, without a session.
 //!
+//! - `GET /v1/public/companies?ids=` → names and logos for the company chooser
 //! - `GET /v1/public/companies/by-subdomain/{subdomain}` → the company id
 //! - `GET /v1/public/companies/{company_id}/stones` (+ `/search`, `/{id}`,
 //!   `/{id}/slabs`, `/{id}/images`) → displayed stones in stock
@@ -11,7 +12,7 @@
 //! Nothing here returns costs, hidden items or sold slabs. Replaces the
 //! loaders of `customer.$company.stones|sinks|faucets`,
 //! `customer.$company.stones.slabs.$stone`, `contractors.$company.stones`
-//! and `customer.stones` in the Remix app.
+//! `customer.stones` and `customers.companies` in the Remix app.
 
 mod calendly;
 mod handlers;
@@ -24,6 +25,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .routes(routes!(handlers::companies))
         .routes(routes!(handlers::company_by_subdomain))
         .routes(routes!(handlers::stones))
         .routes(routes!(handlers::search_stones))

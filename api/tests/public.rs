@@ -189,3 +189,16 @@ async fn a_vcard_is_built_from_the_query(pool: MySqlPool) {
         .await
         .assert_status(axum::http::StatusCode::BAD_REQUEST);
 }
+
+#[test_db::test(seed)]
+async fn the_company_chooser_lists_names_and_logos(pool: MySqlPool) {
+    sqlx::query("UPDATE company SET logo_url = 'https://img.example/acme.png' WHERE id = 100")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let body = get(pool, "/v1/public/companies?ids=101&ids=100&ids=999").await;
+    assert_eq!(body[0]["id"], 100);
+    assert_eq!(body[0]["logo_url"], "https://img.example/acme.png");
+    assert_eq!(body[1]["id"], 101);
+    assert_eq!(body.as_array().unwrap().len(), 2);
+}
