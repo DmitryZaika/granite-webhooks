@@ -3667,7 +3667,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or of the shop",
             "content": {
               "application/json": {
                 "schema": {
@@ -4715,7 +4715,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or of the shop",
             "content": {
               "application/json": {
                 "schema": {
@@ -5415,7 +5415,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee, admin or of the shop",
             "content": {
               "application/json": {
                 "schema": {
@@ -13312,6 +13312,78 @@
         ]
       }
     },
+    "/v1/emails/{id}/images": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "List an email's pictures",
+        "description": "Image attachments (HEIC included) of one of the company's emails, for the\nphoto viewer.",
+        "operationId": "list_email_images",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Email id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pictures (none for another company's email)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EmailImage"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/emails/drafts/{id}": {
       "get": {
         "tags": [
@@ -18382,6 +18454,25 @@
               "$ref": "#/components/schemas/DraftAttachment"
             },
             "description": "Files attached so far."
+          }
+        }
+      },
+      "EmailImage": {
+        "type": "object",
+        "description": "A picture sent with an email.",
+        "required": [
+          "id",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The attachment."
+          },
+          "url": {
+            "type": "string",
+            "description": "A URL the browser can show."
           }
         }
       },

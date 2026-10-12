@@ -11,6 +11,7 @@
 //! - `POST /v1/emails`                            → send (or schedule) an email
 //! - `POST /v1/email-attachments/{id}/deal`      → save an attachment to a deal
 //! - `GET  /v1/deals/file-urls`                   → file URLs of a deal or a customer's deals
+//! - `GET  /v1/emails/{id}/images`                 → an email's pictures, for the photo viewer
 //! - `POST /v1/emails/drafts`, `GET|PUT|DELETE /v1/emails/drafts/{id}` → the caller's drafts
 //!
 //! Replaces the Remix `employee.emails*` loaders and `api.emails.*` routes.
@@ -49,6 +50,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(drafts::create_draft))
         .routes(routes!(attachments::add_to_deal))
         .routes(routes!(attachments::deal_file_urls))
+        .routes(routes!(attachments::email_images))
         .routes(routes!(
             drafts::get_draft,
             drafts::update_draft,

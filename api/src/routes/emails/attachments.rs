@@ -209,3 +209,55 @@ mod tests {
         assert!(!is_image("application", "pdf", "quote.pdf"));
     }
 }
+
+/// A picture sent with an email.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct EmailImage {
+    /// The attachment.
+    pub id: i32,
+    /// A URL the browser can show.
+    pub url: String,
+}
+
+/// List an email's pictures
+///
+/// Image attachments (HEIC included) of one of the company's emails, for the
+/// photo viewer.
+#[utoipa::path(
+    get,
+    path = "/v1/emails/{id}/images",
+    operation_id = "list_email_images",
+    tag = "emails",
+    params(("id" = i32, Path, description = "Email id")),
+    responses(
+        (status = 200, description = "Pictures (none for another company's email)", body = Vec<EmailImage>),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn email_images(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+) -> ApiResult<Json<Vec<EmailImage>>> {
+    let rows: Vec<(i32, String)> = sqlx::query_as(
+        "SELECT ea.id, ea.url FROM email_attachments ea JOIN emails e ON e.id = ea.email_id
+          WHERE ea.email_id = ? AND e.company_id = ?
+            AND (LOWER(ea.content_type) = 'image' OR LOWER(ea.filename) LIKE '%.heic'
+                 OR LOWER(ea.filename) LIKE '%.heif')",
+    )
+    .bind(id)
+    .bind(user.company_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut images = Vec::with_capacity(rows.len());
+    for (id, url) in rows {
+        images.push(EmailImage {
+            id,
+            url: state.storage.readable_url(&url, None).await,
+        });
+    }
+    Ok(Json(images))
+}

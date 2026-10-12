@@ -3,7 +3,7 @@
 //! `admin.stones.edit.$stone.slabs.tsx`.
 
 use super::schemas::StoneRef;
-use crate::auth::{AdminUser, EmployeeUser};
+use crate::auth::{AdminUser, EmployeeUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::routes::uploads::{self, schemas::UploadFolder};
@@ -177,7 +177,7 @@ async fn stone_refs(
     responses(
         (status = 200, description = "Own photos, then linked ones", body = Vec<StoneImage>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or of the shop", body = ErrorBody),
         (status = 404, description = "No such stone in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -185,7 +185,7 @@ async fn stone_refs(
 )]
 pub async fn images(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<Json<Vec<StoneImage>>> {
     let mut conn = state.pool.acquire().await?;

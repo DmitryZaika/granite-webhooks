@@ -6,6 +6,7 @@
 //! | `CurrentUser`  | `requireLoggedInUser`*      | any valid session                        |
 //! | `EmployeeUser` | `getEmployeeUser`           | `is_employee \|\| is_admin \|\| is_superuser` |
 //! | `AdminUser`    | `getAdminUser`              | `is_admin \|\| is_superuser`              |
+//! | `ShopOrEmployeeUser` | `getShopOrEmployeeUser` | an employee, or a shop manager / worker of the company |
 //!
 //! *`CurrentUser` also applies the super-admin elevation and company switch, so
 //! `company_id` is always the company the request acts in.
@@ -22,6 +23,15 @@ use cookie::{SESSION_COOKIE_NAME, cookie_value, decode_session};
 use session::{SessionUser, effective_user, find_session_user, user_positions};
 
 async fn authenticate(parts: &Parts, state: &AppState) -> Result<SessionUser, ApiError> {
+    authenticate_with_positions(parts, state)
+        .await
+        .map(|(user, _)| user)
+}
+
+async fn authenticate_with_positions(
+    parts: &Parts,
+    state: &AppState,
+) -> Result<(SessionUser, Vec<session::UserPositionRow>), ApiError> {
     let session = parts
         .headers
         .get_all(COOKIE)
@@ -35,7 +45,8 @@ async fn authenticate(parts: &Parts, state: &AppState) -> Result<SessionUser, Ap
         .await?
         .ok_or(ApiError::Unauthorized)?;
     let positions = user_positions(&state.pool, user.id).await?;
-    Ok(effective_user(user, &positions, session.active_company_id))
+    let user = effective_user(user, &positions, session.active_company_id);
+    Ok((user, positions))
 }
 
 pub struct CurrentUser(pub SessionUser);
@@ -56,6 +67,29 @@ impl FromRequestParts<AppState> for EmployeeUser {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let user = authenticate(parts, state).await?;
         if user.is_employee || user.is_admin || user.is_superuser {
+            Ok(Self(user))
+        } else {
+            Err(ApiError::Forbidden)
+        }
+    }
+}
+
+/// Shop manager and shop worker positions (`Positions` in the CRM).
+const SHOP_POSITIONS: [i32; 2] = [3, 4];
+
+/// An employee, or someone of the shop (a shop manager or worker of the
+/// company the request acts in).
+pub struct ShopOrEmployeeUser(pub SessionUser);
+
+impl FromRequestParts<AppState> for ShopOrEmployeeUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        let (user, positions) = authenticate_with_positions(parts, state).await?;
+        let shop = positions.iter().any(|row| {
+            row.company_id == user.company_id && SHOP_POSITIONS.contains(&row.position_id)
+        });
+        if user.is_employee || user.is_admin || user.is_superuser || shop {
             Ok(Self(user))
         } else {
             Err(ApiError::Forbidden)
