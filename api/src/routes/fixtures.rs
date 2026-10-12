@@ -24,6 +24,8 @@ pub struct Kind {
     pub types: Types,
     /// Sinks have a length and width; faucets do not.
     pub sized: bool,
+    /// Image of a model added without one; `None` makes the image required.
+    pub placeholder: Option<&'static str>,
 }
 
 /// The `type` values a model can have.
@@ -43,6 +45,7 @@ pub const SINKS: Kind = Kind {
     folder: UploadFolder::Sinks,
     types: Types::Company("sink_types"),
     sized: true,
+    placeholder: Some("/placeholders/sink-placeholder.svg"),
 };
 
 pub const FAUCETS: Kind = Kind {
@@ -54,6 +57,7 @@ pub const FAUCETS: Kind = Kind {
     folder: UploadFolder::Faucets,
     types: Types::Fixed(&["single handle", "double handle"]),
     sized: false,
+    placeholder: None,
 };
 
 /// A sink or faucet model with its stock, as the edit form shows it.
@@ -100,8 +104,9 @@ pub struct FixtureInput {
     #[serde(rename = "type")]
     #[schema(rename = "type")]
     pub kind: String,
-    /// Image: an upload to the model's folder (`POST /v1/uploads`). Required
-    /// when creating; omit to keep the image when editing.
+    /// Image: an upload to the model's folder (`POST /v1/uploads`). A new
+    /// sink without one gets a placeholder image; faucets need one. Omit to
+    /// keep the image when editing.
     #[serde(default)]
     pub image_url: Option<String>,
     /// Shown in the catalogs.
@@ -320,11 +325,17 @@ pub async fn create(
     company_id: i32,
     input: &FixtureInput,
 ) -> Result<i32, ApiError> {
-    let url =
-        image_url(input).ok_or_else(|| ApiError::BadRequest("An image is required".into()))?;
+    let uploaded = image_url(input);
+    let url = match (&uploaded, kind.placeholder) {
+        (Some(url), _) => url.clone(),
+        (None, Some(placeholder)) => placeholder.to_string(),
+        (None, None) => return Err(ApiError::BadRequest("An image is required".into())),
+    };
     let mut tx = state.pool.begin().await?;
     validate(&mut tx, kind, company_id, input).await?;
-    uploads::attach(&state.storage, &url, kind.folder).await?;
+    if let Some(url) = &uploaded {
+        uploads::attach(&state.storage, url, kind.folder).await?;
+    }
     let (columns, values) = if kind.sized {
         (", length, width, depth", ", ?, ?, 0")
     } else {

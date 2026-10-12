@@ -18,6 +18,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{MySql, MySqlConnection, QueryBuilder};
 use utoipa::{IntoParams, ToSchema};
 
+/// Image of a stone added without one (served by the web app).
+const STONE_PLACEHOLDER: &str = "/placeholders/stone-placeholder.svg";
+
 /// Surface finishes a stone can have.
 pub const FINISHES: &[&str] = &["polished", "leathered", "honed"];
 
@@ -34,8 +37,8 @@ pub struct StoneInput {
     /// `polished`, `leathered` or `honed`.
     pub finishing: String,
     /// Image: the `url` of an upload to the `stones` folder
-    /// (`POST /v1/uploads`). Required when creating; when editing, omit it
-    /// to keep the current image.
+    /// (`POST /v1/uploads`). A new stone without one gets a placeholder
+    /// image; when editing, omit it to keep the current image.
     #[serde(default)]
     pub image_url: Option<String>,
     /// Shown in the catalogs.
@@ -217,12 +220,13 @@ pub async fn create(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<StoneInput>,
 ) -> ApiResult<(StatusCode, Json<CreatedStone>)> {
-    let image_url = non_empty(input.image_url.as_ref())
-        .ok_or_else(|| ApiError::BadRequest("An image is required".into()))?
-        .to_string();
+    let uploaded = non_empty(input.image_url.as_ref());
+    let image_url = uploaded.unwrap_or(STONE_PLACEHOLDER).to_string();
     let mut tx = state.pool.begin().await?;
     validate(&mut tx, user.company_id, &input).await?;
-    uploads::attach(&state.storage, &image_url, UploadFolder::Stones).await?;
+    if let Some(url) = uploaded {
+        uploads::attach(&state.storage, url, UploadFolder::Stones).await?;
+    }
     let result = sqlx::query(
         "INSERT INTO stones (name, type, finishing, url, company_id, is_display, on_sale,
             regular_stock, supplier_id, width, length, cost_per_sqft, retail_price, level,

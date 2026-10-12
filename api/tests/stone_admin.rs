@@ -305,6 +305,24 @@ async fn creates_a_stone_with_its_image_and_colors(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_stone_added_without_an_image_gets_the_placeholder(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let res = server
+        .post("/v1/stones")
+        .with_session(sessions::ADMIN)
+        .json(&stone_body(None))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    let url: Option<String> = sqlx::query_scalar("SELECT url FROM stones WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(url.as_deref(), Some("/placeholders/stone-placeholder.svg"));
+}
+
+#[test_db::test(seed)]
 async fn stone_writes_validate_everything(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool.clone());
     let url = upload(&server, &storage, "stones").await;
@@ -315,7 +333,6 @@ async fn stone_writes_validate_everything(pool: MySqlPool) {
         body
     };
     let cases = [
-        (stone_body(None), "An image is required"),
         (
             with("image_url", json!("https://img.example/x.jpg")),
             "not an uploaded stones file",

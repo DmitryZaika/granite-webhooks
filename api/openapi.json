@@ -31442,7 +31442,7 @@
               "string",
               "null"
             ],
-            "description": "Image: an upload to the model's folder (`POST /v1/uploads`). Required\nwhen creating; omit to keep the image when editing."
+            "description": "Image: an upload to the model's folder (`POST /v1/uploads`). A new\nsink without one gets a placeholder image; faucets need one. Omit to\nkeep the image when editing."
           },
           "is_display": {
             "type": "boolean",
@@ -38303,7 +38303,7 @@
               "string",
               "null"
             ],
-            "description": "Image: the `url` of an upload to the `stones` folder\n(`POST /v1/uploads`). Required when creating; when editing, omit it\nto keep the current image."
+            "description": "Image: the `url` of an upload to the `stones` folder\n(`POST /v1/uploads`). A new stone without one gets a placeholder\nimage; when editing, omit it to keep the current image."
           },
           "is_display": {
             "type": "boolean",

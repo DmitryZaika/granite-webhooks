@@ -205,7 +205,7 @@ async fn creates_models_with_image_and_units(pool: MySqlPool) {
 
 #[test_db::test(seed)]
 async fn model_writes_validate(pool: MySqlPool) {
-    let (server, storage) = server_with_storage(pool);
+    let (server, storage) = server_with_storage(pool.clone());
     let url = upload(&server, &storage, "sinks").await;
     let stone_url = upload(&server, &storage, "stones").await;
     let with = |key: &str, value: Value| {
@@ -214,7 +214,6 @@ async fn model_writes_validate(pool: MySqlPool) {
         body
     };
     for (body, error) in [
-        (sink(None, None), "An image is required"),
         (sink(None, Some(&stone_url)), "not an uploaded sinks file"),
         (with("name", json!(" ")), "Name is required"),
         (with("type", json!("bar sink")), "invalid type"),
@@ -250,6 +249,28 @@ async fn model_writes_validate(pool: MySqlPool) {
         .json(&json!({ "name": "X", "type": "composite", "image_url": url }))
         .await;
     res.assert_status(StatusCode::BAD_REQUEST);
+    let res = server
+        .post("/v1/faucets")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "X", "type": "single handle" }))
+        .await;
+    res.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(res.json::<Value>()["error"], "An image is required");
+
+    // A sink without an image gets the placeholder.
+    let res = server
+        .post("/v1/sinks")
+        .with_session(sessions::ADMIN)
+        .json(&sink(None, None))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    let url: String = sqlx::query_scalar("SELECT url FROM sink_type WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(url, "/placeholders/sink-placeholder.svg");
 }
 
 #[test_db::test(seed)]
