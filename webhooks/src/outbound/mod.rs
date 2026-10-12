@@ -43,6 +43,10 @@ pub struct OutgoingEmail {
     pub references: Vec<String>,
     #[serde(default)]
     pub attachments: Vec<OutgoingAttachment>,
+    /// A notice the system sends (an appointment confirmation): `body` is
+    /// HTML sent as is, without the signature block or the opt-out line.
+    #[serde(default)]
+    pub transactional: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -151,7 +155,11 @@ fn bare_message_id(id: &str) -> String {
 /// attachments (`files[i]` is the content of `email.attachments[i]`). Bcc
 /// recipients are only in the envelope.
 pub fn build_message(email: &OutgoingEmail, files: Vec<Vec<u8>>) -> Vec<u8> {
-    let bodies = outgoing_bodies(&email.body, email.signature.as_deref());
+    let bodies = if email.transactional {
+        body::transactional_bodies(&email.body)
+    } else {
+        outgoing_bodies(&email.body, email.signature.as_deref())
+    };
     let from = match email.from_name.as_deref().map(str::trim) {
         Some(name) if !name.is_empty() => mail_builder::headers::address::Address::new_address(
             Some(name.to_string()),
@@ -288,7 +296,20 @@ mod tests {
                 content_type: "application/pdf".into(),
                 url: "https://bucket.s3.us-east-2.amazonaws.com/emails/a%20b.pdf".into(),
             }],
+            transactional: false,
         }
+    }
+
+    #[test]
+    fn a_transactional_email_has_no_opt_out_line() {
+        let notice = OutgoingEmail {
+            body: "<p>Your estimate is booked.</p>".into(),
+            transactional: true,
+            ..email()
+        };
+        let message = String::from_utf8(build_message(&notice, vec![Vec::new()])).unwrap();
+        assert!(message.contains("Your estimate is booked."));
+        assert!(!message.contains("rather not receive"));
     }
 
     #[tokio::test]

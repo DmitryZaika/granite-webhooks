@@ -128,7 +128,7 @@ fn bad(message: &str) -> ApiError {
     ApiError::BadRequest(message.into())
 }
 
-fn check(input: &EventInput) -> ApiResult<Checked<'_>> {
+pub fn check(input: &EventInput) -> ApiResult<Checked<'_>> {
     let length = |text: &str| text.chars().count();
     if input.title.is_empty() {
         return Err(bad("Title is required"));

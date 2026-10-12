@@ -105,6 +105,14 @@ pub fn outgoing_bodies(body: &str, signature: Option<&str>) -> OutgoingBodies {
     }
 }
 
+/// A system notice: the HTML as given, and its text without tags.
+pub fn transactional_bodies(html: &str) -> OutgoingBodies {
+    OutgoingBodies {
+        text: html_to_plain_text(html),
+        html: html.to_string(),
+    }
+}
+
 pub fn is_html_markup(value: &str) -> bool {
     HTML_TAG.is_match(value)
 }

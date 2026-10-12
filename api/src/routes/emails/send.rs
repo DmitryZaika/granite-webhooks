@@ -500,6 +500,7 @@ impl Envelope {
             in_reply_to: self.in_reply_to.clone(),
             references: self.references.clone(),
             attachments: self.attachments.clone(),
+            transactional: false,
         }
     }
 }

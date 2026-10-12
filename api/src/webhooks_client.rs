@@ -272,6 +272,8 @@ pub struct OutgoingEmail {
     pub in_reply_to: Option<String>,
     pub references: Vec<String>,
     pub attachments: Vec<OutgoingAttachment>,
+    /// A system notice: `body` is sent as is, without signature or opt-out line.
+    pub transactional: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

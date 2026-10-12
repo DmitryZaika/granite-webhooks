@@ -19,7 +19,7 @@
 
 mod flows;
 mod history;
-mod provider;
+pub mod provider;
 mod rollup;
 mod schemas;
 mod scope;

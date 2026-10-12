@@ -17418,6 +17418,93 @@
         ]
       }
     },
+    "/v1/events/estimates": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Book an in-home estimate",
+        "description": "Puts the estimate on the Estimates calendar, texts the customer from the\noffice manager's line (else emails them from their sales rep), and\nschedules the customer's and the rep's reminders. The customer needs a\nphone or an email.",
+        "operationId": "book_estimate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EstimateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Booked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookedEstimate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid field, not the Estimates calendar, or a customer without phone or email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/events/search": {
       "get": {
         "tags": [
@@ -19047,6 +19134,28 @@
               "null"
             ],
             "description": "Name of the sales rep who owns the deal."
+          }
+        }
+      },
+      "BookedEstimate": {
+        "type": "object",
+        "description": "`POST /v1/events/estimates`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The new event (0 for the onboarding sample customer).",
+            "minimum": 0
+          },
+          "notification_channel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`sms` or `email`; null when the confirmation could not be sent."
           }
         }
       },
@@ -21453,6 +21562,43 @@
             "description": "Short reason: `unauthorized`, `forbidden`, `not found`, `database error`, or the\nbad-request message (e.g. `invalid sales_rep: abc`)."
           }
         }
+      },
+      "EstimateInput": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventInput",
+            "description": "The event; `calendar_id` must be the Estimates calendar."
+          },
+          {
+            "type": "object",
+            "required": [
+              "customer_id"
+            ],
+            "properties": {
+              "customer_id": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The customer the estimate is for."
+              },
+              "deal_id": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "The deal it is for (the rep's reminders link to it; default the\ncustomer's newest deal)."
+              },
+              "customer_email": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Where to email the confirmation when it cannot be texted (default the\ncustomer's primary email)."
+              }
+            }
+          }
+        ],
+        "description": "Body of `POST /v1/events/estimates`."
       },
       "EventAttachment": {
         "type": "object",
