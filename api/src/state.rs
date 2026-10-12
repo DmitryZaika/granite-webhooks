@@ -1,3 +1,4 @@
+use crate::ai::Ai;
 use crate::maps::Maps;
 use crate::storage::Storage;
 use crate::telegram::TelegramBots;
@@ -38,6 +39,8 @@ pub struct AppState {
     pub telephony_http: reqwest::Client,
     /// The `CloudTalk` API (a stub in tests).
     pub cloudtalk_base: Arc<str>,
+    /// `OpenAI`, for the AI helpers.
+    pub ai: Ai,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,6 +62,7 @@ impl AppState {
             call_starts: Arc::default(),
             telephony_http: reqwest::Client::new(),
             cloudtalk_base: Arc::from(common::telephony::cloudtalk::BASE_URL),
+            ai: Ai::disabled(),
         }
     }
 
@@ -77,6 +81,12 @@ impl AppState {
     #[must_use]
     pub fn with_cloudtalk_base(mut self, base: &str) -> Self {
         self.cloudtalk_base = Arc::from(base.trim_end_matches('/'));
+        self
+    }
+
+    #[must_use]
+    pub fn with_ai(mut self, ai: Ai) -> Self {
+        self.ai = ai;
         self
     }
 
@@ -100,7 +110,8 @@ impl AppState {
             .with_storage(Storage::from_env())
             .with_telegram(TelegramBots::from_env())
             .with_webhooks(WebhooksClient::from_env())
-            .with_maps(Maps::from_env()))
+            .with_maps(Maps::from_env())
+            .with_ai(Ai::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the

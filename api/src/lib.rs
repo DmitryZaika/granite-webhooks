@@ -14,6 +14,7 @@
     clippy::doc_markdown
 )]
 
+pub mod ai;
 pub mod auth;
 pub mod error;
 pub mod extract;

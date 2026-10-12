@@ -19934,6 +19934,83 @@
           }
         ]
       }
+    },
+    "/v1/ai/improve": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Improve a draft",
+        "description": "Rewrites a customer-facing email or text: grammar, spelling and slightly\nbetter wording, same meaning, facts and links. The reply is the raw text.",
+        "operationId": "improve_message",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImproveInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Improved draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Improved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -20761,6 +20838,14 @@
             "description": "Calls in the `CloudTalk` shape (`Cdr`, `Contact`, `Agent`, …)."
           }
         }
+      },
+      "Channel": {
+        "type": "string",
+        "description": "Which kind of message.",
+        "enum": [
+          "email",
+          "sms"
+        ]
       },
       "Checklist": {
         "type": "object",
@@ -24938,6 +25023,43 @@
             "type": "integer",
             "format": "int64",
             "description": "Photos and files sent with it."
+          }
+        }
+      },
+      "ImproveInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/improve`.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "The draft."
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel",
+            "description": "`email` (default) or `sms`."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's name, to fix the spelling of their first name."
+          }
+        }
+      },
+      "Improved": {
+        "type": "object",
+        "description": "`POST /v1/ai/improve`.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "The rewritten draft."
           }
         }
       },
@@ -30500,6 +30622,10 @@
     {
       "name": "ai-usage",
       "description": "AI usage for the super-user dashboard"
+    },
+    {
+      "name": "ai",
+      "description": "AI helpers for writing messages"
     },
     {
       "name": "public",
