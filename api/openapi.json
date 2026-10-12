@@ -21828,6 +21828,128 @@
           }
         ]
       }
+    },
+    "/v1/me/call-coaching": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Get my call coaching",
+        "description": "The caller's last three real `CloudTalk` calls with their scores, when\nthey have a `CloudTalk` line.",
+        "operationId": "get_my_call_coaching",
+        "responses": {
+          "200": {
+            "description": "Calls",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Coaching"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Ask the coach about a call",
+        "description": "Transcribes and scores one of the calls `GET` lists (once; a failed one\nis tried again), then returns the list. Scoring takes a while; a page\nthat stops waiting sees the result on its next `GET`.",
+        "operationId": "evaluate_my_call",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Calls, the asked one scored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Coaching"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -23110,6 +23232,117 @@
             "description": "When it left its last stage."
           }
         }
+      },
+      "Coaching": {
+        "type": "object",
+        "description": "`GET`/`POST /v1/me/call-coaching`.",
+        "required": [
+          "eligible",
+          "analyzing",
+          "calls"
+        ],
+        "properties": {
+          "eligible": {
+            "type": "boolean",
+            "description": "The caller has a `CloudTalk` line (agent and number)."
+          },
+          "analyzing": {
+            "type": "boolean",
+            "description": "Some call is being scored."
+          },
+          "calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CoachingCall"
+            },
+            "description": "Newest first."
+          }
+        }
+      },
+      "CoachingCall": {
+        "type": "object",
+        "description": "A call the coach can score.",
+        "required": [
+          "call_id",
+          "status",
+          "started_at",
+          "talking_time",
+          "call_type",
+          "phone_display"
+        ],
+        "properties": {
+          "call_id": {
+            "type": "string",
+            "description": "`CloudTalk` call id."
+          },
+          "status": {
+            "$ref": "#/components/schemas/CoachingStatus"
+          },
+          "started_at": {
+            "type": "string",
+            "description": "When it started (`CloudTalk` time)."
+          },
+          "talking_time": {
+            "type": "number",
+            "format": "double",
+            "description": "Seconds talked."
+          },
+          "call_type": {
+            "type": "string",
+            "description": "`incoming` or `outgoing`."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer, from the CRM or `CloudTalk`."
+          },
+          "phone_display": {
+            "type": "string",
+            "description": "The other party's number, dashed."
+          },
+          "score": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "1–100 once scored.",
+            "minimum": 0
+          },
+          "advice": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to do differently."
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the call was about."
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it could not be scored."
+          }
+        }
+      },
+      "CoachingStatus": {
+        "type": "string",
+        "description": "Where a call's score stands.",
+        "enum": [
+          "idle",
+          "pending",
+          "ready",
+          "error"
+        ]
       },
       "Color": {
         "type": "object",
@@ -25758,6 +25991,19 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "EvaluateInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/me/call-coaching`.",
+        "required": [
+          "call_id"
+        ],
+        "properties": {
+          "call_id": {
+            "type": "string",
+            "description": "One of the calls `GET` listed."
           }
         }
       },

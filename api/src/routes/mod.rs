@@ -9,6 +9,7 @@ pub mod ai;
 pub mod ai_usage;
 pub mod attachable;
 pub mod calendars;
+pub mod call_coaching;
 pub mod calls;
 pub mod catalog;
 pub mod checklists;
@@ -85,4 +86,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(notifications::router())
         .merge(quickbooks::router())
         .merge(jobs::router())
+        .merge(call_coaching::router())
 }
