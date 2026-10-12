@@ -20610,6 +20610,268 @@
         ]
       }
     },
+    "/v1/transactions": {
+      "get": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "List transactions",
+        "description": "The company's sales, newest first, with their bundles, stones, sinks,\ncut progress and a status. `employee` and `shop` views filter by\n`status`, `sales_rep` and `search`; the `admin` view lists every sale of\nlive sellers.",
+        "operationId": "list_transactions",
+        "parameters": [
+          {
+            "name": "view",
+            "in": "query",
+            "description": "Default `employee`; `admin` needs an admin.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Which Transactions page asks.",
+              "enum": [
+                "employee",
+                "shop",
+                "admin"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Default `all`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Which sales.",
+              "enum": [
+                "all",
+                "in_progress",
+                "finished"
+              ]
+            }
+          },
+          {
+            "name": "sales_rep",
+            "in": "query",
+            "description": "Only sales of this seller (by name).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Customer, seller, bundle or stone name containing this.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sales",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TransactionRow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or of the shop, or the admin view without being an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/transactions/sales-reps": {
+      "get": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "List the sellers to filter by",
+        "description": "Names of everyone who sold something in the company.",
+        "operationId": "list_transaction_sellers",
+        "responses": {
+          "200": {
+            "description": "Seller names",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/transactions/{id}/installed": {
+      "post": {
+        "tags": [
+          "sales"
+        ],
+        "summary": "Mark a sale installed",
+        "description": "Sets the installed date (and, when `paid`, the paid date) of a sale of\nthe company whose slabs are all cut.",
+        "operationId": "mark_sale_installed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Installed"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Marked installed"
+          },
+          "400": {
+            "description": "Already installed, no slabs, not all slabs cut, or a bad date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or of the shop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such sale in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/instructions": {
       "get": {
         "tags": [
@@ -31106,6 +31368,24 @@
           }
         }
       },
+      "Installed": {
+        "type": "object",
+        "description": "Body of `POST /v1/transactions/{id}/installed`.",
+        "properties": {
+          "installed_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was installed (`YYYY-MM-DD` or an ISO time); default now."
+          },
+          "paid": {
+            "type": "boolean",
+            "description": "It is also paid (on the same date)."
+          }
+        },
+        "additionalProperties": false
+      },
       "Instruction": {
         "type": "object",
         "description": "One instruction of the tree.",
@@ -37879,6 +38159,136 @@
           "square_feet": {
             "type": "string",
             "description": "Square feet of those slabs, decimal string; \"0.00\" when no slab has a size."
+          }
+        }
+      },
+      "TransactionRow": {
+        "type": "object",
+        "description": "A sale in the list.",
+        "required": [
+          "id",
+          "total_slabs",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sale id."
+          },
+          "sale_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sold."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Customer name."
+          },
+          "seller_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Seller name."
+          },
+          "bundle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bundles, comma separated."
+          },
+          "cancelled_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was cancelled."
+          },
+          "installed_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was installed."
+          },
+          "stone_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`name:ACTIVE|DELETED` per stone, comma separated."
+          },
+          "project_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Project address."
+          },
+          "sf": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Square feet (the shop view: each room's, added up)."
+          },
+          "bundle_with_cut": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`bundle:CUT|UNCUT:ACTIVE|DELETED` per slab, comma separated."
+          },
+          "all_cut": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "1 when every slab is cut."
+          },
+          "any_cut": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "1 when a slab is cut."
+          },
+          "total_slabs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Slabs on the sale."
+          },
+          "cut_slabs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Of them cut."
+          },
+          "sink_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sink models, joined."
+          },
+          "status": {
+            "type": "string",
+            "description": "`Sold`, `Partially Cut`, `Cut`, `Installed` or `Cancelled`."
           }
         }
       },
