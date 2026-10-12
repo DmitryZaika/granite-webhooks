@@ -325,18 +325,7 @@ fn push_search_filter(
             15
         }
         CustomerSearchBy::Address => {
-            let words: Vec<&str> = term.split_whitespace().take(6).collect();
-            sql.push(" AND c.address IS NOT NULL");
-            if words.is_empty() {
-                sql.push(" AND 1 = 0");
-            }
-            for word in &words {
-                sql.push(" AND c.address LIKE ").push_bind(format!("%{word}%"));
-            }
-            push_owner_rank(sql, user_id);
-            sql.push(" CASE WHEN c.address LIKE ")
-                .push_bind(prefix.clone())
-                .push(" THEN 0 ELSE 1 END, c.name ASC");
+            push_address_filter(sql, term, &prefix, user_id);
             15
         }
         CustomerSearchBy::Email => {
@@ -362,6 +351,23 @@ fn push_search_filter(
             15
         }
     }
+}
+
+/// Every word of `term` in the address; addresses starting with it first.
+fn push_address_filter(sql: &mut QueryBuilder<MySql>, term: &str, prefix: &str, user_id: i32) {
+    let words: Vec<&str> = term.split_whitespace().take(6).collect();
+    sql.push(" AND c.address IS NOT NULL");
+    if words.is_empty() {
+        sql.push(" AND 1 = 0");
+    }
+    for word in &words {
+        sql.push(" AND c.address LIKE ")
+            .push_bind(format!("%{word}%"));
+    }
+    push_owner_rank(sql, user_id);
+    sql.push(" CASE WHEN c.address LIKE ")
+        .push_bind(prefix.to_string())
+        .push(" THEN 0 ELSE 1 END, c.name ASC");
 }
 
 /// Either phone column, digits only, matches either pattern.
