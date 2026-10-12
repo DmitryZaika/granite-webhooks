@@ -294,3 +294,33 @@ async fn marketing_companies_are_those_of_the_position(pool: MySqlPool) {
         serde_json::json!([{ "id": 101, "name": "Other Granite Co" }])
     );
 }
+
+#[test_db::test(seed)]
+async fn telegram_alerts_are_switched_on_and_off(pool: MySqlPool) {
+    let server = common::server(pool);
+    let saved: serde_json::Value = server
+        .put("/v1/me/notification-preferences")
+        .with_session(sessions::REP)
+        .json(&serde_json::json!({
+            "telegram_sms_notifications": true,
+            "telegram_email_notifications": false,
+            "telegram_activity_notifications": true,
+        }))
+        .await
+        .json();
+    assert_eq!(
+        saved,
+        serde_json::json!({
+            "notifications_telegram_connected": false,
+            "telegram_sms_notifications": true,
+            "telegram_email_notifications": false,
+            "telegram_activity_notifications": true,
+        })
+    );
+    let read: serde_json::Value = server
+        .get("/v1/me/notification-preferences")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(read, saved);
+}

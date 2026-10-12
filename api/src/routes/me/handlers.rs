@@ -251,3 +251,103 @@ pub async fn marketing_companies(
     .await?;
     Ok(Json(companies))
 }
+
+/// Which Telegram alerts the user wants from the notifications bot.
+#[derive(Debug, serde::Serialize, sqlx::FromRow, utoipa::ToSchema)]
+pub struct NotificationPreferences {
+    /// The notifications bot is linked.
+    pub notifications_telegram_connected: bool,
+    /// New texts.
+    pub telegram_sms_notifications: bool,
+    /// New emails.
+    pub telegram_email_notifications: bool,
+    /// Deal activities and other CRM alerts.
+    pub telegram_activity_notifications: bool,
+}
+
+/// Body of `PUT /v1/me/notification-preferences`.
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct NotificationPreferencesInput {
+    /// New texts.
+    pub telegram_sms_notifications: bool,
+    /// New emails.
+    pub telegram_email_notifications: bool,
+    /// Deal activities and other CRM alerts.
+    pub telegram_activity_notifications: bool,
+}
+
+async fn load_preferences(
+    pool: &sqlx::MySqlPool,
+    user_id: i32,
+) -> ApiResult<NotificationPreferences> {
+    let found: Option<NotificationPreferences> = sqlx::query_as(
+        "SELECT notifications_telegram_id IS NOT NULL AS notifications_telegram_connected,
+                COALESCE(telegram_sms_notifications, 0) <> 0 AS telegram_sms_notifications,
+                COALESCE(telegram_email_notifications, 0) <> 0 AS telegram_email_notifications,
+                COALESCE(telegram_activity_notifications, 0) <> 0 AS telegram_activity_notifications
+           FROM users WHERE id = ? AND is_deleted = 0",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    found.ok_or(ApiError::NotFound)
+}
+
+/// Get my notification settings
+///
+/// Which alerts the notifications Telegram bot sends the signed-in user.
+#[utoipa::path(
+    get,
+    path = "/v1/me/notification-preferences",
+    operation_id = "get_notification_preferences",
+    tag = "me",
+    responses(
+        (status = 200, description = "Settings", body = NotificationPreferences),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn notification_preferences(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+) -> ApiResult<Json<NotificationPreferences>> {
+    Ok(Json(load_preferences(&state.pool, user.id).await?))
+}
+
+/// Save my notification settings
+///
+/// Turns each kind of Telegram alert on or off; returns the saved settings.
+#[utoipa::path(
+    put,
+    path = "/v1/me/notification-preferences",
+    operation_id = "set_notification_preferences",
+    tag = "me",
+    request_body = NotificationPreferencesInput,
+    responses(
+        (status = 200, description = "Saved settings", body = NotificationPreferences),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn set_notification_preferences(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    JsonBody(input): JsonBody<NotificationPreferencesInput>,
+) -> ApiResult<Json<NotificationPreferences>> {
+    sqlx::query(
+        "UPDATE users SET telegram_sms_notifications = ?, telegram_email_notifications = ?,
+                telegram_activity_notifications = ?
+          WHERE id = ? AND is_deleted = 0",
+    )
+    .bind(input.telegram_sms_notifications)
+    .bind(input.telegram_email_notifications)
+    .bind(input.telegram_activity_notifications)
+    .bind(user.id)
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(load_preferences(&state.pool, user.id).await?))
+}

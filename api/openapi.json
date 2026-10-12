@@ -352,6 +352,128 @@
         ]
       }
     },
+    "/v1/me/notification-preferences": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Get my notification settings",
+        "description": "Which alerts the notifications Telegram bot sends the signed-in user.",
+        "operationId": "get_notification_preferences",
+        "responses": {
+          "200": {
+            "description": "Settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferences"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Save my notification settings",
+        "description": "Turns each kind of Telegram alert on or off; returns the saved settings.",
+        "operationId": "set_notification_preferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPreferencesInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferences"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/marketing-companies": {
       "get": {
         "tags": [
@@ -24080,6 +24202,57 @@
             ],
             "format": "date-time",
             "description": "When it was written."
+          }
+        }
+      },
+      "NotificationPreferences": {
+        "type": "object",
+        "description": "Which Telegram alerts the user wants from the notifications bot.",
+        "required": [
+          "notifications_telegram_connected",
+          "telegram_sms_notifications",
+          "telegram_email_notifications",
+          "telegram_activity_notifications"
+        ],
+        "properties": {
+          "notifications_telegram_connected": {
+            "type": "boolean",
+            "description": "The notifications bot is linked."
+          },
+          "telegram_sms_notifications": {
+            "type": "boolean",
+            "description": "New texts."
+          },
+          "telegram_email_notifications": {
+            "type": "boolean",
+            "description": "New emails."
+          },
+          "telegram_activity_notifications": {
+            "type": "boolean",
+            "description": "Deal activities and other CRM alerts."
+          }
+        }
+      },
+      "NotificationPreferencesInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/me/notification-preferences`.",
+        "required": [
+          "telegram_sms_notifications",
+          "telegram_email_notifications",
+          "telegram_activity_notifications"
+        ],
+        "properties": {
+          "telegram_sms_notifications": {
+            "type": "boolean",
+            "description": "New texts."
+          },
+          "telegram_email_notifications": {
+            "type": "boolean",
+            "description": "New emails."
+          },
+          "telegram_activity_notifications": {
+            "type": "boolean",
+            "description": "Deal activities and other CRM alerts."
           }
         }
       },
