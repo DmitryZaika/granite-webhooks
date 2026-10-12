@@ -20529,6 +20529,83 @@
         ]
       }
     },
+    "/v1/ai/invoice-edit": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Propose an invoice edit",
+        "description": "Applies a plain-language instruction to the invoice with AI and returns\nthe result for the editor to preview. Nothing is saved.",
+        "operationId": "propose_invoice_edit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceEditInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Proposed invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceEdit"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or too long instruction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "OpenAI failed or answered with something else",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/notifications/done": {
       "post": {
         "tags": [
@@ -26884,6 +26961,37 @@
               "$ref": "#/components/schemas/InventorySlab"
             },
             "description": "Free slabs of the stone and of the stones it shows slabs from, by bundle."
+          }
+        }
+      },
+      "InvoiceEdit": {
+        "type": "object",
+        "description": "`POST /v1/ai/invoice-edit`.",
+        "required": [
+          "invoice"
+        ],
+        "properties": {
+          "invoice": {
+            "$ref": "#/components/schemas/EditableInvoice",
+            "description": "The proposed invoice, for the editor to preview and save."
+          }
+        }
+      },
+      "InvoiceEditInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/invoice-edit`.",
+        "required": [
+          "invoice",
+          "instruction"
+        ],
+        "properties": {
+          "invoice": {
+            "$ref": "#/components/schemas/EditableInvoice",
+            "description": "The invoice as the editor has it."
+          },
+          "instruction": {
+            "type": "string",
+            "description": "What to change."
           }
         }
       },

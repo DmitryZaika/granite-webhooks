@@ -77,3 +77,58 @@ async fn a_reply_without_a_template_is_a_bad_gateway(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::BAD_GATEWAY);
 }
+
+#[test_db::test(seed)]
+async fn an_invoice_edit_keeps_only_allowed_changes(pool: MySqlPool) {
+    let reply = r#"{"invoice":{"id":"9","syncToken":"7","docNumber":"1001","txnDate":null,"dueDate":"2026-06-01","totalAmt":null,"balance":null,"currency":null,"customerMemo":"Thanks!","privateNote":null,"billAddr":null,"shipAddr":null,"lines":[
+        {"id":"1","lineNum":1,"detailType":"SalesItemLineDetail","description":"Quartz","amount":1,"qty":2,"unitPrice":60,"itemRefValue":"99","itemRefName":"Hacked","editable":true},
+        {"id":"new:1","lineNum":null,"detailType":"SalesItemLineDetail","description":null,"amount":null,"qty":1,"unitPrice":40,"itemRefValue":"3","itemRefName":null,"editable":true},
+        {"id":"new:2","lineNum":null,"detailType":"SalesItemLineDetail","description":"Free","amount":0,"qty":1,"unitPrice":0,"itemRefValue":"777","itemRefName":null,"editable":true}
+    ]}}"#;
+    let (server, seen) = server(&pool, reply).await;
+    let line = |id: &str, kind: &str, item: Option<&str>, editable: bool| {
+        json!({ "id": id, "line_num": null, "detail_type": kind, "description": "x", "amount": 120, "qty": 1,
+                "unit_price": 120, "item_ref_value": item, "item_ref_name": item.map(|_| "Stone"), "editable": editable })
+    };
+    let invoice = json!({
+        "id": "9", "sync_token": "1", "doc_number": "1001", "txn_date": "2026-05-01", "due_date": null,
+        "total_amt": 120, "balance": 120, "currency": "USD", "customer_memo": null, "private_note": "keep?",
+        "bill_addr": null, "ship_addr": null,
+        "lines": [
+            line("1", "SalesItemLineDetail", Some("3"), true),
+            line("2", "DescriptionOnly", None, true),
+            line("3", "SubTotalLineDetail", None, false),
+        ],
+    });
+    let body: Value = server
+        .post("/v1/ai/invoice-edit")
+        .with_session(sessions::REP)
+        .json(
+            &json!({ "invoice": invoice, "instruction": "two of them, drop the note, add a sink" }),
+        )
+        .await
+        .json();
+    let edited = &body["invoice"];
+    assert_eq!(edited["sync_token"], "1");
+    assert_eq!(edited["txn_date"], "2026-05-01");
+    assert_eq!(edited["due_date"], "2026-06-01");
+    assert_eq!(edited["customer_memo"], "Thanks!");
+    assert_eq!(edited["private_note"], Value::Null);
+    let lines = edited["lines"].as_array().unwrap();
+    let ids: Vec<&str> = lines
+        .iter()
+        .map(|line| line["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["1", "3", "new:1"]);
+    assert_eq!(lines[0]["amount"], 120.0);
+    assert_eq!(lines[0]["qty"], 2.0);
+    assert_eq!(lines[0]["item_ref_value"], "3");
+    assert_eq!(lines[2]["item_ref_name"], "Stone");
+    assert_eq!(lines[2]["description"], "Stone");
+    let sent = seen.lock().unwrap().clone();
+    let user: Value =
+        serde_json::from_str(sent[0]["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(user["invoice"]["syncToken"], "1");
+    assert_eq!(user["invoice"]["lines"][0]["itemRefValue"], "3");
+    assert_eq!(sent[0]["response_format"]["type"], "json_object");
+}
