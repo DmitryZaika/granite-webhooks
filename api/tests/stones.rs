@@ -1,5 +1,6 @@
 mod common;
 
+use api::storage;
 use axum::http::StatusCode;
 use common::{WithSession, ids, server, sessions};
 use serde_json::{Value, json};
@@ -185,4 +186,97 @@ async fn requires_an_employee_or_admin(pool: MySqlPool) {
         .with_session(sessions::ADMIN)
         .await
         .assert_status_ok();
+}
+
+#[test_db::test(seed)]
+async fn shop_staff_count_samples(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let patch = |id: i32, body: Value| {
+        let request = server
+            .patch(&format!("/v1/stones/{id}/samples"))
+            .with_session(sessions::VIEWER)
+            .json(&body);
+        async move { request.await }
+    };
+    patch(3000, json!({ "amount": 3 }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (104, 4, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    patch(3000, json!({ "amount": 3 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    patch(3000, json!({ "importance": 2 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let saved: (Option<i32>, Option<i32>) =
+        sqlx::query_as("SELECT samples_amount, samples_importance FROM stones WHERE id = 3000")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(saved, (Some(3), Some(2)));
+    // Saving the same value again is still fine.
+    patch(3000, json!({ "importance": 2 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    for bad in [
+        json!({ "amount": -1 }),
+        json!({ "importance": 5 }),
+        json!({}),
+    ] {
+        patch(3000, bad)
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+    patch(4000, json!({ "amount": 1 }))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    // The shop's stones list works too.
+    server
+        .get("/v1/stones")
+        .with_session(sessions::VIEWER)
+        .await
+        .assert_status_ok();
+}
+
+#[test_db::test(seed)]
+async fn admins_proxy_bucket_images(pool: MySqlPool) {
+    let (server, storage) = common::server_with_storage(pool);
+    storage
+        .put("stones/a b.png", common::png(4, 4), "image/png")
+        .await
+        .unwrap();
+    storage
+        .put("stones/notes.pdf", b"%PDF".to_vec(), "application/pdf")
+        .await
+        .unwrap();
+    let get = |url: String, session: &'static str| {
+        let request = server
+            .get("/v1/stones/image-proxy")
+            .add_query_param("url", url)
+            .with_session(session);
+        async move { request.await }
+    };
+    let base = storage::MEMORY_PUBLIC_BASE;
+    let res = get(format!("{base}/stones/a%20b.png"), sessions::ADMIN).await;
+    res.assert_status_ok();
+    assert_eq!(res.header("content-type"), "image/png");
+    assert_eq!(res.as_bytes().as_ref(), common::png(4, 4).as_slice());
+
+    get(format!("{base}/stones/a%20b.png"), sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    get(format!("{base}/stones/notes.pdf"), sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    get("https://evil.test/x.png".into(), sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    get(format!("{base}/stones/missing.png"), sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 }

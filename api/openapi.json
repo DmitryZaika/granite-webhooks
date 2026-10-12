@@ -2721,7 +2721,7 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin, or asks for hidden stones without being an admin",
+            "description": "Caller is not an employee or shop staff, or asks for hidden stones without being an admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -3457,6 +3457,98 @@
         ]
       }
     },
+    "/v1/stones/{id}/samples": {
+      "patch": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Set a stone's samples",
+        "description": "Saves the samples on hand and/or how many to keep for a stone of the\ncaller's company.",
+        "operationId": "update_stone_samples",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stone id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SamplesInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Negative amount, importance not 1-4, or nothing to save",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or shop staff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stone in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/stones/names": {
       "get": {
         "tags": [
@@ -3527,6 +3619,109 @@
           },
           "500": {
             "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/stones/image-proxy": {
+      "get": {
+        "tags": [
+          "stones"
+        ],
+        "summary": "Fetch a stone image through the API",
+        "description": "Returns the bytes of an image in the storage bucket so the browser can\ndraw it on a canvas (the bucket sends no CORS headers). Other URLs and\nfiles that are not images are refused.",
+        "operationId": "proxy_stone_image",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "description": "Public URL of an image in the company bucket.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image",
+            "content": {
+              "image/*": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an image in the bucket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No bucket configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -22208,6 +22403,29 @@
             "description": "Deals created this month."
           }
         }
+      },
+      "SamplesInput": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/stones/{id}/samples`; at least one field.",
+        "properties": {
+          "amount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Samples on hand, 0 or more."
+          },
+          "importance": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many samples to keep: 1 (few) to 3 (many), 4 = none needed."
+          }
+        },
+        "additionalProperties": false
       },
       "SaveOrder": {
         "type": "object",

@@ -9,8 +9,10 @@ use crate::extract::{JsonBody, MultiQuery};
 use crate::routes::uploads::{self, schemas::UploadFolder};
 use crate::state::AppState;
 use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Query, State};
+use axum::http::{StatusCode, header};
+use axum::response::IntoResponse;
+use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlConnection, MySqlPool};
 use utoipa::{IntoParams, ToSchema};
@@ -708,5 +710,63 @@ pub async fn add_slab(
             length,
             width,
         }),
+    ))
+}
+
+/// Query of `GET /v1/stones/image-proxy`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ImageProxyQuery {
+    /// Public URL of an image in the company bucket.
+    pub url: String,
+}
+
+/// Fetch a stone image through the API
+///
+/// Returns the bytes of an image in the storage bucket so the browser can
+/// draw it on a canvas (the bucket sends no CORS headers). Other URLs and
+/// files that are not images are refused.
+#[utoipa::path(
+    get,
+    path = "/v1/stones/image-proxy",
+    operation_id = "proxy_stone_image",
+    tag = "stones",
+    params(ImageProxyQuery),
+    responses(
+        (status = 200, description = "The image", content_type = "image/*", body = Vec<u8>),
+        (status = 400, description = "Not an image in the bucket", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "No such file", body = ErrorBody),
+        (status = 500, description = "Storage error", body = ErrorBody),
+        (status = 503, description = "No bucket configured", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn image_proxy(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Query(query): Query<ImageProxyQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let disallowed = || ApiError::BadRequest("Invalid or disallowed URL".into());
+    let key = state
+        .storage
+        .key_for_url(&query.url)
+        .ok_or_else(disallowed)?;
+    let key = percent_decode_str(&key).decode_utf8_lossy().into_owned();
+    let object = state.storage.get(&key).await?.ok_or(ApiError::NotFound)?;
+    if !object
+        .content_type
+        .to_ascii_lowercase()
+        .starts_with("image/")
+    {
+        return Err(disallowed());
+    }
+    Ok((
+        [
+            (header::CONTENT_TYPE, object.content_type),
+            (header::CACHE_CONTROL, "private, max-age=3600".to_string()),
+        ],
+        object.bytes,
     ))
 }
