@@ -14,6 +14,7 @@
 //! - `GET  /v1/deals/file-urls`                   → file URLs of a deal or a customer's deals
 //! - `GET  /v1/emails/{id}/images`                 → an email's pictures, for the photo viewer
 //! - `POST /v1/emails/drafts`, `GET|PUT|DELETE /v1/emails/drafts/{id}` → the caller's drafts
+//! - `GET  /v1/superuser/sales-emails[/{thread_id}]` → the sales mailbox (super admins)
 //!
 //! Replaces the Remix `employee.emails*` and `admin.emails*` loaders and `api.emails.*` routes.
 //! The `webhooks` Lambda builds and sends the MIME message (it owns SES).
@@ -27,6 +28,7 @@ mod drafts;
 mod handlers;
 mod list;
 mod names;
+mod sales_mailbox;
 pub mod schemas;
 pub mod send;
 pub mod sql;
@@ -38,6 +40,8 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(handlers::list))
+        .routes(routes!(sales_mailbox::list))
+        .routes(routes!(sales_mailbox::thread))
         .routes(routes!(handlers::counts))
         .routes(routes!(handlers::unread))
         .routes(routes!(handlers::get_thread))

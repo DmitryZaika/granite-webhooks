@@ -15783,6 +15783,176 @@
         ]
       }
     },
+    "/v1/superuser/sales-emails": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "List the sales mailbox",
+        "description": "A page (50 threads) of the sales mailbox's inbox (mail to it, not from it)\nor sent folder, across every company, ranked by each thread's latest\nmessage in the folder. Super admins only.",
+        "operationId": "list_sales_mailbox",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "query",
+            "description": "`inbox` (default) or `sent`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "A folder of the mailbox.",
+              "enum": [
+                "inbox",
+                "sent"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page, from 1.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Matches subject, text and addresses.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of threads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a super admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/sales-emails/{thread_id}": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Open a sales mailbox conversation",
+        "description": "Every message of a thread that has mail to or from the sales mailbox,\nwith attachments and addresses, and who it is with. Read only: opening\nit marks nothing read. Super admins only.",
+        "operationId": "get_sales_mailbox_thread",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "description": "Conversation id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a super admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No sales mailbox mail in the thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/emails/folder-counts": {
       "get": {
         "tags": [
@@ -44715,6 +44885,92 @@
           }
         }
       },
+      "SalesEmail": {
+        "type": "object",
+        "description": "The latest message of a thread in the folder.",
+        "required": [
+          "id",
+          "thread_id",
+          "has_attachments",
+          "thread_has_attachments"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The message."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "Its thread."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subject."
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Text."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When (UTC, ISO 8601)."
+          },
+          "sender_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "From."
+          },
+          "receiver_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "To."
+          },
+          "sender_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The CRM user who sent it."
+          },
+          "has_attachments": {
+            "type": "boolean",
+            "description": "It has attachments."
+          },
+          "thread_has_attachments": {
+            "type": "boolean",
+            "description": "Any message of the thread has attachments."
+          },
+          "sender_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sender's user or customer name."
+          },
+          "receiver_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The receiver's user or customer name."
+          }
+        }
+      },
       "SalesGoal": {
         "type": "object",
         "description": "The signed-in user's monthly sales goal.",
@@ -44760,6 +45016,45 @@
               "null"
             ],
             "description": "Invoice date."
+          }
+        }
+      },
+      "SalesPage": {
+        "type": "object",
+        "description": "`GET /v1/superuser/sales-emails`.",
+        "required": [
+          "emails",
+          "total_count",
+          "current_page",
+          "page_size",
+          "mailbox"
+        ],
+        "properties": {
+          "emails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SalesEmail"
+            },
+            "description": "Threads, latest message first."
+          },
+          "total_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Threads in the folder (and search)."
+          },
+          "current_page": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The page."
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Threads per page."
+          },
+          "mailbox": {
+            "type": "string",
+            "description": "The mailbox's address."
           }
         }
       },

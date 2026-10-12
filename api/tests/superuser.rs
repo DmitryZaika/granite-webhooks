@@ -175,3 +175,63 @@ async fn super_admins_send_a_plain_email(pool: MySqlPool) {
     assert_eq!(sent[0].body, "Line &lt;1&gt;<br>Line 2");
     assert!(sent[0].transactional);
 }
+
+#[test_db::test(seed)]
+async fn super_admins_read_the_sales_mailbox(pool: MySqlPool) {
+    make_super(&pool).await;
+    sqlx::raw_sql(
+        "INSERT INTO emails (id, thread_id, subject, body, sender_email, receiver_email, sent_at, company_id, is_draft) VALUES
+           (9900, 'sales-t1', 'Pricing?', 'How much?', 'Alice <alice@example.com>', 'sales@granite-manager.com', '2026-05-01 10:00:00', 100, 0),
+           (9901, 'sales-t1', 'Re: Pricing?', 'Plans start at...', 'sales@granitemanager.com', 'alice@example.com', '2026-05-01 11:00:00', 100, 0),
+           (9902, 'sales-t2', 'Demo', 'Can we talk', 'bob@example.com', 'SALES@granitemanager.com', '2026-05-02 10:00:00', NULL, 0),
+           (9903, 'other-t', 'Hi', 'x', 'carl@example.com', 'rep@acme.test', '2026-05-03 10:00:00', 100, 0);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool);
+    server
+        .get("/v1/superuser/sales-emails")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let inbox: Value = server
+        .get("/v1/superuser/sales-emails")
+        .with_session(sessions::SUPER_ADMIN)
+        .await
+        .json();
+    assert_eq!(inbox["total_count"], 2);
+    let threads: Vec<&str> = inbox["emails"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["thread_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(threads, ["sales-t2", "sales-t1"]);
+    assert_eq!(inbox["emails"][1]["sender_name"], "Alice Lead");
+    let sent: Value = server
+        .get("/v1/superuser/sales-emails?folder=sent")
+        .with_session(sessions::SUPER_ADMIN)
+        .await
+        .json();
+    assert_eq!(sent["emails"][0]["id"], 9901);
+    let found: Value = server
+        .get("/v1/superuser/sales-emails?search=demo")
+        .with_session(sessions::SUPER_ADMIN)
+        .await
+        .json();
+    assert_eq!(found["total_count"], 1);
+
+    let thread: Value = server
+        .get("/v1/superuser/sales-emails/sales-t1")
+        .with_session(sessions::SUPER_ADMIN)
+        .await
+        .json();
+    assert_eq!(thread["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(thread["customer"]["name"], "Alice Lead");
+    server
+        .get("/v1/superuser/sales-emails/other-t")
+        .with_session(sessions::SUPER_ADMIN)
+        .await
+        .assert_status_not_found();
+}

@@ -326,6 +326,79 @@ pub async fn finish_attachments(
     Ok(())
 }
 
+/// A thread's messages (oldest first, with attachments; on a deal only its
+/// own and unassigned ones) and every non-BCC address, in header order.
+pub async fn thread_contents(
+    pool: &MySqlPool,
+    storage: &Storage,
+    thread_id: &str,
+    trash: bool,
+    deal_id: Option<i64>,
+) -> Result<(Vec<ThreadMessage>, Vec<Participant>), sqlx::Error> {
+    let deleted = if trash { "IS NOT NULL" } else { "IS NULL" };
+    let mut args: Vec<Arg> = vec![thread_id.into()];
+    let deal_filter = deal_id.map_or(String::new(), |deal_id| {
+        args.push(deal_id.into());
+        " AND (e.deal_id = ? OR e.deal_id IS NULL)".to_string()
+    });
+    let mut messages: Vec<ThreadMessage> = Sql::new(
+        format!(
+            "SELECT e.id, e.subject, e.body, e.html_body, e.sent_at, e.sender_email, e.receiver_email,
+                    e.receiver_user_id, e.employee_read_at, e.sender_user_id, u.email_signature AS signature,
+                    MAX(er.read_at) AS read_at
+             FROM emails e
+             LEFT JOIN email_reads er ON e.message_id = er.message_id AND {CLIENT_OPEN_MIN_DELAY}
+             LEFT JOIN users u ON u.id = e.sender_user_id
+             WHERE e.deleted_at {deleted} AND e.thread_id = ?{deal_filter}
+             GROUP BY e.id
+             ORDER BY e.sent_at, e.id"
+        ),
+        args.clone(),
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await?;
+
+    let deal_filter = deal_id.map_or(String::new(), |_| {
+        " AND (deal_id = ? OR deal_id IS NULL)".to_string()
+    });
+    let mut attachments: Vec<Attachment> = Sql::new(
+        format!(
+            "SELECT id, email_id, content_type, content_subtype, filename, url FROM email_attachments
+             WHERE email_id IN (SELECT id FROM emails WHERE deleted_at {deleted} AND thread_id = ?{deal_filter})
+             ORDER BY id"
+        ),
+        args,
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await?;
+    finish_attachments(pool, storage, &mut attachments).await?;
+    for message in &mut messages {
+        message.attachments = attachments
+            .iter()
+            .filter(|a| a.email_id == message.id)
+            .cloned()
+            .collect();
+    }
+
+    let participants: Vec<Participant> = sqlx::query_as(
+        "SELECT ep.email_id, CAST(ep.type AS CHAR) AS type, ep.email, ep.display_name, ep.user_id,
+                ep.customer_id, u.name AS user_name, c.name AS customer_name
+         FROM email_participants ep
+         JOIN emails e ON e.id = ep.email_id
+         LEFT JOIN users u ON u.id = ep.user_id
+         LEFT JOIN customers c ON c.id = ep.customer_id
+         WHERE e.thread_id = ? AND ep.type <> 'bcc'
+         ORDER BY ep.email_id, ep.position, ep.id",
+    )
+    .bind(thread_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok((messages, participants))
+}
+
 /// Everything the conversation view shows. `None` when the caller's company
 /// may not read it.
 #[allow(clippy::too_many_lines)] // Mirrors the two Remix chat loaders (mailbox and deal).
@@ -410,66 +483,8 @@ pub async fn thread_detail(
         None => Vec::new(),
     };
 
-    let deleted = if trash { "IS NOT NULL" } else { "IS NULL" };
-    let mut args: Vec<Arg> = vec![thread_id.into()];
-    let deal_filter = deal_id.map_or(String::new(), |deal_id| {
-        args.push(deal_id.into());
-        " AND (e.deal_id = ? OR e.deal_id IS NULL)".to_string()
-    });
-    let mut messages: Vec<ThreadMessage> = Sql::new(
-        format!(
-            "SELECT e.id, e.subject, e.body, e.html_body, e.sent_at, e.sender_email, e.receiver_email,
-                    e.receiver_user_id, e.employee_read_at, e.sender_user_id, u.email_signature AS signature,
-                    MAX(er.read_at) AS read_at
-             FROM emails e
-             LEFT JOIN email_reads er ON e.message_id = er.message_id AND {CLIENT_OPEN_MIN_DELAY}
-             LEFT JOIN users u ON u.id = e.sender_user_id
-             WHERE e.deleted_at {deleted} AND e.thread_id = ?{deal_filter}
-             GROUP BY e.id
-             ORDER BY e.sent_at, e.id"
-        ),
-        args.clone(),
-    )
-    .query_as()
-    .fetch_all(pool)
-    .await?;
-
-    let deal_filter = deal_id.map_or(String::new(), |_| {
-        " AND (deal_id = ? OR deal_id IS NULL)".to_string()
-    });
-    let mut attachments: Vec<Attachment> = Sql::new(
-        format!(
-            "SELECT id, email_id, content_type, content_subtype, filename, url FROM email_attachments
-             WHERE email_id IN (SELECT id FROM emails WHERE deleted_at {deleted} AND thread_id = ?{deal_filter})
-             ORDER BY id"
-        ),
-        args,
-    )
-    .query_as()
-    .fetch_all(pool)
-    .await?;
-    finish_attachments(pool, storage, &mut attachments).await?;
-    for message in &mut messages {
-        message.attachments = attachments
-            .iter()
-            .filter(|a| a.email_id == message.id)
-            .cloned()
-            .collect();
-    }
-
-    let participants: Vec<Participant> = sqlx::query_as(
-        "SELECT ep.email_id, CAST(ep.type AS CHAR) AS type, ep.email, ep.display_name, ep.user_id,
-                ep.customer_id, u.name AS user_name, c.name AS customer_name
-         FROM email_participants ep
-         JOIN emails e ON e.id = ep.email_id
-         LEFT JOIN users u ON u.id = ep.user_id
-         LEFT JOIN customers c ON c.id = ep.customer_id
-         WHERE e.thread_id = ? AND ep.type <> 'bcc'
-         ORDER BY ep.email_id, ep.position, ep.id",
-    )
-    .bind(thread_id)
-    .fetch_all(pool)
-    .await?;
+    let (messages, participants) =
+        thread_contents(pool, storage, thread_id, trash, deal_id).await?;
 
     Ok(Some(ThreadDetail {
         thread_id: thread_id.to_string(),
