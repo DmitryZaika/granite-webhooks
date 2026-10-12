@@ -9,8 +9,10 @@
 //! - `GET|POST /v1/marketing/{company_id}/referral-sources`,
 //!   `PATCH|DELETE .../{id}` → where leads come from
 //! - `POST   /v1/marketing/{company_id}/uploads` → a picture for a new lead
+//! - `GET    /v1/marketing/{company_id}/customers/search` → find a customer
 //!
-//! Replaces the Remix `external.marketing.$companyId.leads*` routes.
+//! Replaces the Remix `external.marketing.$companyId.leads*` and
+//! `external.api.customers.*` routes.
 
 mod handlers;
 mod leads;
@@ -48,6 +50,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::info))
         .routes(routes!(handlers::projects))
         .routes(routes!(handlers::upload))
+        .routes(routes!(handlers::search))
         .routes(routes!(sources::list, sources::create))
         .routes(routes!(sources::rename, sources::delete))
 }

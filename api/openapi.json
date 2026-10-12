@@ -21450,6 +21450,123 @@
         ]
       }
     },
+    "/v1/marketing/{company_id}/customers/search": {
+      "get": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "Search the company's customers",
+        "description": "The employee customer search (`GET /v1/customers/search`) for the\nmarketing team's \"find a customer\" box.",
+        "operationId": "search_marketing_customers",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "term",
+            "in": "query",
+            "description": "What the user typed. Required (may be empty for phone search).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "by",
+            "in": "query",
+            "description": "Which field to match: `name` (default), `phone`, `email`, `company`, `address`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "How `GET /v1/customers/search` matches `term`.",
+              "enum": [
+                "name",
+                "phone",
+                "email",
+                "company",
+                "address"
+              ]
+            }
+          },
+          {
+            "name": "own_only",
+            "in": "query",
+            "description": "`true` returns only customers assigned to the caller or unassigned.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching customers, best first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CustomerSearchRow"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing `term` or unknown `by`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not on the company's marketing team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/marketing/{company_id}/referral-sources": {
       "get": {
         "tags": [

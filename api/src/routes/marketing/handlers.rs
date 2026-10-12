@@ -5,9 +5,10 @@ use super::require_marketer;
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::extract::MultiQuery;
 use crate::routes::customers::history::{CustomerHistory, lead_history};
-use crate::routes::customers::queries::find_customer;
-use crate::routes::customers::schemas::CustomerDetail;
+use crate::routes::customers::queries::{find_customer, search_customers};
+use crate::routes::customers::schemas::{CustomerDetail, CustomerSearchQuery, CustomerSearchRow};
 use crate::routes::uploads::handlers::extension;
 use crate::routes::uploads::schemas::{Upload, UploadFolder};
 use crate::serde_helpers::js_date;
@@ -287,5 +288,36 @@ pub async fn upload(
             url,
             token: None,
         }),
+    ))
+}
+
+/// Search the company's customers
+///
+/// The employee customer search (`GET /v1/customers/search`) for the
+/// marketing team's "find a customer" box.
+#[utoipa::path(
+    get,
+    path = "/v1/marketing/{company_id}/customers/search",
+    operation_id = "search_marketing_customers",
+    tag = "marketing",
+    params(("company_id" = i32, Path, description = "Company id"), CustomerSearchQuery),
+    responses(
+        (status = 200, description = "Matching customers, best first", body = Vec<CustomerSearchRow>),
+        (status = 400, description = "Missing `term` or unknown `by`", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not on the company's marketing team", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn search(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(company_id): Path<i32>,
+    MultiQuery(query): MultiQuery<CustomerSearchQuery>,
+) -> ApiResult<Json<Vec<CustomerSearchRow>>> {
+    require_marketer(&state, &user, company_id).await?;
+    Ok(Json(
+        search_customers(&state.pool, company_id, user.id, &query).await?,
     ))
 }

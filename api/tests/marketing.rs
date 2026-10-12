@@ -201,3 +201,20 @@ async fn a_lead_is_added_edited_listed_and_deleted(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NOT_FOUND);
 }
+
+#[test_db::test(seed)]
+async fn the_marketing_team_searches_customers(pool: MySqlPool) {
+    make_marketer(&pool).await;
+    let server = server(pool);
+    let rows: Value = server
+        .get("/v1/marketing/100/customers/search?term=Alice&by=name")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(rows[0]["name"], "Alice Lead");
+    server
+        .get("/v1/marketing/101/customers/search?term=Alice")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+}
