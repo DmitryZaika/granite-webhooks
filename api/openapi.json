@@ -18435,6 +18435,81 @@
             "session_cookie": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Add an image",
+        "description": "Puts a picture uploaded to the `images` folder (`POST /v1/uploads`) in\nthe library (its thumbnail is made now), in `folder_id` when that is a\nlive folder of the company.",
+        "operationId": "create_image",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewImage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryImage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, or not an uploaded image",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/documents": {
@@ -18726,6 +18801,476 @@
           },
           "404": {
             "description": "No such document in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/image-library": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Get the image library",
+        "description": "Every image of the company: the live folders by name, each with its\nimages by name, and the images in no folder. Images of a deleted folder\nare not shown.",
+        "operationId": "get_image_library",
+        "responses": {
+          "200": {
+            "description": "The library",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageLibrary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/images/{id}": {
+      "delete": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Delete an image",
+        "description": "Takes it out of the library; the file stays in storage (emails and\nquotes may show it).",
+        "operationId": "delete_image",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Image id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such image in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Edit an image",
+        "description": "Renames it, replaces its file with a new upload (the old file and its\nthumbnail are deleted), and/or moves it to another folder.",
+        "operationId": "update_image",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Image id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageChanges"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryImage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty name, or not an uploaded image",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such image or folder in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/image-folders": {
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Add an image folder",
+        "operationId": "create_image_folder",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Folder"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/image-folders/{id}": {
+      "delete": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Delete an image folder",
+        "description": "Soft-deletes it; its images stay in the database but are no longer\nlisted.",
+        "operationId": "delete_image_folder",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Folder id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live folder in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Rename an image folder",
+        "operationId": "update_image_folder",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Folder id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Renamed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Folder"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live folder in the caller's company",
             "content": {
               "application/json": {
                 "schema": {
@@ -27977,6 +28522,25 @@
           }
         }
       },
+      "Folder": {
+        "type": "object",
+        "description": "A folder (without its images).",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Folder id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          }
+        }
+      },
       "FolderCounts": {
         "type": "object",
         "description": "Thread counts of the caller's folders.",
@@ -28002,6 +28566,20 @@
             "description": "Draft threads."
           }
         }
+      },
+      "FolderInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/image-folders` and `PATCH /v1/image-folders/{id}`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name (1–255 characters)."
+          }
+        },
+        "additionalProperties": false
       },
       "FoundEvent": {
         "type": "object",
@@ -28530,6 +29108,86 @@
           }
         }
       },
+      "ImageChanges": {
+        "type": "object",
+        "description": "Body of `PATCH /v1/images/{id}`: what to change.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New name (1–100 characters)."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A newly uploaded file replacing the old one (which is deleted)."
+          },
+          "folder_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Folder to move it to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImageFolder": {
+        "type": "object",
+        "description": "A folder with its images, by name.",
+        "required": [
+          "id",
+          "name",
+          "images"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Folder id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LibraryImage"
+            },
+            "description": "Its images, by name."
+          }
+        }
+      },
+      "ImageLibrary": {
+        "type": "object",
+        "description": "The whole library.",
+        "required": [
+          "folders",
+          "root_images"
+        ],
+        "properties": {
+          "folders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImageFolder"
+            },
+            "description": "Folders by name."
+          },
+          "root_images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LibraryImage"
+            },
+            "description": "Images in no folder, by name."
+          }
+        }
+      },
       "ImproveInput": {
         "type": "object",
         "description": "Body of `POST /v1/ai/improve`.",
@@ -29027,6 +29685,40 @@
               "null"
             ],
             "description": "Where it is stored."
+          }
+        }
+      },
+      "LibraryImage": {
+        "type": "object",
+        "description": "An image of the library.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Image id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it is stored (its thumbnail has `-icon` before the extension)."
+          },
+          "folder_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Folder it is in; null at the top level."
           }
         }
       },
@@ -29587,6 +30279,33 @@
             "description": "1 to 20 steps."
           }
         }
+      },
+      "NewImage": {
+        "type": "object",
+        "description": "Body of `POST /v1/images`.",
+        "required": [
+          "name",
+          "url"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name (1–100 characters)."
+          },
+          "url": {
+            "type": "string",
+            "description": "URL of the file uploaded to the `images` folder."
+          },
+          "folder_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Folder to put it in; an unknown folder means none."
+          }
+        },
+        "additionalProperties": false
       },
       "NewPhoneCustomer": {
         "type": "object",
@@ -34753,6 +35472,7 @@
           "quotes",
           "template-images",
           "documents",
+          "images",
           "email-templates"
         ]
       },

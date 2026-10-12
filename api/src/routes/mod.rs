@@ -25,6 +25,7 @@ pub mod emails;
 pub mod events;
 pub mod faucets;
 pub mod fixtures;
+pub mod image_library;
 pub mod instructions;
 pub mod jobs;
 pub mod leaderboard;
@@ -76,6 +77,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(sms::router())
         .merge(attachable::router())
         .merge(documents::router())
+        .merge(image_library::router())
         .merge(instructions::router())
         .merge(events::router())
         .merge(schedule::router())

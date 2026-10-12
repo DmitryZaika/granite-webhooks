@@ -25,6 +25,8 @@ pub enum UploadFolder {
     TemplateImages,
     /// The company's document library (admins; images and documents).
     Documents,
+    /// The company's image library (admins; images).
+    Images,
     /// Files sent with every email of a template (admins; any file type).
     #[serde(rename = "email-templates")]
     EmailTemplates,
@@ -43,6 +45,7 @@ impl UploadFolder {
             Self::TemplateImages => "template-images",
             Self::EmailTemplates => "email-templates",
             Self::Documents => "documents",
+            Self::Images => "images",
         }
     }
 }
