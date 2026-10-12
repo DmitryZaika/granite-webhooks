@@ -27,6 +27,7 @@ pub mod faucets;
 pub mod fixtures;
 pub mod image_library;
 pub mod instructions;
+pub mod invoice_queue;
 pub mod jobs;
 pub mod leaderboard;
 pub mod me;
@@ -80,6 +81,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(documents::router())
         .merge(image_library::router())
         .merge(supports::router())
+        .merge(invoice_queue::router())
         .merge(instructions::router())
         .merge(events::router())
         .merge(schedule::router())

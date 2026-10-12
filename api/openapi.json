@@ -19603,6 +19603,145 @@
         ]
       }
     },
+    "/v1/invoice-queue": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "List sales to invoice",
+        "description": "The company's sales with no QuickBooks invoice yet, newest first.",
+        "operationId": "list_invoice_queue",
+        "responses": {
+          "200": {
+            "description": "Sales without an invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QueuedSale"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/invoice-queue/{sale_id}": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Get a sale to invoice",
+        "description": "One sale of the company with its customer's email, phone, address and\nQuickBooks link, to review before invoicing.",
+        "operationId": "get_invoice_queue_sale",
+        "parameters": [
+          {
+            "name": "sale_id",
+            "in": "path",
+            "description": "Sale id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sale",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueuedSaleDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such sale in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/instructions": {
       "get": {
         "tags": [
@@ -32582,6 +32721,100 @@
             "description": "The question, 1 to 5000 characters."
           }
         }
+      },
+      "QueuedSale": {
+        "type": "object",
+        "description": "A sale waiting for its invoice.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sale id."
+          },
+          "sale_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sold."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Customer name."
+          },
+          "seller_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Seller name."
+          },
+          "cancelled_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was cancelled."
+          },
+          "installed_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was installed."
+          }
+        }
+      },
+      "QueuedSaleDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/QueuedSale"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The customer's primary email."
+              },
+              "phone": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The customer's phone."
+              },
+              "address": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The customer's address."
+              },
+              "qbo_id": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "The customer's QuickBooks id; null until linked."
+              }
+            }
+          }
+        ],
+        "description": "A queued sale with its customer's contact."
       },
       "QuickStone": {
         "type": "object",
