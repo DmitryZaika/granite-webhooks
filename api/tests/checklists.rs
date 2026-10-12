@@ -189,3 +189,37 @@ async fn an_installer_saves_a_checklist(pool: MySqlPool) {
         .await
         .assert_status(axum::http::StatusCode::BAD_REQUEST);
 }
+
+#[test_db::test(seed)]
+async fn a_checklist_prints_as_a_pdf(pool: MySqlPool) {
+    sqlx::query("UPDATE checklists SET comments = 'Great job, very clean. The seams are invisible and the edges match the sample exactly, thank you all.' WHERE id = 9000")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let server = server(pool);
+    let res = server
+        .get("/v1/checklists/9000/pdf")
+        .with_session(sessions::REP)
+        .await;
+    res.assert_status_ok();
+    assert_eq!(res.header("content-type"), "application/pdf");
+    assert_eq!(
+        res.header("content-disposition"),
+        "inline; filename=\"checklist-Alice_Lead-9000.pdf\""
+    );
+    let bytes = res.as_bytes();
+    assert!(bytes.starts_with(b"%PDF-"));
+    if let Ok(path) = std::env::var("CHECKLIST_PDF_OUT") {
+        std::fs::write(path, bytes.as_ref()).unwrap();
+    }
+    server
+        .get("/v1/checklists/9000/pdf")
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    server
+        .get("/v1/checklists/990000051/pdf?samples=true")
+        .with_session(sessions::REP)
+        .await
+        .assert_status_ok();
+}

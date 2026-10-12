@@ -20,6 +20,8 @@ pub mod error;
 pub mod extract;
 pub mod maps;
 pub mod openapi;
+pub mod pdf;
+pub mod pdf_fonts;
 pub mod period;
 pub mod qbo;
 pub mod routes;

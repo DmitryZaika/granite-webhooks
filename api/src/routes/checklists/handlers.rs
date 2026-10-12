@@ -11,7 +11,7 @@ use axum::extract::State;
 /// Returns every checklist of the caller's company, newest first (ties by
 /// id, highest first), with the installer's name and the result of each
 /// check. The customer's signature is not included; the signed PDF of a
-/// checklist is at `/api/checklist-pdf/{id}` on the web app.
+/// checklist is at `GET /v1/checklists/{id}/pdf`.
 #[utoipa::path(
     get,
     path = "/v1/checklists",

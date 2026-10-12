@@ -7973,7 +7973,7 @@
           "checklists"
         ],
         "summary": "List the company's post-installation checklists",
-        "description": "Returns every checklist of the caller's company, newest first (ties by\nid, highest first), with the installer's name and the result of each\ncheck. The customer's signature is not included; the signed PDF of a\nchecklist is at `/api/checklist-pdf/{id}` on the web app.",
+        "description": "Returns every checklist of the caller's company, newest first (ties by\nid, highest first), with the installer's name and the result of each\ncheck. The customer's signature is not included; the signed PDF of a\nchecklist is at `GET /v1/checklists/{id}/pdf`.",
         "operationId": "list_checklists",
         "responses": {
           "200": {
@@ -8076,6 +8076,99 @@
           },
           "403": {
             "description": "Caller is not an installer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/checklists/{id}/pdf": {
+      "get": {
+        "tags": [
+          "checklists"
+        ],
+        "summary": "Get a checklist as a PDF",
+        "description": "The checklist with its checks, comments and the customer's signature,\nunder the company logo.",
+        "operationId": "get_checklist_pdf",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Checklist id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "samples",
+            "in": "query",
+            "description": "The onboarding tour is open: its sample checklist can be opened.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such checklist in the caller's company",
             "content": {
               "application/json": {
                 "schema": {
