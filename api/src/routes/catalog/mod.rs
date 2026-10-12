@@ -6,9 +6,10 @@
 //! - `POST   /v1/stone-types`        → add a type
 //! - `PATCH  /v1/stone-types/{id}`   → rename a type (and its stones)
 //! - `DELETE /v1/stone-types/{id}`   → delete an unused type
+//! - `/v1/sink-types` and `/v1/sink-types/{id}` → the same for sink types
 //!
 //! Replaces the supplier/color queries of the Remix stone forms and
-//! `app/utils/stoneTypes.server.ts`.
+//! `app/utils/stoneTypes.server.ts` and `app/utils/sinkTypes.server.ts`.
 
 mod handlers;
 pub mod queries;
@@ -25,5 +26,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(
             handlers::rename_stone_type,
             handlers::delete_stone_type
+        ))
+        .routes(routes!(handlers::sink_types, handlers::create_sink_type))
+        .routes(routes!(
+            handlers::rename_sink_type,
+            handlers::delete_sink_type
         ))
 }

@@ -8464,6 +8464,340 @@
         ]
       }
     },
+    "/v1/sink-types": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "List the company's sink types",
+        "description": "Returns the sink types of the company (`composite`, `farm house`...), by\nname. A sink model's `type` must be one of them.",
+        "operationId": "list_sink_types",
+        "responses": {
+          "200": {
+            "description": "Sink types by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StoneType"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Add a sink type",
+        "description": "Creates a sink type for the caller's company. Names are unique per\ncompany, ignoring case.",
+        "operationId": "create_sink_type",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoneTypeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Type created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoneType"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or longer than 255 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A type with this name exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sink-types/{id}": {
+      "delete": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Delete a sink type",
+        "description": "Deletes a type no live sink model uses. When models still use it, answers\n409 with those models; delete or retype them first.",
+        "operationId": "delete_sink_type",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sink type id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Type deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such type in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Live sink models use the type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SinkTypeInUse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Rename a sink type",
+        "description": "Renames the type and sets the new name on every sink model of the company\nthat had the old one.",
+        "operationId": "rename_sink_type",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sink type id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoneTypeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Type renamed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoneType"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or longer than 255 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such type in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another type has this name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/checklists": {
       "get": {
         "tags": [
@@ -36956,6 +37290,27 @@
           }
         }
       },
+      "SinkTypeInUse": {
+        "type": "object",
+        "description": "409 body of `DELETE /v1/sink-types/{id}`: the type is still used.",
+        "required": [
+          "error",
+          "sinks"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "\"This type is used by undeleted sinks and cannot be deleted.\""
+          },
+          "sinks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoneUsingType"
+            },
+            "description": "Live sink models of that type, by name; delete or retype them first."
+          }
+        }
+      },
       "SlabCounts": {
         "type": "object",
         "description": "Slab counts of a stone. Counts the stone's own slabs plus those of the\nstones it draws from (linked stones). Cut and deleted slabs are never\ncounted.",
@@ -38253,7 +38608,7 @@
       },
       "StoneUsingType": {
         "type": "object",
-        "description": "A stone that uses a type.",
+        "description": "A stone (or sink model) that uses a type.",
         "required": [
           "id"
         ],

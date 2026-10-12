@@ -338,3 +338,108 @@ async fn hidden_stones_are_for_admins(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 }
+
+#[test_db::test(seed)]
+async fn sink_types_are_per_company_and_rename_their_models(pool: MySqlPool) {
+    let (server, storage) = server_with_storage(pool.clone());
+    let list = |session| {
+        let server = &server;
+        async move {
+            server
+                .get("/v1/sink-types")
+                .with_session(session)
+                .await
+                .json::<Value>()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        list(sessions::REP).await,
+        [
+            "ceramic",
+            "composite",
+            "farm house",
+            "stainless 16 gauge",
+            "stainless 18 gauge"
+        ]
+    );
+    assert_eq!(list(sessions::OTHER_COMPANY_REP).await, ["composite"]);
+
+    // A new type can be given to a sink model; an unknown one cannot.
+    let res = server
+        .post("/v1/sink-types")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": " Trough " }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    server
+        .post("/v1/sink-types")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "TROUGH" }))
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    server
+        .post("/v1/sink-types")
+        .with_session(sessions::REP)
+        .json(&json!({ "name": "Vessel" }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let url = upload(&server, &storage, "sinks").await;
+    let mut body = sink(None, Some(&url));
+    body["type"] = json!("trough");
+    let created = server
+        .post("/v1/sinks")
+        .with_session(sessions::ADMIN)
+        .json(&body)
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let model = created.json::<Value>()["id"].as_i64().unwrap();
+
+    // Renaming renames the models of that type.
+    server
+        .patch(&format!("/v1/sink-types/{id}"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Deep Trough" }))
+        .await
+        .assert_status_ok();
+    let kind: String = sqlx::query_scalar("SELECT type FROM sink_type WHERE id = ?")
+        .bind(model)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(kind, "Deep Trough");
+
+    // A type in use cannot be deleted.
+    let blocked = server
+        .delete(&format!("/v1/sink-types/{id}"))
+        .with_session(sessions::ADMIN)
+        .await;
+    blocked.assert_status(StatusCode::CONFLICT);
+    assert_eq!(
+        blocked.json::<Value>(),
+        json!({
+            "error": "This type is used by undeleted sinks and cannot be deleted.",
+            "sinks": [{ "id": model, "name": "Undermount 3219" }]
+        })
+    );
+    server
+        .delete(&format!("/v1/sinks/{model}"))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .delete(&format!("/v1/sink-types/{id}"))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .delete("/v1/sink-types/105")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}

@@ -48,7 +48,16 @@ pub struct StoneTypeInUse {
     pub stones: Vec<StoneUsingType>,
 }
 
-/// A stone that uses a type.
+/// 409 body of `DELETE /v1/sink-types/{id}`: the type is still used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct SinkTypeInUse {
+    /// "This type is used by undeleted sinks and cannot be deleted."
+    pub error: String,
+    /// Live sink models of that type, by name; delete or retype them first.
+    pub sinks: Vec<StoneUsingType>,
+}
+
+/// A stone (or sink model) that uses a type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
 pub struct StoneUsingType {
     /// Stone id.

@@ -246,6 +246,15 @@ INSERT INTO stone_types (id, name, company_id) VALUES
   (103, 'quartzite', 100),
   (104, 'granite',   101);
 
+-- ---- Sink types (sink forms). Ids 100+.
+INSERT INTO sink_types (id, name, company_id) VALUES
+  (100, 'stainless 18 gauge', 100),
+  (101, 'stainless 16 gauge', 100),
+  (102, 'composite',          100),
+  (103, 'ceramic',            100),
+  (104, 'farm house',         100),
+  (105, 'composite',          101);
+
 -- ---- Installed (project) photos of stones (admin stone images tab). Ids 100+.
 INSERT INTO installed_stones (id, url, stone_id) VALUES
   (100, 'https://img.example/installed-black-1.jpg', 3000),

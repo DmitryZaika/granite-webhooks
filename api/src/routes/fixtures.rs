@@ -21,9 +21,17 @@ pub struct Kind {
     pub photo_model_column: &'static str,
     pub folder: UploadFolder,
     /// Allowed `type` values.
-    pub types: &'static [&'static str],
+    pub types: Types,
     /// Sinks have a length and width; faucets do not.
     pub sized: bool,
+}
+
+/// The `type` values a model can have.
+#[derive(Debug, Clone, Copy)]
+pub enum Types {
+    Fixed(&'static [&'static str]),
+    /// The names in this table of the company (case ignored).
+    Company(&'static str),
 }
 
 pub const SINKS: Kind = Kind {
@@ -33,13 +41,7 @@ pub const SINKS: Kind = Kind {
     photo_table: "installed_sinks",
     photo_model_column: "sink_id",
     folder: UploadFolder::Sinks,
-    types: &[
-        "stainless 18 gauge",
-        "stainless 16 gauge",
-        "composite",
-        "ceramic",
-        "farm house",
-    ],
+    types: Types::Company("sink_types"),
     sized: true,
 };
 
@@ -50,7 +52,7 @@ pub const FAUCETS: Kind = Kind {
     photo_table: "installed_faucets",
     photo_model_column: "faucet_id",
     folder: UploadFolder::Faucets,
-    types: &["single handle", "double handle"],
+    types: Types::Fixed(&["single handle", "double handle"]),
     sized: false,
 };
 
@@ -197,7 +199,18 @@ async fn validate(
     if input.name.trim().is_empty() {
         return Err(ApiError::BadRequest("Name is required".into()));
     }
-    if !kind.types.contains(&input.kind.as_str()) {
+    let known = match kind.types {
+        Types::Fixed(types) => types.contains(&input.kind.as_str()),
+        Types::Company(table) => sqlx::query_scalar::<_, i32>(sql(format!(
+            "SELECT 1 FROM {table} WHERE company_id = ? AND LOWER(name) = LOWER(?) LIMIT 1"
+        )))
+        .bind(company_id)
+        .bind(input.kind.trim())
+        .fetch_optional(&mut *conn)
+        .await?
+        .is_some(),
+    };
+    if !known {
         return Err(ApiError::BadRequest(format!(
             "invalid type: {}",
             input.kind

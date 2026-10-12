@@ -99,7 +99,7 @@ async fn uploads_are_presigned_into_the_folder(pool: MySqlPool) {
     server
         .post("/v1/uploads")
         .with_session(sessions::ADMIN)
-        .json(&json!({ "folder": "documents", "file_name": "a.png", "content_type": "image/png" }))
+        .json(&json!({ "folder": "secrets", "file_name": "a.png", "content_type": "image/png" }))
         .await
         .assert_status(StatusCode::BAD_REQUEST);
     server
