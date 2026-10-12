@@ -20586,6 +20586,108 @@
         ]
       }
     },
+    "/v1/reports/cut-slabs": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Cut slabs report",
+        "description": "Whole slabs (not remnants) of the caller's company that were cut, with\ntheir stone, the stone's supplier and the sale, newest cut first. Slabs\nof stones without a supplier are left out.",
+        "operationId": "get_cut_slabs_report",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Cut on or after this day, `YYYY-MM-DD`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Cut on or before this day, `YYYY-MM-DD`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "supplier_id",
+            "in": "query",
+            "description": "Only stones of this supplier.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "stone_id",
+            "in": "query",
+            "description": "Only this stone.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cut slabs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CutSlab"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/shop/cut-stats": {
       "get": {
         "tags": [
@@ -29294,6 +29396,76 @@
           }
         },
         "additionalProperties": false
+      },
+      "CutSlab": {
+        "type": "object",
+        "description": "A cut whole slab with its stone, supplier and sale.",
+        "required": [
+          "id",
+          "stone_id",
+          "supplier_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Slab id."
+          },
+          "bundle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bundle label."
+          },
+          "stone_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stone id."
+          },
+          "stone_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stone name."
+          },
+          "supplier_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Supplier id."
+          },
+          "supplier_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Supplier name."
+          },
+          "cut_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was cut."
+          },
+          "sale_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sold; null when the sale is missing."
+          },
+          "seller_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who sold it; null when unknown."
+          }
+        }
       },
       "CutStats": {
         "type": "object",
@@ -40521,6 +40693,10 @@
     {
       "name": "shop",
       "description": "The fabrication shop's own pages"
+    },
+    {
+      "name": "reports",
+      "description": "Admin reports"
     },
     {
       "name": "company",
