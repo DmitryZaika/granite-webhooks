@@ -18905,6 +18905,226 @@
           }
         ]
       }
+    },
+    "/v1/calls/{provider}": {
+      "get": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "List calls with a customer",
+        "description": "With `deal_id`: calls with the deal's customer since the deal was created\n(none for another company's deal). With `phone`/`phone2`: every call with\nthose numbers in the date range. Empty when the company has not set up\nthe provider.",
+        "operationId": "list_calls",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "Telephony provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          },
+          {
+            "name": "deal_id",
+            "in": "query",
+            "description": "Calls with the deal's customer since the deal was created.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "phone",
+            "in": "query",
+            "description": "Or: calls with this phone.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phone2",
+            "in": "query",
+            "description": "And this one.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "date_from",
+            "in": "query",
+            "description": "From this day (`YYYY-MM-DD`), with `phone`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "date_to",
+            "in": "query",
+            "description": "To this day, with `phone`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Calls",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Calls"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RingCentral is rate limiting; try again in a minute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "Call a number",
+        "description": "`CloudTalk` rings the caller's agent (`CloudTalk` app or phone), then dials\nthe number once they answer. `RingCentral` rings the caller's own line,\nthen connects the number. Errors are tokens the page explains:\n`cloudtalk_not_configured`, `agent_not_linked`, `agent_not_online`,\n`ringcentral_not_configured`, `my_line_missing`,\n`ringcentral_no_call_permission`, `invalid_phone`, `rate_limited`.",
+        "operationId": "start_call",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "Telephony provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Ringing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedCall"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Provider not set up, or the caller has no agent or line",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "More than 10 calls a minute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -19690,6 +19910,33 @@
           "hidden": {
             "type": "boolean",
             "description": "Hidden from everyone's schedule (create only)."
+          }
+        }
+      },
+      "CallInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/calls/{provider}`.",
+        "required": [
+          "phone_digits"
+        ],
+        "properties": {
+          "phone_digits": {
+            "type": "string",
+            "description": "10 to 15 digits."
+          }
+        }
+      },
+      "Calls": {
+        "type": "object",
+        "description": "`GET /v1/calls/{provider}`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {},
+            "description": "Calls in the `CloudTalk` shape (`Cdr`, `Contact`, `Agent`, …)."
           }
         }
       },
@@ -27172,6 +27419,26 @@
           }
         }
       },
+      "StartedCall": {
+        "type": "object",
+        "description": "`POST /v1/calls/{provider}`.",
+        "properties": {
+          "call_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral`'s call status, e.g. `InProgress`."
+          },
+          "ringing_line": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's own line `RingCentral` rings first."
+          }
+        }
+      },
       "StepChannel": {
         "type": "string",
         "description": "How a step is delivered.",
@@ -28833,6 +29100,10 @@
     {
       "name": "places",
       "description": "Address suggestions from Google Places"
+    },
+    {
+      "name": "calls",
+      "description": "Calls through the company's telephony provider"
     },
     {
       "name": "public",

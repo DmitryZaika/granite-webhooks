@@ -32,6 +32,12 @@ pub struct AppState {
     pub sms_sends: Arc<Mutex<HashMap<i32, VecDeque<Instant>>>>,
     /// Google Maps, for driving distances.
     pub maps: Maps,
+    /// Recent calls started per user, for the per-minute limit.
+    pub call_starts: Arc<Mutex<HashMap<i32, VecDeque<Instant>>>>,
+    /// HTTP client for the telephony providers' APIs.
+    pub telephony_http: reqwest::Client,
+    /// The `CloudTalk` API (a stub in tests).
+    pub cloudtalk_base: Arc<str>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -50,6 +56,9 @@ impl AppState {
             sms_upkeep: Arc::default(),
             sms_sends: Arc::default(),
             maps: Maps::disabled(),
+            call_starts: Arc::default(),
+            telephony_http: reqwest::Client::new(),
+            cloudtalk_base: Arc::from(common::telephony::cloudtalk::BASE_URL),
         }
     }
 
@@ -62,6 +71,12 @@ impl AppState {
     #[must_use]
     pub fn with_telegram(mut self, telegram: TelegramBots) -> Self {
         self.telegram = telegram;
+        self
+    }
+
+    #[must_use]
+    pub fn with_cloudtalk_base(mut self, base: &str) -> Self {
+        self.cloudtalk_base = Arc::from(base.trim_end_matches('/'));
         self
     }
 

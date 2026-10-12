@@ -7,6 +7,7 @@
 
 pub mod attachable;
 pub mod calendars;
+pub mod calls;
 pub mod catalog;
 pub mod checklists;
 pub mod company;
@@ -69,4 +70,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(events::router())
         .merge(schedule::router())
         .merge(places::router())
+        .merge(calls::router())
 }
