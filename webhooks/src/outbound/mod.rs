@@ -6,8 +6,10 @@
 //! S3) and hands it to SES.
 //!
 //! - `POST /email/send` (Remix key) → `{ "message_id": "…@us-east-2.amazonses.com" }`
+//! - `POST /sms/send` (Remix key): see [`sms`]
 
 pub mod body;
+pub mod sms;
 
 use crate::amazon::bucket::{CustomClient, S3Bucket};
 use crate::axum_helpers::guards::RemixBackend;

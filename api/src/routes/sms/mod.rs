@@ -8,6 +8,7 @@
 //! - `GET  /v1/sms/{provider}/unread-count`           → the sidebar badge
 //! - `GET  /v1/sms/{provider}/desktop-alerts`         → unread texts to notify about
 //! - `GET  /v1/sms/{provider}/sales-reps`             → the admin inbox's rep filter
+//! - `POST /v1/sms/{provider}/messages`               → send a text (or schedule it)
 //!
 //! Replaces the Remix `api.cloudtalk.sms.*` / `api.ringcentral.sms.*` read
 //! routes (`app/utils/smsProviderService.server.ts`). Reads use the columns
@@ -18,6 +19,7 @@ mod provider;
 mod rollup;
 mod schemas;
 mod scope;
+mod send;
 mod thread;
 mod threads;
 
@@ -33,4 +35,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(thread::get_thread))
         .routes(routes!(thread::mark_read))
         .routes(routes!(thread::mark_unread))
+        .routes(routes!(send::send))
 }

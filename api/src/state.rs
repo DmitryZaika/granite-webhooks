@@ -3,7 +3,7 @@ use crate::telegram::TelegramBots;
 use crate::webhooks_client::WebhooksClient;
 use axum::http::{Method, header};
 use sqlx::MySqlPool;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -27,6 +27,8 @@ pub struct AppState {
     pub webhooks: WebhooksClient,
     /// When each SMS provider and company last had its upkeep run.
     pub sms_upkeep: Arc<Mutex<HashMap<(&'static str, i32), Instant>>>,
+    /// Recent texts sent per user, for the per-minute limit.
+    pub sms_sends: Arc<Mutex<HashMap<i32, VecDeque<Instant>>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -43,6 +45,7 @@ impl AppState {
             telegram: TelegramBots::disabled(),
             webhooks: WebhooksClient::disabled(),
             sms_upkeep: Arc::default(),
+            sms_sends: Arc::default(),
         }
     }
 

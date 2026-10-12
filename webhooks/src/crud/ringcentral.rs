@@ -1,5 +1,4 @@
 use crate::ringcentral::schemas::{RingcentralSMS, phone_last10};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
 use common::sms::derived::{SmsDirection, SmsProvider, SmsRowInput, SmsStatus, insert_sms};
 use sqlx::MySqlPool;
@@ -185,122 +184,43 @@ pub async fn load_customer_with_mapping(
     Ok(customer)
 }
 
-#[derive(sqlx::FromRow)]
-struct RingCentralCompanyCreds {
-    ringcentral_client_id: Option<String>,
-    ringcentral_client_secret: Option<String>,
-    ringcentral_jwt: Option<String>,
-}
-
+/// The company connected `RingCentral` (OAuth, refresh token alive) or pasted
+/// JWT credentials.
 pub async fn company_has_ring_central(
     pool: &MySqlPool,
     company_id: i32,
 ) -> Result<bool, sqlx::Error> {
-    let row = sqlx::query_as::<_, RingCentralCompanyCreds>(
+    let found: Option<i64> = sqlx::query_scalar(
         r"
-        SELECT ringcentral_client_id, ringcentral_client_secret, ringcentral_jwt
-        FROM company
+        SELECT 1 FROM company
         WHERE id = ?
+          AND ((ringcentral_access_token IS NOT NULL
+                AND ringcentral_refresh_token IS NOT NULL
+                AND ringcentral_refresh_expires > UNIX_TIMESTAMP())
+               OR (COALESCE(ringcentral_client_id, '') <> ''
+                   AND COALESCE(ringcentral_client_secret, '') <> ''
+                   AND COALESCE(ringcentral_jwt, '') <> ''))
         ",
     )
     .bind(company_id)
     .fetch_optional(pool)
     .await?;
-
-    let has_creds = if let Some(r) = row {
-        let key_ok = r
-            .ringcentral_client_id
-            .as_deref()
-            .is_some_and(|s| !s.is_empty());
-        let secret_ok = r
-            .ringcentral_client_secret
-            .as_deref()
-            .is_some_and(|s| !s.is_empty());
-        let jwt_ok = r.ringcentral_jwt.as_deref().is_some_and(|s| !s.is_empty());
-        key_ok && secret_ok && jwt_ok
-    } else {
-        false
-    };
-
-    Ok(has_creds)
+    Ok(found.is_some())
 }
 
-#[derive(sqlx::FromRow)]
-struct RingCentralTokenCreds {
-    ringcentral_client_id: Option<String>,
-    ringcentral_client_secret: Option<String>,
-    ringcentral_jwt: Option<String>,
-    ringcentral_server_url: Option<String>,
-}
-
+/// A token for the company's `RingCentral` API: its OAuth connection, else its
+/// JWT credentials. Returns the token and the server URL.
 pub async fn get_access_token(
     pool: &MySqlPool,
     company_id: u64,
 ) -> Result<(String, String), Box<dyn Error + Send + Sync>> {
-    let row = sqlx::query_as::<_, RingCentralTokenCreds>(
-        r"
-        SELECT ringcentral_client_id, ringcentral_client_secret, ringcentral_jwt,
-               ringcentral_server_url
-        FROM company
-        WHERE id = ?
-        ",
+    let token = crate::ringcentral::auth::access_token(
+        pool,
+        &reqwest::Client::new(),
+        i32::try_from(company_id)?,
     )
-    .bind(i64::try_from(company_id)?)
-    .fetch_optional(pool)
     .await?;
-
-    let Some(r) = row else {
-        return Err("RingCentral API credentials not found".into());
-    };
-    let client_id = r
-        .ringcentral_client_id
-        .filter(|s| !s.is_empty())
-        .ok_or("RingCentral API credentials not found")?;
-    let client_secret = r
-        .ringcentral_client_secret
-        .filter(|s| !s.is_empty())
-        .ok_or("RingCentral API credentials not found")?;
-    let jwt = r
-        .ringcentral_jwt
-        .filter(|s| !s.is_empty())
-        .ok_or("RingCentral API credentials not found")?;
-    let server_url = r
-        .ringcentral_server_url
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://platform.ringcentral.com".to_string());
-
-    let basic = STANDARD.encode(format!("{client_id}:{client_secret}"));
-    let body = format!(
-        "grant_type={}&assertion={}",
-        urlencoding::encode("urn:ietf:params:oauth:grant-type:jwt-bearer"),
-        urlencoding::encode(&jwt),
-    );
-    let client = reqwest::Client::new();
-    let response = client
-        .post(format!(
-            "{}/restapi/oauth/token",
-            server_url.trim_end_matches('/')
-        ))
-        .header("Authorization", format!("Basic {basic}"))
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("RingCentral token error {status}: {body}").into());
-    }
-
-    let json: serde_json::Value = response.json().await?;
-    let token = json
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .ok_or("RingCentral token response missing access_token")?
-        .to_string();
-
-    Ok((token, server_url))
+    Ok((token.token, token.server_url))
 }
 
 pub async fn upsert_ringcentral_mapping(

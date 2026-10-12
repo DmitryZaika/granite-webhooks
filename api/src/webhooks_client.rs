@@ -156,6 +156,108 @@ impl WebhooksClient {
     }
 }
 
+impl WebhooksClient {
+    /// Sends a text (`POST /sms/send`); the ids of the rows sent.
+    pub async fn send_sms(&self, sms: &OutgoingSms) -> Result<Vec<i64>, SmsFailure> {
+        let Some(target) = &self.target else {
+            return Err(SmsFailure::unavailable("sms sending is not configured"));
+        };
+        let (url, key) = target.as_ref();
+        let response = self
+            .http
+            .post(format!("{url}/sms/send"))
+            .header("Authorization", key)
+            .timeout(Duration::from_secs(120))
+            .json(sms)
+            .send()
+            .await
+            .map_err(|err| SmsFailure::unavailable(&err.without_url().to_string()))?;
+        let status = response.status();
+        if status.is_success() {
+            let sent: SentSms = response
+                .json()
+                .await
+                .map_err(|err| SmsFailure::unavailable(&err.without_url().to_string()))?;
+            return Ok(sent.ids);
+        }
+        let reply: SmsErrorReply = response.json().await.unwrap_or_default();
+        Err(SmsFailure {
+            status: status.as_u16(),
+            error: if reply.error.is_empty() {
+                "send_failed".to_string()
+            } else {
+                reply.error
+            },
+            sent_ids: reply.ids,
+            unsent_s3_keys: reply.unsent_s3_keys,
+        })
+    }
+}
+
+/// Body of the `webhooks` `POST /sms/send`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutgoingSms {
+    /// `cloudtalk` or `ringcentral`.
+    pub provider: String,
+    pub company_id: i32,
+    pub user_id: i32,
+    pub agent_id: String,
+    pub phone_digits: String,
+    pub text: String,
+    pub attachments: Vec<OutgoingSmsFile>,
+    pub is_automated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutgoingSmsFile {
+    pub s3_key: String,
+    pub url: String,
+    pub content_type: String,
+    pub filename: String,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+}
+
+#[derive(Deserialize)]
+struct SentSms {
+    ids: Vec<i64>,
+}
+
+#[derive(Deserialize, Default)]
+struct SmsErrorReply {
+    #[serde(default)]
+    error: String,
+    #[serde(default)]
+    ids: Vec<i64>,
+    #[serde(default)]
+    unsent_s3_keys: Vec<String>,
+}
+
+/// A text that did not (fully) go out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmsFailure {
+    /// The webhooks Lambda's status: 400 refused, 502 the provider failed.
+    pub status: u16,
+    /// A token the page translates (`agent_no_number`, `cloudtalk_…`).
+    pub error: String,
+    /// Messages already sent when a later one failed.
+    pub sent_ids: Vec<i64>,
+    /// Files of the messages that did not go out.
+    pub unsent_s3_keys: Vec<String>,
+}
+
+impl SmsFailure {
+    fn unavailable(detail: &str) -> Self {
+        tracing::error!(detail, "sms send failed");
+        Self {
+            status: 502,
+            error: "send_failed".to_string(),
+            sent_ids: Vec::new(),
+            unsent_s3_keys: Vec::new(),
+        }
+    }
+}
+
 /// Body of the `webhooks` `POST /email/send`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OutgoingEmail {

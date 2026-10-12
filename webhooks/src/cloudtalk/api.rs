@@ -14,7 +14,7 @@ use sqlx::MySqlPool;
 
 const BASE_URL: &str = "https://my.cloudtalk.io/api";
 
-fn base_url() -> String {
+pub fn base_url() -> String {
     #[cfg(test)]
     if let Some(stub) = crate::tests::stub_http::cloudtalk_base_url() {
         return stub;

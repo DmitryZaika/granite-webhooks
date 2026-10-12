@@ -353,6 +353,11 @@ async fn a_late_cloudtalk_webhook_sits_between_its_neighbours(pool: MySqlPool) {
 #[test_db::test(seed)]
 async fn search_finds_names_in_any_word_order(pool: MySqlPool) {
     seed(&pool).await;
-    let found = get(&pool, &format!("{THREADS}?search=Lead%20Alic"), sessions::REP).await;
+    let found = get(
+        &pool,
+        &format!("{THREADS}?search=Lead%20Alic"),
+        sessions::REP,
+    )
+    .await;
     assert_eq!(phones(&found), ["3175550100"]);
 }

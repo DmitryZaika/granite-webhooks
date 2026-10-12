@@ -404,6 +404,19 @@ async fn messages(
     let has_older = i64::try_from(rows.len()).unwrap_or(0) > limit;
     rows.truncate(usize::try_from(limit).unwrap_or(0));
     rows.reverse();
+    let messages = to_messages(pool, provider, company_id, phone, rows).await?;
+    Ok((messages, has_older))
+}
+
+/// Rows of one thread as messages: direction seen from the customer's phone,
+/// the rep who sent (or whose number received) each, and the files.
+async fn to_messages(
+    pool: &MySqlPool,
+    provider: SmsProvider,
+    company_id: i32,
+    phone: &str,
+    rows: Vec<MessageRow>,
+) -> Result<Vec<Message>, sqlx::Error> {
     let ids: Vec<i32> = rows.iter().map(|row| row.id).collect();
     let mut files = attachments(pool, provider, &ids).await?;
     let (names, numbers) = if rows.is_empty() {
@@ -412,7 +425,7 @@ async fn messages(
         agent_maps(pool, provider, company_id).await?
     };
     let variants = phone_variants(phone);
-    let messages = rows
+    Ok(rows
         .into_iter()
         .map(|row| {
             let inbound = row.sender.as_ref().is_some_and(|s| variants.contains(s));
@@ -448,8 +461,32 @@ async fn messages(
                 status: status_of(&row.status),
             }
         })
-        .collect();
-    Ok((messages, has_older))
+        .collect())
+}
+
+/// One message of the company's, by id.
+pub async fn message_by_id(
+    pool: &MySqlPool,
+    provider: SmsProvider,
+    company_id: i32,
+    phone: &str,
+    id: i64,
+) -> Result<Option<Message>, sqlx::Error> {
+    let rows: Vec<MessageRow> = fetch_all(
+        pool,
+        format!(
+            "SELECT s.id, CAST(s.sender AS CHAR) AS sender, CAST(s.recipient AS CHAR) AS recipient,
+                    s.text, CAST(s.status AS CHAR) AS status, s.agent, s.created_date AS conversation_at
+               FROM {} s WHERE s.company_id = ? AND s.id = ?",
+            provider.sms_table()
+        ),
+        &[company_id.into(), id.into()],
+    )
+    .await?;
+    Ok(to_messages(pool, provider, company_id, phone, rows)
+        .await?
+        .into_iter()
+        .next())
 }
 
 fn checked_phone(phone: &str) -> ApiResult<String> {

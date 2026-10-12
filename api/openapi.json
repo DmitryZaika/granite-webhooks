@@ -13998,6 +13998,104 @@
           }
         ]
       }
+    },
+    "/v1/sms/{provider}/messages": {
+      "post": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Send a text",
+        "description": "Sends a text (with photos or files uploaded beforehand) to a phone\nthrough the caller's agent (`CloudTalk`) or extension (`RingCentral`), or\nschedules it with `send_at`. `CloudTalk` texts carry links to the files;\n`RingCentral` sends them as MMS, split into several texts when large.\nOpening the conversation counts as read. Errors come back as a token in\n`error`.",
+        "operationId": "send_sms",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "SMS provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendSmsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Sent or scheduled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SentSms"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid text or attachment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller has no agent id for the provider",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over ten texts a minute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider refused or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -19839,6 +19937,58 @@
           }
         }
       },
+      "SendSmsRequest": {
+        "type": "object",
+        "description": "Body of `POST /v1/sms/{provider}/messages`.",
+        "required": [
+          "phone_digits"
+        ],
+        "properties": {
+          "phone_digits": {
+            "type": "string",
+            "description": "The customer's phone, 10 to 15 digits."
+          },
+          "text": {
+            "type": "string",
+            "description": "The message (up to 1600 characters); may be empty with files."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SmsFile"
+            },
+            "description": "Up to ten files."
+          },
+          "template_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The SMS template it was written from (counts towards its ordering)."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer it is for (scheduled texts only)."
+          },
+          "send_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Send later instead, within 90 days."
+          },
+          "cancel_if_customer_messages": {
+            "type": "boolean",
+            "description": "A scheduled text is dropped if the customer writes first."
+          }
+        }
+      },
       "SentSms": {
         "type": "object",
         "description": "Texts the signed-in user sent through the company's SMS provider.",
@@ -20235,6 +20385,44 @@
           }
         }
       },
+      "SmsFile": {
+        "type": "object",
+        "description": "A file uploaded for the text (`POST /api/<provider>/sms/upload-image`).",
+        "required": [
+          "s3_key",
+          "content_type"
+        ],
+        "properties": {
+          "s3_key": {
+            "type": "string",
+            "description": "Its key, under `sms-attachments/<company id>/`."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "Its type (JPEG, PNG, GIF, PDF, Office, text or CSV)."
+          },
+          "filename": {
+            "type": "string",
+            "description": "The name it was uploaded with."
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Pixel width of an image."
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Pixel height of an image."
+          }
+        }
+      },
       "SmsProvider": {
         "type": "string",
         "description": "The SMS provider a company texts through.",
@@ -20242,6 +20430,35 @@
           "cloudtalk",
           "ringcentral"
         ]
+      },
+      "SmsSendError": {
+        "type": "object",
+        "description": "A text that did not (fully) go out.",
+        "required": [
+          "error",
+          "sent_messages"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "A token the page translates (`agent_not_linked`, `rate_limited`,\n`agent_no_number`, `cloudtalk_insufficient_funds`, ...)."
+          },
+          "sent_messages": {
+            "type": "integer",
+            "description": "Messages that went out before one failed.",
+            "minimum": 0
+          },
+          "unsent_s3_keys": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Files of the messages that did not go out (set when some did)."
+          }
+        }
       },
       "StageOrder": {
         "type": "object",
