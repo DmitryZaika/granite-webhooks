@@ -2,7 +2,10 @@ use super::queries::{
     SINK_TYPES, STONE_TYPES, TypeTable, create_type, delete_type, find_type, find_type_by_name,
     items_using_type, list_colors, list_suppliers, list_types, rename_type,
 };
-use super::schemas::{Color, SinkTypeInUse, StoneType, StoneTypeInUse, StoneTypeInput, Supplier};
+use super::schemas::{
+    Color, SinkTypeInUse, StoneType, StoneTypeInUse, StoneTypeInput, Supplier, SupplierEntry,
+    SupplierFile,
+};
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
@@ -34,6 +37,50 @@ pub async fn suppliers(
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<Vec<Supplier>>> {
     Ok(Json(list_suppliers(&state.pool, user.company_id).await?))
+}
+
+/// The supplier directory
+///
+/// Every supplier of the caller's company with its contact details and files,
+/// by id. The onboarding sample supplier is the page's to place.
+#[utoipa::path(
+    get,
+    path = "/v1/suppliers/directory",
+    operation_id = "list_supplier_directory",
+    tag = "catalog",
+    responses(
+        (status = 200, description = "Suppliers with files", body = Vec<SupplierEntry>),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn supplier_directory(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+) -> ApiResult<Json<Vec<SupplierEntry>>> {
+    let mut suppliers: Vec<SupplierEntry> = sqlx::query_as(
+        "SELECT id, supplier_name, manager, phone, email, notes, website
+           FROM suppliers WHERE company_id = ? ORDER BY id",
+    )
+    .bind(user.company_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let files: Vec<SupplierFile> = sqlx::query_as(
+        "SELECT CAST(f.id AS SIGNED) AS id, f.supplier_id, f.name, f.url
+           FROM supplier_files f JOIN suppliers s ON s.id = f.supplier_id
+          WHERE s.company_id = ? ORDER BY f.id",
+    )
+    .bind(user.company_id)
+    .fetch_all(&state.pool)
+    .await?;
+    for file in files {
+        if let Some(supplier) = suppliers.iter_mut().find(|s| s.id == file.supplier_id) {
+            supplier.files.push(file);
+        }
+    }
+    Ok(Json(suppliers))
 }
 
 /// List the stone colors

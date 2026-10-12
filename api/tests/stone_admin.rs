@@ -127,6 +127,32 @@ async fn uploads_need_configured_storage(pool: MySqlPool) {
 // ---- Catalog
 
 #[test_db::test(seed)]
+async fn the_supplier_directory_lists_contacts_and_files(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "UPDATE suppliers SET manager = 'Ann', phone = '317-555-0300' WHERE id = 300;
+         INSERT INTO supplier_files (id, name, url, supplier_id)
+           VALUES (9500, 'Prices.pdf', 'https://files.example/prices.pdf', 300),
+                  (9501, 'Other.pdf', 'https://files.example/other.pdf', 302);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool);
+    let directory: Value = server
+        .get("/v1/suppliers/directory")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(common::ids(&directory), [300, 301]);
+    assert_eq!(directory[0]["manager"], "Ann");
+    assert_eq!(
+        directory[0]["files"],
+        json!([{ "id": 9500, "name": "Prices.pdf", "url": "https://files.example/prices.pdf" }])
+    );
+    assert_eq!(directory[1]["files"], json!([]));
+}
+
+#[test_db::test(seed)]
 async fn suppliers_colors_and_types_of_the_company(pool: MySqlPool) {
     let server = server(pool);
     let get = |path: &'static str| server.get(path).with_session(sessions::REP);

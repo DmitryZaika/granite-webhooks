@@ -1,6 +1,7 @@
 //! Company catalogs the inventory forms pick from.
 //!
 //! - `GET    /v1/suppliers`          → the company's suppliers
+//! - `GET    /v1/suppliers/directory` → their contacts and files, for the suppliers pages
 //! - `GET    /v1/colors`             → stone colors (shared by all companies)
 //! - `GET    /v1/stone-types`        → the company's stone types
 //! - `POST   /v1/stone-types`        → add a type
@@ -9,7 +10,8 @@
 //! - `/v1/sink-types` and `/v1/sink-types/{id}` → the same for sink types
 //!
 //! Replaces the supplier/color queries of the Remix stone forms and
-//! `app/utils/stoneTypes.server.ts` and `app/utils/sinkTypes.server.ts`.
+//! `app/utils/stoneTypes.server.ts` and `app/utils/sinkTypes.server.ts`, and
+//! the `employee.suppliers` and `admin.suppliers` loaders.
 
 mod handlers;
 pub mod queries;
@@ -21,6 +23,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(handlers::suppliers))
+        .routes(routes!(handlers::supplier_directory))
         .routes(routes!(handlers::colors))
         .routes(routes!(handlers::stone_types, handlers::create_stone_type))
         .routes(routes!(

@@ -8070,6 +8070,66 @@
         ]
       }
     },
+    "/v1/suppliers/directory": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The supplier directory",
+        "description": "Every supplier of the caller's company with its contact details and files,\nby id. The onboarding sample supplier is the page's to place.",
+        "operationId": "list_supplier_directory",
+        "responses": {
+          "200": {
+            "description": "Suppliers with files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SupplierEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/colors": {
       "get": {
         "tags": [
@@ -45089,6 +45149,94 @@
           "name": {
             "type": "string",
             "description": "Supplier name."
+          }
+        }
+      },
+      "SupplierEntry": {
+        "type": "object",
+        "description": "A supplier with its contact details and files.",
+        "required": [
+          "id",
+          "files"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Supplier id."
+          },
+          "supplier_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "manager": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contact person."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes."
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Website."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupplierFile"
+            },
+            "description": "Its files, oldest first."
+          }
+        }
+      },
+      "SupplierFile": {
+        "type": "object",
+        "description": "A file (price list, catalog) of a supplier.",
+        "required": [
+          "id",
+          "name",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "File id."
+          },
+          "name": {
+            "type": "string",
+            "description": "File name."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where it is stored."
           }
         }
       },
