@@ -10735,6 +10735,92 @@
         ]
       }
     },
+    "/v1/stats/overview": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "The Statistics page",
+        "description": "Deals by rep and by stage, customers by source and by rep, the customers\ntable with its deals, conversion by rep, lost reasons, campaigns, survey\nratings, top sold stones and emails and texts per month, for the\ncompany's admins. Deals count by their last update (conversion and the\ntable by creation), leads by assignment and other customers by creation.",
+        "operationId": "get_stats_overview",
+        "parameters": [
+          {
+            "name": "from_date",
+            "in": "query",
+            "description": "First day counted (`YYYY-MM-DD`); every day when empty.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "in": "query",
+            "description": "Last day counted (`YYYY-MM-DD`); every day when empty.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sales_rep",
+            "in": "query",
+            "description": "A sales rep's name; everyone when empty or `All`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The numbers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Overview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/dashboard/widgets": {
       "get": {
         "tags": [
@@ -30809,6 +30895,73 @@
         ]
       }
     },
+    "/v1/qbo/class-sales": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Sales by class",
+        "description": "The company's `QuickBooks` \"Sales by Class\" report (accrual basis) for the\ndays, and its classes so the page can nest them. `not_connected` when\n`QuickBooks` is off or disconnected, `error` when the report failed.",
+        "operationId": "get_qbo_class_sales",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "description": "First day (`YYYY-MM-DD`); `QuickBooks`' default when empty.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "description": "Last day (`YYYY-MM-DD`); `QuickBooks`' default when empty.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report, or why there is none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassSales"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/jobs/appointment-reminders": {
       "post": {
         "tags": [
@@ -32607,6 +32760,45 @@
           }
         }
       },
+      "Campaign": {
+        "type": "object",
+        "description": "A marketing campaign's customers.",
+        "required": [
+          "customers_acquired",
+          "closed_deals",
+          "won_deals"
+        ],
+        "properties": {
+          "compaign_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The campaign (`customers.compaign_name`)."
+          },
+          "customers_acquired": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "closed_deals": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Won and lost deals."
+          },
+          "won_deals": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "conversion_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Won out of closed, in percent; null with no closed deals."
+          }
+        }
+      },
       "Channel": {
         "type": "string",
         "description": "Which kind of message.",
@@ -32894,6 +33086,43 @@
             "description": "The right answer."
           }
         }
+      },
+      "ClassSales": {
+        "type": "object",
+        "description": "`GET /v1/qbo/class-sales`.",
+        "required": [
+          "status",
+          "classes"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/ClassSalesStatus",
+            "description": "Whether the report came back."
+          },
+          "report": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The `ClassSales` report as `QuickBooks` returns it (with `ok`)."
+          },
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "The company's `Class` entities (empty when they could not be read)."
+          }
+        }
+      },
+      "ClassSalesStatus": {
+        "type": "string",
+        "description": "`ok`, `not_connected` or `error`.",
+        "enum": [
+          "ok",
+          "not_connected",
+          "error"
+        ]
       },
       "ClosedDeal": {
         "type": "object",
@@ -33486,6 +33715,60 @@
             "type": "integer",
             "format": "int64",
             "description": "All deals, whatever their state."
+          }
+        }
+      },
+      "ConversionMetrics": {
+        "type": "object",
+        "description": "A rep's deals made and sold, by customer source.",
+        "required": [
+          "total_sold",
+          "total_created",
+          "leads_sold_same_month",
+          "leads_created",
+          "walkin_sold_same_month",
+          "walkin_created",
+          "callin_sold_same_month",
+          "callin_created"
+        ],
+        "properties": {
+          "rep_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_sold": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_created": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "leads_sold_same_month": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "leads_created": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "walkin_sold_same_month": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "walkin_created": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "callin_sold_same_month": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "callin_created": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -34554,6 +34837,64 @@
           }
         }
       },
+      "CustomersByRep": {
+        "type": "object",
+        "description": "A rep's valid customers by source.",
+        "required": [
+          "walkin",
+          "callin",
+          "leads",
+          "manual",
+          "total"
+        ],
+        "properties": {
+          "rep_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "walkin": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "callin": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "leads": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "manual": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "CustomersBySource": {
+        "type": "object",
+        "description": "Valid customers from a source.",
+        "required": [
+          "total"
+        ],
+        "properties": {
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "CustomersStatus": {
         "type": "string",
         "description": "`ok`, `error` or `not_connected`.",
@@ -34562,6 +34903,37 @@
           "error",
           "not_connected"
         ]
+      },
+      "CustomersTotals": {
+        "type": "object",
+        "description": "The company's customers.",
+        "required": [
+          "total",
+          "without_rep",
+          "invalid",
+          "last_30"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "without_rep": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Without a sales rep."
+          },
+          "invalid": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Marked invalid."
+          },
+          "last_30": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Added in the last 30 days."
+          }
+        }
       },
       "CutOptions": {
         "type": "object",
@@ -35306,6 +35678,147 @@
           "won",
           "lost"
         ]
+      },
+      "DealsByRep": {
+        "type": "object",
+        "description": "A rep's deals.",
+        "required": [
+          "rep_id",
+          "deals_count",
+          "avg_amount",
+          "avg_amount_won",
+          "won_count",
+          "lost_count",
+          "won_lost_ratio",
+          "pipeline_amount",
+          "won_count_walkin",
+          "lost_count_walkin",
+          "won_lost_ratio_walkin",
+          "won_count_leads",
+          "lost_count_leads",
+          "won_lost_ratio_leads"
+        ],
+        "properties": {
+          "rep_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "rep_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deals_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "avg_amount": {
+            "type": "number",
+            "format": "double"
+          },
+          "avg_amount_won": {
+            "type": "number",
+            "format": "double"
+          },
+          "won_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lost_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "won_lost_ratio": {
+            "type": "number",
+            "format": "double",
+            "description": "Won out of closed, in percent."
+          },
+          "pipeline_amount": {
+            "type": "number",
+            "format": "double",
+            "description": "Open deals' amount."
+          },
+          "won_count_walkin": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lost_count_walkin": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "won_lost_ratio_walkin": {
+            "type": "number",
+            "format": "double"
+          },
+          "won_count_leads": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lost_count_leads": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "won_lost_ratio_leads": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "DealsByStage": {
+        "type": "object",
+        "description": "Open deals in a stage.",
+        "required": [
+          "list_id",
+          "deals_count",
+          "total_amount"
+        ],
+        "properties": {
+          "list_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "list_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deals_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_amount": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "DealsList": {
+        "type": "object",
+        "description": "A pipeline stage.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          }
+        }
       },
       "DefaultQuestionnaire": {
         "type": "object",
@@ -39378,6 +39891,31 @@
         ],
         "description": "`GET /v1/customers` returns `CustomerRow`s, or `CompanyRow`s when `view=companies`."
       },
+      "LostReason": {
+        "type": "object",
+        "description": "How often a rep lost for a reason.",
+        "required": [
+          "count"
+        ],
+        "properties": {
+          "rep_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lost_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "MailboxPage": {
         "type": "object",
         "description": "One page of a folder.",
@@ -39921,6 +40459,23 @@
           "sending",
           "failed"
         ]
+      },
+      "MonthCount": {
+        "type": "object",
+        "description": "A month's count (`YYYY-MM`); months without any are left out.",
+        "required": [
+          "month",
+          "count"
+        ],
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
       },
       "MonthlyCount": {
         "type": "object",
@@ -40796,6 +41351,133 @@
               "null"
             ],
             "description": "Why it was lost; only with `lost`."
+          }
+        }
+      },
+      "Overview": {
+        "type": "object",
+        "description": "`GET /v1/stats/overview`.",
+        "required": [
+          "deals_by_rep",
+          "deals_by_stage",
+          "lists",
+          "customers_totals",
+          "customers_by_source",
+          "customers_by_rep",
+          "customers_table",
+          "customers_deals",
+          "conversion_metrics_by_rep",
+          "lost_reasons_by_rep",
+          "customers_by_campaign",
+          "sales_rep_ratings",
+          "top_sold_colors",
+          "emails_per_month"
+        ],
+        "properties": {
+          "from_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The days counted, in order."
+          },
+          "to_date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deals_by_rep": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DealsByRep"
+            }
+          },
+          "deals_by_stage": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DealsByStage"
+            }
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DealsList"
+            }
+          },
+          "customers_totals": {
+            "$ref": "#/components/schemas/CustomersTotals"
+          },
+          "customers_by_source": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomersBySource"
+            }
+          },
+          "customers_by_rep": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomersByRep"
+            }
+          },
+          "customers_table": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TableCustomer"
+            }
+          },
+          "customers_deals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TableDeal"
+            }
+          },
+          "conversion_metrics_by_rep": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversionMetrics"
+            }
+          },
+          "lost_reasons_by_rep": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LostReason"
+            }
+          },
+          "customers_by_campaign": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Campaign"
+            }
+          },
+          "sales_rep_ratings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepRating"
+            }
+          },
+          "top_sold_colors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TopSoldColor"
+            },
+            "description": "Top 10 stones by slabs sold."
+          },
+          "emails_per_month": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MonthCount"
+            }
+          },
+          "sms_per_month": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/MonthCount"
+            },
+            "description": "Null when the company has no SMS provider."
           }
         }
       },
@@ -42716,26 +43398,32 @@
       },
       "RepRating": {
         "type": "object",
-        "description": "A sales rep's average.",
+        "description": "A rep's post-installation survey score.",
         "required": [
-          "name",
-          "rating",
-          "answers"
+          "rep_id",
+          "responses"
         ],
         "properties": {
-          "name": {
-            "type": "string",
-            "description": "Name (\"Not specified\" when the rep is gone)."
-          },
-          "rating": {
-            "type": "number",
-            "format": "double",
-            "description": "Average sales rep rating."
-          },
-          "answers": {
+          "rep_id": {
             "type": "integer",
-            "format": "int64",
-            "description": "Answers about them."
+            "format": "int32"
+          },
+          "rep_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avg_rating": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "responses": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -46255,6 +46943,110 @@
           }
         }
       },
+      "TableCustomer": {
+        "type": "object",
+        "description": "A customer of the table.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "UTC, ISO 8601."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "referral_source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "form_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "invalid_lead": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sales_rep_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TableDeal": {
+        "type": "object",
+        "description": "A deal of the table's customers.",
+        "required": [
+          "id",
+          "customer_id",
+          "sales_rep_name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "customer_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "amount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lost_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_won": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "sales_rep_name": {
+            "type": "string"
+          }
+        }
+      },
       "TaxRate": {
         "type": "object",
         "description": "`GET /v1/company/tax-rate`.",
@@ -46925,6 +47717,30 @@
           "rich_text": {
             "type": "string",
             "description": "The task, 1 to 255 characters."
+          }
+        }
+      },
+      "TopSoldColor": {
+        "type": "object",
+        "description": "A stone's sold slabs.",
+        "required": [
+          "slabs_sold",
+          "square_feet"
+        ],
+        "properties": {
+          "stone_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slabs_sold": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "square_feet": {
+            "type": "number",
+            "format": "double"
           }
         }
       },

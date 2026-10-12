@@ -8,11 +8,13 @@
 //! - `GET /v1/qbo/invoices/{invoice_id}/pdf` → any invoice of the company
 //!   as a PDF (the rep's sales panel, schedule events)
 //! - `GET /v1/qbo/customers` → `QuickBooks` customers by email or name
+//! - `GET /v1/qbo/class-sales` → the "Sales by Class" report (admins)
 //! - `GET /v1/me/qbo-sales` → the rep's sales this month, and
 //!   `/customers` the customers behind them
 //!
 //! Replaces the Remix `api.quickbooks.*` and `api.employee.qbo-*` routes.
 
+pub mod class_sales;
 pub mod invoice;
 pub mod sales;
 
@@ -41,6 +43,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(customers))
         .routes(routes!(sales::my_sales))
         .routes(routes!(sales::my_customers))
+        .routes(routes!(class_sales::class_sales))
 }
 
 /// What a `QuickBooks` failure means to the page.
