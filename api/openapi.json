@@ -3459,6 +3459,77 @@
         ]
       }
     },
+    "/v1/users/call-activity": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List reps' calls",
+        "description": "The `CloudTalk` calls of the given users of the caller's company over the\nlast 90 days, newest first. Users without a `CloudTalk` agent, and\ncompanies without `CloudTalk`, have none.",
+        "operationId": "list_user_call_activity",
+        "parameters": [
+          {
+            "name": "user_ids",
+            "in": "query",
+            "description": "Comma-separated user ids.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Calls, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CallActivity"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/stones": {
       "get": {
         "tags": [
@@ -20978,6 +21049,103 @@
               "null"
             ],
             "description": "The demo booking page."
+          }
+        }
+      },
+      "CallActivity": {
+        "type": "object",
+        "description": "One call, as a row of the users-activity feed.",
+        "required": [
+          "id",
+          "source",
+          "user_id",
+          "user_name",
+          "action",
+          "created_at",
+          "summary",
+          "tags",
+          "recorded",
+          "is_voicemail",
+          "talk_seconds"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The `CloudTalk` call id."
+          },
+          "source": {
+            "type": "string",
+            "description": "Always `cloudtalk_call`."
+          },
+          "user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The rep."
+          },
+          "user_name": {
+            "type": "string",
+            "description": "The rep's name."
+          },
+          "action": {
+            "type": "string",
+            "description": "`Made a call`, `Received a call` or `Missed a call`."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When the call started, as `CloudTalk` reports it."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `CloudTalk` contact's name."
+          },
+          "contact": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The other party's number."
+          },
+          "summary": {
+            "type": "string",
+            "description": "Direction and outcome, like `Incoming · 2m 5s`."
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The call's notes, one per line."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Direction, outcome, `Recorded`, then `CloudTalk` tags."
+          },
+          "recorded": {
+            "type": "boolean",
+            "description": "Whether there is a recording."
+          },
+          "recording_link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk`'s recording link."
+          },
+          "is_voicemail": {
+            "type": "boolean",
+            "description": "The caller left a voicemail."
+          },
+          "talk_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds talked; 0 when unanswered."
           }
         }
       },
