@@ -254,6 +254,41 @@ fn mime(attachment: &Attachment) -> Option<String> {
     }
 }
 
+async fn user_signature(pool: &MySqlPool, user_id: i32) -> Result<Option<String>, sqlx::Error> {
+    let signature: Option<Option<String>> =
+        sqlx::query_scalar("SELECT email_signature FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(signature.flatten().filter(|s| !s.is_empty()))
+}
+
+/// Every address of a customer, primary first (`loadCustomerEmails`).
+async fn customer_addresses(
+    pool: &MySqlPool,
+    customer_id: i32,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT ce.email FROM customers_emails ce JOIN customers c ON c.id = ce.customer_id
+         WHERE ce.customer_id = ? ORDER BY ce.id = c.email_id DESC, ce.created_at, ce.id",
+    )
+    .bind(customer_id)
+    .fetch_all(pool)
+    .await
+}
+
+async fn primary_address(pool: &MySqlPool, customer_id: i32) -> Result<String, sqlx::Error> {
+    let primary: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT pe.email FROM customers c
+         LEFT JOIN customers_emails pe ON pe.id = c.email_id AND pe.customer_id = c.id
+         WHERE c.id = ?",
+    )
+    .bind(customer_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(primary.flatten().unwrap_or_default())
+}
+
 /// Signed links and e-signature status of attachments.
 pub async fn finish_attachments(
     pool: &MySqlPool,
@@ -293,23 +328,87 @@ pub async fn finish_attachments(
 
 /// Everything the conversation view shows. `None` when the caller's company
 /// may not read it.
+#[allow(clippy::too_many_lines)] // Mirrors the two Remix chat loaders (mailbox and deal).
 pub async fn thread_detail(
     pool: &MySqlPool,
     storage: &Storage,
     mailbox: &Mailbox,
     thread_id: &str,
     trash: bool,
+    on_deal: Option<i64>,
 ) -> Result<Option<ThreadDetail>, sqlx::Error> {
-    if !readable(pool, thread_id, mailbox.company_id).await? {
-        return Ok(None);
-    }
-    let signature: Option<Option<String>> =
-        sqlx::query_scalar("SELECT email_signature FROM users WHERE id = ?")
-            .bind(mailbox.user_id)
+    let deal_customer = match on_deal {
+        Some(deal_id) => {
+            let row: Option<(i32, Option<String>)> = sqlx::query_as(
+                "SELECT c.id, c.name FROM deals d JOIN customers c ON c.id = d.customer_id
+                 WHERE d.id = ? AND d.deleted_at IS NULL AND c.company_id = ?",
+            )
+            .bind(deal_id)
+            .bind(mailbox.company_id)
             .fetch_optional(pool)
             .await?;
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            Some(row)
+        }
+        None => None,
+    };
+    if !readable(pool, thread_id, mailbox.company_id).await? {
+        let (Some(deal_id), Some((customer_id, name))) = (on_deal, deal_customer) else {
+            return Ok(None);
+        };
+        let exists: Option<i32> =
+            sqlx::query_scalar("SELECT 1 FROM emails WHERE thread_id = ? LIMIT 1")
+                .bind(thread_id)
+                .fetch_optional(pool)
+                .await?;
+        if exists.is_some() {
+            return Ok(None);
+        }
+        // A new conversation started from the deal.
+        let addresses = customer_addresses(pool, customer_id).await?;
+        let signature = user_signature(pool, mailbox.user_id).await?;
+        return Ok(Some(ThreadDetail {
+            thread_id: thread_id.to_string(),
+            deal_id: Some(deal_id),
+            customer: ThreadCustomer {
+                id: Some(customer_id),
+                name: name
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or_else(|| "Customer".into()),
+                email: primary_address(pool, customer_id).await?,
+            },
+            subject: None,
+            current_user_signature: signature,
+            sending_email: sending_address(pool, mailbox.company_id, &mailbox.email).await?,
+            messages: Vec::new(),
+            participants: Vec::new(),
+            customer_addresses: addresses,
+        }));
+    }
+    let signature = user_signature(pool, mailbox.user_id).await?;
     let sending_email = sending_address(pool, mailbox.company_id, &mailbox.email).await?;
-    let (deal_id, customer) = thread_customer(pool, thread_id, mailbox).await?;
+    let (deal_id, customer) = match (on_deal, deal_customer) {
+        (Some(deal_id), Some((customer_id, name))) => {
+            let other = counterparty(pool, thread_id, &mailbox.email).await?;
+            (
+                Some(deal_id),
+                ThreadCustomer {
+                    id: Some(customer_id),
+                    name: name
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or_else(|| "Customer".into()),
+                    email: customer_thread_email(pool, customer_id, &other).await?,
+                },
+            )
+        }
+        _ => thread_customer(pool, thread_id, mailbox).await?,
+    };
+    let customer_addresses = match customer.id {
+        Some(id) => customer_addresses(pool, id).await?,
+        None => Vec::new(),
+    };
 
     let deleted = if trash { "IS NOT NULL" } else { "IS NULL" };
     let mut args: Vec<Arg> = vec![thread_id.into()];
@@ -377,10 +476,11 @@ pub async fn thread_detail(
         deal_id,
         subject: messages.first().and_then(|m| m.subject.clone()),
         customer,
-        current_user_signature: signature.flatten(),
+        current_user_signature: signature,
         sending_email,
         messages,
         participants,
+        customer_addresses,
     }))
 }
 

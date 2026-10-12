@@ -151,8 +151,11 @@ pub async fn unread(
 /// The thread's messages oldest first (on a deal: that deal's messages and
 /// unassigned ones), attachments with links, header participants, who it is
 /// with, and the caller's signature and sending address. `folder=trash`
-/// shows the deleted messages. Any thread of the caller's company can be
-/// read. Opening it does not mark it read: call
+/// shows the deleted messages. With `deal_id` the conversation is opened on
+/// that deal: only its (and unassigned) messages, the deal's customer, and an
+/// empty conversation for a thread id that has no mail yet (composing a new
+/// one). Any thread of the caller's company can be read. Opening it does not
+/// mark it read: call
 /// `POST /v1/emails/threads/{thread_id}/read`.
 #[utoipa::path(
     get,
@@ -165,7 +168,7 @@ pub async fn unread(
         (status = 400, description = "Unknown folder", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
-        (status = 404, description = "No such thread in the company", body = ErrorBody),
+        (status = 404, description = "No such thread (or deal) in the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -183,6 +186,7 @@ pub async fn get_thread(
         &mailbox(&user),
         &thread_id,
         trash,
+        query.deal_id,
     )
     .await?
     .map(Json)

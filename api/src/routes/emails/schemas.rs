@@ -118,6 +118,9 @@ pub struct ThreadQuery {
     /// `trash` shows the deleted messages of the thread instead.
     #[param(inline)]
     pub folder: Option<EmailFolder>,
+    /// Open it on this deal: only the deal's (and unassigned) messages, the
+    /// deal's customer, and an empty conversation for a new thread id.
+    pub deal_id: Option<i64>,
 }
 
 /// Who the conversation is with.
@@ -235,6 +238,8 @@ pub struct ThreadDetail {
     pub messages: Vec<ThreadMessage>,
     /// Addresses of every message, in header order (no BCC).
     pub participants: Vec<Participant>,
+    /// Every address of the customer, primary first (empty when unknown).
+    pub customer_addresses: Vec<String>,
 }
 
 /// Body of thread writes.

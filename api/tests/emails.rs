@@ -415,3 +415,47 @@ async fn sent_drips_missing_from_history_are_recorded(pool: MySqlPool) {
         ]
     );
 }
+
+#[test_db::test(seed)]
+async fn threads_opened_on_a_deal(pool: MySqlPool) {
+    // T3 has no deal: on deal 8009 the customer is the deal's and the email
+    // their address in the thread.
+    let thread = get(
+        &pool,
+        &format!("/v1/emails/threads/{T3}?deal_id=8009"),
+        OLGA,
+    )
+    .await;
+    assert_eq!(thread["deal_id"], 8009);
+    assert_eq!(
+        thread["customer"],
+        json!({ "id": 2000, "name": "Other Co Customer", "email": "buyer@other-customer.test" })
+    );
+    assert_eq!(thread["customer_addresses"].as_array().unwrap().len(), 2);
+    assert_eq!(thread["messages"].as_array().unwrap().len(), 1);
+    // A new thread id on the deal: an empty conversation with the customer.
+    let fresh = get(
+        &pool,
+        "/v1/emails/threads/0e2c5a76-0000-4000-8000-00000000abcd?deal_id=8009",
+        OLGA,
+    )
+    .await;
+    assert_eq!(fresh["messages"], json!([]));
+    assert_eq!(fresh["customer"]["id"], 2000);
+    assert_eq!(fresh["customer"]["email"], "other@otherco.example");
+    let app = server(pool);
+    // Another company's deal, or another company's thread on our deal.
+    app.get(&format!("/v1/emails/threads/{T3}?deal_id=8600"))
+        .with_session(OLGA)
+        .await
+        .assert_status_not_found();
+    app.get(&format!("/v1/emails/threads/{T6}?deal_id=8009"))
+        .with_session(OLGA)
+        .await
+        .assert_status_not_found();
+    // Without a deal an unknown thread is not found.
+    app.get("/v1/emails/threads/0e2c5a76-0000-4000-8000-00000000abcd")
+        .with_session(OLGA)
+        .await
+        .assert_status_not_found();
+}

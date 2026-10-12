@@ -9783,7 +9783,7 @@
           "emails"
         ],
         "summary": "Get an email conversation",
-        "description": "The thread's messages oldest first (on a deal: that deal's messages and\nunassigned ones), attachments with links, header participants, who it is\nwith, and the caller's signature and sending address. `folder=trash`\nshows the deleted messages. Any thread of the caller's company can be\nread. Opening it does not mark it read: call\n`POST /v1/emails/threads/{thread_id}/read`.",
+        "description": "The thread's messages oldest first (on a deal: that deal's messages and\nunassigned ones), attachments with links, header participants, who it is\nwith, and the caller's signature and sending address. `folder=trash`\nshows the deleted messages. With `deal_id` the conversation is opened on\nthat deal: only its (and unassigned) messages, the deal's customer, and an\nempty conversation for a thread id that has no mail yet (composing a new\none). Any thread of the caller's company can be read. Opening it does not\nmark it read: call\n`POST /v1/emails/threads/{thread_id}/read`.",
         "operationId": "get_email_thread",
         "parameters": [
           {
@@ -9809,6 +9809,16 @@
                 "trash",
                 "drafts"
               ]
+            }
+          },
+          {
+            "name": "deal_id",
+            "in": "query",
+            "description": "Open it on this deal: only the deal's (and unassigned) messages, the\ndeal's customer, and an empty conversation for a new thread id.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
             }
           }
         ],
@@ -9854,7 +9864,7 @@
             }
           },
           "404": {
-            "description": "No such thread in the company",
+            "description": "No such thread (or deal) in the company",
             "content": {
               "application/json": {
                 "schema": {
@@ -15881,7 +15891,8 @@
           "customer",
           "sending_email",
           "messages",
-          "participants"
+          "participants",
+          "customer_addresses"
         ],
         "properties": {
           "thread_id": {
@@ -15931,6 +15942,13 @@
               "$ref": "#/components/schemas/Participant"
             },
             "description": "Addresses of every message, in header order (no BCC)."
+          },
+          "customer_addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every address of the customer, primary first (empty when unknown)."
           }
         }
       },
