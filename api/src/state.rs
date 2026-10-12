@@ -3,7 +3,9 @@ use crate::telegram::TelegramBots;
 use crate::webhooks_client::WebhooksClient;
 use axum::http::{Method, header};
 use sqlx::MySqlPool;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 /// Origins allowed when `API_ALLOWED_ORIGINS` is unset: the production tenant
@@ -23,6 +25,8 @@ pub struct AppState {
     pub telegram: TelegramBots,
     /// The `webhooks` Lambda, for work it owns (CloudTalk contact sync).
     pub webhooks: WebhooksClient,
+    /// When each SMS provider and company last had its upkeep run.
+    pub sms_upkeep: Arc<Mutex<HashMap<(&'static str, i32), Instant>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +42,7 @@ impl AppState {
             storage: Storage::Disabled,
             telegram: TelegramBots::disabled(),
             webhooks: WebhooksClient::disabled(),
+            sms_upkeep: Arc::default(),
         }
     }
 

@@ -13,7 +13,7 @@ use sqlx::mysql::MySqlQueryResult;
 use sqlx::{MySql, MySqlPool, Transaction};
 
 /// Half-width of the echo window, in seconds; must match the CRM constant.
-const SMS_ECHO_WINDOW_SECONDS: i64 = 300;
+pub const SMS_ECHO_WINDOW_SECONDS: i64 = 300;
 
 /// The SMS provider whose table a row belongs to. Table names are interpolated
 /// from this enum only; every value is bound.
@@ -26,7 +26,7 @@ pub enum SmsProvider {
 impl SmsProvider {
     /// Name of the provider's SMS table.
     #[must_use]
-    const fn table(self) -> &'static str {
+    pub const fn table(self) -> &'static str {
         match self {
             Self::Cloudtalk => "cloudtalk_sms",
             Self::Ringcentral => "ringcentral_sms",
@@ -35,7 +35,7 @@ impl SmsProvider {
 
     /// Name of the column holding the provider's own message id.
     #[must_use]
-    const fn id_column(self) -> &'static str {
+    pub const fn id_column(self) -> &'static str {
         match self {
             Self::Cloudtalk => "cloudtalk_id",
             Self::Ringcentral => "ringcentral_id",
@@ -44,7 +44,7 @@ impl SmsProvider {
 
     /// Value stored in the `sms_company_phones.provider` ENUM.
     #[must_use]
-    const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Cloudtalk => "cloudtalk",
             Self::Ringcentral => "ringcentral",
@@ -308,7 +308,7 @@ async fn repair_company_line_threads(
 }
 
 /// The company's own lines: both role flags set.
-async fn company_sender_phones(
+pub async fn company_sender_phones(
     pool: &MySqlPool,
     provider: SmsProvider,
     company_id: i32,
@@ -327,9 +327,6 @@ async fn company_sender_phones(
 
 /// The live outbound row this inbound row echoes, if any; closest in time wins,
 /// ties broken by id.
-///
-/// The window is a `BETWEEN` so the `(company_id, direction, status,
-/// created_date)` index stays usable — `ABS(TIMESTAMPDIFF(...))` only orders.
 async fn find_echo_outbound_id(
     pool: &MySqlPool,
     provider: SmsProvider,
@@ -337,10 +334,42 @@ async fn find_echo_outbound_id(
     sender10: Option<&str>,
     recipient10: &str,
 ) -> Result<Option<i64>, sqlx::Error> {
-    if input.text.is_empty() {
+    let candidate = EchoCandidate {
+        company_id: input.company_id,
+        text: input.text,
+        sender10,
+        recipient10,
+        created_date: input.created_date,
+    };
+    find_echoed_outbound(pool, provider, &candidate, None).await
+}
+
+/// An untagged inbound row that may repeat one of our own sends.
+#[derive(Clone, Copy, Debug)]
+pub struct EchoCandidate<'a> {
+    pub company_id: i32,
+    pub text: &'a str,
+    pub sender10: Option<&'a str>,
+    pub recipient10: &'a str,
+    pub created_date: DateTime<Utc>,
+}
+
+/// The live outbound row (other than `exclude_id`) that `row` echoes: same
+/// text, a shared phone, inside the echo window; closest in time wins, ties
+/// broken by id.
+///
+/// The window is a `BETWEEN` so the `(company_id, direction, status,
+/// created_date)` index stays usable — `ABS(TIMESTAMPDIFF(...))` only orders.
+pub async fn find_echoed_outbound(
+    pool: &MySqlPool,
+    provider: SmsProvider,
+    row: &EchoCandidate<'_>,
+    exclude_id: Option<i64>,
+) -> Result<Option<i64>, sqlx::Error> {
+    if row.text.is_empty() {
         return Ok(None);
     }
-    let phones = linkable_phones(sender10, recipient10);
+    let phones = linkable_phones(row.sender10, row.recipient10);
     if phones.is_empty() {
         return Ok(None);
     }
@@ -350,6 +379,7 @@ async fn find_echo_outbound_id(
           WHERE o.company_id = ? \
             AND o.direction = 'outbound' \
             AND o.status IN ('sent', 'pending') \
+            AND o.id <> ? \
             AND o.created_date BETWEEN (? - INTERVAL {SMS_ECHO_WINDOW_SECONDS} SECOND) \
                                    AND (? + INTERVAL {SMS_ECHO_WINDOW_SECONDS} SECOND) \
             AND o.text = ? \
@@ -359,15 +389,16 @@ async fn find_echo_outbound_id(
         provider.table(),
     );
     let mut query = sqlx::query_scalar::<_, i32>(sqlx::AssertSqlSafe(sql))
-        .bind(input.company_id)
-        .bind(input.created_date)
-        .bind(input.created_date)
-        .bind(input.text);
+        .bind(row.company_id)
+        .bind(exclude_id.unwrap_or(0))
+        .bind(row.created_date)
+        .bind(row.created_date)
+        .bind(row.text);
     for phone in phones.iter().chain(phones.iter()) {
         query = query.bind(*phone);
     }
     let found = query
-        .bind(input.created_date)
+        .bind(row.created_date)
         .fetch_optional(pool)
         .await?
         .map(i64::from);

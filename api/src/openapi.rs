@@ -47,6 +47,7 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         (name = "questionnaires", description = "Sales discovery questionnaires and the answers per deal"),
         (name = "emails", description = "The caller's mailbox: folders, conversations, read state"),
         (name = "deals", description = "The sales pipeline: deals, their stages, activities and notes"),
+        (name = "sms", description = "SMS conversations through CloudTalk or RingCentral"),
     )
 )]
 struct ApiDoc;

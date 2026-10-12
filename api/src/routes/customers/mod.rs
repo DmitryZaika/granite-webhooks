@@ -13,7 +13,7 @@
 //! (`app/utils/customersListLoader.server.ts`).
 
 mod duplicates;
-mod fuzzy;
+pub(crate) mod fuzzy;
 mod handlers;
 mod history;
 mod projects;

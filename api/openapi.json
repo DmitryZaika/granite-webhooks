@@ -13357,10 +13357,722 @@
           }
         ]
       }
+    },
+    "/v1/sms/{provider}/threads": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "List conversations",
+        "description": "A page of the caller's SMS conversations (`scope=all`: the company's, for\nadmins), latest first — or unread first when narrowed to one rep. A\nsearch matches phone digits, message text and customer or supplier names.",
+        "operationId": "list_sms_threads",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "SMS provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Phone digits, message text, or a customer's or supplier's name.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 100 (default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Threads to skip.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`all` for the whole company (admins only).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose conversations to list.",
+              "enum": [
+                "mine",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "description": "With `scope=all`, one rep's conversations (their agent id).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of conversations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/{provider}/unread-count": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Count unread conversations",
+        "description": "Conversations with unread messages, for the sidebar badge.",
+        "operationId": "count_unread_sms_threads",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "SMS provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`all` for the whole company (admins only).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose conversations to list.",
+              "enum": [
+                "mine",
+                "all"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreadCount"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/{provider}/desktop-alerts": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Unread texts to alert about",
+        "description": "Up to 50 unread conversations whose latest message came from the\ncustomer, for desktop notifications. Empty for a user without an agent id\nor a company without the provider.",
+        "operationId": "list_sms_desktop_alerts",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "SMS provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Alerts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopAlerts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/{provider}/sales-reps": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "List reps who text",
+        "description": "The company's users with an agent (`CloudTalk`) or extension\n(`RingCentral`) id, for the admin inbox's rep filter.",
+        "operationId": "list_sms_sales_reps",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "SMS provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reps by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SalesRep"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/{provider}/threads/{phone}": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Get a conversation",
+        "description": "The newest messages with one phone (page back with `before_id`), the\ncustomer or supplier it belongs to and the SMS flow running on it. A\nconversation the caller may not see comes back without messages. The\nonboarding tour's sample phone is not a real conversation (404).",
+        "operationId": "get_sms_thread",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "SMS provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          },
+          {
+            "name": "phone",
+            "in": "path",
+            "description": "The other party's phone digits",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Messages, 1 to 200 (default 30), newest first before reversing.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before_id",
+            "in": "query",
+            "description": "Only messages older than this one (paging back).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`all` to read as an admin (anyone else reads their own).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose conversations to list.",
+              "enum": [
+                "mine",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "description": "With `scope=all`, read as one rep (their agent id).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The onboarding sample",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/{provider}/threads/{phone}/read": {
+      "post": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Mark a conversation read",
+        "description": "Clears the conversation's unread messages for the caller.",
+        "operationId": "mark_sms_thread_read",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "SMS provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          },
+          {
+            "name": "phone",
+            "in": "path",
+            "description": "The other party's phone digits",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Marked (or not visible to the caller)"
+          },
+          "400": {
+            "description": "Not a phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/{provider}/threads/{phone}/unread": {
+      "post": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Mark a conversation unread",
+        "description": "Keeps the conversation unread for the caller until it is opened again.",
+        "operationId": "mark_sms_thread_unread",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "SMS provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          },
+          {
+            "name": "phone",
+            "in": "path",
+            "description": "The other party's phone digits",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Marked (or not visible to the caller)"
+          },
+          "400": {
+            "description": "Not a phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
     "schemas": {
+      "ActiveFlow": {
+        "type": "object",
+        "description": "An SMS flow running (or failed) on the phone.",
+        "required": [
+          "enrollment_id",
+          "flow_id",
+          "flow_name",
+          "status",
+          "next_step_position",
+          "total_steps"
+        ],
+        "properties": {
+          "enrollment_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The phone's enrollment in the flow."
+          },
+          "flow_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The flow."
+          },
+          "flow_name": {
+            "type": "string",
+            "description": "The flow's name."
+          },
+          "status": {
+            "type": "string",
+            "description": "`active`, `paused` or `failed`."
+          },
+          "next_step_position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Position of the next step (1 = first)."
+          },
+          "next_step_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The next step's template."
+          },
+          "next_step_preview": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the next step sends."
+          },
+          "next_send_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the next step goes out."
+          },
+          "total_steps": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Steps in the flow."
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the flow failed."
+          }
+        }
+      },
       "Activity": {
         "type": "object",
         "description": "A to-do on a deal.",
@@ -15657,6 +16369,69 @@
           }
         }
       },
+      "DesktopAlert": {
+        "type": "object",
+        "description": "An unread conversation whose latest message is from the customer.",
+        "required": [
+          "id",
+          "phone_digits",
+          "title",
+          "message",
+          "href",
+          "sent_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`sms-<phone>`."
+          },
+          "phone_digits": {
+            "type": "string",
+            "description": "The other party's phone."
+          },
+          "title": {
+            "type": "string",
+            "description": "The customer's name, else the phone."
+          },
+          "message": {
+            "type": "string",
+            "description": "The latest message."
+          },
+          "href": {
+            "type": "string",
+            "description": "The conversation's page."
+          },
+          "sent_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the latest message arrived."
+          }
+        }
+      },
+      "DesktopAlerts": {
+        "type": "object",
+        "description": "`GET /v1/sms/{provider}/desktop-alerts`.",
+        "required": [
+          "alerts"
+        ],
+        "properties": {
+          "alerts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DesktopAlert"
+            },
+            "description": "Newest first."
+          }
+        }
+      },
+      "Direction": {
+        "type": "string",
+        "description": "Which way a message went, seen from the company.",
+        "enum": [
+          "inbound",
+          "outbound"
+        ]
+      },
       "DocumentRename": {
         "type": "object",
         "description": "Body of `PATCH /v1/deals/{id}/documents/{document_id}`.",
@@ -17015,6 +17790,77 @@
             "description": "Inbox only: the time the thread is ranked by (its latest message to the caller)."
           }
         }
+      },
+      "Message": {
+        "type": "object",
+        "description": "One message.",
+        "required": [
+          "id",
+          "direction",
+          "text",
+          "created_at",
+          "status",
+          "attachments"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The SMS row id (page back with `before_id`)."
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Direction"
+          },
+          "text": {
+            "type": "string",
+            "description": "The text; empty for a photo or file alone."
+          },
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Agent id stored on the row."
+          },
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The rep who sent it, or whose number received it."
+          },
+          "agent_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That rep's name."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was sent (`CloudTalk`: placed among its neighbours when the\nwebhook arrived late)."
+          },
+          "status": {
+            "$ref": "#/components/schemas/MessageStatus"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            },
+            "description": "Photos and files, in order."
+          }
+        }
+      },
+      "MessageStatus": {
+        "type": "string",
+        "description": "Delivery state.",
+        "enum": [
+          "sent",
+          "sending",
+          "failed"
+        ]
       },
       "MonthlyCount": {
         "type": "object",
@@ -18717,6 +19563,24 @@
               "null"
             ],
             "description": "Goal for each month, decimal string in USD (e.g. \"50000.00\"); null\nwhen the user has not set one (the dashboard then assumes $50,000)."
+          }
+        }
+      },
+      "SalesRep": {
+        "type": "object",
+        "description": "A rep who texts through the provider.",
+        "required": [
+          "agent_id",
+          "name"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "Filter value for `agent_id`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The rep's name."
           }
         }
       },
@@ -20430,6 +21294,39 @@
           }
         }
       },
+      "ThreadList": {
+        "type": "object",
+        "description": "A page of the inbox.",
+        "required": [
+          "threads",
+          "total_count",
+          "unread_count",
+          "has_more"
+        ],
+        "properties": {
+          "threads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreadSummary"
+            },
+            "description": "This page."
+          },
+          "total_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Threads matching, over every page."
+          },
+          "unread_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unread threads (ignoring the search when it matches nothing)."
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "Another page follows."
+          }
+        }
+      },
       "ThreadMessage": {
         "type": "object",
         "description": "A message of a thread.",
@@ -20529,6 +21426,68 @@
               "$ref": "#/components/schemas/Attachment"
             },
             "description": "Attachments."
+          }
+        }
+      },
+      "ThreadSummary": {
+        "type": "object",
+        "description": "One conversation in the inbox.",
+        "required": [
+          "phone_digits",
+          "last_message_text",
+          "last_message_at",
+          "last_direction",
+          "message_count",
+          "unread_count"
+        ],
+        "properties": {
+          "phone_digits": {
+            "type": "string",
+            "description": "The other party's phone (the thread key)."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer with this phone."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's name, else a supplier's."
+          },
+          "last_message_text": {
+            "type": "string",
+            "description": "Text of the latest message (a photo or file label when it has none)."
+          },
+          "last_message_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the latest message was sent."
+          },
+          "last_direction": {
+            "$ref": "#/components/schemas/Direction"
+          },
+          "last_agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Agent id on the latest message."
+          },
+          "message_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Messages in the conversation (matching the search, with one)."
+          },
+          "unread_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unread messages (1 when marked unread by hand)."
           }
         }
       },
@@ -20832,6 +21791,10 @@
     {
       "name": "deals",
       "description": "The sales pipeline: deals, their stages, activities and notes"
+    },
+    {
+      "name": "sms",
+      "description": "SMS conversations through CloudTalk or RingCentral"
     }
   ]
 }

@@ -1,7 +1,7 @@
 use crate::cloudtalk::schemas::{CloudtalkSMS, phone_last10};
-use crate::libs::sms_derived::{SmsDirection, SmsProvider, SmsRowInput, SmsStatus, insert_sms};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Duration, Utc};
+use common::sms::derived::{SmsDirection, SmsProvider, SmsRowInput, SmsStatus, insert_sms};
 use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
 use std::error::Error;

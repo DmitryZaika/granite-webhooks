@@ -23,6 +23,7 @@ pub mod questionnaires;
 pub mod sales;
 pub mod sinks;
 pub mod slabs;
+pub mod sms;
 pub mod stats;
 pub mod stones;
 pub mod templates;
@@ -55,4 +56,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(questionnaires::router())
         .merge(emails::router())
         .merge(templates::router())
+        .merge(sms::router())
 }
