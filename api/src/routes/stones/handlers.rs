@@ -5,7 +5,7 @@ use super::queries::{
 use super::schemas::{
     ListStonesQuery, QuickStone, QuickStoneInput, SearchStonesQuery, Stone, StoneDetail, StoneSlab,
 };
-use crate::auth::EmployeeUser;
+use crate::auth::{EmployeeUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::state::AppState;
@@ -100,7 +100,7 @@ pub async fn get(
     responses(
         (status = 200, description = "Slabs by id", body = Vec<StoneSlab>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or of the shop", body = ErrorBody),
         (status = 404, description = "No such stone in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -108,7 +108,7 @@ pub async fn get(
 )]
 pub async fn slabs(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<Json<Vec<StoneSlab>>> {
     if find_stone(&state.pool, user.company_id, id)
@@ -139,14 +139,14 @@ pub async fn slabs(
         (status = 200, description = "Matching stones, best first", body = Vec<Stone>),
         (status = 400, description = "A parameter has the wrong type", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or of the shop", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn search(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     MultiQuery(query): MultiQuery<SearchStonesQuery>,
 ) -> ApiResult<Json<Vec<Stone>>> {
     Ok(Json(
