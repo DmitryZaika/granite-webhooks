@@ -9026,6 +9026,63 @@
         ]
       }
     },
+    "/v1/installer/context": {
+      "get": {
+        "tags": [
+          "checklists"
+        ],
+        "summary": "The installer portal's context",
+        "description": "Returns the caller's company, its logo and whether its QuickBooks data\nis usable. Only installers may call it (403 otherwise: an employee\nbelongs in the employee pages).",
+        "operationId": "get_installer_context",
+        "responses": {
+          "200": {
+            "description": "The context",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallerContext"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an installer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/uploads": {
       "post": {
         "tags": [
@@ -32500,6 +32557,32 @@
           }
         },
         "additionalProperties": false
+      },
+      "InstallerContext": {
+        "type": "object",
+        "description": "What the installer portal shows around the checklist form.",
+        "required": [
+          "company_id",
+          "quickbooks"
+        ],
+        "properties": {
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The company the installer works for."
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The company logo for the form header; null when none."
+          },
+          "quickbooks": {
+            "type": "boolean",
+            "description": "QuickBooks is on and connected (the portal then shows invoices)."
+          }
+        }
       },
       "Instruction": {
         "type": "object",

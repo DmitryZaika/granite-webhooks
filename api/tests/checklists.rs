@@ -223,3 +223,36 @@ async fn a_checklist_prints_as_a_pdf(pool: MySqlPool) {
         .await
         .assert_status_ok();
 }
+
+#[test_db::test(seed)]
+async fn the_installer_portal_gets_its_company_and_logo(pool: MySqlPool) {
+    let server = server(pool.clone());
+    server
+        .get("/v1/installer/context")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(axum::http::StatusCode::FORBIDDEN);
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (100, 6, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE company SET logo_url = 'https://img.example/logo.png' WHERE id = 100")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let body: serde_json::Value = server
+        .get("/v1/installer/context")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "company_id": 100,
+            "logo_url": "https://img.example/logo.png",
+            "quickbooks": false,
+        })
+    );
+}

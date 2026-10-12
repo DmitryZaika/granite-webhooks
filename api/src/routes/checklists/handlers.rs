@@ -156,3 +156,50 @@ pub async fn create(
         Json(CreatedChecklist { id }),
     ))
 }
+
+/// What the installer portal shows around the checklist form.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct InstallerContext {
+    /// The company the installer works for.
+    pub company_id: i32,
+    /// The company logo for the form header; null when none.
+    pub logo_url: Option<String>,
+    /// QuickBooks is on and connected (the portal then shows invoices).
+    pub quickbooks: bool,
+}
+
+/// The installer portal's context
+///
+/// Returns the caller's company, its logo and whether its QuickBooks data
+/// is usable. Only installers may call it (403 otherwise: an employee
+/// belongs in the employee pages).
+#[utoipa::path(
+    get,
+    path = "/v1/installer/context",
+    operation_id = "get_installer_context",
+    tag = "checklists",
+    responses(
+        (status = 200, description = "The context", body = InstallerContext),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an installer", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn installer_context(
+    State(state): State<AppState>,
+    crate::auth::InstallerUser(user): crate::auth::InstallerUser,
+) -> ApiResult<Json<InstallerContext>> {
+    let logo_url: Option<Option<String>> =
+        sqlx::query_scalar("SELECT logo_url FROM company WHERE id = ?")
+            .bind(user.company_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let features =
+        crate::routes::company::queries::company_features(&state.pool, user.company_id).await?;
+    Ok(Json(InstallerContext {
+        company_id: user.company_id,
+        logo_url: logo_url.flatten(),
+        quickbooks: features.quickbooks_enabled && features.quickbooks_connected,
+    }))
+}
