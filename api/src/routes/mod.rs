@@ -26,6 +26,7 @@ pub mod fixtures;
 pub mod instructions;
 pub mod leaderboard;
 pub mod me;
+pub mod notifications;
 pub mod places;
 pub mod public;
 pub mod questionnaires;
@@ -79,4 +80,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(delayed::router())
         .merge(ai_usage::router())
         .merge(ai::router())
+        .merge(notifications::router())
 }

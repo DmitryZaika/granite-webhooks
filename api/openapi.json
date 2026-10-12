@@ -20528,6 +20528,76 @@
           }
         ]
       }
+    },
+    "/v1/notifications/done": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Dismiss notifications",
+        "description": "Marks activity and billing notifications done and the listed email\nthreads read. With `clear_all`, dismisses every one of them and marks all\nunread incoming mail read.",
+        "operationId": "dismiss_notifications",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DoneInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Dismissed"
+          },
+          "400": {
+            "description": "Nothing to dismiss",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -23596,6 +23666,23 @@
           "name": {
             "type": "string",
             "description": "New display name, 1 to 255 characters."
+          }
+        }
+      },
+      "DoneInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/notifications/done`.",
+        "properties": {
+          "clear_all": {
+            "type": "boolean",
+            "description": "Dismiss everything: activity and billing notifications, and every\nunread incoming email."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationRef"
+            },
+            "description": "The notifications to dismiss."
           }
         }
       },
@@ -26822,6 +26909,16 @@
           }
         }
       },
+      "NotificationKind": {
+        "type": "string",
+        "description": "What a notification is about.",
+        "enum": [
+          "activity",
+          "email",
+          "call",
+          "billing"
+        ]
+      },
       "NotificationPreferences": {
         "type": "object",
         "description": "Which Telegram alerts the user wants from the notifications bot.",
@@ -26870,6 +26967,23 @@
           "telegram_activity_notifications": {
             "type": "boolean",
             "description": "Deal activities and other CRM alerts."
+          }
+        }
+      },
+      "NotificationRef": {
+        "type": "object",
+        "description": "One notification of the bell.",
+        "required": [
+          "id",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`notif-<id>` for activities, `billing-<id>` for billing, the thread\nid for email. Calls are dismissed in the browser only."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NotificationKind"
           }
         }
       },
@@ -31442,6 +31556,10 @@
     {
       "name": "sms",
       "description": "SMS conversations through CloudTalk or RingCentral"
+    },
+    {
+      "name": "notifications",
+      "description": "The notification bell"
     }
   ]
 }
