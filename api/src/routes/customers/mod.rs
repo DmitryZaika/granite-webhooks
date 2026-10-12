@@ -12,6 +12,7 @@
 //! Replaces `loadCustomersListPage` in the Remix app
 //! (`app/utils/customersListLoader.server.ts`).
 
+mod duplicates;
 mod fuzzy;
 mod handlers;
 mod history;
@@ -29,6 +30,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::list, write::create))
         .routes(routes!(handlers::emails_batch))
         .routes(routes!(handlers::search))
+        .routes(routes!(duplicates::duplicates))
         .routes(routes!(handlers::get, write::update, write::delete))
         .routes(routes!(write::set_sales_rep))
         .routes(routes!(write::set_temperature))

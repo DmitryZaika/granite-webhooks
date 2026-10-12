@@ -236,3 +236,31 @@ async fn deleted_customers_only_on_request(pool: MySqlPool) {
         .await
         .assert_status_not_found();
 }
+
+#[test_db::test(seed)]
+async fn duplicates_match_phones_and_addresses(pool: MySqlPool) {
+    let server = server(pool);
+    let find = |query: &'static str| {
+        let server = &server;
+        async move {
+            let res = server
+                .get(&format!("/v1/customers/duplicates{query}"))
+                .with_session(sessions::REP)
+                .await;
+            res.assert_status_ok();
+            res.json::<Value>()
+        }
+    };
+    let by_phone = find("?phone=%2B1%20(317)%20555-0100").await;
+    assert_eq!(by_phone[0]["id"], 1000);
+    assert_eq!(by_phone[0]["sales_rep_name"], "Rita Rep");
+    assert_eq!(find("?phone_2=317.555.0101").await[0]["id"], 1000);
+    assert_eq!(
+        find("?email=nobody%40x.test&email=ALICE.WORK%40example.com").await[0]["id"],
+        1000
+    );
+    assert_eq!(find("?phone=555").await, serde_json::json!([]));
+    assert_eq!(find("").await, serde_json::json!([]));
+    // Another company's customer is not a duplicate here.
+    assert_eq!(find("?phone=463-555-0200").await, serde_json::json!([]));
+}

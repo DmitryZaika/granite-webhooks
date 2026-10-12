@@ -679,6 +679,98 @@
         ]
       }
     },
+    "/v1/customers/duplicates": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Find customers with a contact",
+        "description": "Up to 5 live customers of the company that already have one of the\nphones (last 10 digits) or addresses, for the \"already exists\" warning\nof the add form. Empty without any contact.",
+        "operationId": "find_duplicate_customers",
+        "parameters": [
+          {
+            "name": "phone",
+            "in": "query",
+            "description": "Phone (its last 10 digits are compared).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phone_2",
+            "in": "query",
+            "description": "Second phone.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "email",
+            "in": "query",
+            "description": "Email addresses (repeat the parameter), compared case-insensitively.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching customers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DuplicateCustomer"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/customers/{id}": {
       "get": {
         "tags": [
@@ -15579,6 +15671,48 @@
           }
         },
         "additionalProperties": false
+      },
+      "DuplicateCustomer": {
+        "type": "object",
+        "description": "A live customer with one of the given contacts.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Customer id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Primary email address."
+          },
+          "sales_rep_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Assigned sales rep's name."
+          }
+        }
       },
       "EmailDraft": {
         "type": "object",
