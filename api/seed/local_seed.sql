@@ -476,3 +476,45 @@ INSERT INTO sales_questionnaire_questions (id, questionnaire_id, question, delet
   (8735, 8723, 'Other?',                NULL);
 INSERT INTO sales_questionnaire_responses (deal_id, question_id, answer, answered_by) VALUES
   (8600, 8730, 'Kitchen', 107);
+
+-- ---- Mailbox (/v1/emails). Ids 8800+, all in April 2026 (never "this month").
+-- Olga (106, rep@other.test) of company 101, which has a mail domain.
+-- T1 ...0001: customer buyer@other-customer.test (customer 2000) wrote twice
+--   (8800 read, 8802 unread, with an attachment), Olga replied (8801, opened
+--   by the customer). On deal 8009.
+-- T2 ...0002: Pat Prospect (no customer) wrote, read; the name is only in the
+--   participant row.
+-- T3 ...0003: Olga wrote to the customer only (Sent), opened 1 s after the
+--   send (an image proxy: not a real open).
+-- T4 ...0004: trashed inbound mail.
+-- T5 ...0005: Olga's draft.
+-- T6 ...0006: company 100 mail to rep@acme.test (never Olga's).
+INSERT INTO customers_emails (id, customer_id, email, created_at, created_by) VALUES
+  (8790, 2000, 'buyer@other-customer.test', '2026-04-01 08:00:00', 106);
+
+INSERT INTO emails (id, subject, body, html_body, sent_at, deleted_at, message_id, thread_id, sender_user_id, receiver_user_id, sender_email, receiver_email, deal_id, employee_read_at, company_id, is_draft) VALUES
+  (8800, 'Kitchen quote',     'Can you quote my kitchen?', NULL, '2026-04-10 10:00:00', NULL, '<m8800@other-customer.test>', 'aaaaaaaa-1111-4000-8000-000000000001', NULL, 106, 'buyer@other-customer.test', 'rep@other.test', 8009, '2026-04-10 10:30:00', 101, 0),
+  (8801, 'Re: Kitchen quote', 'Sure, attached.',           '<p>Sure, attached.</p>', '2026-04-10 11:00:00', NULL, '<m8801@other.test>', 'aaaaaaaa-1111-4000-8000-000000000001', 106, NULL, 'Olga Other <rep@other.test>', 'buyer@other-customer.test', 8009, NULL, 101, 0),
+  (8802, 'Re: Kitchen quote', 'Thanks! See my sketch.',    NULL, '2026-04-11 09:00:00', NULL, '<m8802@other-customer.test>', 'aaaaaaaa-1111-4000-8000-000000000001', NULL, 106, 'buyer@other-customer.test', 'rep@other.test', NULL, NULL, 101, 0),
+  (8803, 'Granite question',  'Do you carry Black Pearl?', NULL, '2026-04-05 12:00:00', NULL, '<m8803@prospect.test>', 'aaaaaaaa-1111-4000-8000-000000000002', NULL, NULL, 'pat@prospect.test', 'rep@other.test', NULL, '2026-04-05 13:00:00', 101, 0),
+  (8804, 'Following up',      'Just checking in.',         NULL, '2026-04-06 12:00:00', NULL, '<m8804@other.test>', 'aaaaaaaa-1111-4000-8000-000000000003', 106, NULL, 'rep@other.test', 'buyer@other-customer.test', NULL, NULL, 101, 0),
+  (8805, 'Spam',              'Buy now',                   NULL, '2026-04-07 12:00:00', '2026-04-08 12:00:00', '<m8805@spam.test>', 'aaaaaaaa-1111-4000-8000-000000000004', NULL, NULL, 'spam@spam.test', 'rep@other.test', NULL, NULL, 101, 0),
+  (8806, 'Draft quote',       'Work in progress',          NULL, '2026-04-09 12:00:00', NULL, NULL, 'aaaaaaaa-1111-4000-8000-000000000005', 106, NULL, 'rep@other.test', 'buyer@other-customer.test', NULL, NULL, 101, 1),
+  (8807, 'Acme only',         'Not for Olga',              NULL, '2026-04-08 12:00:00', NULL, '<m8807@x.test>', 'aaaaaaaa-1111-4000-8000-000000000006', NULL, 100, 'someone@x.test', 'rep@acme.test', NULL, NULL, 100, 0);
+
+INSERT INTO email_participants (email_id, email, display_name, user_id, customer_id, type, position) VALUES
+  (8800, 'buyer@other-customer.test', 'Bea Buyer', NULL, 2000, 'from', 0),
+  (8800, 'rep@other.test', NULL, 106, NULL, 'to', 0),
+  (8801, 'rep@other.test', 'Olga Other', 106, NULL, 'from', 0),
+  (8801, 'buyer@other-customer.test', NULL, NULL, 2000, 'to', 0),
+  (8801, 'boss@other-customer.test', 'Boss', NULL, NULL, 'cc', 0),
+  (8801, 'secret@other.test', NULL, NULL, NULL, 'bcc', 0),
+  (8803, 'pat@prospect.test', 'Pat Prospect', NULL, NULL, 'from', 0),
+  (8803, 'rep@other.test', NULL, 106, NULL, 'to', 0);
+
+INSERT INTO email_attachments (id, email_id, content_type, content_subtype, filename, url) VALUES
+  (8810, 8802, 'image', 'png', 'sketch.png', 'https://example.test/sketch.png');
+
+INSERT INTO email_reads (message_id, read_at) VALUES
+  ('<m8801@other.test>', '2026-04-10 15:00:00'),
+  ('<m8804@other.test>', '2026-04-06 12:00:01');

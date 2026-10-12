@@ -45,6 +45,7 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         (name = "leaderboard", description = "The company's points leaderboard"),
         (name = "schedule", description = "Calendars and events of the company schedule"),
         (name = "questionnaires", description = "Sales discovery questionnaires and the answers per deal"),
+        (name = "emails", description = "The caller's mailbox: folders, conversations, read state"),
         (name = "deals", description = "The sales pipeline: deals, their stages, activities and notes"),
     )
 )]

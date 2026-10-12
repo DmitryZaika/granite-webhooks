@@ -9558,6 +9558,756 @@
           }
         ]
       }
+    },
+    "/v1/emails/threads": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "List the caller's email threads",
+        "description": "One page (25 threads) of a folder: `inbox` (mail addressed to the caller,\nranked by the latest message to them), `sent`, `trash` (ranked by\ndeletion) or `drafts`. Every message of each listed thread comes back,\nwith names, attachment flags and the recipient's last open. `search`\nmatches subject, text, addresses, and the addresses of customers whose\nname matches; in the inbox it matches any message of the thread. Open a\nthread with `GET /v1/emails/threads/{thread_id}`.",
+        "operationId": "list_email_threads",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "query",
+            "description": "Default `inbox`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "A mailbox folder.",
+              "enum": [
+                "inbox",
+                "sent",
+                "trash",
+                "drafts"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page of 25 threads. Default 1.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Words to find in subject, text and addresses, or a customer name\n(whose addresses then match).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the folder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown folder or malformed page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/emails/folder-counts": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Count the caller's email folders",
+        "description": "Unread inbox threads (customer mail to the caller or on their deals, and\ncoworkers' mail to them), threads in the trash and drafts.",
+        "operationId": "count_email_folders",
+        "responses": {
+          "200": {
+            "description": "Counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderCounts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/emails/unread": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Get the inbox badge",
+        "description": "Unread inbox threads and the newest unread message id (to notice new\nmail between polls). Always 0 when the company has no inbound email.",
+        "operationId": "get_unread_email_count",
+        "responses": {
+          "200": {
+            "description": "The badge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreadCount"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/emails/threads/{thread_id}": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Get an email conversation",
+        "description": "The thread's messages oldest first (on a deal: that deal's messages and\nunassigned ones), attachments with links, header participants, who it is\nwith, and the caller's signature and sending address. `folder=trash`\nshows the deleted messages. Any thread of the caller's company can be\nread. Opening it does not mark it read: call\n`POST /v1/emails/threads/{thread_id}/read`.",
+        "operationId": "get_email_thread",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "description": "Conversation id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "description": "`trash` shows the deleted messages of the thread instead.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "A mailbox folder.",
+              "enum": [
+                "inbox",
+                "sent",
+                "trash",
+                "drafts"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown folder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such thread in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/emails/threads/{thread_id}/read": {
+      "post": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Mark an open conversation read",
+        "description": "Stamps every unread live message of the thread that the caller did not\nsend (what opening the conversation used to do). Any thread of the\ncaller's company.",
+        "operationId": "read_email_thread",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "description": "Conversation id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Marked"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such thread in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/emails/threads/mark-read": {
+      "post": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Mark conversations read",
+        "description": "Stamps unread live messages the caller did not send, in the caller's own threads (threads they are on or of their deals).",
+        "operationId": "mark_email_threads_read",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Done"
+          },
+          "400": {
+            "description": "No thread ids, or too many",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/emails/threads/mark-unread": {
+      "post": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Mark conversations unread",
+        "description": "Clears the read stamp of every message of the caller's own threads.",
+        "operationId": "mark_email_threads_unread",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Done"
+          },
+          "400": {
+            "description": "No thread ids, or too many",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/emails/threads/delete": {
+      "post": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Move conversations to the trash",
+        "description": "Soft-deletes every message of the caller's own threads, at most 50 threads.",
+        "operationId": "delete_email_threads",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Done"
+          },
+          "400": {
+            "description": "No thread ids, or too many",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/emails/threads/restore": {
+      "post": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Restore conversations from the trash",
+        "description": "Undeletes every message of the caller's own threads.",
+        "operationId": "restore_email_threads",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Done"
+          },
+          "400": {
+            "description": "No thread ids, or too many",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/emails/threads/purge": {
+      "post": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Erase conversations from the trash",
+        "description": "Permanently deletes the trashed messages of the caller's own threads\n(at most 50 threads) and their open tracking. Live messages are kept.",
+        "operationId": "purge_email_threads",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Erased",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Purged"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No thread ids, or too many",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -9878,6 +10628,62 @@
             "type": "integer",
             "description": "Documents attached.",
             "minimum": 0
+          }
+        }
+      },
+      "Attachment": {
+        "type": "object",
+        "description": "A file attached to a message.",
+        "required": [
+          "id",
+          "email_id",
+          "content_type",
+          "filename",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attachment id."
+          },
+          "email_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Message it belongs to."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "MIME type (`application`)."
+          },
+          "content_subtype": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MIME subtype (`pdf`)."
+          },
+          "filename": {
+            "type": "string",
+            "description": "File name."
+          },
+          "url": {
+            "type": "string",
+            "description": "Stored URL."
+          },
+          "signed_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A link the browser can open, for private files (valid an hour)."
+          },
+          "signature_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Status of an e-signature request made from it: `draft`, `sent`,\n`viewed`, `signed`, `declined`, `expired`; null without one."
           }
         }
       },
@@ -11665,6 +12471,32 @@
           }
         }
       },
+      "FolderCounts": {
+        "type": "object",
+        "description": "Thread counts of the caller's folders.",
+        "required": [
+          "inbox_unread",
+          "trash",
+          "drafts"
+        ],
+        "properties": {
+          "inbox_unread": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unread inbox threads."
+          },
+          "trash": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Threads in the trash."
+          },
+          "drafts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Draft threads."
+          }
+        }
+      },
       "LeadAnswers": {
         "type": "object",
         "description": "What a lead answered on the ad or web form; every field free text, null\nwhen not asked.",
@@ -11883,6 +12715,156 @@
           }
         ],
         "description": "`GET /v1/customers` returns `CustomerRow`s, or `CompanyRow`s when `view=companies`."
+      },
+      "MailboxPage": {
+        "type": "object",
+        "description": "One page of a folder.",
+        "required": [
+          "emails",
+          "total_count",
+          "page",
+          "page_size"
+        ],
+        "properties": {
+          "emails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MailboxRow"
+            },
+            "description": "Every message of the page's threads, threads newest first."
+          },
+          "total_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Threads in the folder (with the search)."
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "description": "This page."
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Threads per page."
+          }
+        }
+      },
+      "MailboxRow": {
+        "type": "object",
+        "description": "A message of a listed thread (every message of the page's threads).",
+        "required": [
+          "id",
+          "body",
+          "is_draft",
+          "has_attachments",
+          "thread_has_attachments"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Message id."
+          },
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Conversation id (UUID)."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subject."
+          },
+          "body": {
+            "type": "string",
+            "description": "Plain text body."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sent."
+          },
+          "sender_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "From header (`Name <address>` or an address)."
+          },
+          "receiver_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First To header."
+          },
+          "sender_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Sending user, null for mail from outside."
+          },
+          "employee_read_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When an employee opened it; null while unread."
+          },
+          "is_draft": {
+            "type": "boolean",
+            "description": "Unsent draft."
+          },
+          "client_read_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the recipient last opened it (sent mail only)."
+          },
+          "has_attachments": {
+            "type": "boolean",
+            "description": "The message has attachments."
+          },
+          "thread_has_attachments": {
+            "type": "boolean",
+            "description": "Some message of the conversation has attachments."
+          },
+          "sender_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sender's name: user, customer, or the name in a header."
+          },
+          "receiver_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Receiver's name, the same way."
+          },
+          "inbox_sort_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Inbox only: the time the thread is ranked by (its latest message to the caller)."
+          }
+        }
       },
       "MonthlyCount": {
         "type": "object",
@@ -12233,6 +13215,67 @@
               "$ref": "#/components/schemas/Question"
             },
             "description": "Questions in creation order."
+          }
+        }
+      },
+      "Participant": {
+        "type": "object",
+        "description": "An address on a message (no BCC).",
+        "required": [
+          "email_id",
+          "type",
+          "email"
+        ],
+        "properties": {
+          "email_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Message."
+          },
+          "type": {
+            "type": "string",
+            "description": "`from`, `to` or `cc`."
+          },
+          "email": {
+            "type": "string",
+            "description": "Address, lowercased."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name from the header."
+          },
+          "user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The user it belongs to."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer it belongs to."
+          },
+          "user_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That user's name."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That customer's name."
           }
         }
       },
@@ -12589,6 +13632,20 @@
           "slabs": {
             "$ref": "#/components/schemas/SlabCounts",
             "description": "Slabs in the yard (own and linked stones)."
+          }
+        }
+      },
+      "Purged": {
+        "type": "object",
+        "description": "Result of `POST /v1/emails/threads/purge`.",
+        "required": [
+          "purged"
+        ],
+        "properties": {
+          "purged": {
+            "type": "integer",
+            "description": "Messages erased.",
+            "minimum": 0
           }
         }
       },
@@ -14404,6 +15461,211 @@
           }
         }
       },
+      "ThreadCustomer": {
+        "type": "object",
+        "description": "Who the conversation is with.",
+        "required": [
+          "name",
+          "email"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Customer id, when the address belongs to one."
+          },
+          "name": {
+            "type": "string",
+            "description": "Customer, header or coworker name; the address, or `Customer`."
+          },
+          "email": {
+            "type": "string",
+            "description": "The address to reply to."
+          }
+        }
+      },
+      "ThreadDetail": {
+        "type": "object",
+        "description": "A conversation.",
+        "required": [
+          "thread_id",
+          "customer",
+          "sending_email",
+          "messages",
+          "participants"
+        ],
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "description": "Conversation id."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Deal the conversation is on."
+          },
+          "customer": {
+            "$ref": "#/components/schemas/ThreadCustomer",
+            "description": "Who it is with."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subject of the first message."
+          },
+          "current_user_signature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's email signature."
+          },
+          "sending_email": {
+            "type": "string",
+            "description": "The address the caller's mail leaves from (theirs, or the shared one)."
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreadMessage"
+            },
+            "description": "Messages, oldest first (on a deal: the deal's and unassigned ones)."
+          },
+          "participants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Participant"
+            },
+            "description": "Addresses of every message, in header order (no BCC)."
+          }
+        }
+      },
+      "ThreadIds": {
+        "type": "object",
+        "description": "Body of thread writes.",
+        "required": [
+          "thread_ids"
+        ],
+        "properties": {
+          "thread_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Conversation ids (only the caller's own threads are changed)."
+          }
+        }
+      },
+      "ThreadMessage": {
+        "type": "object",
+        "description": "A message of a thread.",
+        "required": [
+          "id",
+          "body",
+          "attachments"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Message id."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subject."
+          },
+          "body": {
+            "type": "string",
+            "description": "Plain text body."
+          },
+          "html_body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "HTML body, when the mail had one."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sent."
+          },
+          "sender_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "From header."
+          },
+          "receiver_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First To header."
+          },
+          "receiver_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Receiving user, when known."
+          },
+          "employee_read_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When an employee opened it."
+          },
+          "sender_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Sending user; null for mail from outside."
+          },
+          "signature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email signature of the sending user."
+          },
+          "read_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the recipient last opened it."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            },
+            "description": "Attachments."
+          }
+        }
+      },
       "TopSoldStone": {
         "type": "object",
         "description": "A stone the signed-in user sold slabs of this month.",
@@ -14431,6 +15693,28 @@
           "square_feet": {
             "type": "string",
             "description": "Square feet of those slabs, decimal string; \"0.00\" when no slab has a size."
+          }
+        }
+      },
+      "UnreadCount": {
+        "type": "object",
+        "description": "The inbox badge.",
+        "required": [
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unread inbox threads; 0 when the company has no inbound email."
+          },
+          "latest_inbound_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Newest unread message id, to notice new mail between polls."
           }
         }
       },
@@ -14666,6 +15950,10 @@
     {
       "name": "questionnaires",
       "description": "Sales discovery questionnaires and the answers per deal"
+    },
+    {
+      "name": "emails",
+      "description": "The caller's mailbox: folders, conversations, read state"
     },
     {
       "name": "deals",

@@ -13,6 +13,7 @@ pub mod created;
 pub mod customers;
 pub mod dashboard;
 pub mod deals;
+pub mod emails;
 pub mod faucets;
 pub mod fixtures;
 pub mod leaderboard;
@@ -51,4 +52,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(deals::router())
         .merge(calendars::router())
         .merge(questionnaires::router())
+        .merge(emails::router())
 }
