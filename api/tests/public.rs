@@ -202,3 +202,78 @@ async fn the_company_chooser_lists_names_and_logos(pool: MySqlPool) {
     assert_eq!(body[1]["id"], 101);
     assert_eq!(body.as_array().unwrap().len(), 2);
 }
+
+#[test_db::test(seed)]
+async fn the_survey_saves_answers_and_stops_reminders_with_a_valid_link(pool: MySqlPool) {
+    // User 101 installs for company 100.
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 6, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = common::server(pool.clone());
+    let form: Value = server.get("/v1/public/companies/100/survey").await.json();
+    assert_eq!(form["company_name"], "Acme Stone");
+    let ids = |key: &str| {
+        form[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_i64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert!(ids("sales_reps").contains(&100));
+    assert_eq!(ids("installers"), [101]);
+
+    let answer = |token: &str| {
+        json!({
+            "sales_rep_id": 100, "installer_id": 101, "sales_rep_rating": 5,
+            "technician_rating": 4, "installation_rating": 5,
+            "installation_comments": " Great ", "checklist_id": 9000, "token": token,
+        })
+    };
+    let done = |pool: MySqlPool| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM emails WHERE message_id = 'checklist-survey-done-9000'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    server
+        .post("/v1/public/companies/100/surveys")
+        .json(&answer("forged"))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+    assert_eq!(done(pool.clone()).await, 0);
+    let token = api::routes::jobs::survey_notifications::survey_token(common::SECRET, 9000);
+    server
+        .post("/v1/public/companies/100/surveys")
+        .json(&answer(&token))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+    assert_eq!(done(pool.clone()).await, 1);
+    let comment: Option<String> = sqlx::query_scalar(
+        "SELECT installation_comment FROM customer_surveys WHERE company_id = 100 ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(comment.as_deref(), Some("Great"));
+
+    let mut bad = answer("");
+    bad["installer_id"] = json!(100);
+    server
+        .post("/v1/public/companies/100/surveys")
+        .json(&bad)
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+    let mut bad = answer("");
+    bad["sales_rep_rating"] = json!(6);
+    server
+        .post("/v1/public/companies/100/surveys")
+        .json(&bad)
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+}

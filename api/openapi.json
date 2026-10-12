@@ -10041,6 +10041,107 @@
         }
       }
     },
+    "/v1/public/companies/{company_id}/survey": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "The survey form",
+        "description": "The company's name, sales reps and installers, for the customer to pick\nwho they worked with. No session needed.",
+        "operationId": "get_public_survey",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The form",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SurveyForm"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/companies/{company_id}/surveys": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Answer the survey",
+        "description": "Saves the customer's ratings for the company. With a valid link\n(`checklist_id` and `token`) the checklist's reminders stop; a missing or\nforged token only skips that. No session needed.",
+        "operationId": "create_public_survey",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SurveyInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "A rating outside 1-5, or someone who is not the company's sales rep or installer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/company/features": {
       "get": {
         "tags": [
@@ -39266,6 +39367,131 @@
             ],
             "format": "date-time",
             "description": "When it was answered."
+          }
+        }
+      },
+      "SurveyForm": {
+        "type": "object",
+        "description": "What the survey form shows.",
+        "required": [
+          "company_name",
+          "sales_reps",
+          "installers"
+        ],
+        "properties": {
+          "company_name": {
+            "type": "string",
+            "description": "Company name; empty when the company does not exist."
+          },
+          "sales_reps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SurveyPerson"
+            },
+            "description": "The company's sales reps, by name."
+          },
+          "installers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SurveyPerson"
+            },
+            "description": "The company's installers, by name."
+          }
+        }
+      },
+      "SurveyInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/public/companies/{company_id}/surveys`.",
+        "required": [
+          "sales_rep_id",
+          "installer_id",
+          "sales_rep_rating",
+          "technician_rating",
+          "installation_rating"
+        ],
+        "properties": {
+          "sales_rep_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The sales rep rated; one of the company's sales reps."
+          },
+          "installer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The installer rated; one of the company's installers."
+          },
+          "sales_rep_rating": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 to 5."
+          },
+          "sales_rep_comments": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Comments on the sales rep."
+          },
+          "technician_rating": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 to 5."
+          },
+          "technician_comments": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Comments on the installer."
+          },
+          "installation_rating": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 to 5."
+          },
+          "installation_comments": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Comments on the installation."
+          },
+          "checklist_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The checklist of the survey link (`c`), with its signed token (`t`):\nrecording the completion stops the reminders. The answers are saved\nwithout them, so the survey stays anonymous."
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The link's token for `checklist_id`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SurveyPerson": {
+        "type": "object",
+        "description": "A person the customer can rate.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "User id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
           }
         }
       },

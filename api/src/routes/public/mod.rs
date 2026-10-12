@@ -8,16 +8,20 @@
 //! - `GET /v1/public/colors` → stone colors
 //! - `GET /v1/public/vcard` → a contact card file
 //! - `GET /v1/public/calendly-url` → the demo booking page
+//! - `GET /v1/public/companies/{company_id}/survey`, `POST .../surveys` →
+//!   the post-installation survey
 //!
 //! Nothing here returns costs, hidden items or sold slabs. Replaces the
 //! loaders of `customer.$company.stones|sinks|faucets`,
 //! `customer.$company.stones.slabs.$stone`, `contractors.$company.stones`
-//! `customer.stones` and `customers.companies` in the Remix app.
+//! `customer.stones`, `customers.companies` and `customer.$company.survey`
+//! in the Remix app.
 
 mod calendly;
 mod handlers;
 pub mod queries;
 pub mod schemas;
+mod survey;
 mod vcard;
 
 use crate::state::AppState;
@@ -37,4 +41,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::colors))
         .routes(routes!(vcard::vcard))
         .routes(routes!(calendly::calendly_url))
+        .routes(routes!(survey::survey_form))
+        .routes(routes!(survey::create_survey))
 }
