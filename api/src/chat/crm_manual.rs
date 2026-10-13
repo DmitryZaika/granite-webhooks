@@ -400,3 +400,38 @@ pub fn quick_answer(question: &str, access: Option<&Access>) -> Option<String> {
     cloudtalk_phone_answer(question, access)
         .or_else(|| cloudtalk_credentials_answer(question, access))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renaming_a_person_routes_to_the_users_section() {
+        for question in [
+            "how to change installer name",
+            "how to change user's name",
+            "how to rename a sales rep",
+            "change technician name",
+            "how to edit user name",
+            "how to change the name of an installer",
+            "installer name is misspelled",
+            "how do I fix a wrong name on a survey card",
+            "change employee name",
+            "update staff name",
+        ] {
+            assert!(
+                section_ids_for(question)
+                    .iter()
+                    .any(|id| id == "admin-company-settings-users"),
+                "{question}"
+            );
+        }
+        let ids = section_ids_for("installer name is wrong on the survey");
+        assert!(ids.iter().any(|id| id == "admin-surveys-customer-feedback"));
+        let manual = assemble(
+            &section_ids_for("how to change installer name"),
+            &HashMap::new(),
+        );
+        assert!(manual.contains("Change a person's name") && manual.contains("Actions → Edit"));
+    }
+}
