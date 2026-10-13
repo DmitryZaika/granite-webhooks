@@ -68,9 +68,10 @@ fn every_operation_is_documented() {
         for method in METHODS {
             let Some(op) = item.get(method) else { continue };
             let at = format!("{} {path}", method.to_uppercase());
-            // The showroom and signing in are public: no session, so no
-            // security and no 401.
+            // The showroom, signing in and third parties' webhooks (signed
+            // by the sender) are public: no session, so no security and no 401.
             let public = path.starts_with("/v1/public/")
+                || path.starts_with("/v1/webhooks/")
                 || path == "/v1/auth/login"
                 || path == "/v1/auth/logout"
                 || path.starts_with("/v1/auth/password-reset");

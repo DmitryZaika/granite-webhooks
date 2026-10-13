@@ -158,3 +158,23 @@ impl FromRequestParts<AppState> for UserManager {
         }
     }
 }
+
+/// Who may pay for the company (`userCanManageBilling`): an employee who is
+/// a Manager of the company the request acts in.
+pub struct BillingManager(pub SessionUser);
+
+impl FromRequestParts<AppState> for BillingManager {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        let (user, positions) = authenticate_with_positions(parts, state).await?;
+        let manager = positions
+            .iter()
+            .any(|row| row.company_id == user.company_id && row.position_id == MANAGER_POSITION);
+        if (user.is_employee || user.is_admin || user.is_superuser) && manager {
+            Ok(Self(user))
+        } else {
+            Err(ApiError::Forbidden)
+        }
+    }
+}

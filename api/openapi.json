@@ -33028,6 +33028,224 @@
           }
         ]
       }
+    },
+    "/v1/billing/reactivation": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Start paying to restore access",
+        "description": "For a company whose subscription ended unpaid: creates a new subscription\ncharged to the card (managers only). Answers `paid` when there is nothing\nto pay (the company is not restricted, or Stripe already has it paid),\notherwise the payment for the browser to confirm. Stripe's refusals\n(\"Your card was declined.\") are 400s with Stripe's message.",
+        "operationId": "start_billing_reactivation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartReactivation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Paid, or a payment to confirm",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReactivationStarted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No card, or Stripe refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/billing/reactivation/finish": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Finish restoring access",
+        "description": "After the browser confirmed the payment: waits a few seconds for Stripe\nto mark the subscription paid and applies it.",
+        "operationId": "finish_billing_reactivation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinishReactivation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Active or pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReactivationFinished"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not the company's subscription, or Stripe failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/webhooks/stripe": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Receive a Stripe event",
+        "description": "Stripe's webhook endpoint: checkout, subscription, invoice and payment\nmethod events update the company's billing (each event once). Needs a\nvalid `Stripe-Signature` for `STRIPE_WEBHOOK_SECRET`; no session.",
+        "operationId": "receive_stripe_webhook",
+        "parameters": [
+          {
+            "name": "Stripe-Signature",
+            "in": "header",
+            "description": "Stripe's signature of the body",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The Stripe event, as Stripe sent it",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Processed (or ignored)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookReceived"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid signature, or not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Processing failed; Stripe retries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -40154,6 +40372,19 @@
           }
         }
       },
+      "FinishReactivation": {
+        "type": "object",
+        "description": "Body of `POST /v1/billing/reactivation/finish`.",
+        "properties": {
+          "subscription_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The subscription the start call created (`sub_...`); omit when it\nanswered `paid`."
+          }
+        }
+      },
       "FixtureInput": {
         "type": "object",
         "description": "Body of the create and edit routes of sink and faucet models.",
@@ -46104,6 +46335,54 @@
         },
         "additionalProperties": false
       },
+      "ReactivationFinished": {
+        "type": "object",
+        "description": "Body of the finish answer.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/ReactivationStatus",
+            "description": "`active` or `pending`."
+          }
+        }
+      },
+      "ReactivationStarted": {
+        "type": "object",
+        "description": "How the payment goes on.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/StartStatus",
+            "description": "`paid`, or `requires_payment`: confirm the payment in the browser\n(`stripe.confirmCardPayment`) with `client_secret`, then call\n`/v1/billing/reactivation/finish` with `subscription_id`."
+          },
+          "client_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first invoice's payment confirmation secret; absent when paid."
+          },
+          "subscription_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The new subscription, for the finish call; absent when paid."
+          }
+        }
+      },
+      "ReactivationStatus": {
+        "type": "string",
+        "description": "Whether access is back.",
+        "enum": [
+          "active",
+          "pending"
+        ]
+      },
       "ReadinessReply": {
         "type": "object",
         "description": "Body of `GET /v1/suppliers/file-readiness`.",
@@ -48917,6 +49196,27 @@
             "description": "When it left; null for the current stage."
           }
         }
+      },
+      "StartReactivation": {
+        "type": "object",
+        "description": "Body of `POST /v1/billing/reactivation`.",
+        "required": [
+          "payment_method_id"
+        ],
+        "properties": {
+          "payment_method_id": {
+            "type": "string",
+            "description": "The Stripe card to pay with (`pm_...`): a saved card of the company,\nor one Stripe.js just created."
+          }
+        }
+      },
+      "StartStatus": {
+        "type": "string",
+        "description": "Where the payment stands.",
+        "enum": [
+          "paid",
+          "requires_payment"
+        ]
       },
       "StartedCall": {
         "type": "object",
@@ -52105,6 +52405,19 @@
           }
         }
       },
+      "WebhookReceived": {
+        "type": "object",
+        "description": "Answer to Stripe.",
+        "required": [
+          "received"
+        ],
+        "properties": {
+          "received": {
+            "type": "boolean",
+            "description": "Always true."
+          }
+        }
+      },
       "WidgetAction": {
         "type": "string",
         "description": "What a user did with a widget.",
@@ -52381,6 +52694,10 @@
     {
       "name": "followups",
       "description": "AI follow-ups: the company rule they obey, timelines and enrollments"
+    },
+    {
+      "name": "billing",
+      "description": "The company's Granite Manager subscription (Stripe)"
     },
     {
       "name": "jobs",

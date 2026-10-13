@@ -66,6 +66,20 @@ Create the others as their first route is migrated, following the same files.
 them from `security` and 401. They must never return costs, hidden items or
 other companies' data; `tests/public.rs` checks that.
 
+`/v1/webhooks/...` are third parties' callbacks (Stripe): no session either,
+the sender signs the body (`Stripe-Signature` with `STRIPE_WEBHOOK_SECRET`).
+Point the provider's webhook at `https://api.granite-manager.com/v1/webhooks/<name>`.
+
+### Billing (Stripe)
+
+`src/billing/` keeps `company_billing` in step with Stripe (the state machine
+is a port of the CRM's `stripeBilling.ts`, tested in memory in
+`billing/machine.rs`, against MySQL in `tests/billing.rs` with a fake Stripe,
+and against Stripe's test mode in `tests/billing_stripe_live.rs` when
+`STRIPE_TEST_SECRET_KEY=sk_test_...` is set). Env: `STRIPE_SECRET_KEY`,
+`STRIPE_WEBHOOK_SECRET`, `STRIPE_BILLING_PLANS` (`price|Name|cents,...`) or
+`STRIPE_PRICE_ID`.
+
 ### Uploads and storage
 
 Images go straight from the browser to the bucket with a presigned PUT

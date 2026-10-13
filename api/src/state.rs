@@ -1,4 +1,6 @@
 use crate::ai::Ai;
+use crate::billing::BillingPlan;
+use crate::billing::stripe::Stripe;
 use crate::maps::Maps;
 use crate::qbo::Qbo;
 use crate::storage::Storage;
@@ -58,6 +60,13 @@ pub struct AppState {
     pub cookie: crate::auth::cookie::CookieConfig,
     /// The app's public URL (`APP_URL`), the base of links sent by email.
     pub app_url: Arc<str>,
+    /// Stripe, for the company's subscription.
+    pub stripe: Stripe,
+    /// `STRIPE_WEBHOOK_SECRET`: signs Stripe's webhooks. Webhooks are
+    /// refused when unset.
+    pub stripe_webhook_secret: Option<Arc<str>>,
+    /// The subscription plans (`STRIPE_BILLING_PLANS` / `STRIPE_PRICE_ID`).
+    pub billing_plans: Arc<[BillingPlan]>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -87,7 +96,30 @@ impl AppState {
             contract_templates_base: Arc::from(crate::routes::sales::contract::TEMPLATES_BASE),
             cookie: crate::auth::cookie::CookieConfig::default(),
             app_url: Arc::from("http://localhost:5173"),
+            stripe: Stripe::disabled(),
+            stripe_webhook_secret: None,
+            billing_plans: Arc::from([]),
         }
+    }
+
+    #[must_use]
+    pub fn with_stripe(mut self, stripe: Stripe) -> Self {
+        self.stripe = stripe;
+        self
+    }
+
+    #[must_use]
+    pub fn with_stripe_webhook_secret(mut self, secret: &str) -> Self {
+        self.stripe_webhook_secret = Some(secret.trim())
+            .filter(|secret| !secret.is_empty())
+            .map(Arc::from);
+        self
+    }
+
+    #[must_use]
+    pub fn with_billing_plans(mut self, plans: Vec<BillingPlan>) -> Self {
+        self.billing_plans = plans.into();
+        self
     }
 
     #[must_use]
@@ -184,6 +216,9 @@ impl AppState {
             .with_qbo(Qbo::from_env())
             .with_job_key(&std::env::var("LAMBDA_KEY").unwrap_or_default())
             .with_cookie(cookie_config_from_env())
+            .with_stripe(Stripe::from_env())
+            .with_stripe_webhook_secret(&std::env::var("STRIPE_WEBHOOK_SECRET").unwrap_or_default())
+            .with_billing_plans(crate::billing::reactivation::configured_plans())
             .with_app_url(
                 &std::env::var("APP_URL").unwrap_or_else(|_| "https://granite-manager.com".into()),
             ))

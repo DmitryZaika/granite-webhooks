@@ -16,6 +16,7 @@
 
 pub mod ai;
 pub mod auth;
+pub mod billing;
 pub mod db;
 pub mod email_signature;
 pub mod error;

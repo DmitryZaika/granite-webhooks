@@ -10,6 +10,7 @@ pub mod ai_usage;
 pub mod app_shell;
 pub mod attachable;
 pub mod auth;
+pub mod billing;
 pub mod bug_reports;
 pub mod calendars;
 pub mod call_coaching;
@@ -129,4 +130,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(call_coaching::router())
         .merge(followups::router())
         .merge(supplier_files::router())
+        .merge(billing::router())
 }
