@@ -66,8 +66,10 @@ Create the others as their first route is migrated, following the same files.
 them from `security` and 401. They must never return costs, hidden items or
 other companies' data; `tests/public.rs` checks that.
 
-`/v1/webhooks/...` are third parties' callbacks (Stripe): no session either,
-the sender signs the body (`Stripe-Signature` with `STRIPE_WEBHOOK_SECRET`).
+`/v1/webhooks/...` are third parties' callbacks (Stripe, SignWell): no
+session either, the sender proves itself (`Stripe-Signature` with
+`STRIPE_WEBHOOK_SECRET`; SignWell's `?token=` = `SIGNWELL_WEBHOOK_SECRET` or
+its event hash keyed with `SIGNWELL_WEBHOOK_ID`).
 Point the provider's webhook at `https://api.granite-manager.com/v1/webhooks/<name>`.
 
 ### Pictures, PDFs and audio
@@ -104,6 +106,14 @@ native send also needs the company's verified settings in
 "evidenceReference", "settings"}}`) and a `SIGNATURE_STORAGE_BUCKET` that
 blocks all public access. `signing_pdf.rs` freezes the PDF's form and prints
 what the sender filled in, matching pdf-lib's output.
+
+SignWell reports viewed / signed / declined documents to
+`POST /v1/webhooks/signwell` (`routes/signwell_webhook.rs`): the sender is
+emailed (links to `SIGNATURE_APP_ORIGIN`) and notified in the app, and a
+signed contract ("<contract form> - <quote name>.pdf") sells its quote: the
+deal is won with the sold option's total. `quote_pricing/` prices quotes as
+the CRM does (`priceQuote`, the price snapshot, stock sync and extras),
+checked line by line against the TypeScript on the Moraware fixtures.
 
 ### SMS / email flows
 

@@ -35434,6 +35434,105 @@
           }
         ]
       }
+    },
+    "/v1/webhooks/signwell": {
+      "get": {
+        "tags": [
+          "signatures"
+        ],
+        "summary": "Check the webhook URL",
+        "description": "Answers `SignWell` checking that the webhook URL is there.",
+        "operationId": "check_signwell_webhook",
+        "responses": {
+          "200": {
+            "description": "The URL is there",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookOk"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "signatures"
+        ],
+        "summary": "Receive a `SignWell` event",
+        "description": "A document's event (`document_viewed`, `document_completed`,\n`document_declined`, `document_canceled`…): its signature request moves\nforward, the sender is notified, and a signed contract sells its quote.\nNeeds `?token=` / `x-webhook-token` (`SIGNWELL_WEBHOOK_SECRET`) or the\nevent's hash (`SIGNWELL_WEBHOOK_ID`); no session.",
+        "operationId": "receive_signwell_webhook",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "description": "`SIGNWELL_WEBHOOK_SECRET`, when the webhook URL carries it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "x-webhook-token",
+            "in": "header",
+            "description": "`SIGNWELL_WEBHOOK_SECRET`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The event, as SignWell sends it: `event` (`type`, `time`, `hash`) and `data.object.id`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Taken (an unknown document or event changes nothing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookOk"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an event, or no document id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Neither the token nor the hash checks out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -56111,6 +56210,19 @@
           "visible": {
             "type": "boolean",
             "description": "Published to employees (false: a draft)."
+          }
+        }
+      },
+      "WebhookOk": {
+        "type": "object",
+        "description": "The webhook was taken.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "Always true."
           }
         }
       },

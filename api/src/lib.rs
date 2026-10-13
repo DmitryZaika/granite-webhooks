@@ -34,6 +34,7 @@ pub mod period;
 pub mod posthog;
 pub mod price_lists;
 pub mod qbo;
+pub mod quote_pricing;
 pub mod routes;
 pub mod serde_helpers;
 pub mod signing_pdf;

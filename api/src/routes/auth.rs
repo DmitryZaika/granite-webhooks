@@ -805,6 +805,6 @@ mod tests {
 
     #[test]
     fn the_dummy_hash_is_a_bcrypt_hash() {
-        assert!(bcrypt::verify("x", &*DUMMY_HASH).is_ok());
+        assert!(bcrypt::verify("x", &DUMMY_HASH).is_ok());
     }
 }

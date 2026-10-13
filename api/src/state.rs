@@ -76,6 +76,28 @@ pub struct AppState {
     pub signature_bucket: Option<Arc<str>>,
     /// Native e-signatures, when enabled (`NATIVE_SIGNATURES_ENABLED=1`).
     pub native_signing: Option<crate::native_signing::NativeSigning>,
+    /// How `SignWell`'s webhook proves itself: `SIGNWELL_WEBHOOK_SECRET` (a
+    /// `token` it sends) and `SIGNWELL_WEBHOOK_ID` (the key of its event hash).
+    pub signwell_webhook: SignWellWebhookKeys,
+    /// `SIGNATURE_APP_ORIGIN`: the CRM's origin, for links in signature notices.
+    pub signature_app_origin: Arc<str>,
+}
+
+/// The keys `SignWell`'s webhook calls are checked with; none set: refused.
+#[derive(Clone, Default)]
+pub struct SignWellWebhookKeys {
+    pub secret: Option<Arc<str>>,
+    pub id: Option<Arc<str>>,
+}
+
+impl SignWellWebhookKeys {
+    pub fn new(secret: &str, id: &str) -> Self {
+        let set = |v: &str| Some(v.trim()).filter(|v| !v.is_empty()).map(Arc::from);
+        Self {
+            secret: set(secret),
+            id: set(id),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -112,7 +134,21 @@ impl AppState {
             billing_plans: Arc::from([]),
             signature_bucket: None,
             native_signing: None,
+            signwell_webhook: SignWellWebhookKeys::default(),
+            signature_app_origin: Arc::from(""),
         }
+    }
+
+    #[must_use]
+    pub fn with_signwell_webhook(mut self, keys: SignWellWebhookKeys) -> Self {
+        self.signwell_webhook = keys;
+        self
+    }
+
+    #[must_use]
+    pub fn with_signature_app_origin(mut self, origin: &str) -> Self {
+        self.signature_app_origin = Arc::from(origin.trim().trim_end_matches('/'));
+        self
     }
 
     #[must_use]
@@ -250,6 +286,11 @@ impl AppState {
             .with_billing_plans(crate::billing::reactivation::configured_plans())
             .with_signature_bucket(&std::env::var("SIGNATURE_STORAGE_BUCKET").unwrap_or_default())
             .with_native_signing(crate::native_signing::NativeSigning::from_env())
+            .with_signwell_webhook(SignWellWebhookKeys::new(
+                &std::env::var("SIGNWELL_WEBHOOK_SECRET").unwrap_or_default(),
+                &std::env::var("SIGNWELL_WEBHOOK_ID").unwrap_or_default(),
+            ))
+            .with_signature_app_origin(&std::env::var("SIGNATURE_APP_ORIGIN").unwrap_or_default())
             .with_cloudtalk_base(
                 &std::env::var("CLOUDTALK_BASE_URL")
                     .ok()
