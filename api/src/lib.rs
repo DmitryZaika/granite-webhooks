@@ -25,6 +25,7 @@ pub mod openapi;
 pub mod pdf;
 pub mod pdf_fonts;
 pub mod period;
+pub mod price_lists;
 pub mod qbo;
 pub mod routes;
 pub mod serde_helpers;

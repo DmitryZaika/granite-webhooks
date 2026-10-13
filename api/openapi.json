@@ -32678,6 +32678,356 @@
           }
         ]
       }
+    },
+    "/v1/followups/instruction": {
+      "get": {
+        "tags": [
+          "followups"
+        ],
+        "summary": "Get the AI follow-up instruction",
+        "description": "The company's rule for AI-written follow-ups (cadence, tone, what to\nmention), as plain text. Empty when none is saved.",
+        "operationId": "get_followup_instruction",
+        "responses": {
+          "200": {
+            "description": "The instruction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupInstruction"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "followups"
+        ],
+        "summary": "Save the AI follow-up instruction",
+        "description": "Replaces the company's rule with `instruction`, trimmed. An empty (or\nblank) instruction deletes it. Answers the saved text.",
+        "operationId": "save_followup_instruction",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FollowupInstruction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The saved instruction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupInstruction"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Longer than 2000 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/suppliers/file-readiness": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Get a supplier's price-file readiness",
+        "description": "How many of the named supplier's price files are processed, still being\nprocessed or failed, so a price answer can say it may be incomplete.",
+        "operationId": "get_supplier_file_readiness",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Supplier name as the company wrote it (compared trimmed); blank answers null.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Readiness, or null for an unknown supplier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessReply"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/supplier-files/{id}/retry": {
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Retry a failed price file",
+        "description": "Puts a failed price file of the company back in the processing queue\n(attempts reset). The processor picks it up within a minute.",
+        "operationId": "retry_supplier_file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Supplier file id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Queued again"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No failed file with that id in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/suppliers/price-offers": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Find supplier prices for a material",
+        "description": "Searches the company's processed supplier price files for the material in\n`q` and has the AI list the matching prices (never estimated: only prices\nwritten in the files). Also answers the company's sales tax, which the\nquote builder adds to a supplier price.",
+        "operationId": "find_supplier_price_offers",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "What to price, naming the material and ideally the supplier, e.g.\n`Price for Calacatta Laza from MSI`. Under 2 characters finds nothing.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prices found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceOffers"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The AI failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -39695,6 +40045,38 @@
           }
         }
       },
+      "FileReadiness": {
+        "type": "object",
+        "description": "How far the company's price files for the searched suppliers are processed.",
+        "required": [
+          "total",
+          "ready",
+          "processing",
+          "failed"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Price files."
+          },
+          "ready": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Processed and searchable."
+          },
+          "processing": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Waiting or being processed."
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Could not be processed."
+          }
+        }
+      },
       "FileSource": {
         "type": "string",
         "description": "Where a file row lives; pass it back when deleting.",
@@ -40189,6 +40571,19 @@
           }
         },
         "additionalProperties": false
+      },
+      "FollowupInstruction": {
+        "type": "object",
+        "description": "The company's AI follow-up instruction.",
+        "required": [
+          "instruction"
+        ],
+        "properties": {
+          "instruction": {
+            "type": "string",
+            "description": "The rule as plain text, trimmed; empty when the company has none."
+          }
+        }
       },
       "FoundEvent": {
         "type": "object",
@@ -44538,6 +44933,41 @@
           }
         }
       },
+      "PriceOffers": {
+        "type": "object",
+        "description": "Body of `GET /v1/suppliers/price-offers`.",
+        "required": [
+          "offers",
+          "incomplete",
+          "tax_pct"
+        ],
+        "properties": {
+          "offers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupplierOffer"
+            },
+            "description": "Up to 12 matching prices, closest name first."
+          },
+          "incomplete": {
+            "type": "boolean",
+            "description": "Some price files in the searched scope are still processing or\nfailed, so the list may be incomplete."
+          },
+          "tax_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "The company's sales tax in percent (7.25 = 7.25%); 0 when not set."
+          }
+        }
+      },
+      "PriceUnit": {
+        "type": "string",
+        "description": "What a price is for.",
+        "enum": [
+          "sqft",
+          "slab"
+        ]
+      },
       "Priority": {
         "type": "string",
         "description": "Activity priority.",
@@ -45673,6 +46103,23 @@
           }
         },
         "additionalProperties": false
+      },
+      "ReadinessReply": {
+        "type": "object",
+        "description": "Body of `GET /v1/suppliers/file-readiness`.",
+        "properties": {
+          "readiness": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FileReadiness",
+                "description": "Counts over the company's suppliers with that name; null when the\nname is blank or the company has no such supplier."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       },
       "Reassignment": {
         "type": "object",
@@ -49438,6 +49885,56 @@
           }
         }
       },
+      "SupplierOffer": {
+        "type": "object",
+        "description": "A price found in a supplier's price list.",
+        "required": [
+          "supplier",
+          "name",
+          "thickness",
+          "price",
+          "unit",
+          "file"
+        ],
+        "properties": {
+          "supplier": {
+            "type": "string",
+            "description": "Supplier, as the list names it."
+          },
+          "name": {
+            "type": "string",
+            "description": "Color or product name as the list writes it."
+          },
+          "thickness": {
+            "type": "string",
+            "description": "Thickness as written (`2cm`, `3cm`) or empty."
+          },
+          "price": {
+            "type": "number",
+            "format": "double",
+            "description": "The price in dollars."
+          },
+          "unit": {
+            "$ref": "#/components/schemas/PriceUnit",
+            "description": "`sqft` or `slab`, decided by the amount: only a price too big for a\nsquare foot that comes to a sensible one over the slab is a slab price."
+          },
+          "slab": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "description": "Slab size in inches, longer side first; null when the list gives none."
+          },
+          "file": {
+            "type": "string",
+            "description": "Price file it was read from."
+          }
+        }
+      },
       "SupportUpdate": {
         "type": "object",
         "description": "Body of `PUT /v1/supports/{id}`.",
@@ -51880,6 +52377,10 @@
     {
       "name": "quickbooks",
       "description": "QuickBooks Online invoices and customers"
+    },
+    {
+      "name": "followups",
+      "description": "AI follow-ups: the company rule they obey, timelines and enrollments"
     },
     {
       "name": "jobs",

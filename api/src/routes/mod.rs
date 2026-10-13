@@ -28,6 +28,7 @@ pub mod emails;
 pub mod events;
 pub mod faucets;
 pub mod fixtures;
+pub mod followups;
 pub mod image_library;
 pub mod instructions;
 pub mod invoice_queue;
@@ -54,6 +55,7 @@ pub mod sms;
 pub mod stats;
 pub mod stones;
 pub mod superuser;
+pub mod supplier_files;
 pub mod supports;
 pub mod survey_results;
 pub mod teach_mode;
@@ -125,4 +127,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(quickbooks::router())
         .merge(jobs::router())
         .merge(call_coaching::router())
+        .merge(followups::router())
+        .merge(supplier_files::router())
 }
