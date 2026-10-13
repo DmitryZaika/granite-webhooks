@@ -4,16 +4,16 @@ use common::crud::notifications::{
     get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
     unmark_deadline_reminder_telegram_sent,
 };
-use common::crud::outbound_email::{record_outbound_scheduled_email, OutboundScheduledEmail};
+use common::crud::outbound_email::{OutboundScheduledEmail, record_outbound_scheduled_email};
 use common::crud::scheduled_emails::{
-    cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
+    ScheduledEmail, cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
     get_ready_scheduled_emails, mark_scheduled_email_as_sent,
-    mark_scheduled_email_failed_with_reason, ScheduledEmail,
+    mark_scheduled_email_failed_with_reason,
 };
 use common::crud::template::fetch_template_variable_data;
 use common::utils::email_send_window::automated_email_send_window_is_open_now;
 use common::utils::template::replace_template_variables;
-use lambda_runtime::{tracing, Error, LambdaEvent};
+use lambda_runtime::{Error, LambdaEvent, tracing};
 use reqwest::Client;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
@@ -108,54 +108,6 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
     Ok(sent_count)
 }
 
-async fn post_app_process_route(path: &str, label: &str) -> Result<usize, Error> {
-    let app_url = match std::env::var("APP_URL") {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::warn!(?error, "APP_URL is not set; skipping {label}");
-            return Ok(0);
-        }
-    };
-    let lambda_key = match std::env::var("LAMBDA_KEY") {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::warn!(?error, "LAMBDA_KEY is not set; skipping {label}");
-            return Ok(0);
-        }
-    };
-
-    let url = format!(
-        "{}/{}",
-        app_url.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    );
-    let client = Client::new();
-    let response = client
-        .post(url)
-        .header("Authorization", lambda_key)
-        .send()
-        .await
-        .map_err(|error| Error::from(error.to_string()))?;
-
-    if !response.status().is_success() {
-        tracing::warn!(
-            status = response.status().as_u16(),
-            "Failed to process {label}"
-        );
-        return Ok(0);
-    }
-
-    let body = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|error| Error::from(error.to_string()))?;
-    let processed = body
-        .get("processed")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(0);
-    Ok(usize::try_from(processed).unwrap_or(0))
-}
-
 /// Runs a scheduled job of the API (`POST <API_URL>/v1/jobs/<job>`).
 async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
     let api_url = match std::env::var("API_URL") {
@@ -180,7 +132,10 @@ async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
         .await
         .map_err(|error| Error::from(error.to_string()))?;
     if !response.status().is_success() {
-        tracing::warn!(status = response.status().as_u16(), "Failed to process {label}");
+        tracing::warn!(
+            status = response.status().as_u16(),
+            "Failed to process {label}"
+        );
         return Ok(0);
     }
     let body = response
@@ -203,7 +158,7 @@ async fn process_maintenance_due_reminders() -> Result<usize, Error> {
 }
 
 async fn process_sms_followups() -> Result<usize, Error> {
-    post_app_process_route("api/sms-followups/process", "sms follow-ups").await
+    post_api_job("sms-followups", "sms follow-ups").await
 }
 
 async fn process_call_points() -> Result<usize, Error> {
@@ -352,7 +307,10 @@ pub(crate) async fn function_handler(
     let signature_reminder_count = match process_signature_reminders().await {
         Ok(count) => count,
         Err(error) => {
-            tracing::error!(?error, "Failed to process e-signature reminders; continuing");
+            tracing::error!(
+                ?error,
+                "Failed to process e-signature reminders; continuing"
+            );
             0
         }
     };
@@ -393,7 +351,7 @@ mod tests {
             .find("async fn send_due_activity_deadline_reminders")
             .expect("reminder function");
         let fn_end = source
-            .find("async fn post_app_process_route")
+            .find("/// Runs a scheduled job of the API")
             .expect("next function");
         let body = &source[fn_start..fn_end];
         assert!(
