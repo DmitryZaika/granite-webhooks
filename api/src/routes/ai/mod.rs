@@ -8,6 +8,8 @@
 //! - `POST /v1/ai/signature-fields` → what each blank of a contract PDF is for
 //! - `POST /v1/ai/agentic-questions`, `GET .../{id}` → questions for the agent
 //! - `GET /v1/ai/design/{pictures,deals}` → what the AI design tool picks from
+//! - `GET /v1/ai/design/stones`, `POST /v1/ai/design` → AI Design's stones and
+//!   the kitchen redrawn with them (streamed)
 //! - `POST /v1/ai/conversation-reply` → the AI Reply button's draft
 //! - `GET /v1/ai/compose/inventory-url`, `POST /v1/ai/compose/{autocomplete,learn}`
 //!   → the composer's inline autocomplete and what the rep's edits teach it
@@ -25,6 +27,7 @@ pub mod chat;
 pub mod compose;
 pub mod conversation_reply;
 pub mod design;
+pub mod design_render;
 pub mod email_template;
 pub mod first_contact;
 pub mod improve;
@@ -47,6 +50,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(agentic::job))
         .routes(routes!(design::pictures))
         .routes(routes!(design::deals))
+        .routes(routes!(design_render::stones))
+        .routes(routes!(design_render::design))
         .routes(routes!(compose::inventory_url))
         .routes(routes!(compose::autocomplete))
         .routes(routes!(compose::learn))

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const CHAT_URL: &str = "https://api.openai.com/v1/chat/completions";
+const IMAGE_EDITS_URL: &str = "https://api.openai.com/v1/images/edits";
 /// The CRM's main chat model (`GPT_MINI_MODEL`).
 pub const MINI_MODEL: &str = "gpt-6-luna";
 /// When the key may not use [`MINI_MODEL`] (`GPT_MINI_FALLBACK_MODEL`).
@@ -20,6 +21,7 @@ pub const IMAGE_MODEL: &str = "gpt-image-2.5-sunburst";
 pub struct Ai {
     key: Option<Arc<str>>,
     url: Arc<str>,
+    images_url: Arc<str>,
     http: reqwest::Client,
 }
 
@@ -152,14 +154,27 @@ impl Ai {
         Self::new(None, CHAT_URL)
     }
 
-    /// `OPEN_AI_SECRET_KEY`; `OPENAI_CHAT_URL` points at a stand-in (the
-    /// frontend's browser tests).
+    /// `OPEN_AI_SECRET_KEY`; `OPENAI_CHAT_URL` and `OPENAI_IMAGES_URL` point
+    /// at a stand-in (the frontend's browser tests).
     pub fn from_env() -> Self {
-        let url = std::env::var("OPENAI_CHAT_URL")
-            .ok()
-            .filter(|url| !url.trim().is_empty())
-            .unwrap_or_else(|| CHAT_URL.to_string());
-        Self::new(std::env::var("OPEN_AI_SECRET_KEY").ok().as_deref(), &url)
+        let env = |name: &str, default: &str| {
+            std::env::var(name)
+                .ok()
+                .filter(|url| !url.trim().is_empty())
+                .unwrap_or_else(|| default.to_string())
+        };
+        Self::new(
+            std::env::var("OPEN_AI_SECRET_KEY").ok().as_deref(),
+            &env("OPENAI_CHAT_URL", CHAT_URL),
+        )
+        .with_images_url(&env("OPENAI_IMAGES_URL", IMAGE_EDITS_URL))
+    }
+
+    /// The image edits endpoint (a stub in tests).
+    #[must_use]
+    pub fn with_images_url(mut self, url: &str) -> Self {
+        self.images_url = Arc::from(url);
+        self
     }
 
     /// `url` is the chat completions endpoint (a stub in tests).
@@ -170,6 +185,7 @@ impl Ai {
                 .filter(|key| !key.is_empty())
                 .map(Arc::from),
             url: Arc::from(url),
+            images_url: Arc::from(IMAGE_EDITS_URL),
             http: reqwest::Client::new(),
         }
     }
@@ -419,6 +435,198 @@ impl Ai {
         let usage = if error.is_some() { None } else { usage };
         log(pool, caller, chat.model, usage, error.as_deref(), elapsed).await;
         result
+    }
+}
+
+/// A picture for [`Ai::image_edit`].
+pub struct EditImage {
+    pub mime: String,
+    pub bytes: Vec<u8>,
+}
+
+/// What an image edit cost, for the log.
+#[derive(Debug, Clone, Copy, Default)]
+struct ImageUsage {
+    input: Option<u64>,
+    output: Option<u64>,
+    image_input: Option<u64>,
+    image_output: Option<u64>,
+    images: u64,
+}
+
+impl Ai {
+    /// One edited picture from `images` and `prompt` (`trackedImageEdit`):
+    /// a `data:` URL, or `None` when the model returned none. Logged as an
+    /// `image` call.
+    pub async fn image_edit(
+        &self,
+        pool: &MySqlPool,
+        caller: Caller<'_>,
+        model: &str,
+        prompt: &str,
+        images: &[EditImage],
+        size: &str,
+    ) -> Result<Option<String>, AiError> {
+        let key = self.key.as_ref().ok_or(AiError::NotConfigured)?;
+        let started = Instant::now();
+        let boundary = format!("----granite{}", uuid::Uuid::new_v4().simple());
+        let mut body: Vec<u8> = Vec::new();
+        let mut field = |name: &str, value: &str| {
+            body.extend_from_slice(
+                format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes(),
+            );
+        };
+        field("model", model);
+        field("prompt", prompt);
+        field("size", size);
+        field("quality", "high");
+        for (index, image) in images.iter().enumerate() {
+            let extension = if image.mime.contains("jpeg") || image.mime.contains("jpg") {
+                "jpg"
+            } else if image.mime.contains("webp") {
+                "webp"
+            } else {
+                "png"
+            };
+            body.extend_from_slice(
+                format!(
+                    "--{boundary}\r\nContent-Disposition: form-data; name=\"image[]\"; filename=\"image-{index}.{extension}\"\r\nContent-Type: {}\r\n\r\n",
+                    image.mime
+                )
+                .as_bytes(),
+            );
+            body.extend_from_slice(&image.bytes);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        let result = async {
+            let response = self
+                .http
+                .post(&*self.images_url)
+                .bearer_auth(&**key)
+                .timeout(Duration::from_secs(600))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(body)
+                .send()
+                .await
+                .map_err(|err| AiError::Request(err.without_url().to_string()))?;
+            let status = response.status();
+            if !status.is_success() {
+                let text = response.text().await.unwrap_or_default();
+                return Err(AiError::Status {
+                    status: status.as_u16(),
+                    body: text.chars().take(300).collect(),
+                });
+            }
+            let reply: Value = response
+                .json()
+                .await
+                .map_err(|err| AiError::Request(err.without_url().to_string()))?;
+            let image = reply["data"][0]["b64_json"].as_str().map(|b64| {
+                format!(
+                    "data:image/{};base64,{b64}",
+                    reply["output_format"].as_str().unwrap_or("png")
+                )
+            });
+            let u = &reply["usage"];
+            let usage = ImageUsage {
+                input: u["input_tokens"].as_u64(),
+                output: u["output_tokens"].as_u64(),
+                image_input: u["input_tokens_details"]["image_tokens"].as_u64(),
+                image_output: u["output_tokens_details"]["image_tokens"]
+                    .as_u64()
+                    .or_else(|| u["output_tokens"].as_u64()),
+                images: u64::from(image.is_some()),
+            };
+            Ok((image, usage))
+        }
+        .await;
+        let elapsed = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+        match result {
+            Ok((image, usage)) => {
+                log_image(pool, caller, model, Some(usage), None, elapsed).await;
+                Ok(image)
+            }
+            Err(err) => {
+                log_image(pool, caller, model, None, Some(&err.to_string()), elapsed).await;
+                Err(err)
+            }
+        }
+    }
+}
+
+/// An `image` row of `ai_usage_log`, priced like the CRM's `computeCostUsd`.
+#[allow(clippy::suboptimal_flops)]
+async fn log_image(
+    pool: &MySqlPool,
+    caller: Caller<'_>,
+    model: &str,
+    usage: Option<ImageUsage>,
+    error: Option<&str>,
+    duration_ms: u32,
+) {
+    let result = async {
+        type Pricing = (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>);
+        let pricing: Option<Pricing> = match usage {
+            Some(_) => sqlx::query_as(
+                "SELECT CAST(input_per_1m_usd AS DOUBLE), CAST(output_per_1m_usd AS DOUBLE),
+                        CAST(image_input_per_1m_usd AS DOUBLE), CAST(image_output_per_1m_usd AS DOUBLE),
+                        CAST(per_image_usd AS DOUBLE)
+                   FROM ai_model_pricing WHERE model = ? AND effective_from <= CURDATE()
+                  ORDER BY effective_from DESC LIMIT 1",
+            )
+            .bind(model)
+            .fetch_optional(pool)
+            .await?,
+            None => None,
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let cost = match (usage, pricing) {
+            (Some(u), Some((input, output, image_input, image_output, per_image))) => {
+                let total_in = u.input.unwrap_or(0) as f64;
+                let total_out = u.output.unwrap_or(0) as f64;
+                if total_in > 0.0 || total_out > 0.0 {
+                    let image_in = (u.image_input.unwrap_or(0) as f64).min(total_in);
+                    let image_out = (u.image_output.unwrap_or(0) as f64).min(total_out);
+                    ((total_in - image_in) * input.unwrap_or(0.0)
+                        + image_in * image_input.unwrap_or(0.0)
+                        + (total_out - image_out) * output.unwrap_or(0.0)
+                        + image_out * image_output.unwrap_or(0.0))
+                        / 1_000_000.0
+                } else {
+                    u.images as f64 * per_image.unwrap_or(0.0)
+                }
+            }
+            _ => 0.0,
+        };
+        sqlx::query(
+            "INSERT INTO ai_usage_log (feature, api_kind, model, user_id, company_id, input_tokens, output_tokens,
+                image_input_tokens, image_output_tokens, image_count, cost_usd, success, error_message, duration_ms)
+             VALUES (?, 'image', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(caller.feature)
+        .bind(model)
+        .bind(caller.user_id)
+        .bind(caller.company_id)
+        .bind(usage.and_then(|u| u.input))
+        .bind(usage.and_then(|u| u.output))
+        .bind(usage.and_then(|u| u.image_input))
+        .bind(usage.and_then(|u| u.image_output))
+        .bind(usage.map(|u| u.images))
+        .bind(cost)
+        .bind(error.is_none())
+        .bind(error.map(|e| e.chars().take(500).collect::<String>()))
+        .bind(duration_ms)
+        .execute(pool)
+        .await?;
+        Ok::<_, sqlx::Error>(())
+    }
+    .await;
+    if let Err(err) = result {
+        tracing::warn!(error = %err, feature = caller.feature, "AI image usage not logged");
     }
 }
 

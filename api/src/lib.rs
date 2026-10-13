@@ -24,6 +24,7 @@ pub mod error;
 pub mod extract;
 pub mod followups;
 pub mod images;
+pub mod kitchen_design;
 pub mod maps;
 pub mod native_delivery;
 pub mod native_signing;

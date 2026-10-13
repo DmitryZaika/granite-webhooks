@@ -202,7 +202,7 @@ pub fn encode_jpeg(image: &DynamicImage, quality: u8) -> Vec<u8> {
     out
 }
 
-fn encode_png(image: &DynamicImage) -> Vec<u8> {
+pub fn encode_png(image: &DynamicImage) -> Vec<u8> {
     let mut out = Vec::new();
     let rgba = image.to_rgba8();
     let _ = PngEncoder::new(&mut out).write_image(
@@ -215,7 +215,7 @@ fn encode_png(image: &DynamicImage) -> Vec<u8> {
 }
 
 /// Scaled to fit `max x max`, never enlarged.
-fn fit_inside(image: &DynamicImage, max: u32) -> DynamicImage {
+pub fn fit_inside(image: &DynamicImage, max: u32) -> DynamicImage {
     if image.width() <= max && image.height() <= max {
         return image.clone();
     }
