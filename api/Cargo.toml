@@ -49,6 +49,7 @@ hayro = "0.8"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+hickory-resolver = "0.25"
 
 [dev-dependencies]
 test-db = { path = "../test-db" }

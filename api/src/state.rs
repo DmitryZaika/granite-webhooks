@@ -83,6 +83,29 @@ pub struct AppState {
     pub signature_app_origin: Arc<str>,
     /// Granite Manager's `RingCentral` app, for companies that press Connect.
     pub ringcentral_app: Option<crate::ringcentral_connect::RingCentralApp>,
+    /// DNS for the email deliverability and setup checks (fixed answers in
+    /// tests).
+    pub dns: crate::deliverability::AppDns,
+    /// SES identities for the inbound email checks.
+    pub ses: SesIdentities,
+}
+
+/// Where the SES identity lists come from.
+#[derive(Clone)]
+pub enum SesIdentities {
+    /// The AWS account (`ListEmailIdentities`).
+    Aws,
+    /// Fixed lists (tests), or `None`: SES could not be asked.
+    Fixed(Option<Arc<common::amazon::email::IdentitySets>>),
+}
+
+impl SesIdentities {
+    pub async fn sets(&self) -> Option<common::amazon::email::IdentitySets> {
+        match self {
+            Self::Aws => common::amazon::email::identity_sets().await,
+            Self::Fixed(sets) => sets.as_deref().cloned(),
+        }
+    }
 }
 
 /// The keys `SignWell`'s webhook calls are checked with; none set: refused.
@@ -139,6 +162,8 @@ impl AppState {
             signwell_webhook: SignWellWebhookKeys::default(),
             signature_app_origin: Arc::from(""),
             ringcentral_app: None,
+            dns: crate::deliverability::AppDns::Fixed(Arc::default()),
+            ses: SesIdentities::Fixed(None),
         }
     }
 
@@ -211,6 +236,18 @@ impl AppState {
     #[must_use]
     pub fn with_telegram(mut self, telegram: TelegramBots) -> Self {
         self.telegram = telegram;
+        self
+    }
+
+    #[must_use]
+    pub fn with_dns(mut self, dns: crate::deliverability::AppDns) -> Self {
+        self.dns = dns;
+        self
+    }
+
+    #[must_use]
+    pub fn with_ses(mut self, ses: SesIdentities) -> Self {
+        self.ses = ses;
         self
     }
 
@@ -318,7 +355,9 @@ impl AppState {
             .with_app_url(
                 &std::env::var("APP_URL").unwrap_or_else(|_| "https://granite-manager.com".into()),
             )
-            .with_ringcentral_app(crate::ringcentral_connect::RingCentralApp::from_env()))
+            .with_ringcentral_app(crate::ringcentral_connect::RingCentralApp::from_env())
+            .with_dns(crate::deliverability::AppDns::system())
+            .with_ses(SesIdentities::Aws))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the

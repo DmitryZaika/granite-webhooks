@@ -37398,6 +37398,1026 @@
         ]
       }
     },
+    "/v1/superuser/companies": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "List the companies",
+        "description": "Every live company, most users first: users counting toward the limit,\ntours progress, connected integrations, feature switches and whether\nStripe payment is required. The slower checks are per company:\n`/domain-trust`, `/ses-inbound`, `/setup-checklist`.",
+        "operationId": "list_platform_companies",
+        "responses": {
+          "200": {
+            "description": "The companies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CompanySummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Create a company",
+        "description": "Creates the company with its system calendars, the default company email\ntemplates and customer sources, the statistics widgets hidden, a\n`walk-in@<subdomain>.com` employee for the check-in kiosk, and checks\nits domain's deliverability.",
+        "operationId": "create_platform_company",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, bad subdomain or tax",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Subdomain already in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Get a company",
+        "description": "A company's settings, keys and switches, as the edit form shows them.",
+        "operationId": "get_platform_company",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Save a company",
+        "description": "Replaces the company's settings, keys and switches (and its logo when a\nnew one is given), then re-checks its domain's deliverability.",
+        "operationId": "update_platform_company",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Missing name, bad subdomain, tax, limit or logo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Subdomain already in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Delete a company",
+        "description": "Marks the company deleted. `confirm_name` must be its exact name (400\notherwise).",
+        "operationId": "delete_platform_company",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "confirm_name",
+            "in": "query",
+            "description": "The company's exact name, typed by the super admin.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "The name does not match",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/users": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "List a company's users",
+        "description": "The company's active users with their roles, `CloudTalk` fields and\nguided tours progress, and how many users were deleted.",
+        "operationId": "list_platform_company_users",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyUsers"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/domain-trust": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Get a company domain's deliverability",
+        "description": "Checks the company domain's email deliverability (DNS: MX, SPF, DMARC,\nDKIM, blocklists; a check of the same domain from the last week is\nreused) and answers it; null when the company has no usable domain.",
+        "operationId": "get_platform_company_domain_trust",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deliverability, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/DomainTrust"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/ses-inbound": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Get a company's SES inbound status",
+        "description": "Whether SES verified the company's domain and its MX points at SES email\nreceiving, i.e. whether customers' replies reach the CRM.",
+        "operationId": "get_platform_company_ses_inbound",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SesInbound"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/setup-checklist": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Get a company's setup checklist",
+        "description": "What is done of the company's setup: subdomain DNS, domain, key people,\ninbound email (SES), stones on its website, tours, integrations; each\nautomatically or ticked by hand.",
+        "operationId": "get_platform_company_setup_checklist",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The checklist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Checklist"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/setup-checklist/items/{key}": {
+      "put": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Tick a setup item by hand",
+        "description": "Marks a checklist item done (or not) by hand; automatic checks still\ncount either way.",
+        "operationId": "tick_platform_company_setup_item",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Item key, e.g. `users.manager`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Tick"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Unknown item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/features/{feature}": {
+      "put": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Switch a company feature",
+        "description": "Turns `quickbooks`, `signature`, `onboarding` or `leaderboard` on or off\nfor the company (an explicit setting, over the platform default).",
+        "operationId": "switch_platform_company_feature",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "feature",
+            "in": "path",
+            "description": "`quickbooks`, `signature`, `onboarding` or `leaderboard`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Switch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Unknown feature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/billing-required": {
+      "put": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Require Stripe payment",
+        "description": "Whether the company's access depends on its Stripe subscription (off:\nit pays some other way).",
+        "operationId": "set_platform_company_billing_required",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Switch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/signatures/{id}/document": {
       "get": {
         "tags": [
@@ -40664,6 +41684,158 @@
           }
         }
       },
+      "CompanyDetails": {
+        "type": "object",
+        "description": "A company's settings as super admins edit them.",
+        "required": [
+          "id",
+          "name",
+          "quickbooks_enabled",
+          "signature_enabled",
+          "billing_required",
+          "onboarding_enabled",
+          "leaderboard_enabled"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Company name."
+          },
+          "subdomain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subdomain, or null."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address, or null."
+          },
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email domain, or null."
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Logo, or null."
+          },
+          "logo_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Logo height in pixels as saved, or null."
+          },
+          "sales_tax_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sales tax in percent, or null."
+          },
+          "max_users": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "User limit, or null."
+          },
+          "cloudtalk_access_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` API key id, or null."
+          },
+          "cloudtalk_access_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` API secret, or null."
+          },
+          "ringcentral_client_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` JWT app client id, or null."
+          },
+          "ringcentral_client_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` JWT app client secret, or null."
+          },
+          "ringcentral_jwt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` JWT, or null."
+          },
+          "ringcentral_server_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` server override, or null."
+          },
+          "qbo_realm_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Linked `QuickBooks` company, or null."
+          },
+          "signwell_api_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`SignWell` API key, or null."
+          },
+          "quickbooks_enabled": {
+            "type": "boolean",
+            "description": "QuickBooks switch."
+          },
+          "signature_enabled": {
+            "type": "boolean",
+            "description": "E-signature switch (own setting, else on with a `SignWell` key)."
+          },
+          "billing_required": {
+            "type": "boolean",
+            "description": "Stripe payment required."
+          },
+          "onboarding_enabled": {
+            "type": "boolean",
+            "description": "Guided tours switch (own setting, else the platform default)."
+          },
+          "leaderboard_enabled": {
+            "type": "boolean",
+            "description": "Points leaderboard switch (own setting, else the platform default)."
+          }
+        }
+      },
       "CompanyFeatures": {
         "type": "object",
         "description": "What the company the request acts in has switched on or set up. Pages use\nit to decide which features, widgets and links to offer.",
@@ -40711,6 +41883,133 @@
             "description": "The company is connected to RingCentral (OAuth, or JWT credentials).\nWhen both are set up, texts go through RingCentral."
           }
         }
+      },
+      "CompanyInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/superuser/companies` and `PUT /v1/superuser/companies/{id}`.",
+        "required": [
+          "name",
+          "subdomain"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Company name (required)."
+          },
+          "subdomain": {
+            "type": "string",
+            "description": "Subdomain: lowercase letters, digits and inner hyphens (required, unique)."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address."
+          },
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email domain."
+          },
+          "sales_tax_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sales tax in percent (0-100)."
+          },
+          "max_users": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "User limit (1 or more); edit only."
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new logo uploaded to `company-logos`; edit only, omit to keep it."
+          },
+          "logo_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Logo height, 32-192; edit only (default 48)."
+          },
+          "cloudtalk_access_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` API key id."
+          },
+          "cloudtalk_access_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` API secret."
+          },
+          "ringcentral_client_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` JWT app client id."
+          },
+          "ringcentral_client_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` JWT app client secret."
+          },
+          "ringcentral_jwt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` JWT."
+          },
+          "ringcentral_server_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`RingCentral` server override."
+          },
+          "signwell_api_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`SignWell` API key; edit only."
+          },
+          "quickbooks_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "QuickBooks switch; edit only (default on)."
+          },
+          "signature_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "E-signature switch; edit only (omit to leave it)."
+          }
+        },
+        "additionalProperties": false
       },
       "CompanyName": {
         "type": "object",
@@ -40887,6 +42186,204 @@
           }
         },
         "additionalProperties": false
+      },
+      "CompanySummary": {
+        "type": "object",
+        "description": "One company in the list.",
+        "required": [
+          "id",
+          "name",
+          "user_count",
+          "onboarding_finished",
+          "onboarding_eligible",
+          "cloudtalk_connected",
+          "quickbooks_connected",
+          "billing_required",
+          "features"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Company name."
+          },
+          "subdomain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its subdomain (`acme` of `acme.granite-manager.com`), or null."
+          },
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its email domain, or null."
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Logo, or null."
+          },
+          "max_users": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "User limit, or null."
+          },
+          "user_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Active users counting toward the limit."
+          },
+          "onboarding_finished": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Users who finished the first-run tour."
+          },
+          "onboarding_eligible": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Users who run the tours."
+          },
+          "cloudtalk_connected": {
+            "type": "boolean",
+            "description": "`CloudTalk` keys are saved."
+          },
+          "quickbooks_connected": {
+            "type": "boolean",
+            "description": "A `QuickBooks` company is linked."
+          },
+          "billing_required": {
+            "type": "boolean",
+            "description": "Access depends on the Stripe subscription."
+          },
+          "features": {
+            "$ref": "#/components/schemas/Features"
+          }
+        }
+      },
+      "CompanyUser": {
+        "type": "object",
+        "description": "A user of a company.",
+        "required": [
+          "id",
+          "is_admin",
+          "is_superuser",
+          "can_manage_users",
+          "runs_onboarding",
+          "counts_toward_user_limit",
+          "progress"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "User id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name, or null."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email, or null."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone, or null."
+          },
+          "is_admin": {
+            "type": "boolean",
+            "description": "Admin access."
+          },
+          "is_superuser": {
+            "type": "boolean",
+            "description": "Platform superuser."
+          },
+          "cloudtalk_agent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` agent id as saved, or null."
+          },
+          "cloudtalk_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CloudTalk` number as saved, or null."
+          },
+          "can_manage_users": {
+            "type": "boolean",
+            "description": "Holds the Manager position (manages users)."
+          },
+          "runs_onboarding": {
+            "type": "boolean",
+            "description": "Runs the guided tours (not an installer or walk-in account)."
+          },
+          "counts_toward_user_limit": {
+            "type": "boolean",
+            "description": "Counts toward the user limit (not walk-in only)."
+          },
+          "onboarding_completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the first-run tour was completed (ISO 8601), or null."
+          },
+          "progress": {
+            "$ref": "#/components/schemas/OnboardingState",
+            "description": "Saved tours progress."
+          }
+        }
+      },
+      "CompanyUsers": {
+        "type": "object",
+        "description": "`GET /v1/superuser/companies/{id}/users`.",
+        "required": [
+          "users",
+          "deleted_count",
+          "has_cloudtalk_api"
+        ],
+        "properties": {
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompanyUser"
+            },
+            "description": "Active users, by name."
+          },
+          "deleted_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deleted users."
+          },
+          "has_cloudtalk_api": {
+            "type": "boolean",
+            "description": "The company has `CloudTalk` keys (the tours read it)."
+          }
+        }
       },
       "Completion": {
         "type": "object",
@@ -43987,6 +45484,46 @@
         },
         "additionalProperties": false
       },
+      "DomainTrust": {
+        "type": "object",
+        "description": "A company domain's deliverability.",
+        "required": [
+          "domain",
+          "risk_level",
+          "reputation_reasons",
+          "checked_at"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "The domain checked."
+          },
+          "reputation_score": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "0-100, higher = more spam risk; null when the check failed."
+          },
+          "risk_level": {
+            "$ref": "#/components/schemas/RiskLevel",
+            "description": "`GOOD`, `REVIEW`, `HIGH_RISK` or `UNKNOWN`."
+          },
+          "reputation_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A summary line, a confidence line, then the DNS changes to make."
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was checked (ISO 8601)."
+          }
+        }
+      },
       "DoneInput": {
         "type": "object",
         "description": "Body of `POST /v1/notifications/done`.",
@@ -45759,6 +47296,34 @@
             "type": "number",
             "format": "double",
             "description": "Cost (USD)."
+          }
+        }
+      },
+      "Features": {
+        "type": "object",
+        "description": "A company's switches.",
+        "required": [
+          "quickbooks",
+          "signature",
+          "onboarding",
+          "leaderboard"
+        ],
+        "properties": {
+          "quickbooks": {
+            "type": "boolean",
+            "description": "QuickBooks is on."
+          },
+          "signature": {
+            "type": "boolean",
+            "description": "E-signatures are on."
+          },
+          "onboarding": {
+            "type": "boolean",
+            "description": "Guided tours are on (own switch, else the platform default)."
+          },
+          "leaderboard": {
+            "type": "boolean",
+            "description": "The points leaderboard is on (own switch, else the platform default)."
           }
         }
       },
@@ -47733,6 +49298,51 @@
           "missing_qbo_id",
           "error"
         ]
+      },
+      "Item": {
+        "type": "object",
+        "description": "One item.",
+        "required": [
+          "key",
+          "label",
+          "done",
+          "auto",
+          "manual",
+          "source"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Item key (e.g. `users.manager`); `PUT .../setup-checklist/items/{key}` ticks it."
+          },
+          "label": {
+            "type": "string",
+            "description": "What to do."
+          },
+          "done": {
+            "type": "boolean",
+            "description": "Done automatically or by hand."
+          },
+          "auto": {
+            "type": "boolean",
+            "description": "Done automatically (from the database, DNS or SES)."
+          },
+          "manual": {
+            "type": "boolean",
+            "description": "Ticked by hand."
+          },
+          "source": {
+            "type": "string",
+            "description": "`auto`, `manual` or `none`."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A hint (the domain, the expected DNS name), or null."
+          }
+        }
       },
       "LeadAnswers": {
         "type": "object",
@@ -53298,6 +54908,16 @@
           }
         }
       },
+      "RiskLevel": {
+        "type": "string",
+        "description": "0-20 good, 21-50 review, above high risk.",
+        "enum": [
+          "GOOD",
+          "REVIEW",
+          "HIGH_RISK",
+          "UNKNOWN"
+        ]
+      },
       "RoomInput": {
         "type": "object",
         "description": "One room of a sale being saved.",
@@ -54683,6 +56303,43 @@
               "$ref": "#/components/schemas/MonthlyCount"
             },
             "description": "Months with at least one text, oldest first, over the current month and\nthe two before it. Months without texts are left out."
+          }
+        }
+      },
+      "SesInbound": {
+        "type": "object",
+        "description": "Whether a company receives email through SES.",
+        "required": [
+          "ses_pending",
+          "mx_inbound",
+          "inbound_ready"
+        ],
+        "properties": {
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The domain checked, or null without one."
+          },
+          "ses_verified": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "SES verified the domain; null when SES could not be asked."
+          },
+          "ses_pending": {
+            "type": "boolean",
+            "description": "Verification is pending at SES."
+          },
+          "mx_inbound": {
+            "type": "boolean",
+            "description": "The domain's MX points at SES email receiving (`inbound-smtp.`)."
+          },
+          "inbound_ready": {
+            "type": "boolean",
+            "description": "Verified and the MX points at SES: inbound email works."
           }
         }
       },
@@ -57540,6 +59197,19 @@
           }
         }
       },
+      "Switch": {
+        "type": "object",
+        "description": "Body of the switch routes.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "On or off."
+          }
+        }
+      },
       "SwitchableCompany": {
         "type": "object",
         "description": "A company the super admin may act in.",
@@ -58485,6 +60155,19 @@
             "type": "integer",
             "format": "int64",
             "description": "Unread messages (1 when marked unread by hand)."
+          }
+        }
+      },
+      "Tick": {
+        "type": "object",
+        "description": "Body of `PUT .../setup-checklist/items/{key}`.",
+        "required": [
+          "checked"
+        ],
+        "properties": {
+          "checked": {
+            "type": "boolean",
+            "description": "Ticked by hand."
           }
         }
       },
