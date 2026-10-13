@@ -32740,6 +32740,83 @@
         ]
       }
     },
+    "/v1/ai/crm-manual-feedback": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Give feedback on a CRM manual answer",
+        "description": "`dislike`: a corrected answer from the manual and the user's access\n(attempt 1 or 2). `approve` / `escalate`: the conversation is saved for\nthe super admins' instruction corrections page.",
+        "operationId": "give_crm_manual_feedback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The correction, or the saved feedback",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Saving failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/notifications": {
       "get": {
         "tags": [
@@ -39085,6 +39162,44 @@
           }
         }
       },
+      "CorrectionOut": {
+        "type": "object",
+        "description": "A corrected answer (`dislike`).",
+        "required": [
+          "correction",
+          "attempt",
+          "escalate"
+        ],
+        "properties": {
+          "correction": {
+            "type": "string",
+            "description": "The corrected answer."
+          },
+          "attempt": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The attempt it answers."
+          },
+          "sectionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The manual section it belongs to."
+          },
+          "proposedManualChange": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The change it suggests for that section."
+          },
+          "escalate": {
+            "type": "boolean",
+            "description": "Always false."
+          }
+        }
+      },
       "CreatedCalendar": {
         "type": "object",
         "description": "`POST /v1/calendars`.",
@@ -41363,6 +41478,47 @@
           }
         }
       },
+      "DialogMessage": {
+        "type": "object",
+        "description": "One message of the conversation the feedback is about.",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/DialogRole",
+            "description": "`user` or `assistant`."
+          },
+          "content": {
+            "type": "string",
+            "description": "What was said."
+          },
+          "correctionAttempt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Which correction this is (1 or 2), for a corrected answer."
+          },
+          "correctionLiked": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the user liked this correction."
+          }
+        }
+      },
+      "DialogRole": {
+        "type": "string",
+        "description": "Who said a dialog message.",
+        "enum": [
+          "user",
+          "assistant"
+        ]
+      },
       "DigestRun": {
         "type": "object",
         "description": "What a run did.",
@@ -43270,6 +43426,161 @@
             "description": "Cost (USD)."
           }
         }
+      },
+      "FeedbackInput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The answer was wrong: ask for a corrected one.",
+            "required": [
+              "question",
+              "originalAnswer",
+              "attempt",
+              "intent"
+            ],
+            "properties": {
+              "question": {
+                "type": "string",
+                "description": "The user's question."
+              },
+              "originalAnswer": {
+                "type": "string",
+                "description": "The answer they disliked."
+              },
+              "attempt": {
+                "type": "integer",
+                "format": "int64",
+                "description": "1 or 2."
+              },
+              "previousCorrections": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Corrections already disliked."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "dislike"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A corrected answer was right: save it for review.",
+            "required": [
+              "dialog",
+              "correctedAnswer",
+              "attempt",
+              "intent"
+            ],
+            "properties": {
+              "dialog": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DialogMessage"
+                },
+                "description": "The conversation, ending with the approved correction."
+              },
+              "correctedAnswer": {
+                "type": "string",
+                "description": "The approved answer."
+              },
+              "attempt": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Which correction (1 or 2)."
+              },
+              "sectionId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The manual section the correction belongs to."
+              },
+              "proposedManualChange": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The change the correction suggests for that section."
+              },
+              "feedbackText": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "What the user wrote."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "approve"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Still wrong: hand it to the super admins.",
+            "required": [
+              "dialog",
+              "intent"
+            ],
+            "properties": {
+              "dialog": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DialogMessage"
+                },
+                "description": "The conversation."
+              },
+              "sectionId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The manual section it is about."
+              },
+              "proposedManualChange": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A suggested change for that section."
+              },
+              "feedbackText": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "What the user wrote."
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "escalate"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Body of `POST /v1/ai/crm-manual-feedback`."
+      },
+      "FeedbackOut": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/CorrectionOut",
+            "description": "For `dislike`."
+          },
+          {
+            "$ref": "#/components/schemas/SavedFeedback",
+            "description": "For `approve` and `escalate`."
+          }
+        ],
+        "description": "The answer to a feedback call."
       },
       "FieldKind": {
         "type": "string",
@@ -51302,6 +51613,33 @@
           "thread_id": {
             "type": "string",
             "description": "Conversation it will start."
+          }
+        }
+      },
+      "SavedFeedback": {
+        "type": "object",
+        "description": "Saved feedback (`approve`, `escalate`).",
+        "required": [
+          "feedbackId",
+          "message"
+        ],
+        "properties": {
+          "feedbackId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The `message_feedback` row.",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string",
+            "description": "What to tell the user."
+          },
+          "escalate": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "True when escalated."
           }
         }
       },

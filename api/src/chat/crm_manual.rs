@@ -58,7 +58,7 @@ pub fn section(id: &str) -> Option<&'static str> {
         .map(|s| s.content.as_str())
 }
 
-fn normalize(text: &str) -> String {
+pub(crate) fn normalize(text: &str) -> String {
     trim(&re!(r"\s+").replace_all(&text.to_lowercase(), " ")).to_string()
 }
 
@@ -262,7 +262,7 @@ pub fn looks_like_how_to(query: &str) -> bool {
     re!(r"\bwhere (?:is|are|do i find|can i find)\b.+\b(?:page|button|sidebar|menu|tab|setting|screen|form|folder|inbox)\b").is_match(&normalized)
 }
 
-fn asks_cloudtalk_phone(normalized: &str) -> bool {
+pub(crate) fn asks_cloudtalk_phone(normalized: &str) -> bool {
     (normalized.contains("cloudtalk") || normalized.contains("qualtalk"))
         && ["phone", "number", "line", "sms sender", "outbound"]
             .iter()
@@ -275,7 +275,7 @@ fn can_edit_admin_users(access: Option<&Access>) -> bool {
     })
 }
 
-fn cloudtalk_phone_answer(question: &str, access: Option<&Access>) -> Option<String> {
+pub(crate) fn cloudtalk_phone_answer(question: &str, access: Option<&Access>) -> Option<String> {
     let normalized = normalize(question);
     if !asks_cloudtalk_phone(&normalized) {
         return None;
@@ -346,7 +346,10 @@ fn cloudtalk_phone_answer(question: &str, access: Option<&Access>) -> Option<Str
     Some(parts.join("\n"))
 }
 
-fn cloudtalk_credentials_answer(question: &str, access: Option<&Access>) -> Option<String> {
+pub(crate) fn cloudtalk_credentials_answer(
+    question: &str,
+    access: Option<&Access>,
+) -> Option<String> {
     let n = normalize(question);
     let asks = n.contains("cloudtalk")
         && (n.contains("access key")

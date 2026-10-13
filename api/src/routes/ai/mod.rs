@@ -13,6 +13,7 @@
 //!   → the composer's inline autocomplete and what the rep's edits teach it
 //! - `POST /v1/ai/first-contact-email` → the first email to a new lead
 //! - `POST /v1/ai/chat` → the AI chat's answer, streamed (server-sent events)
+//! - `POST /v1/ai/crm-manual-feedback` → a thumbs-down on a CRM manual answer
 //!
 //! Replaces the Remix `api.aiImprove.email` and `api.aiSummarize.callNote` routes.
 
@@ -28,6 +29,7 @@ pub mod email_template;
 pub mod first_contact;
 pub mod improve;
 pub mod invoice_edit;
+pub mod manual_feedback;
 pub mod signature_fields;
 
 use crate::state::AppState;
@@ -51,4 +53,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(first_contact::first_contact_email))
         .routes(routes!(conversation_reply::conversation_reply))
         .routes(routes!(chat::ask))
+        .routes(routes!(manual_feedback::feedback))
 }

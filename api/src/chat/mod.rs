@@ -8,6 +8,7 @@
 pub mod assistant;
 pub mod crm_manual;
 pub mod instructions;
+pub mod manual_feedback;
 pub mod markers;
 pub mod prompts;
 
