@@ -21,6 +21,7 @@ pub mod db;
 pub mod email_signature;
 pub mod error;
 pub mod extract;
+pub mod followups;
 pub mod images;
 pub mod maps;
 pub mod openapi;
