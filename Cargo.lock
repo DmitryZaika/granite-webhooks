@@ -115,6 +115,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "api"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "ammonia",
  "aws-sdk-s3",
  "axum",
@@ -145,6 +146,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tower-http",
+ "url",
  "utoipa 6.0.0",
  "utoipa-axum",
  "uuid",

@@ -33083,6 +33083,53 @@
         ]
       }
     },
+    "/v1/jobs/signature-reminders": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Run the native signature lifecycle",
+        "description": "Expires open requests past their expiry, then sends due reminders and\nthe senders' notifications. Called by the `time-triggered` Lambda with\n`Authorization: <LAMBDA_KEY>`. While native signatures are not enabled\nit does nothing.",
+        "operationId": "run_signature_reminders",
+        "responses": {
+          "200": {
+            "description": "What the run did",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignatureRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
     "/v1/me/call-coaching": {
       "get": {
         "tags": [
@@ -49444,6 +49491,36 @@
           "view_url": {
             "type": "string",
             "description": "Where to open it: an API path (`/v1/...`, the signed PDF or native\ndocument) to open on the API's host, else the original file's URL."
+          }
+        }
+      },
+      "SignatureRun": {
+        "type": "object",
+        "description": "What one run did.",
+        "required": [
+          "processed",
+          "sent",
+          "failed",
+          "expired"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Reminders and notifications sent (what the scheduler logs).",
+            "minimum": 0
+          },
+          "sent": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expired": {
+            "type": "integer",
+            "description": "Open requests expired.",
+            "minimum": 0
           }
         }
       },

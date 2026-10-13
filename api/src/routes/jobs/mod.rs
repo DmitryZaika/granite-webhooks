@@ -5,12 +5,15 @@
 //! - `POST /v1/jobs/maintenance-reminders` → the 9 AM shop maintenance digest
 //! - `POST /v1/jobs/survey-notifications` → post-installation surveys
 //! - `POST /v1/jobs/call-points` → outbound calls into call points
+//! - `POST /v1/jobs/signature-reminders` → native e-signature expiry, reminders
+//!   and notifications
 //!
 //! Replaces the Remix `api.*.process` cron routes.
 
 mod appointment_reminders;
 pub mod call_points;
 pub mod maintenance_reminders;
+pub mod signature_reminders;
 pub mod survey_notifications;
 
 use crate::error::ApiError;
@@ -25,6 +28,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(maintenance_reminders::run))
         .routes(routes!(survey_notifications::run))
         .routes(routes!(call_points::run))
+        .routes(routes!(signature_reminders::run))
 }
 
 /// The `time-triggered` Lambda, by its key.

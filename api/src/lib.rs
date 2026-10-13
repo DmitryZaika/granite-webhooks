@@ -25,6 +25,7 @@ pub mod followups;
 pub mod images;
 pub mod maps;
 pub mod openapi;
+pub mod native_signing;
 pub mod pdf;
 pub mod pdf_fonts;
 pub mod pdf_preview;

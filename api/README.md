@@ -89,6 +89,12 @@ SignWell signed copies are fetched and titled "<document> signed". PDFs over
 4 MB redirect to a presigned link (big SignWell copies are stored under
 `signed-documents/`, which a bucket lifecycle rule may expire after a day).
 
+Native signatures are on with `NATIVE_SIGNATURES_ENABLED=1`,
+`SIGNATURE_INVITATION_SECRET` (32 bytes, base64url) and
+`SIGNATURE_APP_ORIGIN` (`native_signing.rs`); the scheduled
+`POST /v1/jobs/signature-reminders` then expires open requests and sends
+reminders and notifications (it does nothing while they are off).
+
 ### Billing (Stripe)
 
 `src/billing/` keeps `company_billing` in step with Stripe (the state machine

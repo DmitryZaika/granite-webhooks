@@ -210,6 +210,10 @@ async fn process_call_points() -> Result<usize, Error> {
     post_api_job("call-points", "call points").await
 }
 
+async fn process_signature_reminders() -> Result<usize, Error> {
+    post_api_job("signature-reminders", "e-signature reminders").await
+}
+
 async fn process_checklist_surveys() -> Result<usize, Error> {
     post_api_job("survey-notifications", "checklist survey notifications").await
 }
@@ -345,15 +349,23 @@ pub(crate) async fn function_handler(
             0
         }
     };
+    let signature_reminder_count = match process_signature_reminders().await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(?error, "Failed to process e-signature reminders; continuing");
+            0
+        }
+    };
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, and {} call points",
+        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, and {} e-signature reminders",
         processed_email_count,
         reminder_count,
         estimate_reminder_count,
         maintenance_reminder_count,
         sms_followup_count,
         checklist_survey_count,
-        call_points_count
+        call_points_count,
+        signature_reminder_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);

@@ -16,6 +16,7 @@ bcrypt = "0.17"
 getrandom = "0.3"
 common = { path = "../common" }
 axum = "0.8"
+aes-gcm = "0.10"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
@@ -42,6 +43,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # Pure Rust: HEIC photos (iPhone) and PDF pages, no system libraries on Lambda.
 zune-heic = "0.5"
 hayro = "0.8"
+url = "2"
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
