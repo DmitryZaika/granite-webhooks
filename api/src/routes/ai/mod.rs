@@ -11,6 +11,7 @@
 //! - `POST /v1/ai/conversation-reply` → the AI Reply button's draft
 //! - `GET /v1/ai/compose/inventory-url`, `POST /v1/ai/compose/{autocomplete,learn}`
 //!   → the composer's inline autocomplete and what the rep's edits teach it
+//! - `POST /v1/ai/first-contact-email` → the first email to a new lead
 //!
 //! Replaces the Remix `api.aiImprove.email` and `api.aiSummarize.callNote` routes.
 
@@ -22,6 +23,7 @@ pub mod compose;
 pub mod conversation_reply;
 pub mod design;
 pub mod email_template;
+pub mod first_contact;
 pub mod improve;
 pub mod invoice_edit;
 pub mod signature_fields;
@@ -44,5 +46,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(compose::inventory_url))
         .routes(routes!(compose::autocomplete))
         .routes(routes!(compose::learn))
+        .routes(routes!(first_contact::first_contact_email))
         .routes(routes!(conversation_reply::conversation_reply))
 }

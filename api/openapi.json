@@ -32499,6 +32499,83 @@
         ]
       }
     },
+    "/v1/ai/first-contact-email": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Draft a first email",
+        "description": "The first email to a new lead, from what they told us (their request,\nproject and source), introducing the rep and ending with a question.",
+        "operationId": "draft_first_contact_email",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirstContactRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftedEmail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/ai/conversation-reply": {
       "post": {
         "tags": [
@@ -41323,6 +41400,24 @@
         },
         "additionalProperties": false
       },
+      "DraftedEmail": {
+        "type": "object",
+        "description": "A drafted email.",
+        "required": [
+          "subject",
+          "body"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "Short, sentence case."
+          },
+          "body": {
+            "type": "string",
+            "description": "The email text (the signature is added when sent)."
+          }
+        }
+      },
       "Drip": {
         "type": "object",
         "description": "When a company template sends itself.",
@@ -43113,6 +43208,28 @@
               "null"
             ],
             "description": "The subscription the start call created (`sub_...`); omit when it\nanswered `paid`."
+          }
+        }
+      },
+      "FirstContactRequest": {
+        "type": "object",
+        "description": "`POST /v1/ai/first-contact-email`.",
+        "properties": {
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The lead's deal."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The lead, when there is no deal."
           }
         }
       },

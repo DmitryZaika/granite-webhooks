@@ -908,6 +908,26 @@ mod tests {
     }
 
     #[test]
+    fn a_rep_without_a_phone_and_an_unknown_company() {
+        let context = ComposeContext {
+            profile: String::new(),
+            timeline: Vec::new(),
+            rep_phone: None,
+            company_name: None,
+            company_address: Some("  ".into()),
+            rep_notes: Vec::new(),
+        };
+        let prompt = build_user_prompt(FollowupChannel::Sms, "Dema", &context, "", "x");
+        assert!(prompt.contains("SALES REP: Dema\n"));
+        assert!(prompt.contains("COMPANY: (unknown)"));
+        assert!(prompt.contains("CUSTOMER / PROJECT INFO:\n(none)"));
+        let at = chrono::DateTime::parse_from_rfc3339("2026-10-09T13:22:59Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(autocomplete_now(at), "2026-10-09 13:22");
+    }
+
+    #[test]
     fn rep_notes_are_cleaned_and_capped() {
         let notes = parse_rep_notes_reply(
             r#"{"notes": ["- Opens with 'Hey'", "opens with 'hey'", "  Signs   off as Dema ", 3]}"#,
