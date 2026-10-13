@@ -625,7 +625,7 @@ fn escape_like(term: &str) -> String {
     out
 }
 
-#[allow(clippy::items_after_statements)]
+#[allow(clippy::items_after_statements, clippy::too_many_lines)]
 async fn search_notes(
     state: &AppState,
     ctx: Ctx,
@@ -788,6 +788,7 @@ fn is_email(text: &str) -> bool {
 }
 
 /// Runs one skill call; the JSON the model reads back.
+#[allow(clippy::too_many_lines)]
 async fn run_skill(
     state: &AppState,
     ctx: Ctx,

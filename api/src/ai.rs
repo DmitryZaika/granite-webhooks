@@ -415,20 +415,9 @@ impl Ai {
         }
         .await;
         let elapsed = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
-        match &result {
-            Ok(_) => log(pool, caller, chat.model, usage, None, elapsed).await,
-            Err(err) => {
-                log(
-                    pool,
-                    caller,
-                    chat.model,
-                    None,
-                    Some(&err.to_string()),
-                    elapsed,
-                )
-                .await
-            }
-        }
+        let error = result.as_ref().err().map(ToString::to_string);
+        let usage = if error.is_some() { None } else { usage };
+        log(pool, caller, chat.model, usage, error.as_deref(), elapsed).await;
         result
     }
 }
