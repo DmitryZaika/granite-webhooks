@@ -3,9 +3,9 @@
 //!
 //! - `GET /v1/webhooks/signwell` → `{ ok: true }` (`SignWell` checks the URL)
 //! - `POST /v1/webhooks/signwell` → the request's status moves forward; the
-//!   sender is told (email and in-app notice) when it was viewed, signed or
-//!   declined, and a signed contract sells its quote (the quote is sold, its
-//!   deal won with the option's total).
+//!   sender is emailed when it was viewed, signed or declined, and a signed
+//!   contract sells its quote (the quote is sold, its deal won with the
+//!   option's total).
 //!
 //! The call is trusted with `SIGNWELL_WEBHOOK_SECRET` (as `?token=` or an
 //! `x-webhook-token` header) or with `SignWell`'s event hash, an HMAC-SHA256
@@ -398,7 +398,6 @@ async fn notify(state: &AppState, request_id: i64, company_id: i32, event: Notic
         |id| Some(format!("/employee/deals/edit/{id}/project")),
     );
 
-    // The email and the in-app notice are independent: one failing keeps the other.
     if let Some(email) = row
         .sender_email
         .as_deref()
@@ -454,25 +453,6 @@ async fn notify(state: &AppState, request_id: i64, company_id: i32, event: Notic
             tracing::error!(error = ?err, request = request_id, "Failed to email that a signature request was {}", event.verb);
         }
     }
-
-    // Without a deal or a customer the in-app notice has nowhere to link to.
-    if path.is_none() {
-        return;
-    }
-    let inserted = sqlx::query(
-        "INSERT INTO notifications (user_id, customer_id, deal_id, message, notification_type, due_at)
-         VALUES (?, ?, ?, ?, ?, NOW())",
-    )
-    .bind(row.created_by_user_id)
-    .bind(row.customer_id)
-    .bind(deal_id)
-    .bind(js_slice(&message, 255))
-    .bind(event.kind)
-    .execute(&state.pool)
-    .await;
-    if let Err(err) = inserted {
-        tracing::error!(error = %err, request = request_id, "Failed to notify that a signature request was {}", event.verb);
-    }
 }
 
 /// The name without a trailing `.pdf` (any case).
@@ -483,17 +463,6 @@ fn strip_pdf(name: &str) -> String {
     } else {
         name.to_string()
     }
-}
-
-/// `s.slice(0, n)` in UTF-16 units, never splitting a character.
-fn js_slice(s: &str, n: usize) -> String {
-    let mut units = 0;
-    s.chars()
-        .take_while(|c| {
-            units += c.len_utf16();
-            units <= n
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -517,6 +486,5 @@ mod tests {
             event_hash("webhook-id", "document_viewed", 1_700_000_001.0)
         );
         assert_eq!(strip_pdf("Contract - Kitchen.PDF"), "Contract - Kitchen");
-        assert_eq!(js_slice("ab😀c", 3), "ab");
     }
 }

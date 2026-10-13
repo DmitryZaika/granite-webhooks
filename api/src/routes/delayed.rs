@@ -324,6 +324,86 @@ async fn mark(
     Ok(())
 }
 
+/// The deal a scheduled message belongs to: the one it was sent from, else
+/// the customer's latest.
+async fn deal_for(pool: &MySqlPool, row: &Row) -> Result<Option<i32>, sqlx::Error> {
+    if let Some(deal_id) = number(&json(&row.payload_json), "dealId").filter(|id| *id > 0) {
+        return Ok(Some(deal_id));
+    }
+    let Some(customer_id) = row.customer_id else {
+        return Ok(None);
+    };
+    sqlx::query_scalar(
+        "SELECT d.id FROM deals d
+           JOIN customers c ON c.id = d.customer_id
+          WHERE d.customer_id = ? AND c.company_id = ? AND d.deleted_at IS NULL
+          ORDER BY d.is_won IS NULL DESC, d.id DESC
+          LIMIT 1",
+    )
+    .bind(customer_id)
+    .bind(row.company_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// The bell notice for a sent (or failed) scheduled message, e.g.
+/// `Scheduled SMS sent: "See you Monday"`, at most 255 characters.
+fn outcome_message(kind: Kind, payload: &Value, sent: bool) -> String {
+    let key = match kind {
+        Kind::Sms => "text",
+        Kind::Emails => "subject",
+    };
+    let preview = field(payload, key)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let what = match kind {
+        Kind::Sms => "Scheduled SMS",
+        Kind::Emails => "Scheduled email",
+    };
+    let outcome = if sent { "sent" } else { "failed to send" };
+    let message = if preview.is_empty() {
+        format!("{what} {outcome}")
+    } else {
+        format!("{what} {outcome}: \"{preview}\"")
+    };
+    if message.chars().count() > 255 {
+        format!("{}...\"", message.chars().take(251).collect::<String>())
+    } else {
+        message
+    }
+}
+
+/// Tells the sender their scheduled message went out (or could not). The
+/// bell lists deal notifications, so a message with no deal gets none; a
+/// failure here never changes the message's own status.
+async fn notify_outcome(pool: &MySqlPool, kind: Kind, row: &Row, sent: bool) {
+    let notified = async {
+        let Some(deal_id) = deal_for(pool, row).await? else {
+            return Ok(());
+        };
+        sqlx::query(
+            "INSERT INTO notifications (user_id, customer_id, deal_id, message, notification_type, due_at)
+             VALUES (?, ?, ?, ?, ?, NOW())",
+        )
+        .bind(row.user_id)
+        .bind(row.customer_id)
+        .bind(deal_id)
+        .bind(outcome_message(kind, &json(&row.payload_json), sent))
+        .bind(if sent {
+            "delayed_message_sent"
+        } else {
+            "delayed_message_failed"
+        })
+        .execute(pool)
+        .await
+        .map(|_| ())
+    };
+    if let Err(error) = notified.await {
+        tracing::warn!(id = row.id, table = kind.table(), %error, "scheduled message notice not saved");
+    }
+}
+
 fn number(payload: &Value, key: &str) -> Option<i32> {
     match &payload[key] {
         Value::String(text) => text.trim().parse().ok(),
@@ -534,13 +614,18 @@ pub async fn process_due_in(
                     Some("missing_sender_or_payload"),
                 )
                 .await?;
+                notify_outcome(pool, kind, &row, false).await;
                 continue;
             };
             match deliver_row(state, kind, &row, &user).await {
-                Ok(()) => mark(pool, kind, row.id, "sent", None).await?,
+                Ok(()) => {
+                    mark(pool, kind, row.id, "sent", None).await?;
+                    notify_outcome(pool, kind, &row, true).await;
+                }
                 Err(error) => {
                     tracing::warn!(id = row.id, table = kind.table(), %error, "scheduled message failed");
                     mark(pool, kind, row.id, "failed", Some(&error)).await?;
+                    notify_outcome(pool, kind, &row, false).await;
                 }
             }
         }
@@ -859,5 +944,27 @@ pub async fn cancel(
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_notice_names_the_message() {
+        let text = json!({ "text": "See  you\n Monday" });
+        assert_eq!(
+            outcome_message(Kind::Sms, &text, true),
+            "Scheduled SMS sent: \"See you Monday\""
+        );
+        assert_eq!(
+            outcome_message(Kind::Emails, &json!({}), false),
+            "Scheduled email failed to send"
+        );
+        let long = outcome_message(Kind::Sms, &json!({ "text": "a".repeat(300) }), true);
+        assert_eq!(long.chars().count(), 255);
+        assert!(long.ends_with("a...\""));
     }
 }

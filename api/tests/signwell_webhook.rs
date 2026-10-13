@@ -211,22 +211,12 @@ async fn a_signed_contract_sells_its_quote_and_wins_its_deal(pool: MySqlPool) {
             .body
             .contains("href=\"https://crm.acme.test/employee/deals/edit/8002/project\"")
     );
-    let notice: (i64, Option<i64>, String, String) = sqlx::query_as(
-        "SELECT CAST(user_id AS SIGNED), CAST(deal_id AS SIGNED), message, notification_type
-           FROM notifications WHERE notification_type = 'signature_signed'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        notice,
-        (
-            100,
-            Some(8002),
-            "Erin Builder signed Contract - Kitchen".into(),
-            "signature_signed".into()
-        )
-    );
+    // Only by email: the bell does not list signature status.
+    let notices: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notifications")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(notices, 0);
 
     // Signed is final: a late "viewed" changes nothing and tells no one.
     setup
@@ -344,13 +334,12 @@ async fn other_signed_files_are_not_a_sale(pool: MySqlPool) {
         .await
         .unwrap();
     assert_eq!(status, "active");
-    let notices: Vec<String> = sqlx::query_scalar(
-        "SELECT notification_type FROM notifications WHERE customer_id = 1004 ORDER BY id",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-    assert_eq!(notices, ["signature_viewed", "signature_declined"]);
+    let notices: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM notifications WHERE customer_id = 1004")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(notices, 0);
 }
 
 #[test_db::test(seed)]
