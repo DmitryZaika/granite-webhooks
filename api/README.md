@@ -72,6 +72,18 @@ session either, the sender proves itself (`Stripe-Signature` with
 its event hash keyed with `SIGNWELL_WEBHOOK_ID`).
 Point the provider's webhook at `https://api.granite-manager.com/v1/webhooks/<name>`.
 
+### Streaming answers
+
+The AI chat (`POST /v1/ai/chat`, server-sent events) and other long AI
+calls outlast API Gateway's 30 s. The same binary also runs behind a Lambda
+Function URL in `RESPONSE_STREAM` mode: set `LAMBDA_RESPONSE_STREAMING=1` on
+that function (`main.rs` then uses `run_with_streaming_response`). Put it on
+a subdomain of the session cookie's domain (for example through CloudFront)
+so the browser sends the cookie; the frontend calls it from
+`VITE_GRANITE_STREAM_URL`. The chat's CRM manual is
+`api/src/chat/crm_manual.json`, rebuilt from the CRM repo with
+`node scripts/sync-crm-manual.mjs ../general_datebase`.
+
 ### Pictures, PDFs and audio
 
 Pure Rust, so nothing to install on Lambda: `images.rs` reads phone photos

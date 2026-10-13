@@ -12,6 +12,7 @@
 //! - `GET /v1/ai/compose/inventory-url`, `POST /v1/ai/compose/{autocomplete,learn}`
 //!   → the composer's inline autocomplete and what the rep's edits teach it
 //! - `POST /v1/ai/first-contact-email` → the first email to a new lead
+//! - `POST /v1/ai/chat` → the AI chat's answer, streamed (server-sent events)
 //!
 //! Replaces the Remix `api.aiImprove.email` and `api.aiSummarize.callNote` routes.
 
@@ -19,6 +20,7 @@ pub mod agentic;
 pub mod call_activity;
 pub mod call_activity_rules;
 pub mod call_note;
+pub mod chat;
 pub mod compose;
 pub mod conversation_reply;
 pub mod design;
@@ -48,4 +50,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(compose::learn))
         .routes(routes!(first_contact::first_contact_email))
         .routes(routes!(conversation_reply::conversation_reply))
+        .routes(routes!(chat::ask))
 }

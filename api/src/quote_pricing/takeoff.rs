@@ -377,7 +377,7 @@ fn add_cutout(t: &mut AreaTakeoff, c: &Cutout) {
     }
 }
 
-#[allow(clippy::float_cmp)]
+#[allow(clippy::float_cmp, clippy::too_many_lines)]
 fn add_other_counter(t: &mut AreaTakeoff, oc: &OtherCounter) {
     for s in &oc.sizes {
         t.counter_sq_ft += s.sqft.unwrap_or(s.length * s.width / 144.0);

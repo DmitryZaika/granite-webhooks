@@ -972,6 +972,7 @@ fn join<'a>(mut a: Part<'a>, b: &Part) -> Part<'a> {
 
 /// The pieces every splash, waterfall and mitered apron of a counter is cut
 /// as (`counterStrips` → `basePieces`), as polygons.
+#[allow(clippy::too_many_lines)]
 pub fn strip_pieces(counter: &Counter, outline: &Outline) -> Vec<Vec<Pt>> {
     let cw = clockwise(&base_shape(counter));
     let mut parts: Vec<Part> = Vec::new();

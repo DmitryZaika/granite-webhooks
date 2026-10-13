@@ -11,6 +11,10 @@ use std::time::{Duration, Instant};
 const CHAT_URL: &str = "https://api.openai.com/v1/chat/completions";
 /// The CRM's main chat model (`GPT_MINI_MODEL`).
 pub const MINI_MODEL: &str = "gpt-6-luna";
+/// When the key may not use [`MINI_MODEL`] (`GPT_MINI_FALLBACK_MODEL`).
+pub const MINI_FALLBACK_MODEL: &str = "gpt-5.4-mini-2026-03-17";
+/// AI Design's kitchen pictures (`OPENAI_IMAGE_MODEL`).
+pub const IMAGE_MODEL: &str = "gpt-image-2.5-sunburst";
 
 #[derive(Clone)]
 pub struct Ai {
@@ -129,7 +133,7 @@ struct ReplyMessage {
     content: Option<String>,
 }
 
-#[derive(Deserialize, Clone, Copy, Default)]
+#[derive(Deserialize, Clone, Copy, Default, Debug)]
 struct Usage {
     prompt_tokens: u32,
     completion_tokens: u32,
@@ -137,7 +141,7 @@ struct Usage {
     prompt_tokens_details: Option<CachedTokens>,
 }
 
-#[derive(Deserialize, Clone, Copy, Default)]
+#[derive(Deserialize, Clone, Copy, Default, Debug)]
 struct CachedTokens {
     #[serde(default)]
     cached_tokens: Option<u32>,
@@ -264,6 +268,168 @@ impl Ai {
                 Err(err)
             }
         }
+    }
+}
+
+impl Ai {
+    /// One completion with a request body built by the caller (tools,
+    /// content parts): the first choice's `message`, usage logged like
+    /// [`Ai::chat`]. `model` is the body's model, for the log.
+    pub async fn complete(
+        &self,
+        pool: &MySqlPool,
+        caller: Caller<'_>,
+        model: &str,
+        body: &Value,
+        timeout: Duration,
+    ) -> Result<Value, AiError> {
+        let key = self.key.as_ref().ok_or(AiError::NotConfigured)?;
+        let started = Instant::now();
+        let result = async {
+            let response = self
+                .http
+                .post(&*self.url)
+                .bearer_auth(&**key)
+                .timeout(timeout)
+                .json(body)
+                .send()
+                .await
+                .map_err(|err| AiError::Request(err.without_url().to_string()))?;
+            let status = response.status();
+            if !status.is_success() {
+                let text = response.text().await.unwrap_or_default();
+                return Err(AiError::Status {
+                    status: status.as_u16(),
+                    body: text.chars().take(300).collect(),
+                });
+            }
+            let reply: Value = response
+                .json()
+                .await
+                .map_err(|err| AiError::Request(err.without_url().to_string()))?;
+            let usage: Option<Usage> = reply
+                .get("usage")
+                .cloned()
+                .and_then(|u| serde_json::from_value(u).ok());
+            Ok((reply["choices"][0]["message"].clone(), usage))
+        }
+        .await;
+        let elapsed = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+        match result {
+            Ok((message, usage)) => {
+                log(
+                    pool,
+                    caller,
+                    model,
+                    Some(usage.unwrap_or_default()),
+                    None,
+                    elapsed,
+                )
+                .await;
+                Ok(message)
+            }
+            Err(err) => {
+                log(pool, caller, model, None, Some(&err.to_string()), elapsed).await;
+                Err(err)
+            }
+        }
+    }
+
+    /// A streamed completion: `on_text` gets each piece of the answer as it
+    /// arrives; the whole answer is returned. Usage is logged once the
+    /// stream ends (`trackedChatStream`).
+    pub async fn chat_stream(
+        &self,
+        pool: &MySqlPool,
+        caller: Caller<'_>,
+        chat: &Chat<'_>,
+        mut on_text: impl FnMut(&str) + Send,
+    ) -> Result<String, AiError> {
+        let key = self.key.as_ref().ok_or(AiError::NotConfigured)?;
+        let started = Instant::now();
+        let mut body = json!({
+            "model": chat.model,
+            "messages": chat.messages,
+            "stream": true,
+            "stream_options": { "include_usage": true },
+        });
+        if let Some(max) = chat.max_completion_tokens {
+            body["max_completion_tokens"] = json!(max);
+        }
+        if let Some(effort) = chat.reasoning_effort {
+            body["reasoning_effort"] = json!(effort);
+        }
+        let mut usage: Option<Usage> = None;
+        let result = async {
+            let mut response = self
+                .http
+                .post(&*self.url)
+                .bearer_auth(&**key)
+                .timeout(chat.timeout)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|err| AiError::Request(err.without_url().to_string()))?;
+            let status = response.status();
+            if !status.is_success() {
+                let text = response.text().await.unwrap_or_default();
+                return Err(AiError::Status {
+                    status: status.as_u16(),
+                    body: text.chars().take(300).collect(),
+                });
+            }
+            let mut answer = String::new();
+            let mut pending: Vec<u8> = Vec::new();
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|err| AiError::Request(err.without_url().to_string()))?
+            {
+                pending.extend_from_slice(&chunk);
+                while let Some(end) = pending.iter().position(|b| *b == b'\n') {
+                    let line: Vec<u8> = pending.drain(..=end).collect();
+                    let line = String::from_utf8_lossy(&line);
+                    let Some(data) = line.trim_end().strip_prefix("data:") else {
+                        continue;
+                    };
+                    let data = data.trim();
+                    if data == "[DONE]" {
+                        continue;
+                    }
+                    let Ok(event) = serde_json::from_str::<Value>(data) else {
+                        continue;
+                    };
+                    if let Some(u) = event.get("usage").filter(|u| !u.is_null()) {
+                        usage = serde_json::from_value(u.clone()).ok();
+                        continue;
+                    }
+                    if let Some(text) = event["choices"][0]["delta"]["content"].as_str()
+                        && !text.is_empty()
+                    {
+                        answer.push_str(text);
+                        on_text(text);
+                    }
+                }
+            }
+            Ok(answer)
+        }
+        .await;
+        let elapsed = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+        match &result {
+            Ok(_) => log(pool, caller, chat.model, usage, None, elapsed).await,
+            Err(err) => {
+                log(
+                    pool,
+                    caller,
+                    chat.model,
+                    None,
+                    Some(&err.to_string()),
+                    elapsed,
+                )
+                .await
+            }
+        }
+        result
     }
 }
 

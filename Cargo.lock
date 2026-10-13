@@ -145,6 +145,7 @@ dependencies = [
  "test-db",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tower-http",
  "unicode-normalization",
  "url",

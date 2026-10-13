@@ -295,6 +295,71 @@ pub fn js_parse_number(text: &str) -> Option<f64> {
     text.parse::<f64>().ok().filter(|x| x.is_finite())
 }
 
+/// JS `parseFloat(text)`: the longest decimal prefix after leading
+/// whitespace (`"12.5 slabs"` → 12.5); `NaN` when there is none.
+pub fn js_parse_float(text: &str) -> f64 {
+    let t = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let bytes = t.as_bytes();
+    let mut end = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    if t[end..].starts_with("Infinity") {
+        return if t.starts_with('-') {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
+    }
+    let digits_from = end;
+    while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+        end += 1;
+    }
+    let mut digits = end - digits_from;
+    if bytes.get(end) == Some(&b'.') {
+        let mut frac = end + 1;
+        while bytes.get(frac).is_some_and(u8::is_ascii_digit) {
+            frac += 1;
+        }
+        digits += frac - end - 1;
+        end = frac;
+    }
+    if digits == 0 {
+        return f64::NAN;
+    }
+    if matches!(bytes.get(end), Some(b'e' | b'E')) {
+        let mut exp = end + 1;
+        if matches!(bytes.get(exp), Some(b'+' | b'-')) {
+            exp += 1;
+        }
+        let exp_digits = exp;
+        while bytes.get(exp).is_some_and(u8::is_ascii_digit) {
+            exp += 1;
+        }
+        if exp > exp_digits {
+            end = exp;
+        }
+    }
+    t[..end]
+        .trim_end_matches('.')
+        .parse::<f64>()
+        .or_else(|_| t[..end].parse::<f64>())
+        .unwrap_or(f64::NAN)
+}
+
+/// JS `parseInt(text, 10)`: leading digits after whitespace and a sign;
+/// `NaN` when there are none.
+pub fn js_parse_int(text: &str) -> f64 {
+    let t = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let (sign, rest) = match t.as_bytes().first() {
+        Some(b'-') => (-1.0, &t[1..]),
+        Some(b'+') => (1.0, &t[1..]),
+        _ => (1.0, t),
+    };
+    let digits: &str = &rest[..rest.bytes().take_while(u8::is_ascii_digit).count()];
+    if digits.is_empty() {
+        return f64::NAN;
+    }
+    sign * digits.parse::<f64>().unwrap_or(f64::NAN)
+}
+
 /// `/\s+/g` → single spaces, then trimmed.
 pub fn squash(text: &str) -> String {
     trim(&crate::re!(r"\s+", "g").replace_all(text, " ")).to_string()

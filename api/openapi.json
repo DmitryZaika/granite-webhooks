@@ -32683,6 +32683,63 @@
         ]
       }
     },
+    "/v1/ai/chat": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Ask the AI chat",
+        "description": "Answers a question in instructions mode (company instructions and the\nCRM manual), price lists mode (supplier price files, special orders) or\nassistant mode (the company's records), streamed as server-sent events.\nThe conversation is kept per user; `isNew` starts it over.",
+        "operationId": "ask_chat",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The answer as server-sent events",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No question",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/notifications": {
       "get": {
         "tags": [
@@ -37828,6 +37885,42 @@
           "email",
           "sms"
         ]
+      },
+      "ChatInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/chat`.",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The question."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`instructions` (default), `priceLists` or `assistant`. A question\nabout the company's records goes to the assistant anyway."
+          },
+          "isNew": {
+            "type": "boolean",
+            "description": "The first question of a conversation."
+          },
+          "specialOrder": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SpecialOrderInput",
+                "description": "The special order the slabs and delivery in the question are for."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "Check": {
         "type": "object",
@@ -52818,6 +52911,36 @@
           "name": {
             "type": "string",
             "description": "1 to 255 characters."
+          }
+        }
+      },
+      "SpecialOrderInput": {
+        "type": "object",
+        "description": "A special order the user is pricing (from the previous answer).",
+        "required": [
+          "pricePerSqft"
+        ],
+        "properties": {
+          "pricePerSqft": {
+            "type": "number",
+            "format": "double",
+            "description": "Price per sq ft."
+          },
+          "lengthInches": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Slab length in inches, when known."
+          },
+          "widthInches": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Slab width in inches, when known."
           }
         }
       },
