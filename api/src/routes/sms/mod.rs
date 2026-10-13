@@ -9,6 +9,7 @@
 //! - `GET  /v1/sms/{provider}/desktop-alerts`         → unread texts to notify about
 //! - `GET  /v1/sms/{provider}/sales-reps`             → the admin inbox's rep filter
 //! - `POST /v1/sms/{provider}/messages`               → send a text (or schedule it)
+//! - `POST /v1/sms/attachments`                       → make uploaded files ready to send
 //! - `GET  /v1/sms/{provider}/history`                → a deal's or customer's texts
 //! - `GET|POST /v1/sms-flows`, `GET|PUT|DELETE /v1/sms-flows/{id}` → SMS flows
 //!
@@ -17,6 +18,7 @@
 //! the writers derive on insert (`common::sms::derived`); the upkeep that
 //! fails stuck sends runs here, at most once a minute per company.
 
+mod attachments;
 mod flows;
 mod history;
 pub mod provider;
@@ -40,6 +42,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(thread::mark_read))
         .routes(routes!(thread::mark_unread))
         .routes(routes!(send::send))
+        .routes(routes!(attachments::prepare_attachments))
         .routes(routes!(history::history))
         .routes(routes!(flows::list, flows::create))
         .routes(routes!(flows::get, flows::update, flows::delete))

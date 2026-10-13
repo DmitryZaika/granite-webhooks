@@ -37,6 +37,9 @@ pub enum ApiError {
     /// Too many attempts; try again later.
     #[error("{0}")]
     TooManyRequests(String),
+    /// A service the route depends on is not available right now.
+    #[error("{0}")]
+    Unavailable(String),
 }
 
 impl IntoResponse for ApiError {
@@ -50,6 +53,7 @@ impl IntoResponse for ApiError {
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
+            Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Storage(crate::storage::StorageError::Disabled) => {
                 StatusCode::SERVICE_UNAVAILABLE
             }

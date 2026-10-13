@@ -17491,6 +17491,122 @@
         ]
       }
     },
+    "/v1/email-attachments/{id}/preview": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Show an image attachment",
+        "description": "For an `<img>`: a JPEG of the attachment's picture. HEIC photos are\nconverted (and kept for later views) and the answer redirects to the\nJPEG; other pictures redirect to the stored file. With `icon=true` the\nanswer is a small JPEG (fits 320 x 320) itself.",
+        "operationId": "preview_email_attachment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Attachment id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "icon",
+            "in": "query",
+            "description": "`true` for a small JPEG (fits 320 x 320) instead of the full picture.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The thumbnail (`icon=true`)",
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "302": {
+            "description": "Redirect to the picture"
+          },
+          "400": {
+            "description": "Not an image",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such attachment the caller may read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The picture could not be converted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The stored file could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/emails/{id}/conversation": {
       "get": {
         "tags": [
@@ -19668,6 +19784,83 @@
         ]
       }
     },
+    "/v1/sms/attachments": {
+      "post": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Prepare files for a text",
+        "description": "Turns files uploaded to `sms-uploads/` into attachments ready to send:\npictures upright, at most 1600 px and about 480 KB (HEIC, WebP become\nJPEG; PNG and GIF stay), documents (PDF, Word, Excel, text, CSV) as they\nare. The uploads are removed. Each file succeeds or fails on its own.",
+        "operationId": "prepare_sms_attachments",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareAttachments"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Prepared and failed files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreparedAttachments"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No files, more than ten, or pictures switched off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No bucket configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/sms/{provider}/history": {
       "get": {
         "tags": [
@@ -20682,6 +20875,78 @@
           },
           "500": {
             "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/documents/{id}/preview": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Show a PDF's first page",
+        "description": "Redirects to a picture (WebP, 400 px wide) of the first page of a PDF in\nthe company's document library, drawing it on first use. For an `<img>`.",
+        "operationId": "preview_document",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Document id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the page picture"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such PDF in the library, or no picture could be drawn",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
             "content": {
               "application/json": {
                 "schema": {
@@ -29390,6 +29655,113 @@
         ]
       }
     },
+    "/v1/calls/{provider}/{media_id}/recording": {
+      "get": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "Load a call's recording",
+        "description": "A link (an hour) to the audio of a recorded call or voicemail: a\n`CloudTalk` call id, or a `RingCentral` media token (`rec_<id>`,\n`vm_<extension>_<message>_<attachment>`) as the call lists give them.",
+        "operationId": "get_call_recording",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "`cloudtalk` or `ringcentral`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "media_id",
+            "in": "path",
+            "description": "CloudTalk call id or RingCentral media token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Where to load the audio",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallRecording"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a call id or media token of the provider",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The call has no recording",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No bucket configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/quotes": {
       "get": {
         "tags": [
@@ -29580,6 +29952,83 @@
           },
           "500": {
             "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/print-previews": {
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Open a printed quote",
+        "description": "The quote page draws the PDF in the browser; this gives it a place in the\nbucket (`quote-previews/`) and a link to open it under its file name in\nthe print window. Replaces the CRM's in-memory preview (10 minutes);\nthe bucket's lifecycle rule removes old previews.",
+        "operationId": "create_quote_print_preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintPreviewInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Upload and open links",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a PDF file name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No bucket configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -31438,6 +31887,83 @@
           },
           "502": {
             "description": "OpenAI failed or answered with something else",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/ai/signature-fields": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Label the blanks of a contract",
+        "description": "The e-signature editor's Auto-detect: for each blank (with the words\naround it) the AI says whether it is a signature, a date, a text field\n(with a label) or decoration to skip.",
+        "operationId": "detect_signature_fields",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DetectInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The labeled blanks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectedFields"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Too many blanks or a malformed one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The AI is unavailable; use the rules instead",
             "content": {
               "application/json": {
                 "schema": {
@@ -34629,6 +35155,65 @@
           }
         }
       },
+      "BlankCandidate": {
+        "type": "object",
+        "description": "A blank found in the PDF.",
+        "required": [
+          "id",
+          "page",
+          "x",
+          "y",
+          "width",
+          "height",
+          "before",
+          "after",
+          "previousLine"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The browser's id for it (0 or more)."
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its page, from 1."
+          },
+          "x": {
+            "type": "number",
+            "format": "double",
+            "description": "Position on the page (unused here; the editor keeps it)."
+          },
+          "y": {
+            "type": "number",
+            "format": "double",
+            "description": "Position on the page."
+          },
+          "width": {
+            "type": "number",
+            "format": "double",
+            "description": "Size on the page."
+          },
+          "height": {
+            "type": "number",
+            "format": "double",
+            "description": "Size on the page."
+          },
+          "before": {
+            "type": "string",
+            "description": "Words right before it on its line (up to 200 characters)."
+          },
+          "after": {
+            "type": "string",
+            "description": "Words right after it on its line (up to 200 characters)."
+          },
+          "previousLine": {
+            "type": "string",
+            "description": "The line above (up to 300 characters)."
+          }
+        }
+      },
       "BoardDeal": {
         "type": "object",
         "description": "A deal card of the board.",
@@ -35155,6 +35740,24 @@
             "type": "integer",
             "description": "Calls classified from a transcript.",
             "minimum": 0
+          }
+        }
+      },
+      "CallRecording": {
+        "type": "object",
+        "description": "Where to load a call's audio.",
+        "required": [
+          "url",
+          "content_type"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "A link to the audio, valid an hour."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "Its type, e.g. `audio/mpeg` or `audio/wav`."
           }
         }
       },
@@ -38497,6 +39100,62 @@
           }
         }
       },
+      "DetectInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/signature-fields`.",
+        "required": [
+          "candidates"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlankCandidate"
+            },
+            "description": "Up to 300 blanks."
+          }
+        }
+      },
+      "DetectedField": {
+        "type": "object",
+        "description": "One blank, labeled.",
+        "required": [
+          "id",
+          "type",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The blank's id from the request."
+          },
+          "type": {
+            "$ref": "#/components/schemas/FieldType",
+            "description": "What it is for."
+          },
+          "label": {
+            "type": "string",
+            "description": "A short label from the document's wording; empty when the AI gave none\n(or more than 80 characters)."
+          }
+        }
+      },
+      "DetectedFields": {
+        "type": "object",
+        "description": "Body of the answer.",
+        "required": [
+          "fields"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetectedField"
+            },
+            "description": "The blanks the AI labeled (only ids that were sent)."
+          }
+        }
+      },
       "DigestRun": {
         "type": "object",
         "description": "What a run did.",
@@ -40005,6 +40664,24 @@
           }
         }
       },
+      "FailedAttachment": {
+        "type": "object",
+        "description": "A file that could not be prepared.",
+        "required": [
+          "filename",
+          "error"
+        ],
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "The name it was picked with."
+          },
+          "error": {
+            "type": "string",
+            "description": "Why: `invalid_upload`, `upload_missing`, `empty_file`,\n`file_too_large`, `unsupported_image`, `image_too_large` or `upload_failed`."
+          }
+        }
+      },
       "Faucet": {
         "type": "object",
         "description": "A faucet model the company sells, with how many units are free to sell.",
@@ -40262,6 +40939,16 @@
             "description": "Cost (USD)."
           }
         }
+      },
+      "FieldType": {
+        "type": "string",
+        "description": "What a blank is for.",
+        "enum": [
+          "signature",
+          "date",
+          "text",
+          "skip"
+        ]
       },
       "FileReadiness": {
         "type": "object",
@@ -44903,6 +45590,23 @@
           }
         }
       },
+      "PickedFile": {
+        "type": "object",
+        "description": "A file uploaded to `sms-uploads/`.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Public URL `POST /v1/uploads` gave for it."
+          },
+          "filename": {
+            "type": "string",
+            "description": "The name it was picked with (shown to the customer for documents)."
+          }
+        }
+      },
       "Pipeline": {
         "type": "object",
         "description": "A pipeline with its stages, as the admin settings page shows it.",
@@ -45164,6 +45868,98 @@
           }
         }
       },
+      "PrepareAttachments": {
+        "type": "object",
+        "description": "Body of `POST /v1/sms/attachments`.",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PickedFile"
+            },
+            "description": "One to ten uploaded files."
+          }
+        }
+      },
+      "PreparedAttachment": {
+        "type": "object",
+        "description": "A file ready to send; pass it in `attachments` of the send call.",
+        "required": [
+          "s3_key",
+          "url",
+          "content_type",
+          "filename",
+          "size"
+        ],
+        "properties": {
+          "s3_key": {
+            "type": "string",
+            "description": "Its key, under `sms-attachments/<company id>/`."
+          },
+          "url": {
+            "type": "string",
+            "description": "Its public URL (shown in the composer and the conversation)."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "JPEG, PNG or GIF for pictures; the document's type otherwise."
+          },
+          "filename": {
+            "type": "string",
+            "description": "The name it was picked with."
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Pixel width of a picture; null for documents.",
+            "minimum": 0
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Pixel height of a picture; null for documents.",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "description": "Bytes as stored.",
+            "minimum": 0
+          }
+        }
+      },
+      "PreparedAttachments": {
+        "type": "object",
+        "description": "Body of the answer: each file is prepared or failed, in order.",
+        "required": [
+          "uploaded",
+          "failed"
+        ],
+        "properties": {
+          "uploaded": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreparedAttachment"
+            },
+            "description": "Files ready to send."
+          },
+          "failed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FailedAttachment"
+            },
+            "description": "Files that could not be used."
+          }
+        }
+      },
       "PriceOffers": {
         "type": "object",
         "description": "Body of `GET /v1/suppliers/price-offers`.",
@@ -45198,6 +45994,37 @@
           "sqft",
           "slab"
         ]
+      },
+      "PrintPreview": {
+        "type": "object",
+        "description": "Where the printed PDF goes, and where to open it.",
+        "required": [
+          "upload_url",
+          "url"
+        ],
+        "properties": {
+          "upload_url": {
+            "type": "string",
+            "description": "`PUT` the PDF here (valid 15 minutes) with `Content-Type: application/pdf`."
+          },
+          "url": {
+            "type": "string",
+            "description": "Open this (valid an hour) to show the PDF; the viewer saves it under\nthe file name."
+          }
+        }
+      },
+      "PrintPreviewInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/quotes/print-previews`.",
+        "required": [
+          "filename"
+        ],
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "What the PDF is saved as, e.g. `Smith Kitchen.pdf` (ends with `.pdf`,\nat most 180 characters, none of `\\ / : * ? \" < > |`)."
+          }
+        }
       },
       "Priority": {
         "type": "string",
@@ -48892,7 +49719,7 @@
       },
       "SmsFile": {
         "type": "object",
-        "description": "A file uploaded for the text (`POST /api/<provider>/sms/upload-image`).",
+        "description": "A file prepared for the text (`POST /v1/sms/attachments`).",
         "required": [
           "s3_key",
           "content_type"
@@ -51933,7 +52760,8 @@
           "supports",
           "bug-reports",
           "email-templates",
-          "leads"
+          "leads",
+          "sms-uploads"
         ]
       },
       "UploadRequest": {
@@ -51955,7 +52783,7 @@
           },
           "content_type": {
             "type": "string",
-            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`; for `deals` and `documents` also PDF, Word,\nExcel, CSV and plain text; for `emails` and `email-templates` any type. Send the same value\nas the `Content-Type` header of the `PUT`."
+            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`; for `deals` and `documents` also PDF, Word,\nExcel, CSV and plain text; for `sms-uploads` also AVIF, Word, Excel, PDF,\nCSV, plain text and `application/octet-stream` (a file the browser could\nnot type); for `emails` and `email-templates` any type. Send the same value\nas the `Content-Type` header of the `PUT`."
           }
         },
         "additionalProperties": false

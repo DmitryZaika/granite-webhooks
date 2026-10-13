@@ -52,13 +52,26 @@ pub async fn create(
         request.folder,
         UploadFolder::Quotes | UploadFolder::TemplateImages
     );
-    if !(is_deal || is_email || is_quote || is_bug_report || user.is_admin || user.is_superuser) {
+    let is_sms = request.folder == UploadFolder::SmsUploads;
+    if !(is_deal
+        || is_email
+        || is_quote
+        || is_bug_report
+        || is_sms
+        || user.is_admin
+        || user.is_superuser)
+    {
         return Err(ApiError::Forbidden);
     }
     let content_type = request.content_type.trim().to_lowercase();
     let allowed = IMAGE_CONTENT_TYPES.contains(&content_type.as_str())
-        || ((is_deal || request.folder == UploadFolder::Documents)
+        || ((is_deal || is_sms || request.folder == UploadFolder::Documents)
             && DOCUMENT_CONTENT_TYPES.contains(&content_type.as_str()))
+        || (is_sms
+            && matches!(
+                content_type.as_str(),
+                "image/avif" | "application/octet-stream"
+            ))
         || ((is_email || is_bug_report || request.folder == UploadFolder::EmailTemplates)
             && is_mime_type(&content_type));
     if !allowed {

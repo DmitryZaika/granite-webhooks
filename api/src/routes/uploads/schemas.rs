@@ -37,6 +37,10 @@ pub enum UploadFolder {
     EmailTemplates,
     /// A picture the marketing team attaches to a lead (marketing upload route).
     Leads,
+    /// A file picked for a text, before `POST /v1/sms/attachments` makes it
+    /// ready to send (any employee; images, HEIC, documents).
+    #[serde(rename = "sms-uploads")]
+    SmsUploads,
 }
 
 impl UploadFolder {
@@ -56,6 +60,7 @@ impl UploadFolder {
             Self::Supports => "supports",
             Self::BugReports => "bug-reports",
             Self::Leads => "leads",
+            Self::SmsUploads => "sms-uploads",
         }
     }
 }
@@ -70,7 +75,9 @@ pub struct UploadRequest {
     pub file_name: String,
     /// MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,
     /// `image/gif`, `image/heic` or `image/heif`; for `deals` and `documents` also PDF, Word,
-    /// Excel, CSV and plain text; for `emails` and `email-templates` any type. Send the same value
+    /// Excel, CSV and plain text; for `sms-uploads` also AVIF, Word, Excel, PDF,
+    /// CSV, plain text and `application/octet-stream` (a file the browser could
+    /// not type); for `emails` and `email-templates` any type. Send the same value
     /// as the `Content-Type` header of the `PUT`.
     pub content_type: String,
 }

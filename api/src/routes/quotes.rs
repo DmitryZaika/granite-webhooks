@@ -3,9 +3,10 @@
 //! - `GET /v1/quotes` → the company's quotes for the quotes list
 //! - `DELETE /v1/quotes/{id}` → soft-deletes a quote
 //! - `GET /v1/quotes/inventory-slabs` → a stone's free slabs for the layout
+//! - `POST /v1/quotes/print-previews` → where to put a printed quote PDF to open it
 //!
 //! Replaces the Remix `employee.quotes` loader, the `employee.quotes.delete`
-//! route and `api.quote-inventory-slabs`. Slab pictures for a
+//! route, `api.quote-inventory-slabs` and `api.quote-preview`. Slab pictures for a
 //! layout upload to the `quotes` folder (`POST /v1/uploads`).
 
 use crate::auth::{EmployeeUser, ShopOrEmployeeUser};
@@ -23,6 +24,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list_quotes))
         .routes(routes!(delete_quote))
         .routes(routes!(inventory_slabs))
+        .routes(routes!(print_preview))
 }
 
 /// `positions.id` of a sales rep.
@@ -305,4 +307,88 @@ pub async fn inventory_slabs(
             })
             .collect(),
     }))
+}
+
+/// Body of `POST /v1/quotes/print-previews`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PrintPreviewInput {
+    /// What the PDF is saved as, e.g. `Smith Kitchen.pdf` (ends with `.pdf`,
+    /// at most 180 characters, none of `\ / : * ? " < > |`).
+    pub filename: String,
+}
+
+/// Where the printed PDF goes, and where to open it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PrintPreview {
+    /// `PUT` the PDF here (valid 15 minutes) with `Content-Type: application/pdf`.
+    pub upload_url: String,
+    /// Open this (valid an hour) to show the PDF; the viewer saves it under
+    /// the file name.
+    pub url: String,
+}
+
+fn valid_print_name(name: &str) -> Option<&str> {
+    let name = name.trim();
+    let bad = |c: char| {
+        matches!(
+            c,
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\r' | '\n'
+        )
+    };
+    (name.to_lowercase().ends_with(".pdf") && name.chars().count() <= 180 && !name.contains(bad))
+        .then_some(name)
+}
+
+/// Open a printed quote
+///
+/// The quote page draws the PDF in the browser; this gives it a place in the
+/// bucket (`quote-previews/`) and a link to open it under its file name in
+/// the print window. Replaces the CRM's in-memory preview (10 minutes);
+/// the bucket's lifecycle rule removes old previews.
+#[utoipa::path(
+    post,
+    path = "/v1/quotes/print-previews",
+    operation_id = "create_quote_print_preview",
+    tag = "quotes",
+    request_body = PrintPreviewInput,
+    responses(
+        (status = 201, description = "Upload and open links", body = PrintPreview),
+        (status = 400, description = "Not a PDF file name", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 503, description = "No bucket configured", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn print_preview(
+    State(state): State<AppState>,
+    EmployeeUser(_user): EmployeeUser,
+    crate::extract::JsonBody(input): crate::extract::JsonBody<PrintPreviewInput>,
+) -> ApiResult<(StatusCode, Json<PrintPreview>)> {
+    let filename = valid_print_name(&input.filename)
+        .ok_or_else(|| ApiError::BadRequest("Invalid preview".into()))?;
+    let key = format!("quote-previews/{}.pdf", uuid::Uuid::new_v4());
+    let upload_url = state.storage.presign_put(&key, "application/pdf").await?;
+    let url = state
+        .storage
+        .presign_get_as(&key, "application/pdf", Some(filename))
+        .await?;
+    Ok((StatusCode::CREATED, Json(PrintPreview { upload_url, url })))
+}
+
+#[cfg(test)]
+mod print_tests {
+    use super::valid_print_name;
+
+    #[test]
+    fn print_names_are_plain_pdf_names() {
+        assert_eq!(
+            valid_print_name(" Smith Kitchen.pdf "),
+            Some("Smith Kitchen.pdf")
+        );
+        assert_eq!(valid_print_name("Café.PDF"), Some("Café.PDF"));
+        assert_eq!(valid_print_name("a/b.pdf"), None);
+        assert_eq!(valid_print_name("quote.txt"), None);
+        assert_eq!(valid_print_name(&format!("{}.pdf", "x".repeat(180))), None);
+    }
 }

@@ -70,6 +70,18 @@ other companies' data; `tests/public.rs` checks that.
 the sender signs the body (`Stripe-Signature` with `STRIPE_WEBHOOK_SECRET`).
 Point the provider's webhook at `https://api.granite-manager.com/v1/webhooks/<name>`.
 
+### Pictures, PDFs and audio
+
+Pure Rust, so nothing to install on Lambda: `images.rs` reads phone photos
+(HEIC with `zune-heic`) and makes thumbnails and SMS-ready pictures;
+`pdf_preview.rs` draws a PDF's first page with `hayro`. Responses stay
+under Lambda's 6 MB: big files go up with presigned PUTs (`POST
+/v1/uploads`) and down with presigned GETs or redirects (document and
+attachment previews, call recordings copied to the bucket, quote prints).
+The bucket's CORS must allow `GET` and `HEAD` too: the call player fetches
+the recording. `CLOUDTALK_BASE_URL` points CloudTalk calls at a stand-in
+(the frontend's browser tests).
+
 ### Billing (Stripe)
 
 `src/billing/` keeps `company_billing` in step with Stripe (the state machine

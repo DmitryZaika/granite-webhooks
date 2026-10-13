@@ -116,7 +116,11 @@ fn every_operation_is_documented() {
                 }
             }
             let responses = op["responses"].as_object();
-            if !responses.is_some_and(|r| r.keys().any(|code| code.starts_with('2'))) {
+            // A redirect is the answer of routes made for `<img>` (previews).
+            if !responses.is_some_and(|r| {
+                r.keys()
+                    .any(|code| code.starts_with('2') || code.starts_with('3'))
+            }) {
                 problems.push(format!("{at}: no success response"));
             }
             if !public && !responses.is_some_and(|r| r.contains_key("401")) {

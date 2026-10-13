@@ -42,7 +42,7 @@ type AttachmentRow = (
 );
 
 /// Url, type, subtype and file name of an attachment the caller may read.
-async fn readable_attachment(
+pub(super) async fn readable_attachment(
     pool: &MySqlPool,
     company_id: i32,
     id: i32,

@@ -219,6 +219,12 @@ impl AppState {
             .with_stripe(Stripe::from_env())
             .with_stripe_webhook_secret(&std::env::var("STRIPE_WEBHOOK_SECRET").unwrap_or_default())
             .with_billing_plans(crate::billing::reactivation::configured_plans())
+            .with_cloudtalk_base(
+                &std::env::var("CLOUDTALK_BASE_URL")
+                    .ok()
+                    .filter(|base| !base.trim().is_empty())
+                    .unwrap_or_else(|| common::telephony::cloudtalk::BASE_URL.to_string()),
+            )
             .with_app_url(
                 &std::env::var("APP_URL").unwrap_or_else(|_| "https://granite-manager.com".into()),
             ))
