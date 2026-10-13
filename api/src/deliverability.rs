@@ -43,7 +43,11 @@ pub enum AppDns {
 }
 
 impl AppDns {
+    /// The system resolver; none (every name missing) with `DNS_LOOKUPS=off`.
     pub fn system() -> Self {
+        if std::env::var("DNS_LOOKUPS").is_ok_and(|value| value.trim() == "off") {
+            return Self::Fixed(std::sync::Arc::default());
+        }
         SystemDns::new().map_or_else(
             || Self::Fixed(std::sync::Arc::default()),
             |dns| Self::System(std::sync::Arc::new(dns)),
@@ -106,10 +110,13 @@ impl Dns for FixedDns {
 pub struct SystemDns(hickory_resolver::TokioResolver);
 
 impl SystemDns {
+    /// The system's resolvers, giving up on a name after two seconds.
     pub fn new() -> Option<Self> {
-        hickory_resolver::Resolver::builder_tokio()
-            .ok()
-            .map(|builder| Self(builder.build()))
+        let mut builder = hickory_resolver::Resolver::builder_tokio().ok()?;
+        let options = builder.options_mut();
+        options.timeout = std::time::Duration::from_secs(2);
+        options.attempts = 1;
+        Some(Self(builder.build()))
     }
 }
 
@@ -726,8 +733,15 @@ async fn dnsbl(dns: &impl Dns, domain: &str, zone: &str) -> Blacklist {
     }
 }
 
-/// Probes DNS and scores the domain. Errors when MX or TXT lookups fail.
+/// Probes DNS and scores the domain. Errors when MX or TXT lookups fail or
+/// the whole check takes over ten seconds.
 pub async fn assess(dns: &impl Dns, domain: &str) -> Result<Assessment, Lookup> {
+    tokio::time::timeout(std::time::Duration::from_secs(10), assess_now(dns, domain))
+        .await
+        .unwrap_or(Err(Lookup::Failed))
+}
+
+async fn assess_now(dns: &impl Dns, domain: &str) -> Result<Assessment, Lookup> {
     let domain = domain.trim().to_lowercase();
     let dmarc_host = format!("_dmarc.{domain}");
     let (mx, root, dmarc, spamhaus, nordspam) = tokio::join!(

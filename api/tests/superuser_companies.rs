@@ -504,3 +504,15 @@ async fn superusers_switch_features_and_billing(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 }
+
+#[test_db::test(seed)]
+async fn every_seeded_company_reads(pool: MySqlPool) {
+    let server = server(&pool).await;
+    for id in [100, 101] {
+        let res = server
+            .get(&format!("/v1/superuser/companies/{id}"))
+            .with_session(sessions::ADMIN)
+            .await;
+        assert_eq!(res.status_code(), StatusCode::OK, "{}", res.text());
+    }
+}
