@@ -418,7 +418,7 @@ fn process_one<'a>(
         if !claim(state, due.id).await? {
             return Ok(());
         }
-        let outcome = send_step(state, &due, clock.unwrap_or_else(Utc::now)).await?;
+        let outcome = Box::pin(send_step(state, &due, clock.unwrap_or_else(Utc::now))).await?;
         match outcome {
             Outcome::Sent => {
                 run.sent += 1;
@@ -711,6 +711,9 @@ async fn send_email(
         send_at: None,
         cancel_if_customer_messages: false,
         automated: true,
+        signature_requests: Vec::new(),
+        signature_send_key: None,
+        delayed_email_id: None,
     };
     match deliver(state, rep, &email).await {
         Ok(_) => Ok(Ok(())),

@@ -13,6 +13,9 @@ pub enum ApiError {
     /// Valid session, but the user lacks the permission the route needs.
     #[error("forbidden")]
     Forbidden,
+    /// Like `Forbidden`, saying what to turn on and where.
+    #[error("{0}")]
+    Denied(String),
     /// The resource does not exist, or belongs to another company.
     #[error("not found")]
     NotFound,
@@ -46,7 +49,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self {
             Self::Unauthorized | Self::Unauthenticated(_) => StatusCode::UNAUTHORIZED,
-            Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::Forbidden | Self::Denied(_) => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Conflict(_) => StatusCode::CONFLICT,

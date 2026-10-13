@@ -146,6 +146,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tower-http",
+ "unicode-normalization",
  "url",
  "utoipa 6.0.0",
  "utoipa-axum",
@@ -1198,12 +1199,14 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "ammonia",
  "aws-config",
  "aws-sdk-sesv2",
  "base64",
  "chrono",
  "chrono-tz",
  "rand",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

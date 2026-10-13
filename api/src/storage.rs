@@ -246,6 +246,131 @@ impl Storage {
         }
     }
 
+    /// Writes a signature file once to the private signature bucket
+    /// (`If-None-Match: *`, encrypted, never cached); writing the same bytes
+    /// again is fine, other bytes are refused.
+    pub async fn put_private(
+        &self,
+        bucket: &str,
+        key: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> Result<(), StorageError> {
+        match self {
+            Self::S3(s3) => {
+                use aws_sdk_s3::error::ProvideErrorMetadata;
+                use base64::Engine as _;
+                use sha2::Digest as _;
+                let checksum =
+                    base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(&bytes));
+                let result = s3
+                    .client
+                    .put_object()
+                    .bucket(bucket)
+                    .key(key)
+                    .content_type(content_type)
+                    .cache_control("private, no-store")
+                    .server_side_encryption(aws_sdk_s3::types::ServerSideEncryption::Aes256)
+                    .if_none_match("*")
+                    .checksum_sha256(checksum)
+                    .body(ByteStream::from(bytes.clone()))
+                    .send()
+                    .await;
+                match result {
+                    Ok(_) => Ok(()),
+                    Err(err) if err.code() == Some("PreconditionFailed") => {
+                        let existing = self.get_url(&format!("s3://{bucket}/{key}")).await?;
+                        if existing.is_some_and(|object| object.bytes == bytes) {
+                            Ok(())
+                        } else {
+                            Err(StorageError::Backend(
+                                "existing signature object integrity check failed".into(),
+                            ))
+                        }
+                    }
+                    Err(err) => Err(StorageError::Backend(err.to_string())),
+                }
+            }
+            Self::Memory(memory) => {
+                let mut objects = memory.objects.lock().expect("lock");
+                let existing = objects.get(key).map(|existing| existing.bytes == bytes);
+                if existing.is_none() {
+                    objects.insert(
+                        key.to_string(),
+                        StoredObject {
+                            bytes,
+                            content_type: content_type.to_string(),
+                        },
+                    );
+                }
+                drop(objects);
+                match existing {
+                    Some(false) => Err(StorageError::Backend(
+                        "existing signature object integrity check failed".into(),
+                    )),
+                    _ => Ok(()),
+                }
+            }
+            Self::Disabled => Err(StorageError::Disabled),
+        }
+    }
+
+    /// The bucket blocks all public access (signed documents are private).
+    pub async fn verify_private(&self, bucket: &str) -> Result<(), StorageError> {
+        let Self::S3(s3) = self else {
+            return match self {
+                Self::Memory(_) => Ok(()),
+                _ => Err(StorageError::Disabled),
+            };
+        };
+        let public = || {
+            StorageError::Backend(
+                "signature bucket must be private and block all public access".into(),
+            )
+        };
+        let block = s3
+            .client
+            .get_public_access_block()
+            .bucket(bucket)
+            .send()
+            .await
+            .map_err(|err| StorageError::Backend(err.to_string()))?;
+        let config = block
+            .public_access_block_configuration()
+            .ok_or_else(public)?;
+        if !(config.block_public_acls() == Some(true)
+            && config.ignore_public_acls() == Some(true)
+            && config.block_public_policy() == Some(true)
+            && config.restrict_public_buckets() == Some(true))
+        {
+            return Err(public());
+        }
+        match s3
+            .client
+            .get_bucket_policy_status()
+            .bucket(bucket)
+            .send()
+            .await
+        {
+            Ok(status) => {
+                if status
+                    .policy_status()
+                    .and_then(aws_sdk_s3::types::PolicyStatus::is_public)
+                    != Some(false)
+                {
+                    return Err(public());
+                }
+            }
+            Err(err) => {
+                use aws_sdk_s3::error::ProvideErrorMetadata;
+                if err.code() != Some("NoSuchBucketPolicy") {
+                    return Err(StorageError::Backend(err.to_string()));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// A presigned `GET` (an hour) of a key of this bucket, shown inline with
     /// `content_type`; the public URL in the in-memory bucket.
     pub async fn presign_get(&self, key: &str, content_type: &str) -> Result<String, StorageError> {

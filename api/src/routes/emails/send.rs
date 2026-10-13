@@ -5,15 +5,17 @@
 //! message through SES, then records the messages (participants,
 //! attachments, the deal customer's new addresses). Scheduled sends are
 //! stored in `delayed_emails` in the shape the delivery cron reads.
-//! Documents sent for e-signature still go through the Remix route.
+//! Documents sent for e-signature: see [`super::signatures`].
 
 use super::attachment_token;
 use super::schemas::{SendAttachment, SendEmailRequest, SendEmailResult};
+use super::signatures::{self, Created};
 use super::sql::{can_read_thread, normalize_address, normalized};
 use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::native_delivery;
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingAttachment, OutgoingEmail, SendFailure};
 use axum::Json;
@@ -89,6 +91,12 @@ pub struct Cleaned {
     pub cancel_if_customer_messages: bool,
     /// Sent by a flow, not typed by the rep (`emails.is_automated`).
     pub automated: bool,
+    /// Attachments sent for e-signature.
+    pub signature_requests: Vec<super::schemas::SignatureRequestInput>,
+    /// The composer's id of this send (a UUID).
+    pub signature_send_key: Option<String>,
+    /// A scheduled email being sent: its row (the send's identity).
+    pub delayed_email_id: Option<i64>,
 }
 
 impl Cleaned {
@@ -116,14 +124,25 @@ impl Cleaned {
                 "At most {MAX_CC_RECIPIENTS} cc and {MAX_CC_RECIPIENTS} bcc recipients"
             )));
         }
-        let subject = request.subject.trim().to_string();
+        if request.signature_requests.len() > 20 {
+            return Err(bad("Invalid signature request"));
+        }
+        for signature in &request.signature_requests {
+            super::signatures::check(signature).map_err(bad)?;
+        }
+        let (subject, body) = super::signatures::with_defaults(
+            request.subject.trim(),
+            &request.body,
+            &request.signature_requests,
+        );
+        let subject = subject.trim().to_string();
         if subject.chars().count() > MAX_SUBJECT_CHARS {
             return Err(bad("Subject is too long"));
         }
-        if request.body.chars().count() > MAX_BODY_CHARS {
+        if body.chars().count() > MAX_BODY_CHARS {
             return Err(bad("Message is too long"));
         }
-        if is_empty_rich_text(&request.body) && request.attachments.is_empty() {
+        if is_empty_rich_text(&body) && request.attachments.is_empty() {
             return Err(bad("Add a message or an attachment"));
         }
         for attachment in &request.attachments {
@@ -145,7 +164,7 @@ impl Cleaned {
             cc,
             bcc,
             subject,
-            body: request.body,
+            body,
             thread_id: request
                 .thread_id
                 .map(|id| id.trim().to_string())
@@ -158,6 +177,12 @@ impl Cleaned {
             send_at: request.send_at,
             cancel_if_customer_messages: request.cancel_if_customer_messages,
             automated: false,
+            signature_requests: request.signature_requests,
+            signature_send_key: request
+                .signature_send_key
+                .map(|key| key.trim().to_string())
+                .filter(|key| !key.is_empty()),
+            delayed_email_id: None,
         })
     }
 
@@ -283,7 +308,29 @@ async fn schedule(
         "sendTogether": email.send_together,
         "templateId": email.template_id.map(|id| id.to_string()),
         "uploadedAttachments": uploaded,
-        "signatureRequests": null,
+        // The CRM form's shape, which both delivery crons read.
+        "signatureRequests": (!email.signature_requests.is_empty()).then(|| {
+            serde_json::Value::Array(
+                email
+                    .signature_requests
+                    .iter()
+                    .map(|request| {
+                        let mut value = serde_json::json!({
+                            "filename": request.filename,
+                            "signerName": request.signer_name,
+                            "signerEmail": request.signer_email,
+                            "fields": request.fields,
+                            "reminders": request.reminders,
+                        });
+                        if let Some(url) = &request.url {
+                            value["url"] = url.clone().into();
+                        }
+                        value
+                    })
+                    .collect(),
+            )
+            .to_string()
+        }),
     });
     sqlx::query(
         "INSERT INTO delayed_emails (
@@ -346,7 +393,7 @@ async fn unauthorized_attachment<'a>(
 }
 
 /// The company's live customer with this address.
-async fn customer_by_address(
+pub(super) async fn customer_by_address(
     pool: &MySqlPool,
     address: &str,
     company_id: i32,
@@ -509,6 +556,7 @@ impl Envelope {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn deliver(
     state: &AppState,
     user: &SessionUser,
@@ -523,29 +571,142 @@ pub async fn deliver(
             "Attachment is not available: {name}"
         )));
     }
-    let envelope = Envelope::new(pool, user, email).await?;
+    let mut created: Option<Created> = None;
+    let mut signature_customer = None;
+    if !email.signature_requests.is_empty() {
+        signatures::check_access(state, user).await?;
+        if email.batches().len() > 1 {
+            return Err(ApiError::BadRequest(
+                "Send signature emails as one message so the signature request is not duplicated."
+                    .to_string(),
+            ));
+        }
+        let files = signatures::load_files(state, &email.attachments).await?;
+        let matched = signatures::match_attachments(&email.signature_requests, &email.attachments)?;
+        signature_customer =
+            signatures::associated_customer(state, user, email, deal_customer).await?;
+        created = Some(
+            signatures::create(state, user, email, &files, &matched, signature_customer).await?,
+        );
+    }
+    let envelope = match Envelope::new(pool, user, email).await {
+        Ok(envelope) => envelope,
+        Err(err) => {
+            if let Some(created) = &created {
+                created.rollback(state).await;
+            }
+            return Err(err);
+        }
+    };
     let sender = &envelope.sender;
+    let branding = match &created {
+        Some(_) => Some(signatures::branding(state, user).await?),
+        None => None,
+    };
 
     let mut sent = Vec::new();
     for recipients in email.batches() {
-        let thread_id = email
+        let mut thread_id = email
             .thread_id
             .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let body = personalized_body(pool, user, email, recipients.to.first()).await?;
-        let outgoing = envelope.message(email, &recipients, body.clone());
-        let message_id = match state.webhooks.send_email(&outgoing).await {
-            Ok(id) => unwrap_brackets(&id),
-            Err(SendFailure::Rejected(reason)) if sent.is_empty() => {
-                return Err(ApiError::BadRequest(reason));
-            }
-            Err(failure) => {
-                tracing::error!(?failure, user_id = user.id, "email send failed");
-                if sent.is_empty() {
-                    return Err(ApiError::Upstream("Email failed to send".to_string()));
+        let mut body = personalized_body(pool, user, email, recipients.to.first()).await?;
+        let mut outgoing = envelope.message(email, &recipients, body.clone());
+        if let Some(created) = &created {
+            body = super::signature_mail::with_signing_links(
+                &body,
+                &created.links(),
+                branding.as_ref(),
+            );
+            outgoing.body.clone_from(&body);
+            outgoing.attachments = email
+                .attachments
+                .iter()
+                .enumerate()
+                .filter(|(index, attachment)| {
+                    created.keeps_attachment(*index, attachment, &email.signature_requests)
+                })
+                .map(|(_, attachment)| OutgoingAttachment {
+                    filename: attachment.filename.clone(),
+                    content_type: attachment.content_type.trim().to_lowercase(),
+                    url: attachment.url.clone(),
+                })
+                .collect();
+        }
+        let message_id = if let Some(Created::Native { signing, documents }) = &created {
+            let snapshot = native_snapshot(&envelope, &outgoing, &body, &thread_id);
+            let conflict = |message: String| ApiError::Conflict(message);
+            match native_delivery::claim(state, signing, documents, &snapshot).await {
+                Err(err) => {
+                    if let Some(created) = &created {
+                        created.rollback(state).await;
+                    }
+                    return Err(match err {
+                        native_delivery::NativeError::Database(err) => ApiError::Database(err),
+                        native_delivery::NativeError::Refused(message) => conflict(message),
+                    });
                 }
-                // Earlier messages are out: record them, then report.
-                break;
+                Ok(native_delivery::Claim::Sent(receipt)) => {
+                    let receipt = *receipt;
+                    body = receipt.snapshot.personalized_body;
+                    thread_id = receipt.snapshot.thread_id;
+                    receipt.message_id
+                }
+                Ok(native_delivery::Claim::Started(claim)) => {
+                    match state.webhooks.send_email(&outgoing).await {
+                        Ok(id) => {
+                            let id = unwrap_brackets(&id);
+                            let receipt = crate::native_signing::MailReceipt {
+                                snapshot,
+                                message_id: id.clone(),
+                            };
+                            native_delivery::accept(state, signing, documents, &claim, &receipt)
+                                .await
+                                .map_err(|err| conflict(err.to_string()))?;
+                            id
+                        }
+                        Err(failure) => {
+                            tracing::error!(
+                                ?failure,
+                                user_id = user.id,
+                                "signature invitation email failed"
+                            );
+                            let definite = matches!(failure, SendFailure::Rejected(_));
+                            if let Err(err) =
+                                native_delivery::fail(state, documents, definite, Some(&claim))
+                                    .await
+                            {
+                                tracing::error!(%err, "native signature delivery not marked failed");
+                            }
+                            return Err(conflict(if definite {
+                                "Email was rejected. Unsent signing links were revoked.".to_string()
+                            } else {
+                                "Email delivery is uncertain; signing links were retained. Reconciliation is required.".to_string()
+                            }));
+                        }
+                    }
+                }
+            }
+        } else {
+            match state.webhooks.send_email(&outgoing).await {
+                Ok(id) => unwrap_brackets(&id),
+                Err(failure) if sent.is_empty() => {
+                    if let Some(created) = &created {
+                        created.rollback(state).await;
+                    }
+                    return Err(match failure {
+                        SendFailure::Rejected(reason) => ApiError::BadRequest(reason),
+                        SendFailure::Failed(_) => {
+                            tracing::error!(?failure, user_id = user.id, "email send failed");
+                            ApiError::Upstream("Email failed to send".to_string())
+                        }
+                    });
+                }
+                Err(failure) => {
+                    tracing::error!(?failure, user_id = user.id, "email send failed");
+                    // Earlier messages are out: record them, then report.
+                    break;
+                }
             }
         };
         sent.push(SentMessage {
@@ -566,6 +727,9 @@ pub async fn deliver(
             deal_customer,
             sender.name.as_deref(),
             message,
+            created
+                .as_ref()
+                .map(|created| (created, signature_customer)),
         )
         .await
         {
@@ -627,6 +791,7 @@ async fn personalized_body(
 
 /// Writes one sent message: the email, its participants and attachments,
 /// and the deal customer's new addresses; all or nothing.
+#[allow(clippy::too_many_lines)]
 async fn record(
     pool: &MySqlPool,
     user: &SessionUser,
@@ -634,8 +799,14 @@ async fn record(
     deal_customer: Option<i32>,
     sender_name: Option<&str>,
     message: &SentMessage,
-) -> Result<(), sqlx::Error> {
-    let mut tx = pool.begin().await?;
+    signed: Option<(&Created, Option<i32>)>,
+) -> Result<(), String> {
+    let mut tx = pool.begin().await.map_err(|err| err.to_string())?;
+    if let Some((created, _)) = signed
+        && signatures::already_recorded(&mut tx, created).await?
+    {
+        return tx.commit().await.map_err(|err| err.to_string());
+    }
     let email_id = sqlx::query(
         "INSERT INTO emails (sender_user_id, subject, body, message_id, sender_email, receiver_email, thread_id, deal_id, company_id, is_automated)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -651,11 +822,14 @@ async fn record(
     .bind(user.company_id)
     .bind(email.automated)
     .execute(&mut *tx)
-    .await?
+    .await
+    .map_err(|err| err.to_string())?
     .last_insert_id();
     let email_id = i32::try_from(email_id).unwrap_or(i32::MAX);
     if let Some(customer_id) = deal_customer {
-        add_customer_emails(&mut tx, customer_id, &message.recipients.to, user.id).await?;
+        add_customer_emails(&mut tx, customer_id, &message.recipients.to, user.id)
+            .await
+            .map_err(|err| err.to_string())?;
     }
     let from_name = sender_name
         .map(str::to_string)
@@ -695,10 +869,12 @@ async fn record(
             ),
         ],
     )
-    .await?;
+    .await
+    .map_err(|err| err.to_string())?;
+    let mut stored = Vec::with_capacity(email.attachments.len());
     for attachment in &email.attachments {
         let (kind, sub) = split_content_type(&attachment.content_type);
-        sqlx::query(
+        let id = sqlx::query(
             "INSERT INTO email_attachments (email_id, content_type, content_subtype, filename, url)
              VALUES (?, ?, ?, ?, ?)",
         )
@@ -708,9 +884,57 @@ async fn record(
         .bind(&attachment.filename)
         .bind(&attachment.url)
         .execute(&mut *tx)
+        .await
+        .map_err(|err| err.to_string())?
+        .last_insert_id();
+        stored.push((
+            i64::try_from(id).unwrap_or(i64::MAX),
+            attachment.filename.clone(),
+            attachment.url.clone(),
+        ));
+    }
+    if let Some((created, customer_id)) = signed {
+        signatures::record(
+            &mut tx,
+            created,
+            user,
+            email,
+            customer_id,
+            i64::from(email_id),
+            &stored,
+        )
         .await?;
     }
-    tx.commit().await
+    tx.commit().await.map_err(|err| err.to_string())
+}
+
+/// The invitation mail as it goes out (`emailToSend`), sealed with a
+/// native send.
+fn native_snapshot(
+    envelope: &Envelope,
+    outgoing: &OutgoingEmail,
+    body: &str,
+    thread_id: &str,
+) -> crate::native_signing::MailSnapshot {
+    let bodies =
+        common::utils::email_body::outgoing_bodies(body, envelope.sender.signature.as_deref());
+    let from = envelope.sender.name.as_deref().map_or_else(
+        || envelope.sender.address.clone(),
+        |name| format!("\"{name}\" <{}>", envelope.sender.address),
+    );
+    crate::native_signing::MailSnapshot {
+        subject: outgoing.subject.clone(),
+        personalized_body: body.to_string(),
+        thread_id: thread_id.to_string(),
+        from,
+        to: outgoing.to.clone(),
+        cc: outgoing.cc.clone(),
+        bcc: outgoing.bcc.clone(),
+        html: bodies.html,
+        text: bodies.text,
+        in_reply_to: envelope.in_reply_to.clone(),
+        references: envelope.references.clone(),
+    }
 }
 
 pub(super) type ParticipantGroup = (&'static str, Vec<(String, Option<String>)>);
@@ -898,6 +1122,8 @@ mod tests {
             template_id: None,
             send_at: None,
             cancel_if_customer_messages: false,
+            signature_requests: Vec::new(),
+            signature_send_key: None,
         }
     }
 

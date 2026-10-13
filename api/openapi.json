@@ -43079,6 +43079,16 @@
           }
         }
       },
+      "FieldKind": {
+        "type": "string",
+        "description": "What a field holds.",
+        "enum": [
+          "signature",
+          "date",
+          "text",
+          "autofill_date_signed"
+        ]
+      },
       "FieldType": {
         "type": "string",
         "description": "What a blank is for.",
@@ -51404,6 +51414,20 @@
           "cancel_if_customer_messages": {
             "type": "boolean",
             "description": "With `send_at`: cancel when the customer writes first."
+          },
+          "signature_requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignatureRequestInput"
+            },
+            "description": "PDF attachments sent for e-signature: the email carries their signing\nlinks instead of the files (at most 20, one message to everyone)."
+          },
+          "signature_send_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The composer's id of this send (a UUID), so a retried send reuses its\nsignature documents."
           }
         },
         "additionalProperties": false
@@ -51855,6 +51879,82 @@
         },
         "additionalProperties": false
       },
+      "SignatureField": {
+        "type": "object",
+        "description": "A field on the document: one the signer fills in, or one the sender\nfilled (`value`), which is printed before it goes out.",
+        "required": [
+          "type",
+          "page",
+          "x",
+          "y",
+          "width",
+          "height",
+          "required"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/FieldKind",
+            "description": "`signature`, `date`, `text` or `autofill_date_signed`."
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "description": "From 1."
+          },
+          "x": {
+            "type": "number",
+            "format": "double",
+            "description": "Left edge, points from the page's left."
+          },
+          "y": {
+            "type": "number",
+            "format": "double",
+            "description": "Top edge, points from the page's top."
+          },
+          "width": {
+            "type": "number",
+            "format": "double",
+            "description": "Points wide."
+          },
+          "height": {
+            "type": "number",
+            "format": "double",
+            "description": "Points high."
+          },
+          "required": {
+            "type": "boolean",
+            "description": "The signer must fill it."
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the sender filled in (a signature: a PNG data URL)."
+          },
+          "prefill": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Text fields: which customer detail filled the value."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The editor's name for it."
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native signing: the field's stable id."
+          }
+        }
+      },
       "SignatureRequest": {
         "type": "object",
         "description": "A document sent for signature.",
@@ -51899,6 +51999,48 @@
           "view_url": {
             "type": "string",
             "description": "Where to open it: an API path (`/v1/...`, the signed PDF or native\ndocument) to open on the API's host, else the original file's URL."
+          }
+        }
+      },
+      "SignatureRequestInput": {
+        "type": "object",
+        "description": "A document to sign.",
+        "required": [
+          "filename",
+          "signer_name",
+          "signer_email",
+          "fields"
+        ],
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "The attachment's file name."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The attachment's URL (matched first, then the file name)."
+          },
+          "signer_name": {
+            "type": "string",
+            "description": "Who signs."
+          },
+          "signer_email": {
+            "type": "string",
+            "description": "Where the signing link goes."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignatureField"
+            },
+            "description": "Where to sign and what the sender filled in (1 to 20)."
+          },
+          "reminders": {
+            "type": "boolean",
+            "description": "The signer is reminded until they sign."
           }
         }
       },

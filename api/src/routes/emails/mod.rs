@@ -33,6 +33,8 @@ mod names;
 mod sales_mailbox;
 pub mod schemas;
 pub mod send;
+pub mod signature_mail;
+pub mod signatures;
 pub mod sql;
 pub mod thread;
 

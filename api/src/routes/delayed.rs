@@ -6,15 +6,16 @@
 //! - `DELETE /v1/delayed/{kind}/{id}` → cancel
 //!
 //! Reading the list first sends the caller's messages that are due (and
-//! drops those whose customer wrote back, when asked to). The CRM's job still
-//! sends everyone else's. Rows with e-signature requests are left to it.
+//! drops those whose customer wrote back, when asked to). The scheduled job
+//! (`POST /v1/jobs/sms-followups`) sends everyone else's, e-signature
+//! requests included.
 //! Replaces the Remix `api.sms.delayed` and `api.email.delayed` routes.
 
 use crate::auth::EmployeeUser;
 use crate::auth::session::{SessionUser, find_user};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
-use crate::routes::emails::schemas::SendAttachment;
+use crate::routes::emails::schemas::{SendAttachment, SignatureRequestInput};
 use crate::routes::emails::send::{Cleaned, deliver};
 use crate::routes::sms::provider::SmsProvider;
 use crate::routes::sms::send::{SendSmsRequest, SmsFile, Undelivered, check, deliver_now};
@@ -350,11 +351,19 @@ fn embedded_list(payload: &Value, key: &str) -> Vec<Value> {
     }
 }
 
-fn has_signature_requests(payload: &Value) -> bool {
-    !embedded_list(payload, "signatureRequests").is_empty()
-}
-
-fn email_from_payload(payload: &Value) -> Cleaned {
+/// The scheduled email as the send route takes it; signature documents are
+/// sent with the row as the send's identity.
+fn email_from_payload(payload: &Value, delayed_email_id: i64) -> Cleaned {
+    let signature_requests: Vec<SignatureRequestInput> =
+        embedded_list(payload, "signatureRequests")
+            .into_iter()
+            .filter_map(|request| serde_json::from_value(request).ok())
+            .collect();
+    let (subject, body) = crate::routes::emails::signatures::with_defaults(
+        field(payload, "subject").trim(),
+        &field(payload, "body"),
+        &signature_requests,
+    );
     let attachments = embedded_list(payload, "uploadedAttachments")
         .iter()
         .filter_map(|file| {
@@ -378,8 +387,8 @@ fn email_from_payload(payload: &Value) -> Cleaned {
         to: strings(payload, "to"),
         cc: strings(payload, "cc"),
         bcc: strings(payload, "bcc"),
-        subject: field(payload, "subject").trim().to_string(),
-        body: field(payload, "body"),
+        subject: subject.trim().to_string(),
+        body,
         thread_id: Some(field(payload, "threadId")).filter(|id| !id.is_empty()),
         deal_id: number(payload, "dealId"),
         customer_id: number(payload, "customerId"),
@@ -389,6 +398,9 @@ fn email_from_payload(payload: &Value) -> Cleaned {
         send_at: None,
         cancel_if_customer_messages: false,
         automated: false,
+        signature_requests,
+        signature_send_key: None,
+        delayed_email_id: Some(delayed_email_id),
     }
 }
 
@@ -428,7 +440,7 @@ async fn deliver_row(
         return Err("missing_sender_or_payload".into());
     }
     match kind {
-        Kind::Emails => deliver(state, user, &email_from_payload(&payload))
+        Kind::Emails => deliver(state, user, &email_from_payload(&payload, row.id))
             .await
             .map(|_| ())
             .map_err(|err| err.to_string()),
@@ -498,9 +510,6 @@ pub async fn process_due_in(
             Kind::Sms => run.sms = rows.len(),
         }
         for row in rows {
-            if kind == Kind::Emails && has_signature_requests(&json(&row.payload_json)) {
-                continue;
-            }
             let claimed = sqlx::query(sqlx::AssertSqlSafe(format!(
                 "UPDATE {} SET status = 'sending' WHERE id = ? AND status = 'pending' AND send_at <= UTC_TIMESTAMP()",
                 kind.table()

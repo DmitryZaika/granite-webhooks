@@ -18,6 +18,7 @@
     clippy::nonminimal_bool
 )]
 
+pub mod ai_cadence;
 pub mod attribution;
 pub mod cadence;
 pub mod classify;
@@ -36,7 +37,6 @@ pub mod js;
 pub mod lifecycle;
 pub mod model_context;
 pub mod phone;
-pub mod ai_cadence;
 pub mod pipeline;
 pub mod pressure;
 pub mod processor;

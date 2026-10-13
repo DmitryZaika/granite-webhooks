@@ -95,6 +95,16 @@ Native signatures are on with `NATIVE_SIGNATURES_ENABLED=1`,
 `POST /v1/jobs/signature-reminders` then expires open requests and sends
 reminders and notifications (it does nothing while they are off).
 
+Sending documents for signature (`POST /v1/emails` with
+`signature_requests`, `routes/emails/signatures.rs`): through SignWell by
+default (the company's `signwell_api_key`, else `SIGNWELL_API_KEY`;
+`SIGNWELL_TEST_MODE=true` for test documents), natively when enabled. A
+native send also needs the company's verified settings in
+`SIGNATURE_VERIFIED_COMPANY_SETTINGS` (`{"<company id>": {"verifiedAt",
+"evidenceReference", "settings"}}`) and a `SIGNATURE_STORAGE_BUCKET` that
+blocks all public access. `signing_pdf.rs` freezes the PDF's form and prints
+what the sender filled in, matching pdf-lib's output.
+
 ### SMS / email flows
 
 `followups/processor.rs` sends the due steps of flows (`sms_flow_enrollments`)
