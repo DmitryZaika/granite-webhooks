@@ -11,7 +11,8 @@
 //! on the streaming Function URL (`LAMBDA_RESPONSE_STREAMING=1`).
 
 use crate::auth::CurrentUser;
-use crate::chat::{self, Event, markers::SpecialOrderOffer};
+use crate::chat::markers::{SpecialOrderOffer, price_as_per_sqft};
+use crate::chat::{self, Event};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::state::AppState;
@@ -56,6 +57,30 @@ pub struct ChatInput {
     /// The special order the slabs and delivery in the question are for.
     #[serde(default)]
     pub special_order: Option<SpecialOrderInput>,
+}
+
+/// `parseSpecialOrderParams`: a positive price, and a full slab size or none
+/// (a slab's total price becomes a price per sq ft).
+fn special_order(input: SpecialOrderInput) -> Option<SpecialOrderOffer> {
+    let price = input.price_per_sqft;
+    if !price.is_finite() || price <= 0.0 {
+        return None;
+    }
+    match (input.length_inches, input.width_inches) {
+        (None, None) => Some(SpecialOrderOffer {
+            price_per_sqft: price,
+            length_inches: None,
+            width_inches: None,
+        }),
+        (Some(l), Some(w)) if l.is_finite() && w.is_finite() && l > 0.0 && w > 0.0 => {
+            Some(SpecialOrderOffer {
+                price_per_sqft: price_as_per_sqft(price, Some(l), Some(w)),
+                length_inches: Some(l),
+                width_inches: Some(w),
+            })
+        }
+        _ => None,
+    }
 }
 
 fn sse_event(event: Event) -> sse::Event {
@@ -103,11 +128,7 @@ pub async fn ask(
         query: input.query,
         mode: input.mode,
         is_new: input.is_new,
-        special_order: input.special_order.map(|o| SpecialOrderOffer {
-            price_per_sqft: o.price_per_sqft,
-            length_inches: o.length_inches,
-            width_inches: o.width_inches,
-        }),
+        special_order: input.special_order.and_then(special_order),
     };
     let (tx, rx) = mpsc::channel(256);
     tokio::spawn(chat::answer(state, user, request, tx));
