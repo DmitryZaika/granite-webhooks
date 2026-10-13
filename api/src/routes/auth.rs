@@ -177,7 +177,7 @@ fn home_path(user: &SessionUser, positions: &[i32]) -> String {
     "/employee".into()
 }
 
-async fn company_subdomain(
+pub(crate) async fn company_subdomain(
     pool: &sqlx::MySqlPool,
     company_id: i32,
 ) -> sqlx::Result<Option<String>> {

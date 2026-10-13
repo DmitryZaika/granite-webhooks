@@ -81,6 +81,8 @@ pub struct AppState {
     pub signwell_webhook: SignWellWebhookKeys,
     /// `SIGNATURE_APP_ORIGIN`: the CRM's origin, for links in signature notices.
     pub signature_app_origin: Arc<str>,
+    /// Granite Manager's `RingCentral` app, for companies that press Connect.
+    pub ringcentral_app: Option<crate::ringcentral_connect::RingCentralApp>,
 }
 
 /// The keys `SignWell`'s webhook calls are checked with; none set: refused.
@@ -136,6 +138,7 @@ impl AppState {
             native_signing: None,
             signwell_webhook: SignWellWebhookKeys::default(),
             signature_app_origin: Arc::from(""),
+            ringcentral_app: None,
         }
     }
 
@@ -208,6 +211,15 @@ impl AppState {
     #[must_use]
     pub fn with_telegram(mut self, telegram: TelegramBots) -> Self {
         self.telegram = telegram;
+        self
+    }
+
+    #[must_use]
+    pub fn with_ringcentral_app(
+        mut self,
+        app: Option<crate::ringcentral_connect::RingCentralApp>,
+    ) -> Self {
+        self.ringcentral_app = app;
         self
     }
 
@@ -305,7 +317,8 @@ impl AppState {
             )
             .with_app_url(
                 &std::env::var("APP_URL").unwrap_or_else(|_| "https://granite-manager.com".into()),
-            ))
+            )
+            .with_ringcentral_app(crate::ringcentral_connect::RingCentralApp::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the

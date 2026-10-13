@@ -417,6 +417,223 @@ impl Qbo {
     }
 }
 
+/// Where the app's credentials come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CredentialsSource {
+    /// The company's own app (a superuser saved its keys).
+    CompanyApp,
+    /// Granite Manager's shared app (`QBO_CLIENT_ID`/`QBO_CLIENT_SECRET`).
+    SharedApp,
+    /// Neither: connecting is not possible.
+    None,
+}
+
+const AUTHORIZE_URL: &str = "https://appcenter.intuit.com/connect/oauth2";
+
+/// Connecting a company: the app it uses, the authorize link, the code
+/// exchange, and saving or clearing the connection.
+impl Qbo {
+    async fn app_row(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+    ) -> Result<Option<ConnectionRow>, sqlx::Error> {
+        Self::row(pool, company_id, false).await
+    }
+
+    /// Which app the company connects through.
+    pub async fn credentials_source(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+    ) -> Result<CredentialsSource, sqlx::Error> {
+        let row = self.app_row(pool, company_id).await?;
+        let own = row.as_ref().is_some_and(|row| {
+            self.open(row.qbo_client_id.as_ref())
+                .zip(self.open(row.qbo_client_secret.as_ref()))
+                .is_some_and(|(id, secret)| id.len() >= 10 && secret.len() >= 10)
+        });
+        Ok(if own {
+            CredentialsSource::CompanyApp
+        } else if self.shared_app.is_some() {
+            CredentialsSource::SharedApp
+        } else {
+            CredentialsSource::None
+        })
+    }
+
+    /// The company has saved tokens (it pressed Connect).
+    pub async fn is_connected(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+    ) -> Result<bool, sqlx::Error> {
+        Ok(self
+            .app_row(pool, company_id)
+            .await?
+            .is_some_and(|row| self.connection(&row).is_some()))
+    }
+
+    /// Intuit's consent page for the company's app.
+    pub async fn authorize_url(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+        redirect_uri: &str,
+        state: &str,
+    ) -> Result<String, QboError> {
+        let row = self
+            .app_row(pool, company_id)
+            .await?
+            .ok_or(QboError::NotConnected)?;
+        let (client_id, _) = self.app(&row).ok_or(QboError::NotConnected)?;
+        let encode = |value: &str| {
+            percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC)
+                .to_string()
+        };
+        Ok(format!(
+            "{AUTHORIZE_URL}?client_id={}&response_type=code&scope={}&redirect_uri={}&state={}",
+            encode(&client_id),
+            encode("com.intuit.quickbooks.accounting"),
+            encode(redirect_uri),
+            encode(state),
+        ))
+    }
+
+    /// Production tokens only belong to the `main` database (a copy would
+    /// log the real one out).
+    async fn production_guard(&self, pool: &MySqlPool) -> Result<(), QboError> {
+        if !self.production {
+            return Ok(());
+        }
+        let database: Option<String> = sqlx::query_scalar("SELECT DATABASE()")
+            .fetch_one(pool)
+            .await?;
+        if database.as_deref() == Some("main") {
+            Ok(())
+        } else {
+            Err(QboError::Request(
+                "Production QuickBooks is only allowed on the main database".into(),
+            ))
+        }
+    }
+
+    /// Trades the code Intuit returned for tokens and saves the connection.
+    pub async fn connect(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+        user_id: i32,
+        code: &str,
+        realm_id: &str,
+        redirect_uri: &str,
+    ) -> Result<(), QboError> {
+        self.production_guard(pool).await?;
+        let row = self
+            .app_row(pool, company_id)
+            .await?
+            .ok_or(QboError::NotConnected)?;
+        let (client_id, client_secret) = self.app(&row).ok_or(QboError::NotConnected)?;
+        let key = self.aes_key.as_ref().ok_or(QboError::NotConnected)?;
+        let form = serde_html_form::to_string([
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", redirect_uri),
+        ])
+        .map_err(|err| QboError::Request(err.to_string()))?;
+        let tokens = self
+            .json(
+                self.http
+                    .post(&*self.token_url)
+                    .basic_auth(client_id, Some(client_secret))
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .body(form),
+            )
+            .await?;
+        let (Some(access_token), Some(refresh_token), Some(access_in), Some(refresh_in)) = (
+            tokens["access_token"].as_str(),
+            tokens["refresh_token"].as_str(),
+            tokens["expires_in"].as_i64().filter(|secs| *secs > 0),
+            tokens["x_refresh_token_expires_in"]
+                .as_i64()
+                .filter(|secs| *secs > 0),
+        ) else {
+            return Err(QboError::Request(
+                "QuickBooks token response is incomplete".into(),
+            ));
+        };
+        let now = now();
+        sqlx::query(
+            "UPDATE company
+                SET qbo_realm_id = ?, qbo_access_token = ?, qbo_refresh_token = ?,
+                    qbo_access_expires = ?, qbo_refresh_expires = ?,
+                    qbo_connected_at = NOW(), qbo_connected_by = ?
+              WHERE id = ?",
+        )
+        .bind(realm_id)
+        .bind(encrypt(key, access_token))
+        .bind(encrypt(key, refresh_token))
+        .bind(now + access_in)
+        .bind(now + refresh_in)
+        .bind(user_id)
+        .bind(company_id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Saves a company's own app keys (encrypted).
+    pub async fn save_app(
+        &self,
+        pool: &MySqlPool,
+        company_id: i32,
+        client_id: &str,
+        client_secret: &str,
+    ) -> Result<bool, QboError> {
+        let key = self.aes_key.as_ref().ok_or(QboError::NotConnected)?;
+        let updated =
+            sqlx::query("UPDATE company SET qbo_client_id = ?, qbo_client_secret = ? WHERE id = ?")
+                .bind(encrypt(key, client_id))
+                .bind(encrypt(key, client_secret))
+                .bind(company_id)
+                .execute(pool)
+                .await?;
+        Ok(updated.rows_affected() > 0)
+    }
+}
+
+const CLEAR_CONNECTION: &str = "UPDATE company
+    SET qbo_realm_id = NULL, qbo_access_token = NULL, qbo_refresh_token = NULL,
+        qbo_access_expires = NULL, qbo_refresh_expires = NULL,
+        qbo_connected_at = NULL, qbo_connected_by = NULL";
+
+/// Forgets the company's connection.
+pub async fn disconnect(pool: &MySqlPool, company_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{CLEAR_CONNECTION} WHERE id = ?"
+    )))
+    .bind(company_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Forgets the connection of whichever company holds `realm_id` (Intuit's
+/// disconnect link).
+pub async fn disconnect_realm(pool: &MySqlPool, realm_id: &str) -> Result<(), sqlx::Error> {
+    if !valid_id(realm_id) {
+        return Ok(());
+    }
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{CLEAR_CONNECTION} WHERE qbo_realm_id = ?"
+    )))
+    .bind(realm_id.trim())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{escape, valid_id};

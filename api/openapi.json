@@ -36557,6 +36557,847 @@
         ]
       }
     },
+    "/v1/company/settings": {
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Get the company settings",
+        "description": "The company's name, address, logo, sales tax and the state of its\n`QuickBooks` and `RingCentral` connections (the latter checked with\n`RingCentral`). Superusers and company managers (admins with the Manager\nposition); superusers may pass `company_id`.",
+        "operationId": "get_company_settings",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanySettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Save the company settings",
+        "description": "Replaces the name, address, logo height and sales tax, and the logo when\na new one is given.",
+        "operationId": "save_company_settings",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanySettingsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Missing name, or a value out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/company/api-token-email": {
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Email the API bearer token",
+        "description": "Sends Granite Manager's documentation API bearer token\n(`GRANITE_MANAGER_DOCS_BEARER_TOKEN`) to the address given. Only for\nholders of the Manager position.",
+        "operationId": "email_api_token",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiTokenEmail"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Sent"
+          },
+          "400": {
+            "description": "Not an email address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Sending failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No token is configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quickbooks/connection": {
+      "get": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Get the QuickBooks connection",
+        "description": "Whether the caller's company can connect `QuickBooks` and whether it is\nconnected (for the connect page).",
+        "operationId": "get_quickbooks_connection",
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuickbooksConnection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Finish connecting QuickBooks",
+        "description": "Trades the code Intuit returned for tokens and saves the connection. The\n`state` must be one `POST /v1/quickbooks/connection/start` gave this user\nfor this company in the last 15 minutes (400 \"connection expired\"\notherwise).",
+        "operationId": "finish_quickbooks_connection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuickbooksCallback"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connected"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Expired or foreign state, a bad realm id, or Intuit refused the code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Disconnect QuickBooks",
+        "description": "Forgets the company's `QuickBooks` connection.",
+        "operationId": "disconnect_quickbooks",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disconnected"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quickbooks/connection/start": {
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Start connecting QuickBooks",
+        "description": "Intuit's consent page for the caller's company. Intuit returns to\n`/redirects/quickbooks/user-auth` on the app's apex domain with `code`,\n`state` and `realmId`; post them to `POST /v1/quickbooks/connection`\nwithin 15 minutes.",
+        "operationId": "start_quickbooks_connection",
+        "responses": {
+          "200": {
+            "description": "Intuit's consent page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizeLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "QuickBooks connect is not set up for the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/public/quickbooks/disconnect": {
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "QuickBooks was disconnected at Intuit",
+        "description": "Intuit sends users who disconnect the app to `/quickbooks/disconnect`\nwith the `realmId`; the page posts it here and the company holding that\n`QuickBooks` company loses its connection. No session; always 204 (it\nnever tells whether a company matched).",
+        "operationId": "quickbooks_disconnected",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RealmDisconnect"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Done (whether or not a company matched)"
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/superuser/companies/{id}/quickbooks-app": {
+      "put": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Save a company's own QuickBooks app",
+        "description": "Superusers: stores (encrypted) the client id and secret of an Intuit app\nthe company connects through instead of the shared one.",
+        "operationId": "save_company_quickbooks_app",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuickbooksApp"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Keys shorter than 10 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AES_KEY is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/ringcentral/connection": {
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Finish connecting RingCentral",
+        "description": "Trades the code for tokens, saves the connection and subscribes to the\ncompany's texts (a failed subscription does not undo the connect).",
+        "operationId": "finish_ringcentral_connection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RingcentralCallback"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connected"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cancelled, expired or foreign state, or RingCentral refused the code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Disconnect RingCentral",
+        "description": "Stops `RingCentral` pushing the company's texts and forgets the\nconnection.",
+        "operationId": "disconnect_ringcentral",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "query",
+            "description": "Superusers only: the company to act on (default: the caller's).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disconnected"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not manage the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/ringcentral/connection/start": {
+      "post": {
+        "tags": [
+          "company"
+        ],
+        "summary": "Start connecting RingCentral",
+        "description": "`RingCentral`'s sign-in page for the caller's company. `RingCentral`\nreturns to `/redirects/ringcentral/user-auth` on the app's apex domain\nwith `code` and `state` (or `error`); post them to\n`POST /v1/ringcentral/connection` within 15 minutes.",
+        "operationId": "start_ringcentral_connection",
+        "responses": {
+          "200": {
+            "description": "RingCentral's sign-in page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizeLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "RingCentral connect is not set up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/signatures/{id}/document": {
       "get": {
         "tags": [
@@ -37819,6 +38660,19 @@
           }
         }
       },
+      "ApiTokenEmail": {
+        "type": "object",
+        "description": "Body of `POST /v1/company/api-token-email`.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Where to send the token."
+          }
+        }
+      },
       "AppShell": {
         "type": "object",
         "description": "`GET /v1/app/shell`.",
@@ -38197,6 +39051,19 @@
               "$ref": "#/components/schemas/SwitchableCompany"
             },
             "description": "Companies a super admin can switch to (empty for everyone else)."
+          }
+        }
+      },
+      "AuthorizeLink": {
+        "type": "object",
+        "description": "Where to send the browser.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The provider's sign-in / consent page."
           }
         }
       },
@@ -39915,6 +40782,112 @@
         ],
         "description": "A customer row of the `companies` view, with totals over its own sales\nand those of its child customers."
       },
+      "CompanySettings": {
+        "type": "object",
+        "description": "`GET /v1/company/settings`.",
+        "required": [
+          "company_id",
+          "can_request_api_token",
+          "quickbooks",
+          "ringcentral"
+        ],
+        "properties": {
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The company these settings are of."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company name, or null."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company address, or null."
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Logo shown in the header, or null."
+          },
+          "logo_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Logo height in pixels as saved (32-192), or null."
+          },
+          "sales_tax_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sales tax in percent (e.g. 7.25), or null."
+          },
+          "can_request_api_token": {
+            "type": "boolean",
+            "description": "The caller holds the Manager position in the company (may request the\nAPI bearer token)."
+          },
+          "quickbooks": {
+            "$ref": "#/components/schemas/QuickbooksSettings"
+          },
+          "ringcentral": {
+            "$ref": "#/components/schemas/RingcentralSettings"
+          }
+        }
+      },
+      "CompanySettingsInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/company/settings`.",
+        "required": [
+          "name",
+          "logo_height"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Company name (required)."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address; blank clears it."
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new logo uploaded to the `company-logos` folder; omit to keep the\ncurrent one."
+          },
+          "logo_height": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Logo height in pixels, 32 to 192."
+          },
+          "sales_tax_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sales tax in percent (0 to 100); null clears it."
+          }
+        },
+        "additionalProperties": false
+      },
       "Completion": {
         "type": "object",
         "description": "A check done.",
@@ -40090,6 +41063,28 @@
           }
         },
         "additionalProperties": false
+      },
+      "Connected": {
+        "type": "object",
+        "description": "After connecting: where the company lives.",
+        "properties": {
+          "company_subdomain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The company's subdomain, to go back to its settings there; null when\nit has none."
+          }
+        }
+      },
+      "ConnectionStatus": {
+        "type": "string",
+        "description": "What a test call says about a saved connection.",
+        "enum": [
+          "connected",
+          "disconnected",
+          "unverified"
+        ]
       },
       "ContentInput": {
         "type": "object",
@@ -40741,6 +41736,15 @@
             "description": "The new user."
           }
         }
+      },
+      "CredentialsSource": {
+        "type": "string",
+        "description": "Where the app's credentials come from.",
+        "enum": [
+          "company-app",
+          "shared-app",
+          "none"
+        ]
       },
       "Credit": {
         "type": "object",
@@ -51187,6 +52191,88 @@
         },
         "additionalProperties": false
       },
+      "QuickbooksApp": {
+        "type": "object",
+        "description": "Body of `PUT /v1/superuser/companies/{id}/quickbooks-app`.",
+        "required": [
+          "client_id",
+          "client_secret"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "description": "The company's own Intuit app client id (10+ characters)."
+          },
+          "client_secret": {
+            "type": "string",
+            "description": "Its client secret (10+ characters)."
+          }
+        }
+      },
+      "QuickbooksCallback": {
+        "type": "object",
+        "description": "Body of `POST /v1/quickbooks/connection`.",
+        "required": [
+          "state",
+          "code",
+          "realm_id"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "description": "`state` as Intuit returned it."
+          },
+          "code": {
+            "type": "string",
+            "description": "`code` as Intuit returned it."
+          },
+          "realm_id": {
+            "type": "string",
+            "description": "`realmId` as Intuit returned it (the `QuickBooks` company)."
+          }
+        }
+      },
+      "QuickbooksConnection": {
+        "type": "object",
+        "description": "`GET /v1/quickbooks/connection`.",
+        "required": [
+          "can_connect",
+          "connected"
+        ],
+        "properties": {
+          "can_connect": {
+            "type": "boolean",
+            "description": "The feature is on and an app is set up: Connect works."
+          },
+          "connected": {
+            "type": "boolean",
+            "description": "The company has connected an account (false when it cannot connect)."
+          }
+        }
+      },
+      "QuickbooksSettings": {
+        "type": "object",
+        "description": "`QuickBooks` as company settings show it.",
+        "required": [
+          "feature_enabled",
+          "credentials_source",
+          "connected"
+        ],
+        "properties": {
+          "feature_enabled": {
+            "type": "boolean",
+            "description": "The `QuickBooks` feature is on for the company."
+          },
+          "credentials_source": {
+            "$ref": "#/components/schemas/CredentialsSource",
+            "description": "Which app connecting uses: `company-app`, `shared-app`, or `none`\n(connecting is not set up)."
+          },
+          "connected": {
+            "type": "boolean",
+            "description": "The company has connected an account."
+          }
+        }
+      },
       "QuoteEmailTemplate": {
         "type": "object",
         "description": "A default for emailing quotes.",
@@ -51674,6 +52760,16 @@
           }
         }
       },
+      "RealmDisconnect": {
+        "type": "object",
+        "description": "Body of `POST /v1/public/quickbooks/disconnect`.",
+        "properties": {
+          "realm_id": {
+            "type": "string",
+            "description": "`realmId` from Intuit's disconnect link; anything but 1-32 digits is\nignored."
+          }
+        }
+      },
       "Reassignment": {
         "type": "object",
         "description": "A reassignment of the customer.",
@@ -52148,6 +53244,57 @@
           "email": {
             "type": "string",
             "description": "The account's email."
+          }
+        }
+      },
+      "RingcentralCallback": {
+        "type": "object",
+        "description": "Body of `POST /v1/ringcentral/connection`.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "description": "`state` as `RingCentral` returned it."
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`code` as `RingCentral` returned it; absent when the user cancelled."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`error` as `RingCentral` returned it (the user cancelled)."
+          }
+        }
+      },
+      "RingcentralSettings": {
+        "type": "object",
+        "description": "`RingCentral` as company settings show it.",
+        "required": [
+          "connect_available"
+        ],
+        "properties": {
+          "connect_available": {
+            "type": "boolean",
+            "description": "Granite Manager's `RingCentral` app is configured (Connect works)."
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConnectionStatus",
+                "description": "For a company that pressed Connect: whether `RingCentral` still\naccepts the connection; null when it never connected."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -57800,7 +58947,8 @@
           "email-templates",
           "leads",
           "sms-uploads",
-          "supplier-files"
+          "supplier-files",
+          "company-logos"
         ]
       },
       "UploadRequest": {
