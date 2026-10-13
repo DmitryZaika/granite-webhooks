@@ -80,6 +80,8 @@ pub enum AiError {
 
 #[derive(Deserialize)]
 struct Reply {
+    #[serde(default)]
+    model: Option<String>,
     choices: Vec<Choice>,
     usage: Option<Usage>,
 }
@@ -87,6 +89,20 @@ struct Reply {
 #[derive(Deserialize)]
 struct Choice {
     message: ReplyMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+/// A reply with what the pipeline metrics record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatReply {
+    pub text: String,
+    /// The model that answered (the requested one when not reported).
+    pub model: String,
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
+    pub finish_reason: Option<String>,
+    pub duration_ms: u32,
 }
 
 #[derive(Deserialize)]
@@ -139,6 +155,18 @@ impl Ai {
         caller: Caller<'_>,
         chat: &Chat<'_>,
     ) -> Result<String, AiError> {
+        self.chat_reply(pool, caller, chat)
+            .await
+            .map(|reply| reply.text)
+    }
+
+    /// Like [`Ai::chat`], with the model, tokens, finish reason and time.
+    pub async fn chat_reply(
+        &self,
+        pool: &MySqlPool,
+        caller: Caller<'_>,
+        chat: &Chat<'_>,
+    ) -> Result<ChatReply, AiError> {
         let key = self.key.as_ref().ok_or(AiError::NotConfigured)?;
         let started = Instant::now();
         let mut body = json!({ "model": chat.model, "messages": chat.messages });
@@ -173,21 +201,37 @@ impl Ai {
                 .json()
                 .await
                 .map_err(|err| AiError::Request(err.without_url().to_string()))?;
-            let usage = reply.usage.unwrap_or_default();
-            let text = reply
-                .choices
-                .into_iter()
-                .next()
+            let usage = reply.usage;
+            let first = reply.choices.into_iter().next();
+            let finish_reason = first
+                .as_ref()
+                .and_then(|choice| choice.finish_reason.clone());
+            let text = first
                 .and_then(|choice| choice.message.content)
                 .unwrap_or_default();
-            Ok((text, usage))
+            Ok((text, usage, reply.model, finish_reason))
         }
         .await;
         let elapsed = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
         match result {
-            Ok((text, usage)) => {
-                log(pool, caller, chat.model, Some(usage), None, elapsed).await;
-                Ok(text)
+            Ok((text, usage, model, finish_reason)) => {
+                log(
+                    pool,
+                    caller,
+                    chat.model,
+                    Some(usage.unwrap_or_default()),
+                    None,
+                    elapsed,
+                )
+                .await;
+                Ok(ChatReply {
+                    text,
+                    model: model.unwrap_or_else(|| chat.model.to_string()),
+                    input_tokens: usage.map(|u| u.prompt_tokens),
+                    output_tokens: usage.map(|u| u.completion_tokens),
+                    finish_reason,
+                    duration_ms: elapsed,
+                })
             }
             Err(err) => {
                 let message = err.to_string();

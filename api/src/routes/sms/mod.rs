@@ -26,7 +26,7 @@ mod rollup;
 mod schemas;
 mod scope;
 pub mod send;
-mod thread;
+pub(crate) mod thread;
 mod threads;
 
 use crate::state::AppState;

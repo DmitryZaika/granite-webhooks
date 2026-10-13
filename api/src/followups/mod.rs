@@ -33,6 +33,7 @@ pub mod js;
 pub mod lifecycle;
 pub mod phone;
 pub mod pressure;
+pub mod gather;
 pub mod model_context;
 pub mod prompt;
 pub mod prompt_texts;

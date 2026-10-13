@@ -201,7 +201,7 @@ async fn agent_maps(
 
 /// The customer with this phone: through the provider's contacts, else the
 /// customer record itself.
-async fn customer_by_phone(
+pub async fn customer_by_phone(
     pool: &MySqlPool,
     provider: SmsProvider,
     company_id: i32,
