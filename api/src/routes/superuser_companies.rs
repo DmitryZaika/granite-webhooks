@@ -743,6 +743,8 @@ pub struct CompanyUser {
     pub counts_toward_user_limit: bool,
     /// When the first-run tour was completed (ISO 8601), or null.
     pub onboarding_completed_at: Option<String>,
+    /// A tours record exists (`progress` is saved, not the empty default).
+    pub onboarding_started: bool,
     /// Saved tours progress.
     pub progress: OnboardingState,
 }
@@ -842,6 +844,7 @@ pub async fn company_users(
                 counts_toward_user_limit: !(positions.contains(&CHECK_IN)
                     && positions.iter().all(|p| *p == CHECK_IN)),
                 onboarding_completed_at: record.completed_at,
+                onboarding_started: record.has_row,
                 progress: record.state,
                 id: row.id,
                 name: row.name,

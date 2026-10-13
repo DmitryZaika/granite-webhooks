@@ -38,6 +38,7 @@ pub mod invoice_queue;
 pub mod jobs;
 pub mod leaderboard;
 pub mod maintenance;
+pub mod manual_feedback_reviews;
 pub mod marketing;
 pub mod me;
 pub mod notifications;
@@ -141,6 +142,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(billing_account::router())
         .merge(integrations::router())
         .merge(superuser_companies::router())
+        .merge(manual_feedback_reviews::router())
         .merge(signatures::router())
         .merge(signwell_webhook::router())
 }

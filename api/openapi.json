@@ -38418,6 +38418,148 @@
         ]
       }
     },
+    "/v1/superuser/manual-feedback": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "List manual feedback to review",
+        "description": "Unresolved threads users approved or escalated, newest first.",
+        "operationId": "list_manual_feedback_reviews",
+        "responses": {
+          "200": {
+            "description": "Threads to review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FeedbackReview"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/manual-feedback/{id}/resolve": {
+      "post": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Resolve a manual feedback thread",
+        "description": "Marks the thread reviewed; with `apply_manual_change` its proposed\nsection text replaces that section of the CRM manual for the chat.",
+        "operationId": "resolve_manual_feedback_review",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Feedback id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Resolve"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Resolved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such feedback",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/signatures/{id}/document": {
       "get": {
         "tags": [
@@ -42282,6 +42424,7 @@
           "can_manage_users",
           "runs_onboarding",
           "counts_toward_user_limit",
+          "onboarding_started",
           "progress"
         ],
         "properties": {
@@ -42351,6 +42494,10 @@
               "null"
             ],
             "description": "When the first-run tour was completed (ISO 8601), or null."
+          },
+          "onboarding_started": {
+            "type": "boolean",
+            "description": "A tours record exists (`progress` is saved, not the empty default)."
           },
           "progress": {
             "$ref": "#/components/schemas/OnboardingState",
@@ -47405,6 +47552,89 @@
           }
         ],
         "description": "The answer to a feedback call."
+      },
+      "FeedbackReview": {
+        "type": "object",
+        "description": "A thread waiting for review.",
+        "required": [
+          "id",
+          "history",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Feedback id."
+          },
+          "user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Who rated the answer, or null."
+          },
+          "company_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Their company, or null."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company name, or null."
+          },
+          "user_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "User name, or null."
+          },
+          "history": {
+            "type": "object",
+            "description": "The conversation as the chat saved it (`question`, `originalAnswer`,\n`corrections`, or `dialog`)."
+          },
+          "feedback_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the user wrote, or null."
+          },
+          "status": {
+            "type": "string",
+            "description": "`user_approved` or `escalated`."
+          },
+          "manual_section_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The manual section to change, or null."
+          },
+          "proposed_manual_change": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The section's proposed new text, or null."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sent (ISO 8601), or null."
+          }
+        }
       },
       "FieldKind": {
         "type": "string",
@@ -54854,6 +55084,19 @@
           "email": {
             "type": "string",
             "description": "The account's email."
+          }
+        }
+      },
+      "Resolve": {
+        "type": "object",
+        "description": "Body of `POST /v1/superuser/manual-feedback/{id}/resolve`.",
+        "required": [
+          "apply_manual_change"
+        ],
+        "properties": {
+          "apply_manual_change": {
+            "type": "boolean",
+            "description": "Write the proposed section text into the manual (when the thread has\none); false only marks it reviewed."
           }
         }
       },
