@@ -95,6 +95,16 @@ Native signatures are on with `NATIVE_SIGNATURES_ENABLED=1`,
 `POST /v1/jobs/signature-reminders` then expires open requests and sends
 reminders and notifications (it does nothing while they are off).
 
+### SMS / email flows
+
+`followups/processor.rs` sends the due steps of flows (`sms_flow_enrollments`)
+from the scheduled `POST /v1/jobs/sms-followups`, which also sends lead-list
+drip texts and everyone's scheduled emails and texts; a rep's start or "send
+now" sends the first step before the response. After an outbound call the
+`webhooks` Lambda posts to `POST /v1/followups/call-check` (with
+`LAMBDA_KEY`; it needs `API_URL` set to this API). Follow-up texts reuse
+`sms-flow-<run>-<step>` / `sms-drip-<row>` as the provider's idempotency key.
+
 ### Billing (Stripe)
 
 `src/billing/` keeps `company_billing` in step with Stripe (the state machine

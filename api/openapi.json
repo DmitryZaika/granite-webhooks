@@ -34301,6 +34301,63 @@
         ]
       }
     },
+    "/v1/followups/call-check": {
+      "post": {
+        "tags": [
+          "followups"
+        ],
+        "summary": "Check an outbound call",
+        "description": "Whether the customer talked back on a rep's call. A conversation stops\nthe customer's running SMS / email flows.",
+        "operationId": "check_followup_call",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallCheck"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the check found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallCheckResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
     "/v1/suppliers/file-readiness": {
       "get": {
         "tags": [
@@ -36803,6 +36860,85 @@
             "type": "integer",
             "format": "int64",
             "description": "Seconds talked; 0 when unanswered."
+          }
+        }
+      },
+      "CallCheck": {
+        "type": "object",
+        "description": "A finished outbound call.",
+        "required": [
+          "company_id",
+          "phone_digits",
+          "call_id",
+          "talking_time"
+        ],
+        "properties": {
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The rep's company."
+          },
+          "phone_digits": {
+            "$ref": "#/components/schemas/PhoneDigits",
+            "description": "The customer's phone."
+          },
+          "call_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The provider's call id."
+          },
+          "talking_time": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds of talk."
+          },
+          "is_voicemail": {
+            "type": "boolean",
+            "description": "The provider says the call reached voicemail."
+          },
+          "recording_link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the provider keeps the recording."
+          }
+        }
+      },
+      "CallCheckResult": {
+        "type": "object",
+        "description": "What the check found.",
+        "required": [
+          "skipped",
+          "reason",
+          "cancelled",
+          "customer_responded"
+        ],
+        "properties": {
+          "skipped": {
+            "type": "boolean",
+            "description": "No conversation was found (`talking_time_too_short`,\n`transcription_unavailable`, `voicemail`)."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why: one of the above, `long_call` or `customer_conversation`."
+          },
+          "cancelled": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Flow runs stopped.",
+            "minimum": 0
+          },
+          "customer_responded": {
+            "type": "boolean",
+            "description": "The customer talked: the deal moves to Contacted."
+          },
+          "transcript_preview": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The start of the transcript, when one was made."
           }
         }
       },
@@ -46976,6 +47112,19 @@
             "description": "Their name."
           }
         }
+      },
+      "PhoneDigits": {
+        "oneOf": [
+          {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "description": "The customer's phone, as digits or a number."
       },
       "PhoneInput": {
         "type": "object",
