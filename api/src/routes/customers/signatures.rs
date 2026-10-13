@@ -30,8 +30,8 @@ pub struct SignatureRequest {
     pub status: String,
     /// When it was sent.
     pub created_at: Option<DateTime<Utc>>,
-    /// Where to open it: the signed PDF or native document through the web
-    /// app, else the original file.
+    /// Where to open it: an API path (`/v1/...`, the signed PDF or native
+    /// document) to open on the API's host, else the original file's URL.
     pub view_url: String,
 }
 
@@ -216,7 +216,7 @@ pub async fn signature_requests(
     for row in rows {
         let view_url = if row.provider == "native" {
             format!(
-                "/api/signatures/{}/document?customerId={customer_id}",
+                "/v1/signatures/{}/document?customer_id={customer_id}",
                 row.id
             )
         } else if row.status == "signed"
@@ -225,7 +225,7 @@ pub async fn signature_requests(
                 .as_deref()
                 .is_some_and(|id| !id.is_empty())
         {
-            format!("/api/signature-requests/{}/signed-pdf", row.id)
+            format!("/v1/signature-requests/{}/signed-pdf", row.id)
         } else {
             state
                 .storage

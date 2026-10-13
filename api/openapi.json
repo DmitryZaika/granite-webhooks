@@ -33772,6 +33772,122 @@
           }
         }
       }
+    },
+    "/v1/signatures/{id}/document": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Open a natively signed document",
+        "description": "The document as sent, or signed once the customer signed it, from the\nprivate signature bucket. For a browser tab: errors are plain text.",
+        "operationId": "open_native_signature_document",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Signature request id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "description": "Opened from this customer's documents: anyone in the company may\nopen the customer's documents. Otherwise only the sender or an admin.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The PDF",
+            "content": {
+              "application/pdf": {}
+            }
+          },
+          "401": {
+            "description": "No valid session, or not an employee",
+            "content": {
+              "text/plain": {}
+            }
+          },
+          "404": {
+            "description": "No such document the caller may open",
+            "content": {
+              "text/plain": {}
+            }
+          },
+          "503": {
+            "description": "The file cannot be read right now",
+            "content": {
+              "text/plain": {}
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/signature-requests/{id}/signed-pdf": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Open a signed `SignWell` document",
+        "description": "The signed PDF, titled and named \"<document> signed.pdf\"; the original\nfile while it is not signed. For a browser tab: errors are plain text.",
+        "operationId": "open_signed_pdf",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Signature request id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The PDF",
+            "content": {
+              "application/pdf": {}
+            }
+          },
+          "401": {
+            "description": "No valid session, or not an employee",
+            "content": {
+              "text/plain": {}
+            }
+          },
+          "404": {
+            "description": "No such request in the caller's company",
+            "content": {
+              "text/plain": {}
+            }
+          },
+          "502": {
+            "description": "The document could not be downloaded",
+            "content": {
+              "text/plain": {}
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -49321,7 +49437,7 @@
           },
           "view_url": {
             "type": "string",
-            "description": "Where to open it: the signed PDF or native document through the web\napp, else the original file."
+            "description": "Where to open it: an API path (`/v1/...`, the signed PDF or native\ndocument) to open on the API's host, else the original file's URL."
           }
         }
       },

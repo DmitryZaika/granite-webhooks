@@ -67,6 +67,9 @@ pub struct AppState {
     pub stripe_webhook_secret: Option<Arc<str>>,
     /// The subscription plans (`STRIPE_BILLING_PLANS` / `STRIPE_PRICE_ID`).
     pub billing_plans: Arc<[BillingPlan]>,
+    /// `SIGNATURE_STORAGE_BUCKET`: the private bucket of natively signed
+    /// documents (read with the storage credentials).
+    pub signature_bucket: Option<Arc<str>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -99,6 +102,7 @@ impl AppState {
             stripe: Stripe::disabled(),
             stripe_webhook_secret: None,
             billing_plans: Arc::from([]),
+            signature_bucket: None,
         }
     }
 
@@ -125,6 +129,13 @@ impl AppState {
     #[must_use]
     pub fn with_cookie(mut self, cookie: crate::auth::cookie::CookieConfig) -> Self {
         self.cookie = cookie;
+        self
+    }
+
+    #[must_use]
+    pub fn with_signature_bucket(mut self, bucket: &str) -> Self {
+        let bucket = bucket.trim();
+        self.signature_bucket = (!bucket.is_empty()).then(|| Arc::from(bucket));
         self
     }
 
@@ -219,6 +230,7 @@ impl AppState {
             .with_stripe(Stripe::from_env())
             .with_stripe_webhook_secret(&std::env::var("STRIPE_WEBHOOK_SECRET").unwrap_or_default())
             .with_billing_plans(crate::billing::reactivation::configured_plans())
+            .with_signature_bucket(&std::env::var("SIGNATURE_STORAGE_BUCKET").unwrap_or_default())
             .with_cloudtalk_base(
                 &std::env::var("CLOUDTALK_BASE_URL")
                     .ok()
