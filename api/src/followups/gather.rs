@@ -864,6 +864,7 @@ fn decide(
     extra_emails: &[String],
     phones: Vec<String>,
     clock: Instant,
+    mark: &mut impl FnMut(&'static str),
 ) -> (
     FollowupContactPressure,
     super::pressure::repair::FollowupValidationResult,
@@ -892,7 +893,9 @@ fn decide(
         other_deals: profile_result.other_deals.clone(),
         explicit_reenroll: request.explicit_reenroll,
     });
+    mark("fact_extraction");
     let validation = prepare_followup_validation(&raw_pressure);
+    mark("validation");
     let pressure = validation.pressure.clone();
     let generation_decision = evaluate_followup_generation_decision(&GenerationDecisionInputs {
         sequence_status: Some(pressure.followup_sequence_status),
@@ -924,7 +927,24 @@ pub async fn gather_followup_context(
     request: &FollowupRequest,
     clock: Instant,
 ) -> Result<GatheredContext, sqlx::Error> {
+    gather_timed(pool, request, clock, &mut None).await
+}
+
+/// [`gather_followup_context`], marking its phases on `timer`.
+#[allow(clippy::too_many_lines)]
+pub async fn gather_timed(
+    pool: &MySqlPool,
+    request: &FollowupRequest,
+    clock: Instant,
+    timer: &mut Option<&mut super::pipeline::PipelineTimer>,
+) -> Result<GatheredContext, sqlx::Error> {
+    let mut mark = |phase: &'static str| {
+        if let Some(timer) = timer.as_deref_mut() {
+            timer.mark(phase);
+        }
+    };
     let customer_id = resolve_customer_id(pool, request).await?;
+    mark("resolve_customer");
     let phones = customer_phones(pool, customer_id, request.phone_digits.as_deref()).await?;
     let extra_emails: Vec<String> = request.customer_email.iter().cloned().collect();
     let customer_addresses = match customer_id {
@@ -982,6 +1002,7 @@ pub async fn gather_followup_context(
     let customer_page_line = load_customer_page_line(pool, request.company_id).await?;
     let style_profile = load_style_profile(pool, request.user_id, request.company_id).await?;
     let (sms_loaded, emails_loaded) = (sms.len(), emails.len());
+    mark("db_load");
 
     let mut merged: Vec<FollowupTimelineMessage> = sms.into_iter().chain(emails).collect();
     merged.sort_by(|a, b| a.at.cmp(&b.at));
@@ -991,6 +1012,7 @@ pub async fn gather_followup_context(
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
+    mark("conversation_normalization");
     let (pressure, validation, generation_decision) = decide(
         request,
         &timeline,
@@ -1000,6 +1022,7 @@ pub async fn gather_followup_context(
         &extra_emails,
         phones,
         clock,
+        &mut mark,
     );
     let engine_timeline: Vec<_> = timeline
         .iter()
