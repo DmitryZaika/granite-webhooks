@@ -37,6 +37,8 @@ pub struct AppState {
     pub sms_sends: Arc<Mutex<HashMap<i32, VecDeque<Instant>>>>,
     /// Recent SMS flow starts per user, for the per-minute limit.
     pub flow_starts: Arc<Mutex<HashMap<i32, VecDeque<Instant>>>>,
+    /// Threads the composer's autocomplete gathered in the last minute.
+    pub compose_contexts: Arc<crate::routes::ai::compose::ComposeContexts>,
     /// Google Maps, for driving distances.
     pub maps: Maps,
     /// Recent calls started per user, for the per-minute limit.
@@ -92,6 +94,7 @@ impl AppState {
             sms_upkeep: Arc::default(),
             sms_sends: Arc::default(),
             flow_starts: Arc::default(),
+            compose_contexts: Arc::default(),
             maps: Maps::disabled(),
             call_starts: Arc::default(),
             telephony_http: reqwest::Client::new(),

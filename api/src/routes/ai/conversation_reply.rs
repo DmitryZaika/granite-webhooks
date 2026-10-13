@@ -366,19 +366,6 @@ pub struct ConversationReply {
     pub body: String,
 }
 
-fn is_model_permission_error(err: &AiError) -> bool {
-    let AiError::Status { status, body } = err else {
-        return false;
-    };
-    let body = body.to_lowercase();
-    body.contains("insufficient permissions")
-        || body.contains("missing scopes")
-        || body.contains("does not have access to model")
-        || body.contains("model_not_found")
-        || (*status == 401 && body.contains("permission"))
-        || (*status == 403 && body.contains("model"))
-}
-
 fn too_long(value: Option<&str>, max: usize) -> bool {
     value.is_some_and(|v| v.chars().count() > max)
 }
@@ -515,7 +502,7 @@ pub async fn conversation_reply(
         chat
     };
     let text = match state.ai.chat(&state.pool, caller, &chat(MINI_MODEL)).await {
-        Err(err) if is_model_permission_error(&err) => {
+        Err(err) if err.is_model_permission() => {
             state
                 .ai
                 .chat(&state.pool, caller, &chat(REPLY_FALLBACK_MODEL))

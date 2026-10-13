@@ -9,6 +9,8 @@
 //! - `POST /v1/ai/agentic-questions`, `GET .../{id}` → questions for the agent
 //! - `GET /v1/ai/design/{pictures,deals}` → what the AI design tool picks from
 //! - `POST /v1/ai/conversation-reply` → the AI Reply button's draft
+//! - `GET /v1/ai/compose/inventory-url`, `POST /v1/ai/compose/{autocomplete,learn}`
+//!   → the composer's inline autocomplete and what the rep's edits teach it
 //!
 //! Replaces the Remix `api.aiImprove.email` and `api.aiSummarize.callNote` routes.
 
@@ -16,6 +18,7 @@ pub mod agentic;
 pub mod call_activity;
 pub mod call_activity_rules;
 pub mod call_note;
+pub mod compose;
 pub mod conversation_reply;
 pub mod design;
 pub mod email_template;
@@ -38,5 +41,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(agentic::job))
         .routes(routes!(design::pictures))
         .routes(routes!(design::deals))
+        .routes(routes!(compose::inventory_url))
+        .routes(routes!(compose::autocomplete))
+        .routes(routes!(compose::learn))
         .routes(routes!(conversation_reply::conversation_reply))
 }

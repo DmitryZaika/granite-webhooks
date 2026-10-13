@@ -37,6 +37,8 @@ pub struct Chat<'a> {
     pub json: bool,
     pub reasoning_effort: Option<&'a str>,
     pub max_completion_tokens: Option<u32>,
+    /// Routes calls with the same prompt prefix to the same cache.
+    pub prompt_cache_key: Option<String>,
     pub timeout: Duration,
 }
 
@@ -48,6 +50,7 @@ impl<'a> Chat<'a> {
             json: false,
             reasoning_effort: None,
             max_completion_tokens: None,
+            prompt_cache_key: None,
             timeout: Duration::from_secs(60),
         }
     }
@@ -76,6 +79,22 @@ pub enum AiError {
     Status { status: u16, body: String },
     #[error("OpenAI returned no content")]
     Empty,
+}
+
+impl AiError {
+    /// The key may not use the model (the caller falls back to another).
+    pub fn is_model_permission(&self) -> bool {
+        let Self::Status { status, body } = self else {
+            return false;
+        };
+        let body = body.to_lowercase();
+        body.contains("insufficient permissions")
+            || body.contains("missing scopes")
+            || body.contains("does not have access to model")
+            || body.contains("model_not_found")
+            || (*status == 401 && body.contains("permission"))
+            || (*status == 403 && body.contains("model"))
+    }
 }
 
 #[derive(Deserialize)]
@@ -181,6 +200,9 @@ impl Ai {
         }
         if let Some(effort) = chat.reasoning_effort {
             body["reasoning_effort"] = json!(effort);
+        }
+        if let Some(key) = &chat.prompt_cache_key {
+            body["prompt_cache_key"] = json!(key);
         }
         let result = async {
             let response = self

@@ -32298,6 +32298,207 @@
         ]
       }
     },
+    "/v1/ai/compose/inventory-url": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "The stones page link",
+        "description": "The company's customer stones page, which the composer offers to insert.",
+        "operationId": "compose_inventory_url",
+        "responses": {
+          "200": {
+            "description": "The link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryUrl"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/ai/compose/autocomplete": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Continue the draft",
+        "description": "The next few words of the rep's draft (or, with an empty draft, how the\nnext message starts), from the conversation and the rep's notes.",
+        "operationId": "compose_autocomplete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutocompleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The suggestion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Completion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No customer, or an invalid phone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/ai/compose/learn": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Learn from a sent message",
+        "description": "The rep sent something other than the AI's suggestion: keeps the pair and\nrewrites the rep's writing notes from it and the few before it.",
+        "operationId": "compose_learn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LearnRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Whether anything was learned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Learned"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/ai/conversation-reply": {
       "post": {
         "tags": [
@@ -36579,6 +36780,27 @@
           }
         }
       },
+      "AutocompleteRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ComposeTarget"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "draft": {
+                "type": "string",
+                "description": "What the rep typed so far (empty: suggest how the message starts)."
+              },
+              "warm": {
+                "type": "boolean",
+                "description": "Only load the thread, so the first suggestion waits on the model alone."
+              }
+            }
+          }
+        ],
+        "description": "`POST /v1/ai/compose/autocomplete`."
+      },
       "BlankCandidate": {
         "type": "object",
         "description": "A blank found in the PDF.",
@@ -38155,6 +38377,56 @@
           }
         },
         "additionalProperties": false
+      },
+      "ComposeChannel": {
+        "type": "string",
+        "description": "SMS or email.",
+        "enum": [
+          "sms",
+          "email"
+        ]
+      },
+      "ComposeTarget": {
+        "type": "object",
+        "description": "Whose thread the composer is in.",
+        "required": [
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/ComposeChannel"
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer."
+          },
+          "customer_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The email recipient, when there is no customer."
+          },
+          "phone_digits": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SMS thread's phone digits."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The deal the composer is on."
+          }
+        }
       },
       "Condition": {
         "type": "object",
@@ -44374,6 +44646,19 @@
           }
         }
       },
+      "InventoryUrl": {
+        "type": "object",
+        "description": "The customer stones page.",
+        "required": [
+          "inventory_url"
+        ],
+        "properties": {
+          "inventory_url": {
+            "type": "string",
+            "description": "`https://<subdomain>.granite-manager.com/customer/<company>/stones`."
+          }
+        }
+      },
       "InvoiceEdit": {
         "type": "object",
         "description": "`POST /v1/ai/invoice-edit`.",
@@ -44958,6 +45243,44 @@
           "invalid_reasons": {
             "$ref": "#/components/schemas/InvalidReasons",
             "description": "Lost or invalid leads by reason."
+          }
+        }
+      },
+      "LearnRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ComposeTarget"
+          },
+          {
+            "type": "object",
+            "required": [
+              "suggested",
+              "sent"
+            ],
+            "properties": {
+              "suggested": {
+                "type": "string",
+                "description": "The whole message the AI proposed."
+              },
+              "sent": {
+                "type": "string",
+                "description": "What the rep sent instead."
+              }
+            }
+          }
+        ],
+        "description": "`POST /v1/ai/compose/learn`."
+      },
+      "Learned": {
+        "type": "object",
+        "description": "Whether the notes changed.",
+        "required": [
+          "learned"
+        ],
+        "properties": {
+          "learned": {
+            "type": "boolean",
+            "description": "The edit taught something (the notes were rewritten)."
           }
         }
       },
