@@ -1,5 +1,6 @@
 # Variables
 REGION := us-east-2
+AWS_DEPLOY_PROFILE ?= personal
 IAM_ROLE := arn:aws:iam::741448943665:role/cargo-lambda-role-2ed5069c-8882-460d-bdc8-192d9b724756
 
 # Tool commands
@@ -14,7 +15,7 @@ build-webhooks:
 
 .PHONY: deploy-webhooks
 deploy-webhooks: build-webhooks
-	@eval "$$(aws configure export-credentials --format env)" && \
+	@eval "$$(aws configure export-credentials --profile $(AWS_DEPLOY_PROFILE) --format env)" && \
 	unset AWS_PROFILE && \
 	uvx cargo-lambda lambda deploy \
 		--iam-role $(IAM_ROLE) \
@@ -44,7 +45,7 @@ build-time-triggered:
 
 .PHONY: deploy-time-triggered
 deploy-time-triggered: build-time-triggered
-	@eval "$$(aws configure export-credentials --format env)" && \
+	@eval "$$(aws configure export-credentials --profile $(AWS_DEPLOY_PROFILE) --format env)" && \
 	unset AWS_PROFILE && \
 	uvx cargo-lambda lambda deploy \
 		--iam-role $(IAM_ROLE) \
@@ -105,7 +106,7 @@ build-api:
 
 .PHONY: deploy-api
 deploy-api: build-api
-	@eval "$$(aws configure export-credentials --format env)" && \
+	@eval "$$(aws configure export-credentials --profile $(AWS_DEPLOY_PROFILE) --format env)" && \
 	unset AWS_PROFILE && \
 	uvx cargo-lambda lambda deploy \
 		--iam-role $(IAM_ROLE) \
