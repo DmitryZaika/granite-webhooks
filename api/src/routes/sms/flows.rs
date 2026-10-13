@@ -196,7 +196,7 @@ fn bad(token: &str) -> ApiError {
 }
 
 /// Text between `{{` and `}}` without tags and entities (`cleanVariableName`).
-fn variable_names(text: &str) -> Vec<String> {
+pub fn variable_names(text: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut rest = text;
     while let Some(start) = rest.find("{{") {
@@ -277,7 +277,7 @@ fn checked(name: &str, steps: &[StepInput]) -> ApiResult<String> {
     Ok(name.to_string())
 }
 
-async fn steps_by_flow(
+pub async fn steps_by_flow(
     pool: &MySqlPool,
     company_id: i32,
     flow_ids: &[i32],

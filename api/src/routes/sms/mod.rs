@@ -19,12 +19,12 @@
 //! fails stuck sends runs here, at most once a minute per company.
 
 mod attachments;
-mod flows;
+pub(crate) mod flows;
 mod history;
 pub mod provider;
 mod rollup;
-mod schemas;
-mod scope;
+pub(crate) mod schemas;
+pub(crate) mod scope;
 pub mod send;
 pub(crate) mod thread;
 mod threads;

@@ -33906,6 +33906,354 @@
         ]
       }
     },
+    "/v1/customers/{customer_id}/flow": {
+      "get": {
+        "tags": [
+          "followups"
+        ],
+        "summary": "A customer's flow",
+        "description": "The flow running for the customer (or the last one that failed).",
+        "operationId": "get_customer_flow",
+        "parameters": [
+          {
+            "name": "customer_id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The flow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a customer id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "followups"
+        ],
+        "summary": "Act on a customer's flow",
+        "description": "Starts, switches, pauses, resumes or stops the customer's flow, or sends\nits next step now. Refusals come back as a token in `error`\n(`flow_not_found`, `agent_not_linked`, `missing_email`, `invalid_status`,\n`not_due`, ...).",
+        "operationId": "act_on_customer_flow",
+        "parameters": [
+          {
+            "name": "customer_id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlowAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The flow afterwards",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the caller's flow to change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A flow is already running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over ten starts a minute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/{provider}/threads/{phone}/flow": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "A thread's flow",
+        "description": "The flow running on the phone, for someone who may see it.",
+        "operationId": "get_sms_thread_flow",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "SMS provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          },
+          {
+            "name": "phone",
+            "in": "path",
+            "description": "The other party's phone digits",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The flow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Act on a thread's flow",
+        "description": "Like the customer's, for the phone of an SMS conversation.",
+        "operationId": "act_on_sms_thread_flow",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "SMS provider",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SmsProvider"
+            }
+          },
+          {
+            "name": "phone",
+            "in": "path",
+            "description": "The other party's phone digits",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlowAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The flow afterwards",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the caller's flow to change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A flow is already running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over ten starts a minute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/suppliers/file-readiness": {
       "get": {
         "tags": [
@@ -42225,6 +42573,56 @@
             ],
             "format": "date-time",
             "description": "When it last changed."
+          }
+        }
+      },
+      "FlowAction": {
+        "type": "object",
+        "description": "`POST .../flow`.",
+        "required": [
+          "intent"
+        ],
+        "properties": {
+          "intent": {
+            "$ref": "#/components/schemas/FlowIntent"
+          },
+          "flow_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The flow to start or switch to."
+          }
+        }
+      },
+      "FlowIntent": {
+        "type": "string",
+        "description": "What to do with the flow.",
+        "enum": [
+          "start",
+          "switch",
+          "pause",
+          "resume",
+          "stop",
+          "dispatch",
+          "send_now"
+        ]
+      },
+      "FlowState": {
+        "type": "object",
+        "description": "The flow on a customer or thread.",
+        "properties": {
+          "active_flow": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ActiveFlow",
+                "description": "Running, paused or last failed; `None` when there is none (or the\ncaller may not see it)."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },

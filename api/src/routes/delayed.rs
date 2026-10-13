@@ -388,6 +388,7 @@ fn email_from_payload(payload: &Value) -> Cleaned {
         template_id: number(payload, "templateId"),
         send_at: None,
         cancel_if_customer_messages: false,
+        automated: false,
     }
 }
 

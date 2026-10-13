@@ -319,7 +319,7 @@ fn step_preview(custom: Option<&str>, template: Option<&str>) -> Option<String> 
 /// The flow running (or failed) on the phone, if the caller may see it:
 /// admins, viewers of the thread, the rep who started it, or the customer's
 /// rep.
-async fn active_flow(
+pub async fn active_flow(
     pool: &MySqlPool,
     user: &SessionUser,
     phone: &str,

@@ -349,6 +349,7 @@ pub async fn deliver_now(
         text: request.text.trim().to_string(),
         attachments,
         is_automated: false,
+        idempotency_key: None,
     };
     let ids = match state.webhooks.send_sms(&outgoing).await {
         Ok(ids) => ids,

@@ -87,6 +87,8 @@ pub struct Cleaned {
     pub template_id: Option<i32>,
     pub send_at: Option<chrono::DateTime<Utc>>,
     pub cancel_if_customer_messages: bool,
+    /// Sent by a flow, not typed by the rep (`emails.is_automated`).
+    pub automated: bool,
 }
 
 impl Cleaned {
@@ -155,6 +157,7 @@ impl Cleaned {
             template_id: request.template_id.filter(|id| *id > 0),
             send_at: request.send_at,
             cancel_if_customer_messages: request.cancel_if_customer_messages,
+            automated: false,
         })
     }
 
@@ -634,8 +637,8 @@ async fn record(
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     let email_id = sqlx::query(
-        "INSERT INTO emails (sender_user_id, subject, body, message_id, sender_email, receiver_email, thread_id, deal_id, company_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO emails (sender_user_id, subject, body, message_id, sender_email, receiver_email, thread_id, deal_id, company_id, is_automated)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user.id)
     .bind(&email.subject)
@@ -646,6 +649,7 @@ async fn record(
     .bind(&message.thread_id)
     .bind(email.deal_id)
     .bind(user.company_id)
+    .bind(email.automated)
     .execute(&mut *tx)
     .await?
     .last_insert_id();
