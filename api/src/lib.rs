@@ -15,6 +15,7 @@
 )]
 
 pub mod ai;
+pub mod analytics_proxy;
 pub mod auth;
 pub mod billing;
 pub mod chat;
@@ -105,6 +106,10 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/openapi.json",
             get(move || async move { ([(CONTENT_TYPE, "application/json")], spec.to_string()) }),
+        )
+        .route(
+            "/ingest/{*rest}",
+            axum::routing::any(analytics_proxy::relay),
         )
         .merge(routes)
         .layer(middleware::from_fn_with_state(state.clone(), check_origin))
