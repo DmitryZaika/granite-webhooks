@@ -33,7 +33,9 @@ const MAX_ATTEMPTS: i64 = 3;
 pub struct SignatureRun {
     /// Reminders and notifications sent (what the scheduler logs).
     pub processed: usize,
+    /// Reminders and notifications sent.
     pub sent: usize,
+    /// Sends that failed or were blocked.
     pub failed: usize,
     /// Open requests expired.
     pub expired: usize,

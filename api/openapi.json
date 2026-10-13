@@ -34920,7 +34920,8 @@
         "properties": {
           "id": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "The question's id."
           },
           "status": {
             "type": "string",
@@ -49743,10 +49744,12 @@
           },
           "sent": {
             "type": "integer",
+            "description": "Reminders and notifications sent.",
             "minimum": 0
           },
           "failed": {
             "type": "integer",
+            "description": "Sends that failed or were blocked.",
             "minimum": 0
           },
           "expired": {

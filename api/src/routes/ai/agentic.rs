@@ -46,6 +46,7 @@ pub struct QueuedQuestion {
 /// Where a question is.
 #[derive(Debug, Serialize, ToSchema, PartialEq, Eq)]
 pub struct AgenticJob {
+    /// The question's id.
     pub id: i64,
     /// `queued` (not picked up yet), `pending`, `done` or `failed`.
     pub status: String,
