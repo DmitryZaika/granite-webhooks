@@ -456,18 +456,47 @@ pub async fn process_due(
     company_id: i32,
     user_id: i32,
 ) -> Result<(), sqlx::Error> {
+    process_due_in(state, Some((company_id, user_id)))
+        .await
+        .map(|_| ())
+}
+
+/// Due messages looked at (emails, texts).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+pub struct DueRun {
+    /// Due emails looked at.
+    pub emails: usize,
+    /// Due texts looked at.
+    pub sms: usize,
+}
+
+/// Sends the due messages of one user (`Some((company, user))`) or of
+/// everyone (the scheduled job).
+pub async fn process_due_in(
+    state: &AppState,
+    scope: Option<(i32, i32)>,
+) -> Result<DueRun, sqlx::Error> {
     let pool = &state.pool;
+    let mut run = DueRun::default();
     for kind in [Kind::Emails, Kind::Sms] {
-        let rows: Vec<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "{} WHERE status = 'pending' AND send_at <= UTC_TIMESTAMP() AND company_id = ? AND user_id = ?
+        let scoped = if scope.is_some() {
+            " AND company_id = ? AND user_id = ?"
+        } else {
+            ""
+        };
+        let mut query = sqlx::query_as::<_, Row>(sqlx::AssertSqlSafe(format!(
+            "{} WHERE status = 'pending' AND send_at <= UTC_TIMESTAMP(){scoped}
               ORDER BY send_at, id LIMIT ?",
             select(kind)
-        )))
-        .bind(company_id)
-        .bind(user_id)
-        .bind(DUE_BATCH_LIMIT)
-        .fetch_all(pool)
-        .await?;
+        )));
+        if let Some((company_id, user_id)) = scope {
+            query = query.bind(company_id).bind(user_id);
+        }
+        let rows = query.bind(DUE_BATCH_LIMIT).fetch_all(pool).await?;
+        match kind {
+            Kind::Emails => run.emails = rows.len(),
+            Kind::Sms => run.sms = rows.len(),
+        }
         for row in rows {
             if kind == Kind::Emails && has_signature_requests(&json(&row.payload_json)) {
                 continue;
@@ -507,7 +536,7 @@ pub async fn process_due(
             }
         }
     }
-    Ok(())
+    Ok(run)
 }
 
 async fn cancel_row(

@@ -33555,6 +33555,53 @@
         ]
       }
     },
+    "/v1/jobs/sms-followups": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Send due follow-ups",
+        "description": "Sends the due steps of SMS / email flows, the drip texts of lead lists\nand everyone's scheduled emails and texts.",
+        "operationId": "run_sms_followups",
+        "responses": {
+          "200": {
+            "description": "What was done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsFollowupsRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
     "/v1/me/call-coaching": {
       "get": {
         "tags": [
@@ -40631,6 +40678,32 @@
           }
         }
       },
+      "DripRun": {
+        "type": "object",
+        "description": "Drip texts looked at, sent and failed.",
+        "required": [
+          "processed",
+          "sent",
+          "failed"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Due texts looked at.",
+            "minimum": 0
+          },
+          "sent": {
+            "type": "integer",
+            "description": "Texts sent.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "description": "Texts that failed (with the reason on the row).",
+            "minimum": 0
+          }
+        }
+      },
       "DriveMiles": {
         "type": "object",
         "description": "`GET /v1/company/drive-miles`.",
@@ -40642,6 +40715,26 @@
             ],
             "format": "double",
             "description": "Driving miles, one decimal; null when unknown."
+          }
+        }
+      },
+      "DueRun": {
+        "type": "object",
+        "description": "Due messages looked at (emails, texts).",
+        "required": [
+          "emails",
+          "sms"
+        ],
+        "properties": {
+          "emails": {
+            "type": "integer",
+            "description": "Due emails looked at.",
+            "minimum": 0
+          },
+          "sms": {
+            "type": "integer",
+            "description": "Due texts looked at.",
+            "minimum": 0
           }
         }
       },
@@ -51169,6 +51262,48 @@
             ],
             "format": "int32",
             "description": "Pixel height of an image."
+          }
+        }
+      },
+      "SmsFollowupsRun": {
+        "type": "object",
+        "description": "What a run did.",
+        "required": [
+          "processed",
+          "sent",
+          "failed",
+          "stopped",
+          "scheduled_sms",
+          "delayed"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Flow enrollments looked at.",
+            "minimum": 0
+          },
+          "sent": {
+            "type": "integer",
+            "description": "Flow steps sent.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "description": "Flow runs that failed.",
+            "minimum": 0
+          },
+          "stopped": {
+            "type": "integer",
+            "description": "Flow runs stopped by a reply or call.",
+            "minimum": 0
+          },
+          "scheduled_sms": {
+            "$ref": "#/components/schemas/DripRun",
+            "description": "Drip texts of lead lists."
+          },
+          "delayed": {
+            "$ref": "#/components/schemas/DueRun",
+            "description": "Scheduled emails and texts."
           }
         }
       },
