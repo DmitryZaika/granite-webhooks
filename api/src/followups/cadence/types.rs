@@ -140,3 +140,29 @@ pub struct PlanAiFollowupCadenceOptions {
     pub unanswered_total: Option<f64>,
     pub contact_pressure: Option<FollowupContactPressure>,
 }
+
+/// One message of a cadence preview (generated, maybe edited).
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCadencePreviewMessage {
+    pub delay_minutes: f64,
+    pub delay_label: String,
+    pub goal: String,
+    pub channel: FollowupChannel,
+    pub skip: bool,
+    pub skip_reason: Option<String>,
+    pub body: String,
+    pub subject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_body: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub generated_subject: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+}
