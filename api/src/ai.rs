@@ -129,11 +129,14 @@ impl Ai {
         Self::new(None, CHAT_URL)
     }
 
+    /// `OPEN_AI_SECRET_KEY`; `OPENAI_CHAT_URL` points at a stand-in (the
+    /// frontend's browser tests).
     pub fn from_env() -> Self {
-        Self::new(
-            std::env::var("OPEN_AI_SECRET_KEY").ok().as_deref(),
-            CHAT_URL,
-        )
+        let url = std::env::var("OPENAI_CHAT_URL")
+            .ok()
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or_else(|| CHAT_URL.to_string());
+        Self::new(std::env::var("OPEN_AI_SECRET_KEY").ok().as_deref(), &url)
     }
 
     /// `url` is the chat completions endpoint (a stub in tests).
