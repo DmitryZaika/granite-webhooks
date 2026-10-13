@@ -271,32 +271,14 @@ pub fn assemble_metrics(
     }
 }
 
-/// Sends the event to `PostHog` when server reporting is on
-/// (`POSTHOG_SERVER_ENABLED=true` and `POSTHOG_KEY`); failures are traced.
+/// Sends the event to `PostHog` (when server reporting is on).
 pub async fn log_metrics(http: &reqwest::Client, metrics: &PipelineMetrics) {
-    if std::env::var("POSTHOG_SERVER_ENABLED").ok().as_deref() != Some("true") {
-        return;
-    }
-    let Some(key) = std::env::var("POSTHOG_KEY")
-        .ok()
-        .filter(|key| !key.trim().is_empty())
-    else {
-        return;
-    };
-    let host = std::env::var("POSTHOG_HOST").unwrap_or_else(|_| "https://us.i.posthog.com".into());
-    let body = serde_json::json!({
-        "api_key": key,
-        "event": "ai_followup_pipeline",
-        "distinct_id": metrics.user_id.to_string(),
-        "properties": metrics,
-    });
-    let result = http
-        .post(format!("{}/capture/", host.trim_end_matches('/')))
-        .timeout(std::time::Duration::from_secs(5))
-        .json(&body)
-        .send()
-        .await;
-    if let Err(err) = result {
-        lambda_http::tracing::warn!(error = %err.without_url(), "ai_followup_pipeline event not sent");
-    }
+    let properties = serde_json::to_value(metrics).unwrap_or_default();
+    crate::posthog::capture(
+        http,
+        "ai_followup_pipeline",
+        &metrics.user_id.to_string(),
+        properties,
+    )
+    .await;
 }

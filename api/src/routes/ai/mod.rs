@@ -8,6 +8,7 @@
 //! - `POST /v1/ai/signature-fields` → what each blank of a contract PDF is for
 //! - `POST /v1/ai/agentic-questions`, `GET .../{id}` → questions for the agent
 //! - `GET /v1/ai/design/{pictures,deals}` → what the AI design tool picks from
+//! - `POST /v1/ai/conversation-reply` → the AI Reply button's draft
 //!
 //! Replaces the Remix `api.aiImprove.email` and `api.aiSummarize.callNote` routes.
 
@@ -15,6 +16,7 @@ pub mod agentic;
 pub mod call_activity;
 pub mod call_activity_rules;
 pub mod call_note;
+pub mod conversation_reply;
 pub mod design;
 pub mod email_template;
 pub mod improve;
@@ -36,4 +38,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(agentic::job))
         .routes(routes!(design::pictures))
         .routes(routes!(design::deals))
+        .routes(routes!(conversation_reply::conversation_reply))
 }

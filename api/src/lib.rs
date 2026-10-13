@@ -29,6 +29,7 @@ pub mod native_signing;
 pub mod pdf;
 pub mod pdf_fonts;
 pub mod pdf_preview;
+pub mod posthog;
 pub mod period;
 pub mod price_lists;
 pub mod qbo;

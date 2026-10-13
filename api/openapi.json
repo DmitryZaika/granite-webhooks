@@ -32298,6 +32298,113 @@
         ]
       }
     },
+    "/v1/ai/conversation-reply": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Draft the next message",
+        "description": "Drafts the next SMS or email to a customer from the whole conversation:\na fast reply, a follow-up on the open topic, or a custom draft (and\nrevisions of it).",
+        "operationId": "draft_conversation_reply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationReplyInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationReply"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, phone, or no customer, phone or email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The model wrote nothing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/notifications": {
       "get": {
         "tags": [
@@ -37444,6 +37551,101 @@
             "description": "Its files."
           }
         }
+      },
+      "ConversationReply": {
+        "type": "object",
+        "description": "The draft.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "The message (an email's body, without a subject line)."
+          }
+        }
+      },
+      "ConversationReplyInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/conversation-reply`.",
+        "required": [
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "`sms` or `email`."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer."
+          },
+          "customer_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For an email to someone not on file yet."
+          },
+          "phone_digits": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SMS thread's phone (5 to 15 digits)."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The deal to focus on."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ReplyMode"
+          },
+          "custom_request": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the rep asks for (custom drafts, at most 2000 characters)."
+          },
+          "previous_draft": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The draft to revise (at most 8000 characters)."
+          },
+          "revision_instruction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to change in it (at most 2000 characters)."
+          },
+          "instruction_history": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every instruction so far, oldest first (at most 12)."
+          },
+          "include_instructions": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Custom drafts: follow the company's instructions (default true)."
+          }
+        },
+        "additionalProperties": false
       },
       "ConversionCount": {
         "type": "object",
@@ -48352,6 +48554,15 @@
           }
         },
         "additionalProperties": false
+      },
+      "ReplyMode": {
+        "type": "string",
+        "description": "What kind of draft.",
+        "enum": [
+          "fast_reply",
+          "follow_up",
+          "custom"
+        ]
       },
       "ResetRequest": {
         "type": "object",
