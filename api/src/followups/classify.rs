@@ -158,6 +158,7 @@ pub struct InboundMessage<'a> {
     pub customer_phones: &'a [String],
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn classify_inbound_message(message: &InboundMessage<'_>) -> InboundClassification {
     use InboundMessageType as T;
     use ReplyClassificationConfidence as C;
