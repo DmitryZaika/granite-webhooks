@@ -4,16 +4,16 @@ use common::crud::notifications::{
     get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
     unmark_deadline_reminder_telegram_sent,
 };
-use common::crud::outbound_email::{OutboundScheduledEmail, record_outbound_scheduled_email};
+use common::crud::outbound_email::{record_outbound_scheduled_email, OutboundScheduledEmail};
 use common::crud::scheduled_emails::{
-    ScheduledEmail, cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
+    cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
     get_ready_scheduled_emails, mark_scheduled_email_as_sent,
-    mark_scheduled_email_failed_with_reason,
+    mark_scheduled_email_failed_with_reason, ScheduledEmail,
 };
 use common::crud::template::fetch_template_variable_data;
 use common::utils::email_send_window::automated_email_send_window_is_open_now;
 use common::utils::template::replace_template_variables;
-use lambda_runtime::{Error, LambdaEvent, tracing};
+use lambda_runtime::{tracing, Error, LambdaEvent};
 use reqwest::Client;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
@@ -173,6 +173,40 @@ async fn process_checklist_surveys() -> Result<usize, Error> {
     post_api_job("survey-notifications", "checklist survey notifications").await
 }
 
+/// Starts the supplier price file job without waiting for it: a big PDF takes
+/// minutes, and the API Lambda keeps working after this request gives up.
+/// Sent to the long-running deployment (`API_STREAM_URL`) when there is one.
+async fn start_supplier_files_job() {
+    let Some(api_url) = std::env::var("API_STREAM_URL")
+        .ok()
+        .or_else(|| std::env::var("API_URL").ok())
+    else {
+        tracing::warn!("API_URL is not set; skipping supplier files");
+        return;
+    };
+    let Ok(lambda_key) = std::env::var("LAMBDA_KEY") else {
+        tracing::warn!("LAMBDA_KEY is not set; skipping supplier files");
+        return;
+    };
+    let url = format!("{}/v1/jobs/supplier-files", api_url.trim_end_matches('/'));
+    let sent = Client::new()
+        .post(url)
+        .header("Authorization", lambda_key)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await;
+    match sent {
+        Ok(response) if !response.status().is_success() => tracing::warn!(
+            status = response.status().as_u16(),
+            "Failed to start supplier files"
+        ),
+        Err(error) if !error.is_timeout() => {
+            tracing::warn!(?error, "Failed to start supplier files");
+        }
+        _ => {}
+    }
+}
+
 pub fn scheduled_email_recipient(email: Option<&str>) -> Option<&str> {
     email.map(str::trim).filter(|value| !value.is_empty())
 }
@@ -297,6 +331,7 @@ pub(crate) async fn function_handler(
     let maintenance_reminder_count = process_maintenance_due_reminders().await?;
     let sms_followup_count = process_sms_followups().await?;
     let checklist_survey_count = process_checklist_surveys().await?;
+    start_supplier_files_job().await;
     let call_points_count = match process_call_points().await {
         Ok(count) => count,
         Err(error) => {

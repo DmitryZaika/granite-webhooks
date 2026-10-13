@@ -72,6 +72,11 @@ pub async fn create(
                 content_type.as_str(),
                 "image/avif" | "application/octet-stream"
             ))
+        || (request.folder == UploadFolder::SupplierFiles
+            && matches!(
+                content_type.as_str(),
+                "application/pdf" | "text/csv" | "text/tab-separated-values" | "text/plain"
+            ))
         || ((is_email || is_bug_report || request.folder == UploadFolder::EmailTemplates)
             && is_mime_type(&content_type));
     if !allowed {
@@ -141,6 +146,7 @@ pub fn extension(file_name: &str, content_type: &str) -> String {
             "application/pdf" => "pdf",
             "text/csv" => "csv",
             "text/plain" => "txt",
+            "text/tab-separated-values" => "tsv",
             "application/zip" => "zip",
             _ => "bin",
         }

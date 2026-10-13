@@ -9,6 +9,7 @@
 //!   and notifications
 //! - `POST /v1/jobs/sms-followups` → due flow steps, lead-list drip texts and
 //!   scheduled emails and texts
+//! - `POST /v1/jobs/supplier-files` → supplier price files into chunks
 //!
 //! Replaces the Remix `api.*.process` cron routes.
 
@@ -17,6 +18,7 @@ pub mod call_points;
 pub mod maintenance_reminders;
 pub mod signature_reminders;
 pub mod sms_followups;
+pub mod supplier_files;
 pub mod survey_notifications;
 
 use crate::error::ApiError;
@@ -33,6 +35,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(call_points::run))
         .routes(routes!(signature_reminders::run))
         .routes(routes!(sms_followups::run))
+        .routes(routes!(supplier_files::run))
 }
 
 /// The `time-triggered` Lambda, by its key.

@@ -59,6 +59,7 @@ pub mod stats;
 pub mod stones;
 pub mod superuser;
 pub mod supplier_files;
+pub mod suppliers;
 pub mod supports;
 pub mod survey_results;
 pub mod teach_mode;
@@ -132,6 +133,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(call_coaching::router())
         .merge(followups::router())
         .merge(supplier_files::router())
+        .merge(suppliers::router())
         .merge(billing::router())
         .merge(signatures::router())
         .merge(signwell_webhook::router())

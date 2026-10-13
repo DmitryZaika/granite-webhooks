@@ -8376,6 +8376,81 @@
             "session_cookie": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Add a supplier",
+        "description": "Creates a supplier of the company and adds its phone number to the\ncompany's `CloudTalk` contacts. Returns its id.",
+        "operationId": "create_supplier",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupplierInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, or a malformed website, phone or email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/suppliers/directory": {
@@ -34119,6 +34194,53 @@
         ]
       }
     },
+    "/v1/jobs/supplier-files": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Process waiting supplier price files",
+        "description": "Returns files stuck in processing to the queue, then processes waiting\nfiles (newest first) until none is left or ten minutes have passed.",
+        "operationId": "run_supplier_files",
+        "responses": {
+          "200": {
+            "description": "How many files were processed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupplierFilesRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
     "/v1/me/call-coaching": {
       "get": {
         "tags": [
@@ -35318,6 +35440,506 @@
           },
           "502": {
             "description": "The AI failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/suppliers/{id}": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Get a supplier",
+        "description": "One supplier of the company with its contact details.",
+        "operationId": "get_supplier",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Supplier id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The supplier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Supplier"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such supplier in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Edit a supplier",
+        "description": "Replaces the supplier's details and updates its `CloudTalk` contact\n(removed when the phone number is gone).",
+        "operationId": "update_supplier",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Supplier id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupplierInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Missing name, or a malformed website, phone or email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such supplier in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Delete a supplier",
+        "description": "Deletes the supplier (and its price files) and removes it from the\ncompany's `CloudTalk` contacts. Stones, sinks and faucets that named it\nkeep their supplier id (as before); 409 if the database refuses.",
+        "operationId": "delete_supplier",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Supplier id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such supplier in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The database refused the delete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/suppliers/{id}/files": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "List a supplier's price files",
+        "description": "The supplier's price files, newest first, with their processing state.\nFiles in `pending`/`processing` are picked up by the processor within a\nminute; poll while any is.",
+        "operationId": "list_supplier_files",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Supplier id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SupplierFile"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such supplier in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Add a supplier price file",
+        "description": "Records an uploaded price file as `pending`; the processor turns it into\nsearchable prices within a minute (`GET /v1/suppliers/{id}/files` shows\nits state).",
+        "operationId": "add_supplier_file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Supplier id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewSupplierFile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, or not an uploaded file of an accepted type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such supplier in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/supplier-files/{id}": {
+      "delete": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Delete a supplier price file",
+        "description": "Deletes a price file of one of the company's suppliers, its prices and\nthe stored file.",
+        "operationId": "delete_supplier_file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Supplier file id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such file in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
             "content": {
               "application/json": {
                 "schema": {
@@ -47232,6 +47854,25 @@
           }
         }
       },
+      "NewSupplierFile": {
+        "type": "object",
+        "description": "Body of `POST /v1/suppliers/{id}/files`.",
+        "required": [
+          "name",
+          "url"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name to show for the file (required)."
+          },
+          "url": {
+            "type": "string",
+            "description": "URL from `POST /v1/uploads` with folder `supplier-files`, after the\nfile was uploaded. PDF, JPEG, PNG, WebP, CSV, TSV or TXT."
+          }
+        },
+        "additionalProperties": false
+      },
       "NewSupport": {
         "type": "object",
         "description": "Body of `POST /v1/supports`.",
@@ -54518,6 +55159,70 @@
           }
         }
       },
+      "SupplierFilesRun": {
+        "type": "object",
+        "description": "What a run did.",
+        "required": [
+          "processed"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Files claimed and processed (ready or failed).",
+            "minimum": 0
+          }
+        }
+      },
+      "SupplierInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/suppliers` and `PUT /v1/suppliers/{id}`. Blank\noptional fields are saved as null.",
+        "required": [
+          "supplier_name"
+        ],
+        "properties": {
+          "supplier_name": {
+            "type": "string",
+            "description": "Display name (required, trimmed)."
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Website URL (`http(s)://...`)."
+          },
+          "manager": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contact person."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone number, at least 10 characters."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email address."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes."
+          }
+        },
+        "additionalProperties": false
+      },
       "SupplierOffer": {
         "type": "object",
         "description": "A price found in a supplier's price list.",
@@ -56316,7 +57021,8 @@
           "bug-reports",
           "email-templates",
           "leads",
-          "sms-uploads"
+          "sms-uploads",
+          "supplier-files"
         ]
       },
       "UploadRequest": {
@@ -56338,7 +57044,7 @@
           },
           "content_type": {
             "type": "string",
-            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`; for `deals` and `documents` also PDF, Word,\nExcel, CSV and plain text; for `sms-uploads` also AVIF, Word, Excel, PDF,\nCSV, plain text and `application/octet-stream` (a file the browser could\nnot type); for `emails` and `email-templates` any type. Send the same value\nas the `Content-Type` header of the `PUT`."
+            "description": "MIME type of the file: `image/jpeg`, `image/png`, `image/webp`,\n`image/gif`, `image/heic` or `image/heif`; for `deals` and `documents` also PDF, Word,\nExcel, CSV and plain text; for `supplier-files` also PDF, CSV, TSV and plain text; for `sms-uploads` also AVIF, Word, Excel, PDF,\nCSV, plain text and `application/octet-stream` (a file the browser could\nnot type); for `emails` and `email-templates` any type. Send the same value\nas the `Content-Type` header of the `PUT`."
           }
         },
         "additionalProperties": false
