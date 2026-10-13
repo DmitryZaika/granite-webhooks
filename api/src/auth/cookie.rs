@@ -103,6 +103,19 @@ fn encode_json(json: &[u8], secret: &str) -> String {
     utf8_percent_encode(&format!("{payload}.{signature}"), COOKIE_VALUE_ENCODE).to_string()
 }
 
+/// Decodes an unsigned React Router cookie (`createCookie` without secrets):
+/// base64 of the UTF-8 JSON. `None` when it is not one.
+pub fn decode_plain(value: &str) -> Option<serde_json::Value> {
+    let json = STANDARD.decode(value.trim()).ok()?;
+    serde_json::from_slice(&json).ok()
+}
+
+/// Inverse of [`decode_plain`]; returns the percent-encoded cookie value.
+pub fn encode_plain(value: &serde_json::Value) -> String {
+    let payload = STANDARD.encode(serde_json::to_vec(value).expect("JSON serializes"));
+    utf8_percent_encode(&payload, COOKIE_VALUE_ENCODE).to_string()
+}
+
 /// Where the session cookie is set: the shared parent domain (so the API
 /// and every company subdomain see it), and whether it is HTTPS only.
 #[derive(Debug, Clone, Default)]
@@ -127,6 +140,12 @@ impl CookieConfig {
             attributes.push_str(domain);
         }
         attributes
+    }
+
+    /// A `Set-Cookie` value for another `HttpOnly` cookie of the app, on the
+    /// session's domain.
+    pub fn set_cookie(&self, name: &str, value: &str, max_age: i64) -> String {
+        format!("{name}={value}; {}", self.attributes(max_age, true))
     }
 
     /// `Set-Cookie` values that store `value` as the session. With a shared

@@ -11144,6 +11144,121 @@
         ]
       }
     },
+    "/v1/stats/widget-layout": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Get the Statistics widget layout",
+        "description": "The widget layout this browser saved for the company (its cookie), and\nwhether a board without one starts empty.",
+        "operationId": "get_statistics_widget_layout",
+        "responses": {
+          "200": {
+            "description": "The layout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WidgetLayout"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Save the Statistics widget layout",
+        "description": "Stores the whole layout in this browser's cookie for the company.",
+        "operationId": "save_statistics_widget_layout",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveWidgetLayout"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Too big to be a layout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/dashboard/widgets": {
       "get": {
         "tags": [
@@ -56078,6 +56193,19 @@
         },
         "additionalProperties": false
       },
+      "SaveWidgetLayout": {
+        "type": "object",
+        "description": "Body of `PUT /v1/stats/widget-layout`.",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "object",
+            "description": "The whole layout as the page serializes it."
+          }
+        }
+      },
       "SavedDraft": {
         "type": "object",
         "description": "A saved draft.",
@@ -61434,6 +61562,26 @@
           "target": {
             "type": "string",
             "description": "What in the widget was used, e.g. `quick-links` or `sales-goal`;\n1 to 64 characters after trimming."
+          }
+        }
+      },
+      "WidgetLayout": {
+        "type": "object",
+        "description": "`GET /v1/stats/widget-layout`.",
+        "required": [
+          "hidden_by_default"
+        ],
+        "properties": {
+          "saved": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The layout this browser saved for the company, as the page stored it;\nnull when none."
+          },
+          "hidden_by_default": {
+            "type": "boolean",
+            "description": "The company starts with an empty board (new companies) instead of the\ndefault widgets."
           }
         }
       },

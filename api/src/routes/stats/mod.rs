@@ -6,6 +6,7 @@
 //! - `GET /v1/me/stats/sent-emails`     → emails sent per month, last 3 months
 //! - `GET /v1/me/stats/sent-sms`        → texts sent per month, last 3 months
 //! - `GET /v1/stats/overview`           → the admin Statistics page ([`overview`])
+//! - `GET|PUT /v1/stats/widget-layout`  → its widget layout ([`widget_layout`])
 //!
 //! Replaces `salesRepStats.server.ts` and `employeeDashboardMetrics.server.ts`.
 
@@ -13,6 +14,7 @@ mod handlers;
 pub mod overview;
 pub mod queries;
 pub mod schemas;
+pub mod widget_layout;
 
 use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -28,4 +30,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::sent_emails))
         .routes(routes!(handlers::sent_sms))
         .routes(routes!(overview::overview))
+        .routes(routes!(
+            widget_layout::get_layout,
+            widget_layout::save_layout
+        ))
 }
