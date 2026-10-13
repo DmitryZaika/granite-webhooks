@@ -23,56 +23,51 @@ use utoipa::ToSchema;
 const ESCALATION_MESSAGE: &str =
     "I'm sorry — your review was added to our team and we will check it.";
 
+/// What the feedback is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Intent {
+    /// The answer was wrong: ask for a corrected one.
+    Dislike,
+    /// A corrected answer was right: save it for review.
+    Approve,
+    /// Still wrong: hand it to the super admins.
+    Escalate,
+}
+
 /// Body of `POST /v1/ai/crm-manual-feedback`.
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(tag = "intent", rename_all = "lowercase")]
-pub enum FeedbackInput {
-    /// The answer was wrong: ask for a corrected one.
-    Dislike {
-        /// The user's question.
-        question: String,
-        /// The answer they disliked.
-        #[serde(rename = "originalAnswer")]
-        original_answer: String,
-        /// 1 or 2.
-        attempt: i64,
-        /// Corrections already disliked.
-        #[serde(default, rename = "previousCorrections")]
-        previous_corrections: Vec<String>,
-    },
-    /// A corrected answer was right: save it for review.
-    Approve {
-        /// The conversation, ending with the approved correction.
-        dialog: Vec<DialogMessage>,
-        /// The approved answer.
-        #[serde(rename = "correctedAnswer")]
-        corrected_answer: String,
-        /// Which correction (1 or 2).
-        attempt: i64,
-        /// The manual section the correction belongs to.
-        #[serde(default, rename = "sectionId")]
-        section_id: Option<String>,
-        /// The change the correction suggests for that section.
-        #[serde(default, rename = "proposedManualChange")]
-        proposed_manual_change: Option<String>,
-        /// What the user wrote.
-        #[serde(default, rename = "feedbackText")]
-        feedback_text: Option<String>,
-    },
-    /// Still wrong: hand it to the super admins.
-    Escalate {
-        /// The conversation.
-        dialog: Vec<DialogMessage>,
-        /// The manual section it is about.
-        #[serde(default, rename = "sectionId")]
-        section_id: Option<String>,
-        /// A suggested change for that section.
-        #[serde(default, rename = "proposedManualChange")]
-        proposed_manual_change: Option<String>,
-        /// What the user wrote.
-        #[serde(default, rename = "feedbackText")]
-        feedback_text: Option<String>,
-    },
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FeedbackInput {
+    /// `dislike`, `approve` or `escalate`.
+    pub intent: Intent,
+    /// The user's question (`dislike`).
+    #[serde(default)]
+    pub question: String,
+    /// The answer they disliked (`dislike`).
+    #[serde(default)]
+    pub original_answer: String,
+    /// The correction attempt, 1 or 2 (`dislike`, `approve`).
+    #[serde(default)]
+    pub attempt: i64,
+    /// Corrections already disliked (`dislike`).
+    #[serde(default)]
+    pub previous_corrections: Vec<String>,
+    /// The conversation (`approve`, `escalate`).
+    #[serde(default)]
+    pub dialog: Vec<DialogMessage>,
+    /// The approved answer (`approve`).
+    #[serde(default)]
+    pub corrected_answer: String,
+    /// The manual section it is about.
+    #[serde(default)]
+    pub section_id: Option<String>,
+    /// A suggested change for that section.
+    #[serde(default)]
+    pub proposed_manual_change: Option<String>,
+    /// What the user wrote.
+    #[serde(default)]
+    pub feedback_text: Option<String>,
 }
 
 /// A corrected answer (`dislike`).
@@ -146,75 +141,55 @@ pub async fn feedback(
 ) -> ApiResult<Json<FeedbackOut>> {
     let invalid = || ApiError::BadRequest("Invalid request".into());
     let company_id = (user.company_id > 0).then_some(user.company_id);
-    let (status, dialog, approved, section_id, proposed, feedback_text) = match input {
-        FeedbackInput::Dislike {
-            question,
-            original_answer,
-            attempt,
-            previous_corrections,
-        } => {
-            if question.is_empty() || original_answer.is_empty() || !(1..=2).contains(&attempt) {
-                return Err(invalid());
-            }
-            let access = crm_manual::access(&state.pool, &user).await?;
-            let caller = Caller {
-                feature: "crm_manual_correction",
-                user_id: Some(user.id),
-                company_id,
-            };
-            let correction = manual_feedback::correction(
-                &state,
-                caller,
-                &question,
-                &original_answer,
-                attempt,
-                &previous_corrections,
-                Some(&access),
-            )
-            .await;
-            return Ok(Json(FeedbackOut::Correction(CorrectionOut {
-                correction: correction.answer,
-                attempt,
-                section_id: correction
-                    .section_id
-                    .or_else(|| manual_feedback::guess_section_id(&question)),
-                proposed_manual_change: correction.proposed_manual_change,
-                escalate: false,
-            })));
+    let FeedbackInput {
+        intent,
+        question,
+        original_answer,
+        attempt,
+        previous_corrections,
+        dialog,
+        corrected_answer,
+        section_id,
+        proposed_manual_change: proposed,
+        feedback_text,
+    } = input;
+    if intent == Intent::Dislike {
+        if question.is_empty() || original_answer.is_empty() || !(1..=2).contains(&attempt) {
+            return Err(invalid());
         }
-        FeedbackInput::Approve {
-            dialog,
-            corrected_answer,
+        let access = crm_manual::access(&state.pool, &user).await?;
+        let caller = Caller {
+            feature: "crm_manual_correction",
+            user_id: Some(user.id),
+            company_id,
+        };
+        let correction = manual_feedback::correction(
+            &state,
+            caller,
+            &question,
+            &original_answer,
             attempt,
-            section_id,
-            proposed_manual_change,
-            feedback_text,
-        } => {
-            if corrected_answer.is_empty() || !(1..=2).contains(&attempt) {
-                return Err(invalid());
-            }
-            (
-                "user_approved",
-                dialog,
-                Some(corrected_answer),
-                section_id,
-                proposed_manual_change,
-                feedback_text,
-            )
+            &previous_corrections,
+            Some(&access),
+        )
+        .await;
+        return Ok(Json(FeedbackOut::Correction(CorrectionOut {
+            correction: correction.answer,
+            attempt,
+            section_id: correction
+                .section_id
+                .or_else(|| manual_feedback::guess_section_id(&question)),
+            proposed_manual_change: correction.proposed_manual_change,
+            escalate: false,
+        })));
+    }
+    let (status, approved) = if intent == Intent::Approve {
+        if corrected_answer.is_empty() || !(1..=2).contains(&attempt) {
+            return Err(invalid());
         }
-        FeedbackInput::Escalate {
-            dialog,
-            section_id,
-            proposed_manual_change,
-            feedback_text,
-        } => (
-            "escalated",
-            dialog,
-            None,
-            section_id,
-            proposed_manual_change,
-            feedback_text,
-        ),
+        ("user_approved", Some(corrected_answer))
+    } else {
+        ("escalated", None)
     };
     if dialog.is_empty() {
         return Err(ApiError::BadRequest("Invalid dialog payload".into()));

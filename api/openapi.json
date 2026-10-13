@@ -43428,146 +43428,70 @@
         }
       },
       "FeedbackInput": {
-        "oneOf": [
-          {
-            "type": "object",
-            "description": "The answer was wrong: ask for a corrected one.",
-            "required": [
-              "question",
-              "originalAnswer",
-              "attempt",
-              "intent"
-            ],
-            "properties": {
-              "question": {
-                "type": "string",
-                "description": "The user's question."
-              },
-              "originalAnswer": {
-                "type": "string",
-                "description": "The answer they disliked."
-              },
-              "attempt": {
-                "type": "integer",
-                "format": "int64",
-                "description": "1 or 2."
-              },
-              "previousCorrections": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "Corrections already disliked."
-              },
-              "intent": {
-                "type": "string",
-                "enum": [
-                  "dislike"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "A corrected answer was right: save it for review.",
-            "required": [
-              "dialog",
-              "correctedAnswer",
-              "attempt",
-              "intent"
-            ],
-            "properties": {
-              "dialog": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/DialogMessage"
-                },
-                "description": "The conversation, ending with the approved correction."
-              },
-              "correctedAnswer": {
-                "type": "string",
-                "description": "The approved answer."
-              },
-              "attempt": {
-                "type": "integer",
-                "format": "int64",
-                "description": "Which correction (1 or 2)."
-              },
-              "sectionId": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "The manual section the correction belongs to."
-              },
-              "proposedManualChange": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "The change the correction suggests for that section."
-              },
-              "feedbackText": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "What the user wrote."
-              },
-              "intent": {
-                "type": "string",
-                "enum": [
-                  "approve"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "Still wrong: hand it to the super admins.",
-            "required": [
-              "dialog",
-              "intent"
-            ],
-            "properties": {
-              "dialog": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/DialogMessage"
-                },
-                "description": "The conversation."
-              },
-              "sectionId": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "The manual section it is about."
-              },
-              "proposedManualChange": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "A suggested change for that section."
-              },
-              "feedbackText": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "What the user wrote."
-              },
-              "intent": {
-                "type": "string",
-                "enum": [
-                  "escalate"
-                ]
-              }
-            }
-          }
+        "type": "object",
+        "description": "Body of `POST /v1/ai/crm-manual-feedback`.",
+        "required": [
+          "intent"
         ],
-        "description": "Body of `POST /v1/ai/crm-manual-feedback`."
+        "properties": {
+          "intent": {
+            "$ref": "#/components/schemas/Intent",
+            "description": "`dislike`, `approve` or `escalate`."
+          },
+          "question": {
+            "type": "string",
+            "description": "The user's question (`dislike`)."
+          },
+          "originalAnswer": {
+            "type": "string",
+            "description": "The answer they disliked (`dislike`)."
+          },
+          "attempt": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The correction attempt, 1 or 2 (`dislike`, `approve`)."
+          },
+          "previousCorrections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Corrections already disliked (`dislike`)."
+          },
+          "dialog": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DialogMessage"
+            },
+            "description": "The conversation (`approve`, `escalate`)."
+          },
+          "correctedAnswer": {
+            "type": "string",
+            "description": "The approved answer (`approve`)."
+          },
+          "sectionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The manual section it is about."
+          },
+          "proposedManualChange": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A suggested change for that section."
+          },
+          "feedbackText": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the user wrote."
+          }
+        },
+        "additionalProperties": false
       },
       "FeedbackOut": {
         "oneOf": [
@@ -45100,6 +45024,15 @@
         "enum": [
           "company",
           "general"
+        ]
+      },
+      "Intent": {
+        "type": "string",
+        "description": "What the feedback is.",
+        "enum": [
+          "dislike",
+          "approve",
+          "escalate"
         ]
       },
       "InvalidInput": {
