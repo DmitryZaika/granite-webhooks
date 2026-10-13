@@ -31980,6 +31980,162 @@
         ]
       }
     },
+    "/v1/ai/agentic-questions": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Ask the agent",
+        "description": "Queues a question for the claude-job-runner agent, in the caller's latest\nchat or a new one. Poll `GET /v1/ai/agentic-questions/{id}` for the answer.",
+        "operationId": "ask_agent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewAgenticQuestion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueuedQuestion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or too long question",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/ai/agentic-questions/{id}": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Follow a question",
+        "description": "Where the caller's question is, and the agent's answer once it is done.\nOther people's questions read as not found.",
+        "operationId": "get_agentic_question",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The question's id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The question's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgenticJob"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such question of the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/notifications": {
       "get": {
         "tags": [
@@ -34751,6 +34907,45 @@
               "$ref": "#/components/schemas/AnswerChoice"
             },
             "description": "Their answers, by question."
+          }
+        }
+      },
+      "AgenticJob": {
+        "type": "object",
+        "description": "Where a question is.",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string",
+            "description": "`queued` (not picked up yet), `pending`, `done` or `failed`."
+          },
+          "reply": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The answer, once `done`."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the agent failed, once `failed`."
+          },
+          "partial": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the agent answered before failing, if anything."
           }
         }
       },
@@ -44106,6 +44301,24 @@
         },
         "additionalProperties": false
       },
+      "NewAgenticQuestion": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/agentic-questions`.",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The question (1 to 8000 characters once trimmed)."
+          },
+          "new_chat": {
+            "type": "boolean",
+            "description": "Start a new chat instead of continuing the latest one."
+          }
+        },
+        "additionalProperties": false
+      },
       "NewBugReport": {
         "type": "object",
         "description": "Body of `POST /v1/bug-reports`.",
@@ -46791,6 +47004,25 @@
               "$ref": "#/components/schemas/ChoiceInput"
             },
             "description": "The answers it keeps (others are deleted): at least two, exactly one right."
+          }
+        }
+      },
+      "QueuedQuestion": {
+        "type": "object",
+        "description": "A queued question.",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The question's id, to poll."
+          },
+          "status": {
+            "type": "string",
+            "description": "Always `queued`."
           }
         }
       },

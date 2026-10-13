@@ -6,9 +6,11 @@
 //! - `POST /v1/ai/email-template` → an email template from a description
 //! - `POST /v1/ai/invoice-edit` → a QuickBooks invoice edit from an instruction
 //! - `POST /v1/ai/signature-fields` → what each blank of a contract PDF is for
+//! - `POST /v1/ai/agentic-questions`, `GET .../{id}` → questions for the agent
 //!
 //! Replaces the Remix `api.aiImprove.email` and `api.aiSummarize.callNote` routes.
 
+pub mod agentic;
 pub mod call_activity;
 pub mod call_activity_rules;
 pub mod call_note;
@@ -28,4 +30,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(email_template::email_template))
         .routes(routes!(invoice_edit::invoice_edit))
         .routes(routes!(signature_fields::detect))
+        .routes(routes!(agentic::ask))
+        .routes(routes!(agentic::job))
 }
