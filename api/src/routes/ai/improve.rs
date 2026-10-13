@@ -14,6 +14,8 @@ use utoipa::ToSchema;
 
 const SHARED: &str = "Your job is to improve customer-facing business messages at tone level 2 on a 1-3 scale. Level 1 is too plain: only grammar and spelling fixes with almost no word changes. Level 3 is too fancy: stiff, wordy, or corporate. Always write level 2: clear, friendly, professional, and noticeably improved wording. Fix grammar and spelling, and upgrade weak or casual phrasing to slightly better words while keeping the same meaning and a natural voice. You must improve wording, not just proofread. Words like typically, prepare, and please let me know are good level 2 wording. Do not avoid them. Good level 2 upgrades: \"you said you'll call me\" -> \"you mentioned you'll call me back\"; \"I wanted to check in\" -> \"I wanted to follow up\"; \"let me know if that works\" -> \"please let me know if that works for you\"; \"we cut a 30 inch hole\" -> \"we typically prepare a 30 inch opening for the stove\". Do not go to level 3. Avoid stiff phrasing such as \"consistently ensures\", \"please be advised\", \"identified any factors\", \"may necessitate\", \"at your earliest convenience\", or adding extra clauses that sound like legal or marketing copy. Keep sentences straightforward. Keep commas. Do not delete commas that are already there, and use a comma where normal English needs one: after a name you are speaking to (\"I'm sorry, Kevin\") and before but (\"isn't feeling well, but\"). Do not add new facts, promises, dates, prices, or ideas. Never change a day, date, time, or other fact that is already in the draft. Monday must stay Monday. Do not use any outside conversation to rewrite the draft. The only customer detail you may correct is a misspelled first name, and only when a separate name instruction gives that exact name. Keep every http or https URL exactly as written — do not remove, shorten, or rewrite deposit, payment, or other links. Keep the same language as the input. Return only the improved text with no explanations or labels. Bad level 3: \"Please be advised that we will prepare your opening on schedule, which consistently ensures a proper fit. Kindly inform us if you have identified any factors that may necessitate on-site cutting at your earliest convenience.\" Good level 2: \"We typically prepare a 30 inch opening for the stove, which should give you a proper fit. Please let me know if anything on your end would need cutting on site.\"";
 
+const PARTIAL: &str = "The input is only a selected part of a longer message, not the whole message. Improve just this part so it still fits back in the same place: do not add a greeting, sign-off, or anything before or after it, and keep a sentence fragment a fragment. If it starts or ends mid-sentence, keep it starting or ending the same way.";
+
 const LISTS: &str = "If the input has numbered lists (1. 2. 3.), bullet lists, or intentional line breaks, keep each item on its own line in the same order. Do not flatten a list into one paragraph. Match the spacing of the input between list items: if the input has a blank line between list items, keep a blank line between them; if it does not, put each item on the line right after the previous one. If the input has no blank line between lines, do not insert blank lines between sentences.";
 
 /// Which kind of message.
@@ -38,6 +40,11 @@ pub struct ImproveInput {
     /// The customer's name, to fix the spelling of their first name.
     #[serde(default)]
     pub customer_name: Option<String>,
+    /// `true` when `body` is only the part of a longer draft the user
+    /// selected: the reply then fits back in its place (no greeting or
+    /// sign-off, fragments stay fragments). Defaults to `false`.
+    #[serde(default)]
+    pub partial: bool,
 }
 
 /// `POST /v1/ai/improve`.
@@ -69,6 +76,8 @@ fn name_rule(customer_name: Option<&str>) -> Option<String> {
 ///
 /// Rewrites a customer-facing email or text: grammar, spelling and slightly
 /// better wording, same meaning, facts and links. The reply is the raw text.
+/// With `partial`, only a selected part of a draft is sent and the reply is
+/// shaped to be put back in its place.
 #[utoipa::path(
     post,
     path = "/v1/ai/improve",
@@ -95,6 +104,9 @@ pub async fn improve(
     let mut chat = Chat::new(MINI_MODEL).message("system", &system_prompt(input.channel));
     if let Some(rule) = name_rule(input.customer_name.as_deref()) {
         chat = chat.message("system", &rule);
+    }
+    if input.partial {
+        chat = chat.message("system", PARTIAL);
     }
     chat = chat.message("user", &input.body);
     let caller = Caller {

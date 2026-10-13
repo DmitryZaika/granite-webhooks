@@ -13781,6 +13781,88 @@
         ]
       }
     },
+    "/v1/deals/{id}/document-events": {
+      "get": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "List a deal's quote and contract history",
+        "description": "Quotes of the deal that were emailed or printed, and contracts sent for\nsigning (tied to the deal, or named after one of its quotes:\n`<contract form> - <quote name>.pdf`) and signed. Views are left out.\nUnsorted: the deal page merges them into its history by `at`.",
+        "operationId": "list_deal_document_events",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deal id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Quote and contract events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentEvent"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live deal in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/deal-pipelines": {
       "get": {
         "tags": [
@@ -30983,7 +31065,7 @@
           "ai"
         ],
         "summary": "Improve a draft",
-        "description": "Rewrites a customer-facing email or text: grammar, spelling and slightly\nbetter wording, same meaning, facts and links. The reply is the raw text.",
+        "description": "Rewrites a customer-facing email or text: grammar, spelling and slightly\nbetter wording, same meaning, facts and links. The reply is the raw text.\nWith `partial`, only a selected part of a draft is sent and the reply is\nshaped to be put back in its place.",
         "operationId": "improve_message",
         "requestBody": {
           "content": {
@@ -31378,7 +31460,7 @@
           "notifications"
         ],
         "summary": "List notifications",
-        "description": "Unread incoming mail of the last 14 days (one per conversation), due\nactivity and signature notifications, open billing notices and missed\n`CloudTalk` calls, newest first. The onboarding tour's sample\nnotifications are left out unless `samples` is set.",
+        "description": "Unread incoming mail of the last 14 days (one per conversation), due\nnotifications on live deals (signature status is emailed to the sender\ninstead, so it is left out), open billing notices and missed\n`CloudTalk` calls, newest first. The onboarding tour's sample\nnotifications are left out unless `samples` is set.",
         "operationId": "list_notifications",
         "parameters": [
           {
@@ -37886,6 +37968,66 @@
           "outbound"
         ]
       },
+      "DocumentEvent": {
+        "type": "object",
+        "description": "One quote or contract event of a deal.",
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable key, e.g. `quote-email-12` or `contract-signed-7`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DocumentEventKind",
+            "description": "What happened."
+          },
+          "title": {
+            "type": "string",
+            "description": "The quote's name (`Quote` when it has none), or the contract's file\nname without `.pdf`."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Recipients of an emailed quote, the form a quote was printed with, or\nthe contract's signer. Null when unknown."
+          },
+          "at": {
+            "type": "string",
+            "description": "When it happened, UTC (`2026-05-01T14:30:00Z`)."
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who sent or printed it. Null for a signing, or when unknown."
+          },
+          "quote_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The quote to open, for quote events; null for contracts."
+          }
+        }
+      },
+      "DocumentEventKind": {
+        "type": "string",
+        "description": "What happened to the document.",
+        "enum": [
+          "quote_emailed",
+          "quote_printed",
+          "contract_sent",
+          "contract_signed"
+        ]
+      },
       "DocumentRename": {
         "type": "object",
         "description": "Body of `PATCH /v1/deals/{id}/documents/{document_id}`.",
@@ -40711,6 +40853,10 @@
               "null"
             ],
             "description": "The customer's name, to fix the spelling of their first name."
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "`true` when `body` is only the part of a longer draft the user\nselected: the reply then fits back in its place (no greeting or\nsign-off, fragments stay fragments). Defaults to `false`."
           }
         }
       },

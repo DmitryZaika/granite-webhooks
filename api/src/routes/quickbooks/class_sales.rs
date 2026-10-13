@@ -102,7 +102,14 @@ pub async fn class_sales(
         path.push_str("&end_date=");
         path.push_str(end);
     }
-    let report = match state.qbo.get(&access, &path).await {
+    // The report and the class list don't depend on each other.
+    let (report, classes) = tokio::join!(
+        state.qbo.get(&access, &path),
+        state
+            .qbo
+            .query(&access, "select * from Class MAXRESULTS 1000", "Class"),
+    );
+    let report = match report {
         Ok(report) if report.get("Fault").is_none() => report,
         Ok(_) => return Ok(empty(ClassSalesStatus::Error)),
         Err(err) if err.is_not_connected() => return Ok(empty(ClassSalesStatus::NotConnected)),
@@ -111,11 +118,7 @@ pub async fn class_sales(
             return Ok(empty(ClassSalesStatus::Error));
         }
     };
-    let classes = state
-        .qbo
-        .query(&access, "select * from Class MAXRESULTS 1000", "Class")
-        .await
-        .unwrap_or_default();
+    let classes = classes.unwrap_or_default();
     Ok(Json(ClassSales {
         status: ClassSalesStatus::Ok,
         report: Some(report),

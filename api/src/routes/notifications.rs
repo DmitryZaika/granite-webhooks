@@ -251,6 +251,8 @@ fn type_title(kind: &str) -> Option<&'static str> {
         "signature_viewed" => "Document Opened for Signing",
         "signature_signed" => "Document Signed",
         "signature_declined" => "Document Declined",
+        "delayed_message_sent" => "Scheduled Message Sent",
+        "delayed_message_failed" => "Scheduled Message Failed",
         _ => return None,
     })
 }
@@ -373,8 +375,10 @@ async fn activity(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem
            LEFT JOIN deals d ON d.id = n.deal_id AND d.deleted_at IS NULL
            JOIN customers c ON c.id = COALESCE(d.customer_id, n.customer_id)
           WHERE n.user_id = ? AND n.is_done = 0
-            AND (d.id IS NOT NULL OR (n.deal_id IS NULL
-                 AND n.notification_type IN ('signature_viewed', 'signature_signed', 'signature_declined')))
+            AND d.id IS NOT NULL
+            -- Signature status is emailed to the sender, so it is not listed here.
+            AND (n.notification_type IS NULL OR n.notification_type NOT IN
+                 ('signature_viewed', 'signature_signed', 'signature_declined'))
             AND CASE WHEN n.notification_type = 'activity_deadline_reminder'
                      THEN n.due_at <= UTC_TIMESTAMP() AND n.due_at > UTC_TIMESTAMP() - INTERVAL 1 MINUTE
                      ELSE n.due_at <= NOW() END
@@ -547,7 +551,8 @@ fn number(value: &serde_json::Value) -> f64 {
 /// List notifications
 ///
 /// Unread incoming mail of the last 14 days (one per conversation), due
-/// activity and signature notifications, open billing notices and missed
+/// notifications on live deals (signature status is emailed to the sender
+/// instead, so it is left out), open billing notices and missed
 /// `CloudTalk` calls, newest first. The onboarding tour's sample
 /// notifications are left out unless `samples` is set.
 #[utoipa::path(

@@ -18,6 +18,8 @@ const TOKEN_URL: &str = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bear
 const MINOR_VERSION: &str = "minorversion=75";
 /// Refresh this many seconds before the access token expires.
 const SAFETY_GAP: i64 = 60;
+/// How long a report or query may take before it counts as failed.
+pub const REPORT_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone)]
 pub struct Qbo {
@@ -307,8 +309,16 @@ impl Qbo {
     }
 
     async fn send(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response, QboError> {
+        self.send_within(request, Duration::from_mins(1)).await
+    }
+
+    async fn send_within(
+        &self,
+        request: reqwest::RequestBuilder,
+        timeout: Duration,
+    ) -> Result<reqwest::Response, QboError> {
         let response = request
-            .timeout(Duration::from_secs(60))
+            .timeout(timeout)
             .send()
             .await
             .map_err(|err| QboError::Request(err.without_url().to_string()))?;
@@ -324,19 +334,35 @@ impl Qbo {
     }
 
     async fn json(&self, request: reqwest::RequestBuilder) -> Result<Value, QboError> {
-        self.send(request.header("Accept", "application/json"))
+        self.json_within(request, Duration::from_mins(1)).await
+    }
+
+    async fn json_within(
+        &self,
+        request: reqwest::RequestBuilder,
+        timeout: Duration,
+    ) -> Result<Value, QboError> {
+        self.send_within(request.header("Accept", "application/json"), timeout)
             .await?
             .json()
             .await
             .map_err(|err| QboError::Request(err.without_url().to_string()))
     }
 
-    /// `GET /v3/company/{realm}/<path>`.
+    /// `GET /v3/company/{realm}/<path>`. Reports and queries give up after
+    /// [`REPORT_TIMEOUT`] so a hung `QuickBooks` call can't keep a page
+    /// (the dashboard's sales) spinning; other reads get a minute.
     pub async fn get(&self, access: &Access, path: &str) -> Result<Value, QboError> {
-        self.json(
+        let timeout = if path.starts_with("reports/") || path.starts_with("query?") {
+            REPORT_TIMEOUT
+        } else {
+            Duration::from_mins(1)
+        };
+        self.json_within(
             self.http
                 .get(self.url(access, path))
                 .bearer_auth(&access.token),
+            timeout,
         )
         .await
     }

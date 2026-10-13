@@ -78,10 +78,13 @@ async fn clear_all_dismisses_only_the_callers(pool: MySqlPool) {
 #[test_db::test(seed)]
 async fn the_bell_lists_mail_activity_and_billing(pool: MySqlPool) {
     sqlx::raw_sql(
-        "INSERT INTO notifications (id, user_id, customer_id, message, due_at, notification_type, actor_name, created_at) VALUES
-           (9731, 100, 1000, 'Alice opened the contract', NOW() - INTERVAL 1 HOUR, 'signature_viewed', NULL, NOW() - INTERVAL 1 HOUR),
-           (9732, 100, 1000, 'Sample', NOW() - INTERVAL 1 HOUR, 'signature_viewed', 'Onboarding Guide', NOW() - INTERVAL 2 HOUR),
-           (9733, 101, 1000, 'Not Rita''s', NOW(), 'signature_viewed', NULL, NOW());
+        "INSERT INTO notifications (id, user_id, deal_id, customer_id, message, due_at, notification_type, actor_name, created_at) VALUES
+           (9731, 100, 8000, NULL, 'Your text went out', NOW() - INTERVAL 1 HOUR, 'delayed_message_sent', NULL, NOW() - INTERVAL 1 HOUR),
+           (9732, 100, 8000, NULL, 'Sample', NOW() - INTERVAL 1 HOUR, 'note_added', 'Onboarding Guide', NOW() - INTERVAL 2 HOUR),
+           (9733, 101, 8000, NULL, 'Not Rita''s', NOW(), 'note_added', NULL, NOW()),
+           -- Signature status is emailed to the sender instead.
+           (9734, 100, NULL, 1000, 'Alice opened the contract', NOW() - INTERVAL 1 HOUR, 'signature_viewed', NULL, NOW() - INTERVAL 1 HOUR),
+           (9735, 100, 8000, NULL, 'Alice signed', NOW() - INTERVAL 1 HOUR, 'signature_signed', NULL, NOW() - INTERVAL 1 HOUR);
          INSERT INTO billing_notifications (id, company_id, user_id, dedupe_key, title, message, action_label, href, created_at)
            VALUES (9741, 100, 100, 'card', 'Card expired', 'Update it', 'Fix', '/billing', NOW() - INTERVAL 3 HOUR);
          INSERT INTO emails (id, thread_id, subject, body, sender_email, receiver_email, sent_at, company_id, message_id) VALUES
@@ -104,8 +107,8 @@ async fn the_bell_lists_mail_activity_and_billing(pool: MySqlPool) {
         .collect();
     assert_eq!(ids, ["bell-1", "notif-9731", "billing-9741"]);
     assert_eq!(items[0]["href"], "/employee/emails/chat/bell-1");
-    assert_eq!(items[1]["type_title"], "Document Opened for Signing");
-    assert_eq!(items[1]["href"], "/employee/customers/info/1000/documents");
+    assert_eq!(items[1]["type_title"], "Scheduled Message Sent");
+    assert_eq!(items[1]["href"], "/employee/deals/edit/8000/project");
     assert_eq!(items[2]["action_label"], "Fix");
     let with_samples: serde_json::Value = server
         .get("/v1/notifications?samples=true")
