@@ -17497,7 +17497,7 @@
           "emails"
         ],
         "summary": "Show an image attachment",
-        "description": "For an `<img>`: a JPEG of the attachment's picture. HEIC photos are\nconverted (and kept for later views) and the answer redirects to the\nJPEG; other pictures redirect to the stored file. With `icon=true` the\nanswer is a small JPEG (fits 320 x 320) itself.",
+        "description": "For an `<img>`: a JPEG of the attachment's picture. HEIC photos are\nconverted (and kept for later views) and the answer redirects to the\nJPEG; other pictures redirect to the stored file. With `icon=true` the\nanswer is a small JPEG (fits 320 x 320) itself; with `link=true` it is\nthe picture's URL as JSON instead of a redirect.",
         "operationId": "preview_email_attachment",
         "parameters": [
           {
@@ -17518,11 +17518,20 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "link",
+            "in": "query",
+            "description": "`true` to answer `{\"url\": ...}` (where the picture is, valid an\nhour) instead of redirecting there, for scripts that read the bytes.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The thumbnail (`icon=true`)",
+            "description": "The thumbnail (`icon=true`), or where the picture is (`link=true`)",
             "content": {
               "image/jpeg": {
                 "schema": {
@@ -17532,6 +17541,11 @@
                     "format": "int32",
                     "minimum": 0
                   }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PictureLink"
                 }
               }
             }
@@ -32136,6 +32150,154 @@
         ]
       }
     },
+    "/v1/ai/design/pictures": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "List pictures customers emailed",
+        "description": "Image attachments of emails the caller received, newest first, with the\ncustomer who sent each when known.",
+        "operationId": "list_ai_design_pictures",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 60 (default 9).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Pictures to skip, at most 500.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Matches the customer's name, the sender or the file name.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of pictures",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailedPictures"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/ai/design/deals": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "List the caller's deals for a design",
+        "description": "The caller's own live deals, newest first (at most 200).",
+        "operationId": "list_ai_design_deals",
+        "responses": {
+          "200": {
+            "description": "The caller's deals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DesignDeal"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/notifications": {
       "get": {
         "tags": [
@@ -39410,6 +39572,32 @@
           }
         }
       },
+      "DesignDeal": {
+        "type": "object",
+        "description": "A deal a design can be saved to.",
+        "required": [
+          "id",
+          "customer_name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The deal."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its title, when it has one."
+          },
+          "customer_name": {
+            "type": "string",
+            "description": "Its customer."
+          }
+        }
+      },
       "DesktopAlert": {
         "type": "object",
         "description": "An unread conversation whose latest message is from the customer.",
@@ -40376,6 +40564,66 @@
           }
         },
         "additionalProperties": false
+      },
+      "EmailedPicture": {
+        "type": "object",
+        "description": "A picture a customer emailed.",
+        "required": [
+          "id",
+          "filename",
+          "sender_email"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The attachment's id."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Its file name (`customer-image-<id>` when it has none)."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the email arrived."
+          },
+          "sender_email": {
+            "type": "string",
+            "description": "Who sent it."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer with that address, when known."
+          }
+        }
+      },
+      "EmailedPictures": {
+        "type": "object",
+        "description": "A page of pictures.",
+        "required": [
+          "pictures",
+          "has_more"
+        ],
+        "properties": {
+          "pictures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmailedPicture"
+            },
+            "description": "Newest first."
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "More pictures follow."
+          }
+        }
       },
       "EmailsBatchRequest": {
         "type": "object",
@@ -45987,6 +46235,19 @@
           "filename": {
             "type": "string",
             "description": "The name it was picked with (shown to the customer for documents)."
+          }
+        }
+      },
+      "PictureLink": {
+        "type": "object",
+        "description": "Where a picture is (`link=true`).",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The picture, valid an hour."
           }
         }
       },

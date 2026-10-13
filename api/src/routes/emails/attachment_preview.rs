@@ -25,6 +25,30 @@ pub struct PreviewQuery {
     /// `true` for a small JPEG (fits 320 x 320) instead of the full picture.
     #[serde(default)]
     pub icon: bool,
+    /// `true` to answer `{"url": ...}` (where the picture is, valid an
+    /// hour) instead of redirecting there, for scripts that read the bytes.
+    #[serde(default)]
+    pub link: bool,
+}
+
+/// Where a picture is (`link=true`).
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct PictureLink {
+    /// The picture, valid an hour.
+    pub url: String,
+}
+
+fn answer(location: &str, link: bool) -> Response {
+    if link {
+        return (
+            [(header::CACHE_CONTROL, "private, no-store")],
+            axum::Json(PictureLink {
+                url: location.to_string(),
+            }),
+        )
+            .into_response();
+    }
+    redirect(location, "private, max-age=3600")
 }
 
 /// `isHeicEmailAttachment`.
@@ -90,7 +114,8 @@ async fn blocking<T: Send + 'static>(
 /// For an `<img>`: a JPEG of the attachment's picture. HEIC photos are
 /// converted (and kept for later views) and the answer redirects to the
 /// JPEG; other pictures redirect to the stored file. With `icon=true` the
-/// answer is a small JPEG (fits 320 x 320) itself.
+/// answer is a small JPEG (fits 320 x 320) itself; with `link=true` it is
+/// the picture's URL as JSON instead of a redirect.
 #[utoipa::path(
     get,
     path = "/v1/email-attachments/{id}/preview",
@@ -98,7 +123,8 @@ async fn blocking<T: Send + 'static>(
     tag = "emails",
     params(("id" = i32, Path, description = "Attachment id"), PreviewQuery),
     responses(
-        (status = 200, description = "The thumbnail (`icon=true`)", content_type = "image/jpeg", body = Vec<u8>),
+        (status = 200, description = "The thumbnail (`icon=true`), or where the picture is (`link=true`)",
+            content((Vec<u8> = "image/jpeg"), (PictureLink = "application/json"))),
         (status = 302, description = "Redirect to the picture"),
         (status = 400, description = "Not an image", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
@@ -149,7 +175,7 @@ pub async fn preview(
         let readable = storage
             .readable_url(&url, mime(&kind, &sub).as_deref())
             .await;
-        return Ok(redirect(&readable, "private, max-age=3600"));
+        return Ok(answer(&readable, query.link));
     }
     let key = hashed_key("email-attachment-previews", &url);
     if !storage.exists(&key).await? {
@@ -162,7 +188,7 @@ pub async fn preview(
             Err(_) if sniffed.is_some_and(|kind| kind != images::Kind::Heic) => {
                 let mime = sniffed.map(images::Kind::mime);
                 let readable = storage.readable_url(&url, mime).await;
-                return Ok(redirect(&readable, "private, max-age=3600"));
+                return Ok(answer(&readable, query.link));
             }
             Err(err) => {
                 tracing::warn!(error = %err, id, "HEIC email attachment conversion failed");
@@ -171,7 +197,7 @@ pub async fn preview(
         }
     }
     let location = storage.presign_get(&key, "image/jpeg").await?;
-    Ok(redirect(&location, "private, max-age=3600"))
+    Ok(answer(&location, query.link))
 }
 
 #[cfg(test)]

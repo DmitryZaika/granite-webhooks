@@ -215,6 +215,31 @@ async fn a_heic_attachment_becomes_a_jpeg_kept_for_later(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_picture_link_is_answered_as_json_for_scripts(pool: MySqlPool) {
+    let (server, storage) = server_with_storage(pool.clone());
+    attachments(&pool, &storage).await;
+    let converted = server
+        .get("/v1/email-attachments/9910/preview?link=true")
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .await;
+    converted.assert_status_ok();
+    let link = converted.json::<Value>()["url"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let key = link
+        .strip_prefix(&format!("{MEMORY_PUBLIC_BASE}/"))
+        .unwrap();
+    assert!(key.starts_with("email-attachment-previews/"), "{key}");
+    let fake: Value = server
+        .get("/v1/email-attachments/9914/preview?link=true")
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .await
+        .json();
+    assert_eq!(fake, json!({ "url": url("emails/fake.heic") }));
+}
+
+#[test_db::test(seed)]
 async fn other_pictures_redirect_and_icons_are_small_jpegs(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool.clone());
     attachments(&pool, &storage).await;
