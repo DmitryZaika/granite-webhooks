@@ -256,6 +256,12 @@ impl AppState {
                     .filter(|base| !base.trim().is_empty())
                     .unwrap_or_else(|| common::telephony::cloudtalk::BASE_URL.to_string()),
             )
+            .with_signwell_base(
+                &std::env::var("SIGNWELL_BASE_URL")
+                    .ok()
+                    .filter(|base| !base.trim().is_empty())
+                    .unwrap_or_else(|| "https://www.signwell.com/api/v1".to_string()),
+            )
             .with_app_url(
                 &std::env::var("APP_URL").unwrap_or_else(|_| "https://granite-manager.com".into()),
             ))
