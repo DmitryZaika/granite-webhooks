@@ -572,13 +572,17 @@ async fn load_sms_timeline(
 
 async fn customer_email_addresses(
     pool: &MySqlPool,
+    company_id: i32,
     customer_id: i32,
 ) -> Result<Vec<String>, sqlx::Error> {
+    // Only the caller's company's customer (the CRM did not check).
     sqlx::query_scalar(
         "SELECT ce.email FROM customers_emails ce JOIN customers c ON c.id = ce.customer_id
-          WHERE ce.customer_id = ? ORDER BY ce.id = c.email_id DESC, ce.created_at ASC, ce.id ASC",
+          WHERE ce.customer_id = ? AND c.company_id = ?
+          ORDER BY ce.id = c.email_id DESC, ce.created_at ASC, ce.id ASC",
     )
     .bind(customer_id)
+    .bind(company_id)
     .fetch_all(pool)
     .await
 }
@@ -797,6 +801,7 @@ pub async fn load_style_profile(
 
 async fn customer_phones(
     pool: &MySqlPool,
+    company_id: i32,
     customer_id: Option<i32>,
     fallback: Option<&str>,
 ) -> Result<Vec<String>, sqlx::Error> {
@@ -805,8 +810,11 @@ async fn customer_phones(
         return Ok(phones);
     };
     let row: Option<(Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT phone, phone_2 FROM customers WHERE id = ? AND deleted_at IS NULL")
-            .bind(customer_id)
+        sqlx::query_as(
+            "SELECT phone, phone_2 FROM customers WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+        )
+        .bind(customer_id)
+        .bind(company_id)
             .fetch_optional(pool)
             .await?;
     if let Some((phone, phone_2)) = row {
@@ -945,10 +953,16 @@ pub async fn gather_timed(
     };
     let customer_id = resolve_customer_id(pool, request).await?;
     mark("resolve_customer");
-    let phones = customer_phones(pool, customer_id, request.phone_digits.as_deref()).await?;
+    let phones = customer_phones(
+        pool,
+        request.company_id,
+        customer_id,
+        request.phone_digits.as_deref(),
+    )
+    .await?;
     let extra_emails: Vec<String> = request.customer_email.iter().cloned().collect();
     let customer_addresses = match customer_id {
-        Some(id) => customer_email_addresses(pool, id).await?,
+        Some(id) => customer_email_addresses(pool, request.company_id, id).await?,
         None => Vec::new(),
     };
     let identity_emails = if customer_id.is_some() {

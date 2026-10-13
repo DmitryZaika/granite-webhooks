@@ -33702,6 +33702,103 @@
         ]
       }
     },
+    "/v1/followups/timeline": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Show the follow-up conversation",
+        "description": "The texts and emails with the customer (by id or phone) the AI\nfollow-up writer reads, oldest first.",
+        "operationId": "get_followup_timeline",
+        "parameters": [
+          {
+            "name": "customer_id",
+            "in": "query",
+            "description": "The customer.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phone_digits",
+            "in": "query",
+            "description": "Or the phone (5 to 15 digits) of the SMS thread.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupTimeline"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_phone` or `customer_or_phone_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/suppliers/file-readiness": {
       "get": {
         "tags": [
@@ -42113,6 +42210,22 @@
           "instruction": {
             "type": "string",
             "description": "The rule as plain text, trimmed; empty when the company has none."
+          }
+        }
+      },
+      "FollowupTimeline": {
+        "type": "object",
+        "description": "The conversation.",
+        "required": [
+          "timeline"
+        ],
+        "properties": {
+          "timeline": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TimelineMessage"
+            },
+            "description": "Oldest first."
           }
         }
       },
@@ -53023,6 +53136,34 @@
             "type": "integer",
             "format": "int64",
             "description": "Unread messages (1 when marked unread by hand)."
+          }
+        }
+      },
+      "TimelineMessage": {
+        "type": "object",
+        "description": "A message of the conversation.",
+        "required": [
+          "at",
+          "channel",
+          "direction",
+          "text"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "When, `YYYY-MM-DD HH:MM` (UTC)."
+          },
+          "channel": {
+            "type": "string",
+            "description": "`sms` or `email`."
+          },
+          "direction": {
+            "type": "string",
+            "description": "`inbound` or `outbound`."
+          },
+          "text": {
+            "type": "string",
+            "description": "The text (an email starts with its subject line)."
           }
         }
       },
