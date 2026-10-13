@@ -572,6 +572,31 @@ pub async fn create(
     ))
 }
 
+/// Saves a personal flow of the caller's own text (no templates), e.g. an
+/// AI follow-up the rep approved; its id.
+pub async fn insert_personal_flow(
+    pool: &MySqlPool,
+    user: &SessionUser,
+    name: &str,
+    steps: &[StepInput],
+) -> Result<i32, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let id = sqlx::query(
+        "INSERT INTO sms_flows (company_id, user_id, name, created_by) VALUES (?, ?, ?, ?)",
+    )
+    .bind(user.company_id)
+    .bind(user.id)
+    .bind(name)
+    .bind(user.id)
+    .execute(&mut *tx)
+    .await?
+    .last_insert_id();
+    let id = i64::try_from(id).map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
+    insert_steps(&mut tx, id, steps).await?;
+    tx.commit().await?;
+    Ok(i32::try_from(id).unwrap_or_default())
+}
+
 /// The flow, when the caller may change it; 403 when it is the company's
 /// and they may not, 404 when there is none.
 async fn editable(pool: &MySqlPool, user: &SessionUser, id: i32) -> ApiResult<FlowRow> {

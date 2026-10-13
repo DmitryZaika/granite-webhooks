@@ -56,7 +56,7 @@ pub struct FlowAction {
 }
 
 /// Over `SMS_FLOW_START_RATE_LIMIT_PER_MIN` (default 10) starts a minute.
-fn take_start_slot(state: &AppState, user_id: i32) -> bool {
+pub(crate) fn take_start_slot(state: &AppState, user_id: i32) -> bool {
     let limit = std::env::var("SMS_FLOW_START_RATE_LIMIT_PER_MIN")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())

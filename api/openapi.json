@@ -34358,6 +34358,247 @@
         ]
       }
     },
+    "/v1/followups/ai-cadence/preview": {
+      "post": {
+        "tags": [
+          "followups"
+        ],
+        "summary": "Preview an AI follow-up",
+        "description": "Plans the follow-up for the customer and has the model write it. A\ncustomer who should not be followed up now comes back as 400\n`nothing_to_send` with the reason (`force_generate` overrides most).",
+        "operationId": "preview_ai_cadence",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The written follow-up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Nothing to send, or no way to reach the customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CadenceError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CadenceError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/followups/ai-cadence/regenerate": {
+      "post": {
+        "tags": [
+          "followups"
+        ],
+        "summary": "Rewrite one message",
+        "description": "Writes the message again, different from the drafts the rep turned down\n(400 `regenerate_too_similar` when the model keeps repeating itself).",
+        "operationId": "regenerate_ai_cadence_message",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegenerateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The new draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Regenerated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid, or nothing to send",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CadenceError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CadenceError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/followups/ai-cadence": {
+      "post": {
+        "tags": [
+          "followups"
+        ],
+        "summary": "Start an AI follow-up",
+        "description": "Saves the approved messages as the rep's \"Generated with AI\" flow and\nstarts it for the customer (`switch`: replacing the running one). A\nfirst message due now is sent before the response.",
+        "operationId": "start_ai_cadence",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The flow now running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused (e.g. `nothing_to_send`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CadenceError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the caller's flow to replace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CadenceError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A flow is already running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CadenceError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over ten starts a minute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CadenceError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/suppliers/file-readiness": {
       "get": {
         "tags": [
@@ -36625,6 +36866,48 @@
               "type": "string"
             },
             "description": "Files attached."
+          }
+        }
+      },
+      "CadenceChannel": {
+        "type": "string",
+        "description": "SMS or email.",
+        "enum": [
+          "sms",
+          "email"
+        ]
+      },
+      "CadenceError": {
+        "type": "object",
+        "description": "Why nothing was written.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "`nothing_to_send` (blocked), `customer_not_found`, `missing_target`,\n`invalid_phone`, `missing_email`, `generate_failed`, ..."
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The block's reason (e.g. `CUSTOMER_WILL_RECONTACT`)."
+          },
+          "reason_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The block explained for the rep."
+          },
+          "can_force_generate": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "\"Generate anyway\" may override the block."
           }
         }
       },
@@ -47559,6 +47842,141 @@
           }
         }
       },
+      "PreviewMessage": {
+        "type": "object",
+        "description": "One message of the follow-up, as written and maybe edited by the rep.",
+        "required": [
+          "delay_minutes",
+          "delay_label",
+          "goal",
+          "channel",
+          "skip",
+          "body"
+        ],
+        "properties": {
+          "delay_minutes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Minutes after the previous message (the first: after now)."
+          },
+          "delay_label": {
+            "type": "string",
+            "description": "\"Immediately\", \"+2 days\", ..."
+          },
+          "goal": {
+            "type": "string",
+            "description": "What the message is for."
+          },
+          "channel": {
+            "$ref": "#/components/schemas/CadenceChannel"
+          },
+          "skip": {
+            "type": "boolean",
+            "description": "Left out of the flow."
+          },
+          "skip_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it is left out."
+          },
+          "body": {
+            "type": "string",
+            "description": "The text that will be sent."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email messages: the subject."
+          },
+          "generated_body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the model wrote (the rep's edits are learned from)."
+          },
+          "generated_subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the model wrote as the subject."
+          },
+          "angle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The message's angle (e.g. `quote_status`)."
+          },
+          "phase": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where in the follow-up it falls (e.g. `EARLY_FOLLOWUP`)."
+          }
+        }
+      },
+      "PreviewRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Target"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "force_generate": {
+                "type": "boolean",
+                "description": "Write it even though the customer should not be followed up now."
+              }
+            }
+          }
+        ],
+        "description": "`POST /v1/followups/ai-cadence/preview`."
+      },
+      "PreviewResult": {
+        "type": "object",
+        "description": "The written follow-up.",
+        "required": [
+          "channel",
+          "remaining_step_count",
+          "cadence_mode",
+          "preview"
+        ],
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/CadenceChannel"
+          },
+          "last_contact_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last message sent to the customer."
+          },
+          "remaining_step_count": {
+            "type": "integer",
+            "description": "Messages in the preview.",
+            "minimum": 0
+          },
+          "cadence_mode": {
+            "type": "string",
+            "description": "`new`, `unanswered` or `monthly`."
+          },
+          "preview": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreviewMessage"
+            },
+            "description": "The messages, in sending order."
+          }
+        }
+      },
       "PriceOffers": {
         "type": "object",
         "description": "Body of `GET /v1/suppliers/price-offers`.",
@@ -48954,6 +49372,98 @@
           }
         },
         "additionalProperties": false
+      },
+      "RegenerateRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Target"
+          },
+          {
+            "type": "object",
+            "required": [
+              "channel",
+              "goal",
+              "delay_minutes",
+              "delay_label",
+              "avoid_body"
+            ],
+            "properties": {
+              "channel": {
+                "$ref": "#/components/schemas/CadenceChannel"
+              },
+              "goal": {
+                "type": "string",
+                "description": "The message's goal."
+              },
+              "delay_minutes": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Its wait, in minutes."
+              },
+              "delay_label": {
+                "type": "string",
+                "description": "Its wait, as shown."
+              },
+              "avoid_body": {
+                "type": "string",
+                "description": "The draft being replaced."
+              },
+              "avoid_subject": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Its subject (email)."
+              },
+              "avoid_previous": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Earlier drafts of the message already turned down (the last 8 count)."
+              },
+              "angle": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The message's angle."
+              },
+              "phase": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The message's phase."
+              },
+              "force_generate": {
+                "type": "boolean",
+                "description": "Write it even though the customer should not be followed up now."
+              }
+            }
+          }
+        ],
+        "description": "`POST /v1/followups/ai-cadence/regenerate`."
+      },
+      "Regenerated": {
+        "type": "object",
+        "description": "A rewritten message.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "The new text."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email messages: the subject."
+          }
+        }
       },
       "ReminderRun": {
         "type": "object",
@@ -51725,6 +52235,14 @@
           }
         }
       },
+      "StartIntent": {
+        "type": "string",
+        "description": "Start or switch to it.",
+        "enum": [
+          "start",
+          "switch"
+        ]
+      },
       "StartReactivation": {
         "type": "object",
         "description": "Body of `POST /v1/billing/reactivation`.",
@@ -51737,6 +52255,37 @@
             "description": "The Stripe card to pay with (`pm_...`): a saved card of the company,\nor one Stripe.js just created."
           }
         }
+      },
+      "StartRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Target"
+          },
+          {
+            "type": "object",
+            "required": [
+              "intent",
+              "preview"
+            ],
+            "properties": {
+              "intent": {
+                "$ref": "#/components/schemas/StartIntent"
+              },
+              "preview": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PreviewMessage"
+                },
+                "description": "The approved messages."
+              },
+              "force_generate": {
+                "type": "boolean",
+                "description": "Start it even though the customer should not be followed up now."
+              }
+            }
+          }
+        ],
+        "description": "`POST /v1/followups/ai-cadence`."
       },
       "StartStatus": {
         "type": "string",
@@ -53239,6 +53788,27 @@
           "sales_rep_name": {
             "type": "string",
             "description": "The sales rep's name."
+          }
+        }
+      },
+      "Target": {
+        "type": "object",
+        "description": "Whose follow-up.",
+        "properties": {
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer (else the phone's customer, if any)."
+          },
+          "phone_digits": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SMS thread's phone digits."
           }
         }
       },

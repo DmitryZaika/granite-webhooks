@@ -276,7 +276,8 @@ struct Prepared {
     first_channel: FollowupChannel,
 }
 
-async fn customer_contact(
+/// The customer's ten-digit phone and email (`None` when not the company's).
+pub(crate) async fn customer_contact(
     pool: &MySqlPool,
     company_id: i32,
     customer_id: i32,

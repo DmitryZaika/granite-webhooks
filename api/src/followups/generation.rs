@@ -96,6 +96,9 @@ pub enum GenerationError {
     /// The model's reply was not the JSON asked for.
     #[error("ai_followup_parse_failed")]
     Parse,
+    /// Reading the customer's context failed.
+    #[error(transparent)]
+    Database(#[from] sqlx::Error),
 }
 
 /// Where calls are billed and the clock sends are scheduled from.
