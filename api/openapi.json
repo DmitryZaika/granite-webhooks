@@ -35957,6 +35957,61 @@
       }
     },
     "/v1/billing/reactivation": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Get what restoring access costs",
+        "description": "For a suspended company: the plan and price to pay, the saved cards and\nthe Stripe.js key; then pay with `POST /v1/billing/reactivation`.",
+        "operationId": "get_billing_reactivation",
+        "responses": {
+          "200": {
+            "description": "The quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReactivationQuote"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "billing"
@@ -36172,6 +36227,334 @@
             }
           }
         }
+      }
+    },
+    "/v1/billing/gate": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Get the billing gate",
+        "description": "Whether the company's access is paused for an unpaid subscription\n(`restricted`: only the billing pages work) and whether managers see the\npast-due warning with the grace days left. Checks Stripe now and then\n(throttled); errors keep access.",
+        "operationId": "get_billing_gate",
+        "responses": {
+          "200": {
+            "description": "The gate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingGate"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/billing": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Get the company's billing",
+        "description": "The subscription (refreshed from Stripe first), the card on file, the\nplans and the invoices. Managers only; other users read\n`GET /v1/billing/gate`.",
+        "operationId": "get_billing",
+        "responses": {
+          "200": {
+            "description": "The company's billing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingOverview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/billing/checkout": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Subscribe through Stripe Checkout",
+        "description": "A Stripe Checkout link that subscribes the company to the plan; Stripe\nreturns to `/admin/billing?checkout=success` (or `cancel`). Only while the\ncompany has no running subscription (400 otherwise: change the plan).",
+        "operationId": "create_billing_checkout",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanChoice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The Checkout link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Redirect"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown plan, already subscribed, or Stripe refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/billing/portal": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Open the Stripe billing portal",
+        "description": "A Stripe billing portal link for the company's customer, returning to\n`/admin/billing`.",
+        "operationId": "create_billing_portal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortalChoice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The portal link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Redirect"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No Stripe customer, or Stripe refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/billing/subscription": {
+      "put": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Change the plan",
+        "description": "Moves the running subscription to another plan (prorated).",
+        "operationId": "change_billing_plan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanChoice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Changed"
+          },
+          "400": {
+            "description": "Unknown plan, no running subscription, or Stripe refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/signatures/{id}/document": {
@@ -37838,6 +38221,116 @@
         ],
         "description": "`POST /v1/ai/compose/autocomplete`."
       },
+      "BillingGate": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BillingNotice"
+          },
+          {
+            "type": "object",
+            "required": [
+              "can_manage"
+            ],
+            "properties": {
+              "can_manage": {
+                "type": "boolean",
+                "description": "The caller is a manager of the company (manages billing)."
+              }
+            }
+          }
+        ],
+        "description": "`GET /v1/billing/gate`."
+      },
+      "BillingNotice": {
+        "type": "object",
+        "description": "What a page shows about billing.",
+        "required": [
+          "show_warning",
+          "days_remaining",
+          "restricted"
+        ],
+        "properties": {
+          "show_warning": {
+            "type": "boolean",
+            "description": "Show the past-due banner (managers only)."
+          },
+          "days_remaining": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Days left in the grace period."
+          },
+          "restricted": {
+            "type": "boolean",
+            "description": "Access is paused: only billing pages work."
+          }
+        }
+      },
+      "BillingOverview": {
+        "type": "object",
+        "description": "`GET /v1/billing`.",
+        "required": [
+          "invoices",
+          "plans",
+          "restricted",
+          "starts_checkout",
+          "needs_new_subscription",
+          "billing_configured"
+        ],
+        "properties": {
+          "subscription": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Subscription",
+                "description": "The subscription, or null when the company never had one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "card": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Card",
+                "description": "The card subscriptions are charged to, or null."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "invoices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Invoice"
+            },
+            "description": "Paid and open invoices, newest payment first."
+          },
+          "plans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Plan"
+            },
+            "description": "Plans to subscribe or switch to."
+          },
+          "restricted": {
+            "type": "boolean",
+            "description": "Access is paused until the company pays."
+          },
+          "starts_checkout": {
+            "type": "boolean",
+            "description": "The subscription ended (or never started): subscribing goes through\nCheckout (`POST /v1/billing/checkout`), not a plan change."
+          },
+          "needs_new_subscription": {
+            "type": "boolean",
+            "description": "Paused and without a running subscription: pay on the restore page\n(`GET /v1/billing/reactivation`)."
+          },
+          "billing_configured": {
+            "type": "boolean",
+            "description": "Stripe is configured on the server."
+          }
+        }
+      },
       "BlankCandidate": {
         "type": "object",
         "description": "A blank found in the PDF.",
@@ -38679,6 +39172,41 @@
             ],
             "format": "double",
             "description": "Won out of closed, in percent; null with no closed deals."
+          }
+        }
+      },
+      "Card": {
+        "type": "object",
+        "description": "A saved card.",
+        "required": [
+          "id",
+          "brand",
+          "last4",
+          "exp_month",
+          "exp_year"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stripe payment method id (`pm_...`)."
+          },
+          "brand": {
+            "type": "string",
+            "description": "`visa`, `mastercard`, ..."
+          },
+          "last4": {
+            "type": "string",
+            "description": "Last four digits of the card number."
+          },
+          "exp_month": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Expiry month (1-12)."
+          },
+          "exp_year": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Expiry year (e.g. 2030)."
           }
         }
       },
@@ -46025,6 +46553,58 @@
           }
         }
       },
+      "Invoice": {
+        "type": "object",
+        "description": "An invoice of the company.",
+        "required": [
+          "stripe_invoice_id",
+          "status",
+          "amount_due_cents",
+          "amount_paid_cents"
+        ],
+        "properties": {
+          "stripe_invoice_id": {
+            "type": "string",
+            "description": "Stripe invoice id (`in_...`)."
+          },
+          "status": {
+            "type": "string",
+            "description": "`paid` or `open`."
+          },
+          "amount_due_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What is still owed, in cents (0 once paid)."
+          },
+          "amount_paid_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What was paid, in cents."
+          },
+          "hosted_invoice_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stripe's page to pay or view the invoice, or null."
+          },
+          "invoice_pdf": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The invoice PDF, or null."
+          },
+          "paid_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was paid (ISO 8601), or null."
+          }
+        }
+      },
       "InvoiceEdit": {
         "type": "object",
         "description": "`POST /v1/ai/invoice-edit`.",
@@ -49363,6 +49943,45 @@
           }
         }
       },
+      "Plan": {
+        "type": "object",
+        "description": "A plan the company can subscribe to.",
+        "required": [
+          "price_id",
+          "name"
+        ],
+        "properties": {
+          "price_id": {
+            "type": "string",
+            "description": "Stripe price id (`price_...`)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Plan name to show."
+          },
+          "monthly_price_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Monthly price in cents, when configured."
+          }
+        }
+      },
+      "PlanChoice": {
+        "type": "object",
+        "description": "Body of `POST /v1/billing/checkout` and `PUT /v1/billing/subscription`.",
+        "required": [
+          "price_id"
+        ],
+        "properties": {
+          "price_id": {
+            "type": "string",
+            "description": "A plan's `price_id` from `GET /v1/billing`."
+          }
+        }
+      },
       "PointsBreakdown": {
         "type": "object",
         "description": "Points per source. Each source counts only from its own start date.",
@@ -49441,6 +50060,19 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "PortalChoice": {
+        "type": "object",
+        "description": "Body of `POST /v1/billing/portal`.",
+        "properties": {
+          "flow": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`payment_method` (the card form, the default) or `manage` (the whole\nsubscription)."
           }
         }
       },
@@ -50919,6 +51551,77 @@
           }
         }
       },
+      "ReactivationPlan": {
+        "type": "object",
+        "description": "What restoring access costs.",
+        "required": [
+          "price_id",
+          "plan_name",
+          "quantity"
+        ],
+        "properties": {
+          "price_id": {
+            "type": "string",
+            "description": "Stripe price id (`price_...`)."
+          },
+          "plan_name": {
+            "type": "string",
+            "description": "Plan name to show."
+          },
+          "quantity": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Units billed (always 1: a flat price per company)."
+          },
+          "monthly_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Due today and each month, in cents; null when unknown."
+          }
+        }
+      },
+      "ReactivationQuote": {
+        "type": "object",
+        "description": "`GET /v1/billing/reactivation`.",
+        "required": [
+          "needed",
+          "cards"
+        ],
+        "properties": {
+          "needed": {
+            "type": "boolean",
+            "description": "The company is paused without a running subscription: paying restores\nit. False: go back to `/admin/billing`."
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Card"
+            },
+            "description": "Saved cards, the default first."
+          },
+          "plan": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReactivationPlan",
+                "description": "The plan to pay for; null when no plan is configured."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "publishable_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stripe.js publishable key (`pk_...`), or null when not configured."
+          }
+        }
+      },
       "ReactivationStarted": {
         "type": "object",
         "description": "How the payment goes on.",
@@ -51051,6 +51754,19 @@
               "$ref": "#/components/schemas/Recipient"
             },
             "description": "Coworkers (with `include_users`)."
+          }
+        }
+      },
+      "Redirect": {
+        "type": "object",
+        "description": "A link to open in the browser.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Stripe's page."
           }
         }
       },
@@ -54952,6 +55668,68 @@
               "null"
             ],
             "description": "Stone name."
+          }
+        }
+      },
+      "Subscription": {
+        "type": "object",
+        "description": "The company's subscription as stored (refreshed from Stripe).",
+        "required": [
+          "payment_status",
+          "subscription_status",
+          "outstanding_balance_cents"
+        ],
+        "properties": {
+          "plan_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Plan name, or null."
+          },
+          "price_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stripe price id of the current plan, or null."
+          },
+          "monthly_price_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Monthly price in cents, or null."
+          },
+          "payment_status": {
+            "type": "string",
+            "description": "`active`, `past_due`, `suspended` or `none`."
+          },
+          "subscription_status": {
+            "type": "string",
+            "description": "Stripe's subscription status (`active`, `canceled`, `incomplete`, ...)."
+          },
+          "current_period_end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Next billing date (ISO 8601), or null."
+          },
+          "last_successful_payment_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Last successful payment (ISO 8601), or null."
+          },
+          "outstanding_balance_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of open invoices, in cents."
           }
         }
       },

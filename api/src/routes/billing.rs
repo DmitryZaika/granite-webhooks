@@ -5,8 +5,7 @@
 //! - `POST /v1/webhooks/stripe`             → Stripe's events (signed, no session)
 //!
 //! Replaces the Remix `api.billing.reactivate` and `api.stripe.webhook`
-//! routes. The `/admin/billing` pages and the root loader's access gate still
-//! run in Remix on the same tables.
+//! routes. The billing page itself is `billing_account`.
 
 use crate::auth::BillingManager;
 use crate::billing::machine::apply_event;

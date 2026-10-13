@@ -83,6 +83,15 @@ async fn fake_stripe(state: Shared) -> String {
                 s.requests.push(("GET".into(), format!("/v1/subscriptions/{id}"), String::new()));
                 s.subscriptions.get(&id).cloned().map(Json).ok_or_else(not_found)
             })
+            .post(|State(s): State<Shared>, Path(id): Path<String>, body: String| async move {
+                let mut s = s.lock().unwrap();
+                s.requests.push(("POST".into(), format!("/v1/subscriptions/{id}"), body.clone()));
+                let params = form(&body);
+                let sub = s.subscriptions.get_mut(&id).ok_or_else(not_found)?;
+                sub["items"]["data"][0]["price"] = json!({
+                    "id": params["items[0][price]"], "nickname": "Granite Manager Plus", "unit_amount": 9900 });
+                Ok::<_, (StatusCode, Json<Value>)>(Json(sub.clone()))
+            })
             .delete(|State(s): State<Shared>, Path(id): Path<String>| async move {
                 let mut s = s.lock().unwrap();
                 s.requests.push(("DELETE".into(), format!("/v1/subscriptions/{id}"), String::new()));
@@ -101,9 +110,59 @@ async fn fake_stripe(state: Shared) -> String {
         )
         .route(
             "/v1/invoices",
-            get(|State(s): State<Shared>| async move {
-                let _ = s;
-                Json(json!({ "object": "list", "data": [] }))
+            get(|State(s): State<Shared>, query: axum::extract::RawQuery| async move {
+                let mut s = s.lock().unwrap();
+                let query = query.0.unwrap_or_default();
+                s.requests.push(("GET".into(), "/v1/invoices".into(), query.clone()));
+                let params = form(&query);
+                let data: Vec<Value> = s
+                    .invoices
+                    .values()
+                    .filter(|invoice| {
+                        params.get("customer").is_none_or(|c| invoice["customer"] == c.as_str())
+                            && params.get("status").is_none_or(|st| invoice["status"] == st.as_str())
+                    })
+                    .cloned()
+                    .collect();
+                Json(json!({ "object": "list", "data": data }))
+            }),
+        )
+        .route(
+            "/v1/customers",
+            post(|State(s): State<Shared>, body: String| async move {
+                let mut s = s.lock().unwrap();
+                s.requests.push(("POST".into(), "/v1/customers".into(), body));
+                Json(json!({ "id": "cus_created", "object": "customer" }))
+            }),
+        )
+        .route(
+            "/v1/customers/{id}/payment_methods",
+            get(|State(s): State<Shared>, Path(id): Path<String>| async move {
+                let mut s = s.lock().unwrap();
+                s.requests.push(("GET".into(), format!("/v1/customers/{id}/payment_methods"), String::new()));
+                let data: Vec<Value> = s
+                    .payment_methods
+                    .values()
+                    .filter(|m| m["customer"] == id.as_str())
+                    .cloned()
+                    .collect();
+                Json(json!({ "object": "list", "data": data }))
+            }),
+        )
+        .route(
+            "/v1/checkout/sessions",
+            post(|State(s): State<Shared>, body: String| async move {
+                let mut s = s.lock().unwrap();
+                s.requests.push(("POST".into(), "/v1/checkout/sessions".into(), body));
+                Json(json!({ "id": "cs_1", "url": "https://checkout.stripe.com/c/cs_1" }))
+            }),
+        )
+        .route(
+            "/v1/billing_portal/sessions",
+            post(|State(s): State<Shared>, body: String| async move {
+                let mut s = s.lock().unwrap();
+                s.requests.push(("POST".into(), "/v1/billing_portal/sessions".into(), body));
+                Json(json!({ "id": "bps_1", "url": "https://billing.stripe.com/p/session/1" }))
             }),
         )
         .route(
@@ -141,7 +200,10 @@ async fn fake_stripe(state: Shared) -> String {
 }
 
 fn plans() -> Vec<BillingPlan> {
-    parse_billing_plans(Some("price_flat|Granite Manager|4900"), None)
+    parse_billing_plans(
+        Some("price_flat|Granite Manager|4900,price_plus|Granite Manager Plus|9900"),
+        None,
+    )
 }
 
 /// The api with the webhook secret and, when given, a fake Stripe.
@@ -717,4 +779,324 @@ async fn finishing_someone_elses_subscription_is_refused(pool: MySqlPool) {
         .await
         .json::<Value>();
     assert_eq!(pending, json!({ "status": "pending" }));
+}
+
+// ---- The billing page: GET /v1/billing, /gate, checkout, portal, plan change
+
+/// Company 100 pays for `sub_100` (active) with card `pm_100`; one paid and
+/// one open invoice at Stripe.
+async fn subscribed(pool: &MySqlPool, stripe: &Shared) {
+    manager_and_billing(pool).await;
+    sqlx::query(
+        "INSERT INTO company_billing (company_id, stripe_customer_id, stripe_subscription_id, stripe_price_id,
+                                      stripe_subscription_item_id, stripe_payment_method_id,
+                                      subscription_status, payment_status, plan_name, monthly_price_cents)
+         VALUES (100, 'cus_100', 'sub_100', 'price_flat', 'si_100', 'pm_100', 'active', 'active',
+                 'Granite Manager', 4900)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let mut fake = stripe.lock().unwrap();
+    fake.subscriptions.insert(
+        "sub_100".into(),
+        json!({ "id": "sub_100", "object": "subscription", "status": "active", "customer": "cus_100",
+                "default_payment_method": "pm_100", "metadata": { "company_id": "100" },
+                "items": { "data": [{ "id": "si_100", "quantity": 1,
+                    "current_period_start": 1_788_220_800, "current_period_end": 1_790_899_200,
+                    "price": { "id": "price_flat", "nickname": "Granite Manager", "unit_amount": 4900 } }] } }),
+    );
+    fake.invoices
+        .insert("in_paid".into(), invoice("in_paid", true, 4900));
+    fake.invoices
+        .insert("in_open".into(), invoice("in_open", false, 4900));
+    fake.payment_methods.insert(
+        "pm_100".into(),
+        json!({ "id": "pm_100", "object": "payment_method", "type": "card", "customer": "cus_100",
+                "card": { "brand": "visa", "last4": "4242", "exp_month": 4, "exp_year": 2030 } }),
+    );
+}
+
+#[test_db::test(seed)]
+async fn the_billing_page_syncs_from_stripe(pool: MySqlPool) {
+    let stripe = Shared::default();
+    subscribed(&pool, &stripe).await;
+    let server = server(&pool, Some(&stripe)).await;
+    let billing: Value = server
+        .get("/v1/billing")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(
+        billing["subscription"],
+        json!({
+            "plan_name": "Granite Manager",
+            "price_id": "price_flat",
+            "monthly_price_cents": 4900,
+            "payment_status": "active",
+            "subscription_status": "active",
+            "current_period_end": "2026-10-02T00:00:00Z",
+            "last_successful_payment_at": null,
+            "outstanding_balance_cents": 4900
+        })
+    );
+    assert_eq!(
+        billing["card"],
+        json!({ "id": "pm_100", "brand": "visa", "last4": "4242", "exp_month": 4, "exp_year": 2030 })
+    );
+    let invoices: Vec<(String, String)> = billing["invoices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["stripe_invoice_id"].as_str().unwrap().into(),
+                i["status"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        invoices,
+        [
+            ("in_paid".into(), "paid".into()),
+            ("in_open".into(), "open".into())
+        ]
+    );
+    assert_eq!(billing["invoices"][0]["amount_due_cents"], 0);
+    assert_eq!(billing["invoices"][0]["paid_at"], "2026-09-01T00:00:00Z");
+    assert_eq!(
+        billing["invoices"][1]["hosted_invoice_url"],
+        "https://pay.stripe.com/i"
+    );
+    assert_eq!(
+        billing["plans"][1],
+        json!({ "price_id": "price_plus", "name": "Granite Manager Plus", "monthly_price_cents": 9900 })
+    );
+    assert_eq!(billing["restricted"], false);
+    assert_eq!(billing["starts_checkout"], false);
+    assert_eq!(billing["needs_new_subscription"], false);
+    assert_eq!(billing["billing_configured"], true);
+}
+
+#[test_db::test(seed)]
+async fn without_a_record_or_stripe_the_page_is_empty(pool: MySqlPool) {
+    manager_and_billing(&pool).await;
+    let server = server(&pool, None).await;
+    let billing: Value = server
+        .get("/v1/billing")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(billing["subscription"], Value::Null);
+    assert_eq!(billing["card"], Value::Null);
+    assert_eq!(billing["invoices"], json!([]));
+    assert_eq!(billing["starts_checkout"], true);
+    assert_eq!(billing["billing_configured"], false);
+}
+
+#[test_db::test(seed)]
+async fn only_managers_see_billing_and_everyone_sees_the_gate(pool: MySqlPool) {
+    let stripe = Shared::default();
+    suspended(&pool, &stripe).await;
+    let server = server(&pool, Some(&stripe)).await;
+    for path in ["/v1/billing", "/v1/billing/reactivation"] {
+        server
+            .get(path)
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        server
+            .get(path)
+            .with_session(sessions::REP)
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+    server
+        .post("/v1/billing/checkout")
+        .with_session(sessions::REP)
+        .json(&json!({ "price_id": "price_flat" }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let rep: Value = server
+        .get("/v1/billing/gate")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(
+        rep,
+        json!({ "show_warning": false, "days_remaining": 0, "restricted": true, "can_manage": false })
+    );
+    let manager: Value = server
+        .get("/v1/billing/gate")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(manager["restricted"], true);
+    assert_eq!(manager["can_manage"], true);
+    // Another company is not affected.
+    let other: Value = server
+        .get("/v1/billing/gate")
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .await
+        .json();
+    assert_eq!(other["restricted"], false);
+}
+
+#[test_db::test(seed)]
+async fn a_suspended_company_gets_the_reactivation_quote(pool: MySqlPool) {
+    let stripe = Shared::default();
+    suspended(&pool, &stripe).await;
+    stripe.lock().unwrap().payment_methods.insert(
+        "pm_saved".into(),
+        json!({ "id": "pm_saved", "type": "card", "customer": "cus_100",
+                "card": { "brand": "mastercard", "last4": "4444", "exp_month": 1, "exp_year": 2031 } }),
+    );
+    let server = server(&pool, Some(&stripe)).await;
+    let billing: Value = server
+        .get("/v1/billing")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(billing["restricted"], true);
+    assert_eq!(billing["needs_new_subscription"], true);
+    let quote: Value = server
+        .get("/v1/billing/reactivation")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(quote["needed"], true);
+    assert_eq!(
+        quote["plan"],
+        json!({ "price_id": "price_flat", "plan_name": "Granite Manager", "quantity": 1, "monthly_cents": 4900 })
+    );
+    assert_eq!(quote["cards"][0]["id"], "pm_saved");
+    assert_eq!(quote["publishable_key"], Value::Null);
+}
+
+#[test_db::test(seed)]
+async fn a_paid_up_company_needs_no_reactivation(pool: MySqlPool) {
+    let stripe = Shared::default();
+    subscribed(&pool, &stripe).await;
+    let server = server(&pool, Some(&stripe)).await;
+    let quote: Value = server
+        .get("/v1/billing/reactivation")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(
+        quote,
+        json!({ "needed": false, "cards": [], "plan": null, "publishable_key": null })
+    );
+}
+
+#[test_db::test(seed)]
+async fn checkout_creates_the_customer_and_returns_to_the_callers_host(pool: MySqlPool) {
+    manager_and_billing(&pool).await;
+    let stripe = Shared::default();
+    let server = server(&pool, Some(&stripe)).await;
+    server
+        .post("/v1/billing/checkout")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "price_id": "price_unknown" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    let link: Value = server
+        .post("/v1/billing/checkout")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "price_id": "price_flat" }))
+        .await
+        .json();
+    assert_eq!(link, json!({ "url": "https://checkout.stripe.com/c/cs_1" }));
+    let requests = stripe.lock().unwrap().requests.clone();
+    let customer = form(&requests.iter().find(|r| r.1 == "/v1/customers").unwrap().2);
+    assert_eq!(customer["name"], "Acme Stone");
+    assert_eq!(customer["metadata[company_id]"], "100");
+    let session = form(
+        &requests
+            .iter()
+            .find(|r| r.1 == "/v1/checkout/sessions")
+            .unwrap()
+            .2,
+    );
+    assert_eq!(session["customer"], "cus_created");
+    assert_eq!(session["line_items[0][price]"], "price_flat");
+    assert_eq!(session["line_items[0][quantity]"], "1");
+    assert_eq!(
+        session["success_url"],
+        format!("{ALLOWED_ORIGIN}/admin/billing?checkout=success")
+    );
+    assert_eq!(session["subscription_data[metadata][company_id]"], "100");
+    let saved: Option<String> =
+        sqlx::query_scalar("SELECT stripe_customer_id FROM company_billing WHERE company_id = 100")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(saved.as_deref(), Some("cus_created"));
+}
+
+#[test_db::test(seed)]
+async fn a_subscribed_company_changes_its_plan_instead_of_checking_out(pool: MySqlPool) {
+    let stripe = Shared::default();
+    subscribed(&pool, &stripe).await;
+    let server = server(&pool, Some(&stripe)).await;
+    server
+        .post("/v1/billing/checkout")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "price_id": "price_plus" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    server
+        .put("/v1/billing/subscription")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "price_id": "price_plus" }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let update = stripe
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .find(|r| r.0 == "POST" && r.1 == "/v1/subscriptions/sub_100")
+        .map(|r| form(&r.2))
+        .unwrap();
+    assert_eq!(update["items[0][id]"], "si_100");
+    assert_eq!(update["items[0][price]"], "price_plus");
+    assert_eq!(update["proration_behavior"], "create_prorations");
+    let (price, plan): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT stripe_price_id, plan_name FROM company_billing WHERE company_id = 100",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(price.as_deref(), Some("price_plus"));
+    assert_eq!(plan.as_deref(), Some("Granite Manager Plus"));
+}
+
+#[test_db::test(seed)]
+async fn the_portal_opens_the_card_form_or_the_subscription(pool: MySqlPool) {
+    let stripe = Shared::default();
+    subscribed(&pool, &stripe).await;
+    let server = server(&pool, Some(&stripe)).await;
+    for flow in [json!({}), json!({ "flow": "manage" })] {
+        let link: Value = server
+            .post("/v1/billing/portal")
+            .with_session(sessions::MANAGER)
+            .json(&flow)
+            .await
+            .json();
+        assert_eq!(link["url"], "https://billing.stripe.com/p/session/1");
+    }
+    let portals: Vec<HashMap<String, String>> = stripe
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .filter(|r| r.1 == "/v1/billing_portal/sessions")
+        .map(|r| form(&r.2))
+        .collect();
+    assert_eq!(portals[0]["flow_data[type]"], "payment_method_update");
+    assert_eq!(
+        portals[0]["return_url"],
+        format!("{ALLOWED_ORIGIN}/admin/billing")
+    );
+    assert!(!portals[1].contains_key("flow_data[type]"));
 }

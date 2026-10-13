@@ -8,6 +8,7 @@
 //! pays. Companies only get warnings and pauses when `company.billing_required`
 //! is on. Port of the CRM's `stripeBilling.ts` / `stripeBilling.server.ts`.
 
+pub mod account;
 pub mod machine;
 pub mod reactivation;
 pub mod store;

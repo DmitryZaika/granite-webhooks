@@ -130,7 +130,7 @@ async fn current_subscription(
 }
 
 /// The record after applying Stripe's current subscription.
-async fn refresh_subscription<S: BillingStore>(
+pub(super) async fn refresh_subscription<S: BillingStore>(
     stripe: &Stripe,
     store: &S,
     record: CompanyBilling,

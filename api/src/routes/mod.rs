@@ -11,6 +11,7 @@ pub mod app_shell;
 pub mod attachable;
 pub mod auth;
 pub mod billing;
+pub mod billing_account;
 pub mod bug_reports;
 pub mod calendars;
 pub mod call_coaching;
@@ -135,6 +136,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(supplier_files::router())
         .merge(suppliers::router())
         .merge(billing::router())
+        .merge(billing_account::router())
         .merge(signatures::router())
         .merge(signwell_webhook::router())
 }

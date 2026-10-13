@@ -234,6 +234,110 @@ impl Stripe {
     }
 }
 
+impl Stripe {
+    /// The customer's latest invoices (up to 24), any status.
+    pub async fn list_invoices(&self, customer: &str) -> Result<Vec<Value>, StripeError> {
+        let list = self
+            .get(
+                "/v1/invoices",
+                &[("customer", customer.into()), ("limit", "24".into())],
+            )
+            .await?;
+        Ok(data(list))
+    }
+
+    /// A customer for a company that never subscribed.
+    pub async fn create_customer(&self, name: &str, company_id: i32) -> Result<Value, StripeError> {
+        self.post(
+            "/v1/customers",
+            &[
+                ("name", name.into()),
+                ("metadata[company_id]", company_id.to_string()),
+            ],
+        )
+        .await
+    }
+
+    /// A Checkout page that starts a subscription to `price_id`.
+    pub async fn create_checkout_session(
+        &self,
+        customer: &str,
+        company_id: i32,
+        price_id: &str,
+        quantity: i64,
+        return_base: &str,
+    ) -> Result<Value, StripeError> {
+        self.post(
+            "/v1/checkout/sessions",
+            &[
+                ("mode", "subscription".into()),
+                ("customer", customer.into()),
+                ("client_reference_id", company_id.to_string()),
+                ("line_items[0][price]", price_id.into()),
+                ("line_items[0][quantity]", quantity.to_string()),
+                ("success_url", format!("{return_base}?checkout=success")),
+                ("cancel_url", format!("{return_base}?checkout=cancel")),
+                ("metadata[company_id]", company_id.to_string()),
+                (
+                    "subscription_data[metadata][company_id]",
+                    company_id.to_string(),
+                ),
+            ],
+        )
+        .await
+    }
+
+    /// A billing portal page; `payment_method_update` opens the card form.
+    pub async fn create_portal_session(
+        &self,
+        customer: &str,
+        return_url: &str,
+        payment_method_update: bool,
+    ) -> Result<Value, StripeError> {
+        let mut form = vec![
+            ("customer", customer.to_string()),
+            ("return_url", return_url.to_string()),
+        ];
+        if payment_method_update {
+            form.push(("flow_data[type]", "payment_method_update".into()));
+        }
+        self.post("/v1/billing_portal/sessions", &form).await
+    }
+
+    /// Moves the subscription's item to `price_id` (prorated).
+    pub async fn update_subscription(
+        &self,
+        id: &str,
+        item_id: &str,
+        price_id: &str,
+        quantity: i64,
+        company_id: i32,
+    ) -> Result<Value, StripeError> {
+        self.post(
+            &format!("/v1/subscriptions/{}", path_part(id)),
+            &[
+                ("items[0][id]", item_id.into()),
+                ("items[0][price]", price_id.into()),
+                ("items[0][quantity]", quantity.to_string()),
+                ("proration_behavior", "create_prorations".into()),
+                ("metadata[company_id]", company_id.to_string()),
+            ],
+        )
+        .await
+    }
+
+    /// The customer's saved cards (up to 10).
+    pub async fn list_cards(&self, customer: &str) -> Result<Vec<Value>, StripeError> {
+        let list = self
+            .get(
+                &format!("/v1/customers/{}/payment_methods", path_part(customer)),
+                &[("type", "card".into()), ("limit", "10".into())],
+            )
+            .await?;
+        Ok(data(list))
+    }
+}
+
 fn data(list: Value) -> Vec<Value> {
     match list {
         Value::Object(mut map) => match map.remove("data") {
