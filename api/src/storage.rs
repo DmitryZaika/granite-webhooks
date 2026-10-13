@@ -260,6 +260,18 @@ impl Storage {
         content_type: &str,
         filename: Option<&str>,
     ) -> Result<String, StorageError> {
+        self.presign_get_in(None, key, content_type, filename).await
+    }
+
+    /// Like [`Storage::presign_get_as`], in another bucket read with the
+    /// same credentials (the in-memory bucket ignores bucket names).
+    pub async fn presign_get_in(
+        &self,
+        bucket: Option<&str>,
+        key: &str,
+        content_type: &str,
+        filename: Option<&str>,
+    ) -> Result<String, StorageError> {
         let disposition = filename.map_or_else(
             || "inline".to_string(),
             |name| {
@@ -286,7 +298,7 @@ impl Storage {
                 let request = s3
                     .client
                     .get_object()
-                    .bucket(&s3.bucket)
+                    .bucket(bucket.unwrap_or(&s3.bucket))
                     .key(key)
                     .response_content_disposition(disposition)
                     .response_content_type(content_type)

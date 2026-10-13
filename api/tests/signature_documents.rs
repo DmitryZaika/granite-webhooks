@@ -5,7 +5,7 @@ mod common;
 
 use api::app;
 use api::state::AppState;
-use api::storage::Storage;
+use api::storage::{MEMORY_PUBLIC_BASE, Storage};
 use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::routing::get;
@@ -47,7 +47,13 @@ async fn signwell(signed_pdf: Vec<u8>) -> String {
                 }
             }),
         )
-        .route("/files/doc-1.pdf", get(move || async move { signed_pdf }));
+        .route(
+            "/files/doc-1.pdf",
+            get(move || {
+                let signed_pdf = signed_pdf.clone();
+                async move { signed_pdf }
+            }),
+        );
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     base
 }
@@ -64,7 +70,15 @@ async fn server(pool: MySqlPool, signwell_base: &str) -> (TestServer, Storage) {
 /// Request 9201 (by Rita, user 100, for Alice) sent natively; `signed`
 /// moves it to its completed file.
 async fn native_request(pool: &MySqlPool, storage: &Storage, signed: bool) -> (Vec<u8>, Vec<u8>) {
-    let prepared = a_pdf("Prepared contract");
+    native_request_with(pool, storage, signed, a_pdf("Prepared contract")).await
+}
+
+async fn native_request_with(
+    pool: &MySqlPool,
+    storage: &Storage,
+    signed: bool,
+    prepared: Vec<u8>,
+) -> (Vec<u8>, Vec<u8>) {
     let completed = a_pdf("Signed contract");
     let (p_hash, c_hash) = (sha(&prepared), sha(&completed));
     let prefix = format!("100/signatures/{DOC}/");
@@ -143,6 +157,34 @@ async fn a_sent_native_document_opens_as_prepared(pool: MySqlPool) {
         .await;
     response.assert_status_ok();
     assert_eq!(response.as_bytes().to_vec(), prepared);
+}
+
+/// A PDF over the 4 MB the response body may carry.
+fn a_big_pdf() -> Vec<u8> {
+    let mut bytes = a_pdf("Big contract");
+    bytes.extend(std::iter::repeat_n(b'%', 5 * 1024 * 1024));
+    bytes.extend(b"\n%%EOF\n");
+    bytes
+}
+
+#[test_db::test(seed)]
+async fn a_big_native_document_redirects_to_a_presigned_link(pool: MySqlPool) {
+    let (server, storage) = server(pool.clone(), "http://127.0.0.1:9").await;
+    let big = a_big_pdf();
+    native_request_with(&pool, &storage, false, big.clone()).await;
+    let response = server
+        .get("/v1/signatures/9201/document")
+        .with_session(sessions::REP)
+        .await;
+    response.assert_status(StatusCode::FOUND);
+    assert_eq!(
+        response.header("location"),
+        format!(
+            "{MEMORY_PUBLIC_BASE}/100/signatures/{DOC}/prepared-{}.pdf",
+            sha(&big)
+        )
+        .as_str()
+    );
 }
 
 #[test_db::test(seed)]
@@ -285,6 +327,42 @@ async fn a_signed_signwell_pdf_opens_named_and_titled_signed(pool: MySqlPool) {
             .contains("filename=\"John Clay signed.pdf\"")
     );
     assert_eq!(title(response.as_bytes()), "John Clay signed");
+}
+
+/// A real PDF over 4 MB (a big embedded stream survives re-saving).
+fn a_big_real_pdf() -> Vec<u8> {
+    let mut document = lopdf::Document::load_mem(&a_pdf("Big contract")).unwrap();
+    let data: Vec<u8> = (0..5 * 1024 * 1024u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    let stream = document.add_object(lopdf::Stream::new(lopdf::Dictionary::new(), data));
+    document
+        .catalog_mut()
+        .unwrap()
+        .set("BigAttachment", lopdf::Object::Reference(stream));
+    let mut out = Vec::new();
+    document.save_to(&mut out).unwrap();
+    out
+}
+
+#[test_db::test(seed)]
+async fn a_big_signed_pdf_is_stored_and_redirected(pool: MySqlPool) {
+    let big = a_big_real_pdf();
+    let base = signwell(big).await;
+    let (server, storage) = server(pool.clone(), &base).await;
+    signwell_request(&pool, "signed", "https://files.example/original.pdf").await;
+    let response = server
+        .get("/v1/signature-requests/9202/signed-pdf")
+        .with_session(sessions::REP)
+        .await;
+    response.assert_status(StatusCode::FOUND);
+    let location = response.header("location").to_str().unwrap().to_string();
+    let key = location
+        .strip_prefix(&format!("{MEMORY_PUBLIC_BASE}/"))
+        .unwrap();
+    assert!(key.starts_with("signed-documents/100/9202-"), "{key}");
+    let stored = storage.get(key).await.unwrap().expect("the signed copy");
+    assert_eq!(title(&stored.bytes), "John Clay signed");
 }
 
 #[test_db::test(seed)]

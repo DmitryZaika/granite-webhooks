@@ -33779,7 +33779,7 @@
           "customers"
         ],
         "summary": "Open a natively signed document",
-        "description": "The document as sent, or signed once the customer signed it, from the\nprivate signature bucket. For a browser tab: errors are plain text.",
+        "description": "The document as sent, or signed once the customer signed it, from the\nprivate signature bucket; one over 4 MB redirects to a presigned link.\nFor a browser tab: errors are plain text.",
         "operationId": "open_native_signature_document",
         "parameters": [
           {
@@ -33809,6 +33809,9 @@
             "content": {
               "application/pdf": {}
             }
+          },
+          "302": {
+            "description": "Over 4 MB: redirect to a presigned link"
           },
           "401": {
             "description": "No valid session, or not an employee",
@@ -33842,7 +33845,7 @@
           "customers"
         ],
         "summary": "Open a signed `SignWell` document",
-        "description": "The signed PDF, titled and named \"<document> signed.pdf\"; the original\nfile while it is not signed. For a browser tab: errors are plain text.",
+        "description": "The signed PDF, titled and named \"<document> signed.pdf\"; the original\nfile while it is not signed. One over 4 MB is stored in the bucket and\nredirects to a presigned link. For a browser tab: errors are plain text.",
         "operationId": "open_signed_pdf",
         "parameters": [
           {
@@ -33862,6 +33865,9 @@
             "content": {
               "application/pdf": {}
             }
+          },
+          "302": {
+            "description": "Over 4 MB: redirect to a presigned link"
           },
           "401": {
             "description": "No valid session, or not an employee",

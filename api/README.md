@@ -82,6 +82,13 @@ The bucket's CORS must allow `GET` and `HEAD` too: the call player fetches
 the recording. `CLOUDTALK_BASE_URL` points CloudTalk calls at a stand-in
 (the frontend's browser tests).
 
+Signed documents (`routes/signatures.rs`) open in a browser tab with the
+session cookie. Native ones are read from the private
+`SIGNATURE_STORAGE_BUCKET` (same storage credentials) and hash-checked;
+SignWell signed copies are fetched and titled "<document> signed". PDFs over
+4 MB redirect to a presigned link (big SignWell copies are stored under
+`signed-documents/`, which a bucket lifecycle rule may expire after a day).
+
 ### Billing (Stripe)
 
 `src/billing/` keeps `company_billing` in step with Stripe (the state machine

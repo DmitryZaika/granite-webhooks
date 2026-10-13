@@ -27,6 +27,13 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(signed_pdf))
 }
 
+/// Biggest PDF answered in the response body: Lambda responses stop at
+/// 6 MB, base64 included. Bigger ones go through a presigned link.
+pub const MAX_INLINE_BYTES: usize = 4 * 1024 * 1024;
+/// Where a big signed `SignWell` PDF is put for its presigned link (the
+/// bucket's lifecycle rule may expire this folder after a day).
+const SIGNED_COPIES: &str = "signed-documents";
+
 const UNAVAILABLE: &str = "The document is temporarily unavailable. Please try again.";
 
 /// Plain text for the tab the document was opened in.
@@ -38,6 +45,17 @@ fn text(status: StatusCode, message: &str) -> Response {
             (header::CACHE_CONTROL, "private, no-store"),
         ],
         message.to_string(),
+    )
+        .into_response()
+}
+
+fn redirect(location: &str) -> Response {
+    (
+        StatusCode::FOUND,
+        [
+            (header::LOCATION, location.to_string()),
+            (header::CACHE_CONTROL, "private, no-store".to_string()),
+        ],
     )
         .into_response()
 }
@@ -178,7 +196,8 @@ struct NativeRow {
 /// Open a natively signed document
 ///
 /// The document as sent, or signed once the customer signed it, from the
-/// private signature bucket. For a browser tab: errors are plain text.
+/// private signature bucket; one over 4 MB redirects to a presigned link.
+/// For a browser tab: errors are plain text.
 #[utoipa::path(
     get,
     path = "/v1/signatures/{id}/document",
@@ -187,6 +206,7 @@ struct NativeRow {
     params(("id" = i64, Path, description = "Signature request id"), DocumentQuery),
     responses(
         (status = 200, description = "The PDF", content_type = "application/pdf"),
+        (status = 302, description = "Over 4 MB: redirect to a presigned link"),
         (status = 401, description = "No valid session, or not an employee", content_type = "text/plain"),
         (status = 404, description = "No such document the caller may open", content_type = "text/plain"),
         (status = 503, description = "The file cannot be read right now", content_type = "text/plain"),
@@ -284,6 +304,19 @@ pub async fn native_document(
             return Ok(text(StatusCode::SERVICE_UNAVAILABLE, UNAVAILABLE));
         }
     };
+    if object.bytes.len() > MAX_INLINE_BYTES {
+        let link = state
+            .storage
+            .presign_get_in(Some(bucket), &key, "application/pdf", Some(&row.filename))
+            .await;
+        return Ok(match link {
+            Ok(link) => redirect(&link),
+            Err(err) => {
+                tracing::error!(?err, id, "native signature document presign failed");
+                text(StatusCode::SERVICE_UNAVAILABLE, UNAVAILABLE)
+            }
+        });
+    }
     Ok(pdf(object.bytes, &row.filename))
 }
 
@@ -344,7 +377,8 @@ async fn signwell_completed_pdf_url(
 /// Open a signed `SignWell` document
 ///
 /// The signed PDF, titled and named "<document> signed.pdf"; the original
-/// file while it is not signed. For a browser tab: errors are plain text.
+/// file while it is not signed. One over 4 MB is stored in the bucket and
+/// redirects to a presigned link. For a browser tab: errors are plain text.
 #[utoipa::path(
     get,
     path = "/v1/signature-requests/{id}/signed-pdf",
@@ -353,6 +387,7 @@ async fn signwell_completed_pdf_url(
     params(("id" = i64, Path, description = "Signature request id")),
     responses(
         (status = 200, description = "The PDF", content_type = "application/pdf"),
+        (status = 302, description = "Over 4 MB: redirect to a presigned link"),
         (status = 401, description = "No valid session, or not an employee", content_type = "text/plain"),
         (status = 404, description = "No such request in the caller's company", content_type = "text/plain"),
         (status = 502, description = "The document could not be downloaded", content_type = "text/plain"),
@@ -436,6 +471,19 @@ pub async fn signed_pdf(
     let bytes = tokio::task::spawn_blocking(move || with_title(bytes, &title))
         .await
         .map_err(|err| ApiError::Internal(err.to_string()))?;
+    if bytes.len() > MAX_INLINE_BYTES {
+        let key = format!(
+            "{SIGNED_COPIES}/{}/{id}-{}.pdf",
+            user.company_id,
+            sha256_hex(&bytes)
+        );
+        state.storage.put(&key, bytes, "application/pdf").await?;
+        let link = state
+            .storage
+            .presign_get_as(&key, "application/pdf", Some(&filename))
+            .await?;
+        return Ok(redirect(&link));
+    }
     Ok(pdf(bytes, &filename))
 }
 
