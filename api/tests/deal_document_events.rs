@@ -34,7 +34,11 @@ async fn a_deal_lists_its_quote_and_contract_events(pool: MySqlPool) {
     let ids: Vec<&str> = events.iter().map(|e| e["id"].as_str().unwrap()).collect();
     assert_eq!(
         ids,
-        ["quote-email-9911", "contract-sent-9921", "contract-signed-9921"]
+        [
+            "quote-email-9911",
+            "contract-sent-9921",
+            "contract-signed-9921"
+        ]
     );
     assert_eq!(events[0]["kind"], "quote_emailed");
     assert_eq!(events[0]["title"], "Smith: Kitchen");

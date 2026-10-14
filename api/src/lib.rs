@@ -84,7 +84,7 @@ async fn check_origin(State(state): State<AppState>, request: Request, next: Nex
         && let Some(origin) = request.headers().get(ORIGIN)
         && !origin
             .to_str()
-            .is_ok_and(|origin| state::origin_allowed(&state.allowed_origins, origin))
+            .is_ok_and(|origin| state.origin_allowed(origin))
     {
         return (
             StatusCode::FORBIDDEN,

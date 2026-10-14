@@ -1182,6 +1182,320 @@ pub fn prepare_native(
     })
 }
 
+/// What the server records about a signing (`NativeSigningAuditInput`),
+/// frozen with the finish claim; never from the browser.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SigningAudit {
+    pub document_id: String,
+    pub prepared_sha256: String,
+    pub signer_name: String,
+    pub signer_email: String,
+    /// ISO 8601 UTC with milliseconds.
+    pub signed_at: String,
+    pub consent_version: String,
+    /// Always `unavailable`: a forwarded address could be spoofed.
+    pub ip_address: String,
+    pub user_agent: String,
+    /// The request's frozen signing settings.
+    pub settings: serde_json::Value,
+}
+
+fn is_hex64(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn audit_valid(audit: &SigningAudit) -> bool {
+    let email_ok = audit
+        .signer_email
+        .split_once('@')
+        .is_some_and(|(local, domain)| !local.is_empty() && domain.contains('.'))
+        && audit.signer_email.len() <= 255;
+    uuid::Uuid::parse_str(&audit.document_id).is_ok()
+        && is_hex64(&audit.prepared_sha256)
+        && (1..=255).contains(&audit.signer_name.chars().count())
+        && email_ok
+        && chrono::DateTime::parse_from_rfc3339(&audit.signed_at).is_ok()
+        && (1..=100).contains(&audit.consent_version.chars().count())
+        && (1..=64).contains(&audit.ip_address.chars().count())
+        && audit.user_agent.chars().count() <= 2000
+        && crate::native_delivery::frozen_settings_valid(&audit.settings)
+}
+
+/// The signing day as `MM/DD/YYYY` in the company's time zone.
+pub fn signed_date(audit: &SigningAudit) -> String {
+    let zone = audit.settings["timezone"]
+        .as_str()
+        .and_then(|tz| tz.parse::<chrono_tz::Tz>().ok())
+        .unwrap_or(chrono_tz::UTC);
+    chrono::DateTime::parse_from_rfc3339(&audit.signed_at)
+        .map(|at| at.with_timezone(&zone).format("%m/%d/%Y").to_string())
+        .unwrap_or_default()
+}
+
+/// The SHA-256 of the answers as `JSON.stringify` of their sorted entries.
+pub fn answers_sha256(answers: &std::collections::BTreeMap<String, String>) -> String {
+    let entries: Vec<(&String, &String)> = answers.iter().collect();
+    sha256_hex(
+        serde_json::to_string(&entries)
+            .expect("strings serialize")
+            .as_bytes(),
+    )
+}
+
+fn root_pages(doc: &Document) -> Option<ObjectId> {
+    doc.catalog().ok()?.get(b"Pages").ok()?.as_reference().ok()
+}
+
+/// Adds the signature record page(s) (`appendAudit`).
+fn append_audit(
+    doc: &mut Document,
+    audit: &SigningAudit,
+    answers_sha: &str,
+) -> Result<(), PdfSigningError> {
+    let unsupported =
+        || PdfSigningError::new("invalid_text", "Audit text contains unsupported characters");
+    let lines = [
+        "Native signature record".to_string(),
+        format!("Document: {}", audit.document_id),
+        format!("Prepared SHA-256: {}", audit.prepared_sha256),
+        format!("Signer: {}", audit.signer_name),
+        format!("Email: {}", audit.signer_email),
+        format!("Signed at (UTC): {}", audit.signed_at),
+        format!(
+            "Company timezone: {}",
+            audit.settings["timezone"].as_str().unwrap_or_default()
+        ),
+        format!("Consent: {}", audit.consent_version),
+        format!("IP address: {}", audit.ip_address),
+        format!("User agent: {}", audit.user_agent),
+        format!("Answers SHA-256: {answers_sha}"),
+    ];
+    // Each page: its text lines (encoded) and their baselines.
+    let mut pages: Vec<Vec<(Vec<u8>, f64)>> = vec![Vec::new()];
+    let mut y = 748.0;
+    for line in &lines {
+        Font::Regular.try_encode(line).ok_or_else(unsupported)?;
+        let mut rest: Vec<char> = line.chars().collect();
+        while !rest.is_empty() {
+            let mut count = rest.len();
+            while count > 1
+                && Font::Regular.width(&rest[..count].iter().collect::<String>(), 10.0) > 524.0
+            {
+                count -= 1;
+            }
+            if y < 44.0 {
+                pages.push(Vec::new());
+                y = 748.0;
+            }
+            let piece: String = rest[..count].iter().collect();
+            let encoded = Font::Regular.try_encode(&piece).ok_or_else(unsupported)?;
+            pages.last_mut().expect("a page").push((encoded, y));
+            rest.drain(..count);
+            y -= 16.0;
+        }
+    }
+    let invalid = || PdfSigningError::new("invalid_pdf", "This PDF page cannot be edited");
+    let parent = root_pages(doc).ok_or_else(invalid)?;
+    let font = helvetica(doc);
+    for lines in pages {
+        let mut ops = Vec::new();
+        for (bytes, y) in lines {
+            ops.extend_from_slice(
+                format!(
+                    "BT\n/F1 10 Tf\n1 0 0 1 44 {} Tm\n<{}> Tj\nET\n",
+                    fmt(y),
+                    hex(&bytes)
+                )
+                .as_bytes(),
+            );
+        }
+        let contents = doc.add_object(Stream::new(Dictionary::new(), ops));
+        let mut fonts = Dictionary::new();
+        fonts.set("F1", Object::Reference(font));
+        let mut resources = Dictionary::new();
+        resources.set("Font", Object::Dictionary(fonts));
+        let mut page = Dictionary::new();
+        page.set("Type", Object::Name(b"Page".to_vec()));
+        page.set("Parent", Object::Reference(parent));
+        page.set(
+            "MediaBox",
+            Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        );
+        page.set("Resources", Object::Dictionary(resources));
+        page.set("Contents", Object::Reference(contents));
+        let id = doc.add_object(page);
+        let pages = doc
+            .get_object_mut(parent)
+            .and_then(Object::as_dict_mut)
+            .map_err(|_| invalid())?;
+        let mut kids = pages
+            .get(b"Kids")
+            .and_then(Object::as_array)
+            .cloned()
+            .map_err(|_| invalid())?;
+        kids.push(Object::Reference(id));
+        let count = pages.get(b"Count").and_then(Object::as_i64).unwrap_or(0) + 1;
+        pages.set("Kids", Object::Array(kids));
+        pages.set("Count", count);
+    }
+    Ok(())
+}
+
+/// The prepared document with the signer's answers printed
+/// (`validatedNativeSigningDocument`): the fields, and the answers' hash.
+fn signed_document(
+    prepared: &[u8],
+    stored: &[SignatureField],
+    answers: &std::collections::BTreeMap<String, String>,
+    audit: &SigningAudit,
+) -> Result<(Document, Vec<SignatureField>, String), PdfSigningError> {
+    if !audit_valid(audit) {
+        return Err(PdfSigningError::new(
+            "invalid_answers",
+            "Invalid server signing evidence or unverified settings",
+        ));
+    }
+    if sha256_hex(prepared) != audit.prepared_sha256 {
+        return Err(PdfSigningError::new(
+            "version_mismatch",
+            "Prepared PDF version does not match",
+        ));
+    }
+    let mut doc = load_strict(prepared)?;
+    if stored.iter().any(|field| field.id.is_none()) {
+        return Err(PdfSigningError::new(
+            "invalid_fields",
+            "Stored signing fields must include stable IDs",
+        ));
+    }
+    let fields = checked_fields(&doc, stored)?;
+    let editable: HashSet<&str> = fields
+        .iter()
+        .filter(|f| f.trimmed_value().is_empty() && f.kind != FieldKind::AutofillDateSigned)
+        .filter_map(|f| f.id.as_deref())
+        .collect();
+    if answers.keys().any(|id| !editable.contains(id.as_str())) {
+        return Err(PdfSigningError::new(
+            "invalid_answers",
+            "Immutable or unknown field answer",
+        ));
+    }
+    let date = signed_date(audit);
+    let mut stamps = Vec::new();
+    for field in &fields {
+        if !field.trimmed_value().is_empty() {
+            continue;
+        }
+        let autofill = field.kind == FieldKind::AutofillDateSigned;
+        let value = if autofill {
+            date.clone()
+        } else {
+            field
+                .id
+                .as_deref()
+                .and_then(|id| answers.get(id))
+                .cloned()
+                .unwrap_or_default()
+        };
+        if field.required && value.trim().is_empty() {
+            return Err(PdfSigningError::new(
+                "invalid_answers",
+                "Required signer answer is missing",
+            ));
+        }
+        stamps.push(SignatureField {
+            kind: if autofill {
+                FieldKind::Date
+            } else {
+                field.kind
+            },
+            value: Some(value),
+            ..field.clone()
+        });
+    }
+    validate_values(&stamps)?;
+    let mut edits = Vec::new();
+    stamp(&mut doc, &mut edits, &stamps, true)?;
+    apply(&mut doc, &edits)?;
+    let answers_sha = answers_sha256(answers);
+    if audit.settings["auditPage"] == serde_json::Value::Bool(true) {
+        append_audit(&mut doc, audit, &answers_sha)?;
+    }
+    Ok((doc, fields, answers_sha))
+}
+
+/// Checks the answers can be printed (pictures, text fit, required ones)
+/// without producing the final document (`validateNativeSigningInput`).
+pub fn validate_native_input(
+    prepared: &[u8],
+    stored: &[SignatureField],
+    answers: &std::collections::BTreeMap<String, String>,
+    audit: &SigningAudit,
+) -> Result<(), PdfSigningError> {
+    signed_document(prepared, stored, answers, audit).map(|_| ())
+}
+
+/// A signed document: its bytes, hash and evidence record.
+#[derive(Debug, Clone)]
+pub struct NativeSigned {
+    pub bytes: Vec<u8>,
+    pub sha256: String,
+    /// The audit plus `schemaVersion`, `completedSha256`, `fieldsSha256`,
+    /// `answersSha256`.
+    pub evidence: serde_json::Value,
+}
+
+/// The signed PDF (`buildNativeSignedPdf`).
+pub fn build_native_signed(
+    prepared: &[u8],
+    stored: &[SignatureField],
+    answers: &std::collections::BTreeMap<String, String>,
+    audit: &SigningAudit,
+) -> Result<NativeSigned, PdfSigningError> {
+    let (mut doc, fields, answers_sha) = signed_document(prepared, stored, answers, audit)?;
+    if let Ok(at) = chrono::DateTime::parse_from_rfc3339(&audit.signed_at) {
+        let stamp = format!(
+            "D:{}Z",
+            at.with_timezone(&chrono::Utc).format("%Y%m%d%H%M%S")
+        );
+        let info = doc.trailer.get(b"Info").and_then(Object::as_reference).ok();
+        let info = info.unwrap_or_else(|| {
+            let id = doc.add_object(Dictionary::new());
+            doc.trailer.set("Info", Object::Reference(id));
+            id
+        });
+        if let Ok(Object::Dictionary(dict)) = doc.get_object_mut(info) {
+            dict.set("ModDate", Object::string_literal(stamp));
+        }
+    }
+    let bytes = save(&mut doc)?;
+    if !renderable(&bytes) {
+        return Err(PdfSigningError::new(
+            "invalid_pdf",
+            "Signed PDF cannot be rendered",
+        ));
+    }
+    let sha256 = sha256_hex(&bytes);
+    let mut evidence = serde_json::to_value(audit).expect("audit serializes");
+    evidence["schemaVersion"] = serde_json::json!(1);
+    evidence["completedSha256"] = serde_json::json!(sha256);
+    evidence["fieldsSha256"] = serde_json::json!(sha256_hex(
+        serde_json::to_string(&fields)
+            .expect("fields serialize")
+            .as_bytes()
+    ));
+    evidence["answersSha256"] = serde_json::json!(answers_sha);
+    Ok(NativeSigned {
+        bytes,
+        sha256,
+        evidence,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

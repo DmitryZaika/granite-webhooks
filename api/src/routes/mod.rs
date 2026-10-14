@@ -53,7 +53,9 @@ pub mod reports;
 pub mod sales;
 pub mod schedule;
 pub mod shop;
+pub mod signature_requests;
 pub mod signatures;
+pub mod signing;
 pub mod signwell_webhook;
 pub mod sinks;
 pub mod slabs;
@@ -143,6 +145,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(integrations::router())
         .merge(superuser_companies::router())
         .merge(manual_feedback_reviews::router())
+        .merge(signature_requests::router())
+        .merge(signing::router())
         .merge(signatures::router())
         .merge(signwell_webhook::router())
 }

@@ -249,6 +249,33 @@ impl SignWell {
         signing_url_from_payload(&response.json().await.ok()?)
     }
 
+    /// Deletes the document so its link stops working; gone already is fine.
+    /// The error is `SignWell`'s message, for the user.
+    pub async fn delete(&self, key: &str, id: &str) -> Result<(), String> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err("This request has no SignWell document.".into());
+        }
+        let path = format!("/documents/{}", encode(id));
+        let response = self
+            .request(reqwest::Method::DELETE, &path, key)
+            .send()
+            .await
+            .map_err(|_| "Could not reach SignWell. The request was not cancelled.".to_string())?;
+        let status = response.status();
+        if status.is_success() || status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+        let body: Value = response.json().await.unwrap_or(Value::Null);
+        Err(body["message"]
+            .as_str()
+            .or_else(|| body["error"].as_str())
+            .map_or_else(
+                || format!("SignWell refused the cancellation ({})", status.as_u16()),
+                str::to_string,
+            ))
+    }
+
     /// Deletes the document (best effort: a rollback after a failed send).
     pub async fn cancel(&self, key: &str, id: &str) {
         let id = id.trim();

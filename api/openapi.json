@@ -38675,6 +38675,502 @@
         ]
       }
     },
+    "/v1/signature-requests": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "List documents sent for signature",
+        "description": "Newest first, with the customer and sender names. `mine` (default):\nwhat the caller sent; `company` (admins): the whole company. Open\n`SignWell` requests are checked with `SignWell` first.",
+        "operationId": "list_signature_requests",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`mine` (default): what the caller sent; `company`: everyone's (admins).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SentRequest"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee, or not an admin for `company`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/signature-requests/{id}/cancel": {
+      "post": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "Cancel a signature request",
+        "description": "Stops a request the caller sent that is not finished: a `SignWell`\ndocument is deleted at `SignWell` (its link stops working); a native one\nis revoked here and gets no more reminders. The request becomes `expired`.",
+        "operationId": "cancel_signature_request",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Signature request id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Cancelled"
+          },
+          "400": {
+            "description": "Already finished, or SignWell refused (its message)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such request sent by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/public/signing/{document_id}/session": {
+      "post": {
+        "tags": [
+          "signing"
+        ],
+        "summary": "Open a signing session",
+        "description": "Trades the invitation link's token for a 30-minute signing session\n(`__Host-native_signing_<document>` cookie of this host). Opening the link\ncounts as the signer viewing the document (the sender is told once).",
+        "operationId": "open_signing_session",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "description": "The document's id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Session open (cookie set)"
+          },
+          "404": {
+            "description": "Not a valid link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not ready for signing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The link has expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Signing is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/signing/{document_id}": {
+      "get": {
+        "tags": [
+          "signing"
+        ],
+        "summary": "Open a signing link",
+        "description": "For a native document: the document and the signer's state (needs the\nsession cookie from `.../session`). For a `SignWell` document: its\nembedded signing page.",
+        "operationId": "get_signing_page",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "description": "The document's id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What to show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a valid link (or no session)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Signing is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/signing/{document_id}/actions": {
+      "post": {
+        "tags": [
+          "signing"
+        ],
+        "summary": "Act on a document",
+        "description": "Starts (the signer reviewed it), finishes (signs; answers in\n`submission`: `documentVersion`, `consent: true`, `consentVersion`,\n`idempotencyKey`, `answers` by field id), resumes an interrupted finish,\nor declines. Must come from the signing page's origin with the session\ncookie and its `csrf`. Answers the updated view.",
+        "operationId": "act_on_signing",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "description": "The document's id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SigningAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid answers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Wrong origin or CSRF token, or declining is off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a valid link (or no session)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already signed or declined, a finish is in progress, or the document changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The link has expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Not JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable, or the signed PDF could not be saved (resume)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/signing/{document_id}/download": {
+      "get": {
+        "tags": [
+          "signing"
+        ],
+        "summary": "Download the document",
+        "description": "`prepared`: the document to review (while it can be signed), shown\ninline. `completed`: the signed copy, as an attachment. Needs the\nsession cookie. Big files redirect to a short-lived link.",
+        "operationId": "download_signing_document",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "description": "The document's id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "`prepared` (the document to read) or `completed` (the signed copy).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The PDF",
+            "content": {
+              "application/pdf": {}
+            }
+          },
+          "302": {
+            "description": "A short-lived link to a big PDF"
+          },
+          "404": {
+            "description": "Not a valid link, kind or session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not signable any more",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignerErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/signatures/{id}/document": {
       "get": {
         "tags": [
@@ -49467,6 +49963,19 @@
           }
         }
       },
+      "InvitationToken": {
+        "type": "object",
+        "description": "Body of `POST /v1/public/signing/{document_id}/session`.",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "`token` from the invitation link."
+          }
+        }
+      },
       "Invoice": {
         "type": "object",
         "description": "An invoice of the company.",
@@ -56650,6 +57159,80 @@
           }
         }
       },
+      "SentRequest": {
+        "type": "object",
+        "description": "A document sent for signature.",
+        "required": [
+          "id",
+          "filename",
+          "signer_name",
+          "signer_email",
+          "status",
+          "provider",
+          "signed_url"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The request."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Document name."
+          },
+          "signer_name": {
+            "type": "string",
+            "description": "Who signs."
+          },
+          "signer_email": {
+            "type": "string",
+            "description": "Their email."
+          },
+          "status": {
+            "type": "string",
+            "description": "`draft`, `sent`, `viewed`, `signed`, `declined` or `expired`."
+          },
+          "provider": {
+            "type": "string",
+            "description": "`signwell` or `native`."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's name, or null."
+          },
+          "sender_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who sent it, or null."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was sent."
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Last change (when signed, the signing time)."
+          },
+          "signed_url": {
+            "type": "string",
+            "description": "Where to open it: an API path (`/v1/...`) to open on the API's host,\nelse the original file's URL."
+          }
+        }
+      },
       "SentSms": {
         "type": "object",
         "description": "Texts the signed-in user sent through the company's SMS provider.",
@@ -57295,6 +57878,179 @@
           "is_signature_available": {
             "type": "boolean",
             "description": "May send for signature."
+          }
+        }
+      },
+      "SignerErrorBody": {
+        "type": "object",
+        "description": "A refusal: `{\"error\", \"code\"}`.",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "For the signer."
+          },
+          "code": {
+            "type": "string",
+            "description": "`invalid_link`, `expired`, `signed`, `declined`, `csrf`,\n`review_required`, `invalid_submission`, `processing`,\n`retryable_finalization`, `idempotency_conflict`, `no_claim`,\n`version_changed`, `decline_disabled`, `parity_pending`, `unavailable`."
+          }
+        }
+      },
+      "SigningAction": {
+        "type": "object",
+        "description": "Body of `POST /v1/public/signing/{document_id}/actions`.",
+        "required": [
+          "intent",
+          "csrf"
+        ],
+        "properties": {
+          "intent": {
+            "type": "string",
+            "description": "`start` (the signer reviewed the document), `finish` (sign with\n`submission`), `resume` (complete an interrupted finish) or `decline`."
+          },
+          "csrf": {
+            "type": "string",
+            "description": "The view's `csrf`."
+          },
+          "submission": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "With `finish`: the answers."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `decline`: why (up to 500 characters)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SigningPage": {
+        "type": "object",
+        "description": "What the signing page shows.",
+        "required": [
+          "provider"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "`native` (signed here, see `view`) or `signwell` (embed `signing_url`)."
+          },
+          "view": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SigningView",
+                "description": "A native document and the signer's state."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signing_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`SignWell`'s signing page for the embed."
+          }
+        }
+      },
+      "SigningView": {
+        "type": "object",
+        "description": "A field as the signer sees it.",
+        "required": [
+          "document_id",
+          "document_version",
+          "filename",
+          "signer_name",
+          "status",
+          "fields",
+          "signature_methods",
+          "allow_decline",
+          "reviewed",
+          "finish_pending",
+          "csrf",
+          "consent_version",
+          "consent_text",
+          "prepared_url"
+        ],
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "description": "The document's id."
+          },
+          "document_version": {
+            "type": "string",
+            "description": "The prepared PDF's SHA-256; send it back with the answers."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Document name."
+          },
+          "signer_name": {
+            "type": "string",
+            "description": "Who signs."
+          },
+          "status": {
+            "type": "string",
+            "description": "`sent`, `viewed`, `signed`, `declined` or `expired`."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignatureField"
+            },
+            "description": "The fields; those without `value` (and not `autofill_date_signed`)\nare the signer's to fill."
+          },
+          "signature_methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "How the signer may sign: `type` and/or `draw`."
+          },
+          "allow_decline": {
+            "type": "boolean",
+            "description": "The signer may decline."
+          },
+          "reviewed": {
+            "type": "boolean",
+            "description": "The signer pressed start in this session (required before finishing)."
+          },
+          "finish_pending": {
+            "type": "boolean",
+            "description": "A finish was recorded but not completed: resume it."
+          },
+          "csrf": {
+            "type": "string",
+            "description": "Send it with every action."
+          },
+          "consent_version": {
+            "type": "string",
+            "description": "The consent the signer agrees to."
+          },
+          "consent_text": {
+            "type": "string",
+            "description": "Its wording."
+          },
+          "prepared_url": {
+            "type": "string",
+            "description": "The document to read (API path, on this host)."
+          },
+          "completed_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The signed copy (API path), once signed."
           }
         }
       },

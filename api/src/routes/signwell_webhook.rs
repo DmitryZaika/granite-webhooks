@@ -302,7 +302,6 @@ impl NoticeEvent {
 
 #[derive(sqlx::FromRow)]
 struct NoticeRow {
-    created_by_user_id: i64,
     sender_email: Option<String>,
     sender_name: Option<String>,
     company_name: Option<String>,
@@ -452,6 +451,14 @@ async fn notify(state: &AppState, request_id: i64, company_id: i32, event: Notic
         if let Err(err) = state.webhooks.send_email(&outgoing).await {
             tracing::error!(error = ?err, request = request_id, "Failed to email that a signature request was {}", event.verb);
         }
+    }
+}
+
+/// Tells the sender a request moved to `status` (`viewed`, `signed`,
+/// `declined`); other statuses send nothing. Shared with native signing.
+pub async fn notify_status(state: &AppState, request_id: i64, company_id: i32, status: &str) {
+    if let Some(event) = NoticeEvent::of(status) {
+        notify(state, request_id, company_id, event).await;
     }
 }
 

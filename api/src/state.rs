@@ -88,6 +88,9 @@ pub struct AppState {
     pub dns: crate::deliverability::AppDns,
     /// SES identities for the inbound email checks.
     pub ses: SesIdentities,
+    /// `SIGNATURE_SESSION_SECRET`: keys the native signer's CSRF token
+    /// (32+ bytes); unset, native signing links answer 503.
+    pub signing_session_secret: Option<Arc<str>>,
 }
 
 /// Where the SES identity lists come from.
@@ -164,6 +167,7 @@ impl AppState {
             ringcentral_app: None,
             dns: crate::deliverability::AppDns::Fixed(Arc::default()),
             ses: SesIdentities::Fixed(None),
+            signing_session_secret: None,
         }
     }
 
@@ -236,6 +240,13 @@ impl AppState {
     #[must_use]
     pub fn with_telegram(mut self, telegram: TelegramBots) -> Self {
         self.telegram = telegram;
+        self
+    }
+
+    /// Ignored unless 32 bytes or longer.
+    #[must_use]
+    pub fn with_signing_session_secret(mut self, secret: &str) -> Self {
+        self.signing_session_secret = (secret.len() >= 32).then(|| Arc::from(secret));
         self
     }
 
@@ -357,18 +368,30 @@ impl AppState {
             )
             .with_ringcentral_app(crate::ringcentral_connect::RingCentralApp::from_env())
             .with_dns(crate::deliverability::AppDns::system())
-            .with_ses(SesIdentities::Aws))
+            .with_ses(SesIdentities::Aws)
+            .with_signing_session_secret(
+                &std::env::var("SIGNATURE_SESSION_SECRET").unwrap_or_default(),
+            ))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the
     /// origin must be echoed back exactly (no `*`).
+    /// A browser origin may write: one of the app's, or the signing page's
+    /// (`SIGNATURE_APP_ORIGIN`).
+    #[must_use]
+    pub fn origin_allowed(&self, origin: &str) -> bool {
+        origin_allowed(&self.allowed_origins, origin)
+            || (!self.signature_app_origin.is_empty() && origin == &*self.signature_app_origin)
+    }
+
     pub fn cors_layer(&self) -> CorsLayer {
         let origins = Arc::clone(&self.allowed_origins);
+        let signing = Arc::clone(&self.signature_app_origin);
         CorsLayer::new()
             .allow_origin(AllowOrigin::predicate(move |origin, _| {
-                origin
-                    .to_str()
-                    .is_ok_and(|origin| origin_allowed(&origins, origin))
+                origin.to_str().is_ok_and(|origin| {
+                    origin_allowed(&origins, origin) || (!signing.is_empty() && origin == &*signing)
+                })
             }))
             .allow_credentials(true)
             .allow_methods([
