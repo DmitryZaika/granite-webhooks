@@ -36,7 +36,10 @@ async fn admins_create_save_and_restore_price_lists(pool: MySqlPool) {
         .json(&json!({ "name": " Retail 2027 " }))
         .await;
     res.assert_status(StatusCode::CONFLICT);
-    assert_eq!(res.json::<Value>()["error"], "\"Retail 2027\" already exists.");
+    assert_eq!(
+        res.json::<Value>()["error"],
+        "\"Retail 2027\" already exists."
+    );
 
     let list = server
         .get("/v1/quote-price-lists")
@@ -65,7 +68,10 @@ async fn admins_create_save_and_restore_price_lists(pool: MySqlPool) {
     assert_eq!(saved["price_list"]["revision_number"], 2);
     assert_eq!(saved["info"]["expirationDays"], 45);
     assert_eq!(saved["info"]["revision"], 2);
-    assert_eq!(saved["info"]["arrOtherItems"], json!([{ "name": "Haul away" }]));
+    assert_eq!(
+        saved["info"]["arrOtherItems"],
+        json!([{ "name": "Haul away" }])
+    );
     assert_eq!(saved["revisions"][0]["notes"], "Longer quotes");
 
     // Ambiguous prices are refused with every problem.
@@ -84,7 +90,9 @@ async fn admins_create_save_and_restore_price_lists(pool: MySqlPool) {
 
     let first = saved["revisions"][1]["id"].as_i64().unwrap();
     let res = server
-        .post(&format!("/v1/quote-price-lists/{id}/revisions/{first}/restore"))
+        .post(&format!(
+            "/v1/quote-price-lists/{id}/revisions/{first}/restore"
+        ))
         .with_session(sessions::ADMIN)
         .await;
     res.assert_status_ok();
@@ -118,7 +126,10 @@ async fn admins_copy_star_rename_deactivate_and_delete(pool: MySqlPool) {
         .await;
     res.assert_status(StatusCode::CREATED);
     let copy = res.json::<Value>()["id"].as_i64().unwrap();
-    assert_eq!(editor(&server, copy).await["price_list"]["name"], "Retail (copy)");
+    assert_eq!(
+        editor(&server, copy).await["price_list"]["name"],
+        "Retail (copy)"
+    );
 
     server
         .put("/v1/quote-price-lists/default")
@@ -199,8 +210,14 @@ async fn the_extras_catalog_is_added_to_saved_and_filled_from_the_lists(pool: My
         .await
         .assert_status(StatusCode::CONFLICT);
     let builder = editor(&server, b).await;
-    assert_eq!(builder["info"]["extraLinks"][tear_out.to_string()], json!({ "off": true }));
-    assert_eq!(builder["revisions"][0]["notes"], "Extra \"Tear out\" not offered");
+    assert_eq!(
+        builder["info"]["extraLinks"][tear_out.to_string()],
+        json!({ "off": true })
+    );
+    assert_eq!(
+        builder["revisions"][0]["notes"],
+        "Extra \"Tear out\" not offered"
+    );
 
     let catalog = server
         .get("/v1/quote-extras")
@@ -208,10 +225,12 @@ async fn the_extras_catalog_is_added_to_saved_and_filled_from_the_lists(pool: My
         .await
         .json::<Value>();
     assert_eq!(catalog["list_only"], 1);
-    assert!(catalog["catalog"][0]["item"]["arrOptions"][0]["id"]
-        .as_str()
-        .unwrap()
-        .starts_with("opt-"));
+    assert!(
+        catalog["catalog"][0]["item"]["arrOptions"][0]["id"]
+            .as_str()
+            .unwrap()
+            .starts_with("opt-")
+    );
 
     let res = server
         .post("/v1/quote-extras/moves")
