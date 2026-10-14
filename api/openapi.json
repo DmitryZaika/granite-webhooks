@@ -28013,6 +28013,50 @@
         ]
       }
     },
+    "/v1/public/companies/{company_id}/frame": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Get a company's page frame",
+        "description": "Its name and logo, and its catalog's stone and sink types and the\nsuppliers of its stones, sinks and faucets. Unknown companies get an\nempty frame.",
+        "operationId": "get_company_frame",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The frame",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyFrame"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/quote-forms": {
       "get": {
         "tags": [
@@ -45130,7 +45174,8 @@
           "can_manage_billing",
           "is_shop_manager",
           "user_signature_access",
-          "company_features"
+          "company_features",
+          "feature_capabilities"
         ],
         "properties": {
           "user": {
@@ -45209,6 +45254,10 @@
           "company_features": {
             "$ref": "#/components/schemas/ShellFeatures",
             "description": "The acting company's switches."
+          },
+          "feature_capabilities": {
+            "$ref": "#/components/schemas/TeamCapabilities",
+            "description": "What the user's home company can do, as the guided tours gate on it."
           }
         }
       },
@@ -47620,6 +47669,76 @@
           "ringcentral": {
             "type": "boolean",
             "description": "The company is connected to RingCentral (OAuth, or JWT credentials).\nWhen both are set up, texts go through RingCentral."
+          }
+        }
+      },
+      "CompanyFrame": {
+        "type": "object",
+        "description": "The frame of a company's pages.",
+        "required": [
+          "stone_types",
+          "sink_types",
+          "stone_suppliers",
+          "sink_suppliers",
+          "faucet_suppliers"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company name."
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Logo."
+          },
+          "logo_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Logo height in pixels (the app clamps it)."
+          },
+          "stone_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NamedRow"
+            },
+            "description": "Stone types, by name."
+          },
+          "sink_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NamedRow"
+            },
+            "description": "Sink types, by name."
+          },
+          "stone_suppliers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FrameSupplier"
+            },
+            "description": "Suppliers of its stones."
+          },
+          "sink_suppliers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FrameSupplier"
+            },
+            "description": "Suppliers of its sinks."
+          },
+          "faucet_suppliers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FrameSupplier"
+            },
+            "description": "Suppliers of its faucets."
           }
         }
       },
@@ -54161,6 +54280,27 @@
           }
         }
       },
+      "FrameSupplier": {
+        "type": "object",
+        "description": "A supplier of the catalog filters (`ISupplier`).",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Supplier id."
+          },
+          "supplier_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          }
+        }
+      },
       "HiddenUser": {
         "type": "object",
         "description": "A calendar an admin hid from one user.",
@@ -56751,6 +56891,25 @@
           }
         },
         "additionalProperties": false
+      },
+      "NamedRow": {
+        "type": "object",
+        "description": "A type or supplier of the catalog filters.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          }
+        }
       },
       "NewAgenticQuestion": {
         "type": "object",
@@ -61382,6 +61541,27 @@
             "type": "number",
             "format": "double",
             "description": "Discount in dollars."
+          },
+          "created_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Made on (ISO 8601)."
+          },
+          "created_by_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who made it."
+          },
+          "salesperson_phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sales rep's phone."
           }
         }
       },

@@ -15,7 +15,7 @@
 
 pub mod manifest;
 pub mod store;
-mod team;
+pub(crate) mod team;
 
 use crate::auth::ShopOrEmployeeUser;
 use crate::auth::session::SessionUser;

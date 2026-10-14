@@ -504,6 +504,12 @@ pub struct QuoteInfo {
     pub discount_pct: f64,
     /// Discount in dollars.
     pub discount_amount: f64,
+    /// Made on (ISO 8601).
+    pub created_date: Option<String>,
+    /// Who made it.
+    pub created_by_name: Option<String>,
+    /// The sales rep's phone.
+    pub salesperson_phone: Option<String>,
 }
 
 /// A saved revision.
@@ -896,6 +902,9 @@ fn info_of(row: &QuoteRow) -> QuoteInfo {
         tax_pct: row.tax_pct,
         discount_pct: row.discount_pct,
         discount_amount: row.discount_amount,
+        created_date: row.created_date.clone(),
+        created_by_name: row.created_by_name.clone(),
+        salesperson_phone: row.salesperson_phone.clone(),
     }
 }
 

@@ -123,20 +123,7 @@ pub async fn team(
             members: Vec::new(),
         }));
     }
-    let (domain, quickbooks): (Option<String>, bool) = sqlx::query_as(
-        "SELECT NULLIF(TRIM(domain), ''), NULLIF(TRIM(qbo_realm_id), '') IS NOT NULL
-           FROM company WHERE id = ?",
-    )
-    .bind(company)
-    .fetch_optional(pool)
-    .await?
-    .unwrap_or((None, false));
-    let verified_domain = match domain {
-        Some(domain) => common::amazon::email::domain_verified(&domain)
-            .await
-            .unwrap_or(false),
-        None => false,
-    };
+    let capabilities = capabilities(pool, company).await?;
     let rows: Vec<MemberRow> = sqlx::query_as(
         "SELECT id, name, email, COALESCE(is_admin, 0) <> 0 AS is_admin,
                 (NULLIF(TRIM(cloudtalk_agent_id), '') IS NOT NULL
@@ -178,13 +165,37 @@ pub async fn team(
     Ok(Json(Team {
         enabled: true,
         capabilities: TeamCapabilities {
-            cloudtalk: features.cloudtalk,
-            quickbooks,
-            verified_domain,
-            sms_provider: features.cloudtalk || features.ringcentral,
-            followup_tours: env_on("FOLLOWUP_ONBOARDING_ENABLED"),
             onboarding: true,
+            ..capabilities
         },
         members,
     }))
+}
+
+/// What a company can do, as the tour registry gates on it
+/// (`loadFeatureCapabilities`); `onboarding` is the company's tours switch.
+pub async fn capabilities(pool: &sqlx::MySqlPool, company: i32) -> ApiResult<TeamCapabilities> {
+    let features = company_features(pool, company).await?;
+    let (domain, quickbooks): (Option<String>, bool) = sqlx::query_as(
+        "SELECT NULLIF(TRIM(domain), ''), NULLIF(TRIM(qbo_realm_id), '') IS NOT NULL
+           FROM company WHERE id = ?",
+    )
+    .bind(company)
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or((None, false));
+    let verified_domain = match domain {
+        Some(domain) => common::amazon::email::domain_verified(&domain)
+            .await
+            .unwrap_or(false),
+        None => false,
+    };
+    Ok(TeamCapabilities {
+        cloudtalk: features.cloudtalk,
+        quickbooks,
+        verified_domain,
+        sms_provider: features.cloudtalk || features.ringcentral,
+        followup_tours: env_on("FOLLOWUP_ONBOARDING_ENABLED"),
+        onboarding: features.onboarding,
+    })
 }

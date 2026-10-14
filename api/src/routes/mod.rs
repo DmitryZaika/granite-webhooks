@@ -20,6 +20,7 @@ pub mod catalog;
 pub mod checklists;
 pub mod commissions;
 pub mod company;
+pub mod company_frame;
 pub mod created;
 pub mod customer_sources;
 pub mod customer_view;
@@ -124,6 +125,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(quote_editor::router())
         .merge(quote_portal::router())
         .merge(commissions::router())
+        .merge(company_frame::router())
         .merge(quote_forms::router())
         .merge(quote_price_lists::router())
         .merge(reports::router())
