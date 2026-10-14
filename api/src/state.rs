@@ -35,6 +35,9 @@ pub struct AppState {
     pub sms_upkeep: Arc<Mutex<HashMap<(&'static str, i32), Instant>>>,
     /// Recent texts sent per user, for the per-minute limit.
     pub sms_sends: Arc<Mutex<HashMap<i32, VecDeque<Instant>>>>,
+    /// When each customer page (or unknown address) may get its next login
+    /// code, in Unix milliseconds.
+    pub customer_view_cooldown: Arc<Mutex<HashMap<String, i64>>>,
     /// Recent SMS flow starts per user, for the per-minute limit.
     pub flow_starts: Arc<Mutex<HashMap<i32, VecDeque<Instant>>>>,
     /// Threads the composer's autocomplete gathered in the last minute.
@@ -143,6 +146,7 @@ impl AppState {
             webhooks: WebhooksClient::disabled(),
             sms_upkeep: Arc::default(),
             sms_sends: Arc::default(),
+            customer_view_cooldown: Arc::default(),
             flow_starts: Arc::default(),
             compose_contexts: Arc::default(),
             maps: Maps::disabled(),

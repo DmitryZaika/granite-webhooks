@@ -3728,6 +3728,647 @@
         ]
       }
     },
+    "/v1/public/customer-view/{company_id}/{view_id}": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Open a customer's page",
+        "description": "Whether the visitor already entered a code for it, else where a code\nwould go. Unknown pages are 404.",
+        "operationId": "get_customer_view",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The gate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewGate"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/code": {
+      "post": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Email a login code",
+        "description": "Sends a one-time code (10 minutes) to the customer's email.",
+        "operationId": "send_customer_view_code",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Sent"
+          },
+          "404": {
+            "description": "No such page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The customer has no email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A code was just sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The email could not be sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/verify": {
+      "post": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Enter a login code",
+        "description": "Unlocks the page for this browser for 7 days.",
+        "operationId": "verify_customer_view_code",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnteredCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Verified"
+          },
+          "400": {
+            "description": "Wrong or expired code, or too many attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/projects": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "List the customer's projects",
+        "description": "Newest first, with the stone, sink and how far the work is. Needs a\nverified visitor.",
+        "operationId": "list_customer_view_projects",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The projects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ViewProject"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/invoices": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "List the customer's invoices",
+        "description": "Their `QuickBooks` invoices, newest first; `status` says why there are\nnone. Needs a verified visitor.",
+        "operationId": "list_customer_view_invoices",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The invoices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerInvoices"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/{view_id}/invoices/{invoice_id}/pdf": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Get one of the customer's invoices as a PDF",
+        "description": "Only an invoice of this customer's `QuickBooks` customer. Needs a\nverified visitor.",
+        "operationId": "get_customer_view_invoice_pdf",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "invoice_id",
+            "in": "path",
+            "description": "QuickBooks invoice id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The PDF",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid invoice id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not this customer's invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page, or not linked to QuickBooks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "QuickBooks is not connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "QuickBooks failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/login": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Check a pending sign-in",
+        "description": "Whether a code was asked for on the company's account page\n(`pendingAccountLoginChallenge`).",
+        "operationId": "get_customer_view_login",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pending sign-in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingLogin"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/login/code": {
+      "post": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Email a code to an account's address",
+        "description": "Sends a code when a customer of the company has that email. The answer\nis the same either way, so it does not reveal who is a customer.",
+        "operationId": "send_customer_view_login_code",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginEmail"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Sent (if the address is a customer's)"
+          },
+          "400": {
+            "description": "Not an email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A code was just sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The email could not be sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/{company_id}/login/verify": {
+      "post": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Enter an account sign-in code",
+        "description": "Verifies the code sent to the account's address; answers the page it\nunlocks.",
+        "operationId": "verify_customer_view_login_code",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnteredCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Wrong or expired code, or too many attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/customer-view/login": {
+      "delete": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "Drop a pending code",
+        "description": "So the visitor can sign in with another email.",
+        "operationId": "cancel_customer_view_code",
+        "responses": {
+          "204": {
+            "description": "Dropped"
+          }
+        }
+      }
+    },
     "/v1/users/sales-reps": {
       "get": {
         "tags": [
@@ -47178,6 +47819,19 @@
           }
         }
       },
+      "EnteredCode": {
+        "type": "object",
+        "description": "A code the visitor typed.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The 6 digits from the email."
+          }
+        }
+      },
       "Equipment": {
         "type": "object",
         "description": "A piece of equipment.",
@@ -50870,6 +51524,16 @@
         ],
         "description": "`GET /v1/customers` returns `CustomerRow`s, or `CompanyRow`s when `view=companies`."
       },
+      "LoginEmail": {
+        "type": "object",
+        "description": "An address to sign in with.",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The email on the customer's account; empty resends to the pending one."
+          }
+        }
+      },
       "LoginInput": {
         "type": "object",
         "description": "Body of `POST /v1/auth/login`.",
@@ -52521,6 +53185,19 @@
           }
         }
       },
+      "OpenedView": {
+        "type": "object",
+        "description": "The page a verified sign-in opens.",
+        "required": [
+          "view_id"
+        ],
+        "properties": {
+          "view_id": {
+            "type": "string",
+            "description": "The customer's page id: open `/customer/{company_id}/{view_id}`."
+          }
+        }
+      },
       "OptimizedRoute": {
         "type": "object",
         "description": "`POST /v1/schedule/optimize-route`.",
@@ -53117,6 +53794,26 @@
           "cancel_if_customer_messages": {
             "type": "boolean",
             "description": "Dropped if the customer writes first."
+          }
+        }
+      },
+      "PendingLogin": {
+        "type": "object",
+        "description": "A sign-in by email in progress.",
+        "required": [
+          "code_sent"
+        ],
+        "properties": {
+          "code_sent": {
+            "type": "boolean",
+            "description": "A code was sent (or would have been) and has not expired."
+          },
+          "masked_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it went, masked."
           }
         }
       },
@@ -62214,6 +62911,107 @@
           "has_ringcentral_api": {
             "type": "boolean",
             "description": "The listed company has `RingCentral`."
+          }
+        }
+      },
+      "ViewGate": {
+        "type": "object",
+        "description": "Whether the visitor may see the page, and where a code would go.",
+        "required": [
+          "verified",
+          "has_email",
+          "code_sent"
+        ],
+        "properties": {
+          "verified": {
+            "type": "boolean",
+            "description": "The visitor entered a code for this page (valid for 7 days)."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's name, once verified."
+          },
+          "has_email": {
+            "type": "boolean",
+            "description": "The customer has an email a code can go to."
+          },
+          "masked_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That email, masked (`a***@example.com`)."
+          },
+          "code_sent": {
+            "type": "boolean",
+            "description": "A code was sent and has not expired."
+          }
+        }
+      },
+      "ViewProject": {
+        "type": "object",
+        "description": "One of the customer's projects (a sale).",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sale id."
+          },
+          "sale_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was sold (ISO 8601, UTC)."
+          },
+          "price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Price."
+          },
+          "seller_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sales rep."
+          },
+          "stone_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stone."
+          },
+          "stone_pictures": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stone's pictures, comma-separated URLs."
+          },
+          "sink": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sink."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`Sold`, `Partially Cut`, `Cut`, `Installed` or `Cancelled`."
           }
         }
       },

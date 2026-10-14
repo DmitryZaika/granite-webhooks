@@ -21,6 +21,7 @@ pub mod checklists;
 pub mod company;
 pub mod created;
 pub mod customer_sources;
+pub mod customer_view;
 pub mod customers;
 pub mod dashboard;
 pub mod deals;
@@ -84,6 +85,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(me::router())
         .merge(customers::router())
         .merge(customer_sources::router())
+        .merge(customer_view::router())
         .merge(users::router())
         .merge(stones::router())
         .merge(sinks::router())
