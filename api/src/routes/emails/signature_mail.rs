@@ -49,7 +49,7 @@ fn logo_html(branding: &Branding) -> String {
     )
 }
 
-fn card_html(branding: &Branding, rows: &str) -> String {
+pub(crate) fn card_html(branding: &Branding, rows: &str) -> String {
     format!(
         "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f4f4f5;\">
   <tr><td align=\"center\" style=\"padding:32px 12px;\">

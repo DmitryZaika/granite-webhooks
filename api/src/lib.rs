@@ -17,6 +17,7 @@
 pub mod ai;
 pub mod analytics_proxy;
 pub mod auth;
+pub mod automation_notice;
 pub mod billing;
 pub mod chat;
 pub mod commissions;

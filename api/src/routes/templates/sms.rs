@@ -9,6 +9,7 @@ use super::handlers::template_body_error;
 use super::order;
 use super::schemas::{OrderingType, TemplateScope};
 use crate::auth::EmployeeUser;
+use crate::automation_notice::{self, Snapshot};
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
@@ -426,7 +427,10 @@ pub async fn create(
     .execute(pool)
     .await?
     .last_insert_id();
-    let row = accessible(pool, &user, i32::try_from(id).unwrap_or_default()).await?;
+    let id = i32::try_from(id).unwrap_or_default();
+    let row = accessible(pool, &user, id).await?;
+    let after = automation_notice::sms_template(pool, user.company_id, id).await;
+    automation_notice::notify(&state, &user, &Snapshot::Template(None), &after).await;
     Ok((StatusCode::CREATED, Json(to_template(row, &user, company))))
 }
 
@@ -470,6 +474,7 @@ pub async fn update(
     if company {
         drip_taken(pool, user.company_id, drip, Some(id)).await?;
     }
+    let before = automation_notice::sms_template(pool, user.company_id, id).await;
     sqlx::query(
         "UPDATE cloudtalk_sms_templates
             SET name = ?, body = ?, lead_list_id = ?, hour_delay = ?, updated_at = NOW()
@@ -486,6 +491,8 @@ pub async fn update(
     if company && (drip.0.is_none() || drip.1.is_none()) {
         cancel_scheduled(pool, id, "Template deleted").await?;
     }
+    let after = automation_notice::sms_template(pool, user.company_id, id).await;
+    automation_notice::notify(&state, &user, &before, &after).await;
     let row = accessible(pool, &user, id).await?;
     Ok(Json(to_template(row, &user, company)))
 }
@@ -517,6 +524,7 @@ pub async fn delete(
     let pool = &state.pool;
     require_sms(pool, &user).await?;
     editable(pool, &user, id).await?;
+    let before = automation_notice::sms_template(pool, user.company_id, id).await;
     sqlx::query(
         "UPDATE cloudtalk_sms_templates SET deleted_at = NOW(), updated_at = NOW()
           WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
@@ -526,5 +534,6 @@ pub async fn delete(
     .execute(pool)
     .await?;
     cancel_scheduled(pool, id, "Template deleted").await?;
+    automation_notice::notify(&state, &user, &before, &Snapshot::Template(None)).await;
     Ok(StatusCode::NO_CONTENT)
 }

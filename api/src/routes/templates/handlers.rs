@@ -4,6 +4,7 @@ use super::schemas::{
     TemplateAttachment, TemplateAttachmentInput, TemplateOrder, TemplateScope,
 };
 use crate::auth::EmployeeUser;
+use crate::automation_notice::{self, Snapshot};
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
@@ -383,9 +384,12 @@ pub async fn create(
     .execute(&state.pool)
     .await?
     .last_insert_id();
-    let row = accessible(&state.pool, &user, i32::try_from(id).unwrap_or(i32::MAX))
+    let id = i32::try_from(id).unwrap_or(i32::MAX);
+    let row = accessible(&state.pool, &user, id)
         .await?
         .ok_or(ApiError::NotFound)?;
+    let after = automation_notice::email_template(&state.pool, user.company_id, id).await;
+    automation_notice::notify(&state, &user, &Snapshot::Template(None), &after).await;
     Ok((
         StatusCode::CREATED,
         Json(to_template(row, &user, Vec::new())),
@@ -424,6 +428,7 @@ pub async fn update(
     let clean = clean(&input)?;
     let company = editable(&state.pool, &user, id).await?.user_id.is_none();
     let automation = automation(&state.pool, user.company_id, &input, company, Some(id)).await?;
+    let before = automation_notice::email_template(&state.pool, user.company_id, id).await;
     sqlx::query(
         "UPDATE email_templates SET template_name = ?, template_subject = ?, template_body = ?,
                 lead_group_id = ?, lead_list_id = ?, hour_delay = ?
@@ -442,6 +447,8 @@ pub async fn update(
     if automation.is_none() {
         cancel_pending(&state.pool, id, "Template deleted").await?;
     }
+    let after = automation_notice::email_template(&state.pool, user.company_id, id).await;
+    automation_notice::notify(&state, &user, &before, &after).await;
     let row = editable(&state.pool, &user, id).await?;
     let attachments = attachments(&state.pool, &[id])
         .await?
@@ -475,6 +482,7 @@ pub async fn delete(
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
     editable(&state.pool, &user, id).await?;
+    let before = automation_notice::email_template(&state.pool, user.company_id, id).await;
     sqlx::query(
         // The automation goes too: (list, company, delay) is unique, deleted
         // templates included.
@@ -494,6 +502,7 @@ pub async fn delete(
     .bind(id)
     .execute(&state.pool)
     .await?;
+    automation_notice::notify(&state, &user, &before, &Snapshot::Template(None)).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

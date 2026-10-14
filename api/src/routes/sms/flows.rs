@@ -6,6 +6,7 @@
 //! `api.{cloudtalk,ringcentral}.sms.flows*` routes (`smsFlows.server.ts`).
 
 use crate::auth::EmployeeUser;
+use crate::automation_notice::{self, Snapshot};
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
@@ -564,12 +565,10 @@ pub async fn create(
     let id = i64::try_from(id).map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
     insert_steps(&mut tx, id, &input.steps).await?;
     tx.commit().await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(CreatedFlow {
-            id: i32::try_from(id).unwrap_or_default(),
-        }),
-    ))
+    let id = i32::try_from(id).unwrap_or_default();
+    let after = automation_notice::flow(&state.pool, user.company_id, id).await;
+    automation_notice::notify(&state, &user, &Snapshot::Flow(None), &after).await;
+    Ok((StatusCode::CREATED, Json(CreatedFlow { id })))
 }
 
 /// Saves a personal flow of the caller's own text (no templates), e.g. an
@@ -700,6 +699,7 @@ pub async fn update(
     let pool = &state.pool;
     let existing = editable(pool, &user, id).await?;
     let name = checked(&input.name, &input.steps)?;
+    let before = automation_notice::flow(pool, user.company_id, id).await;
     let mut tx = pool.begin().await?;
     // The flow's own scope decides, never the request.
     check_templates(&mut tx, &user, &input.steps, existing.user_id.is_none()).await?;
@@ -719,6 +719,8 @@ pub async fn update(
     insert_steps(&mut tx, i64::from(id), &input.steps).await?;
     tx.commit().await?;
     reschedule(pool, user.company_id, id).await?;
+    let after = automation_notice::flow(pool, user.company_id, id).await;
+    automation_notice::notify(&state, &user, &before, &after).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -747,6 +749,7 @@ pub async fn delete(
 ) -> ApiResult<StatusCode> {
     let pool = &state.pool;
     editable(pool, &user, id).await?;
+    let before = automation_notice::flow(pool, user.company_id, id).await;
     let mut tx = pool.begin().await?;
     sqlx::query(
         "UPDATE sms_flows SET deleted_at = UTC_TIMESTAMP(), updated_at = UTC_TIMESTAMP()
@@ -765,6 +768,7 @@ pub async fn delete(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    automation_notice::notify(&state, &user, &before, &Snapshot::Flow(None)).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
