@@ -26,7 +26,7 @@ pub fn number(value: &Value) -> Option<f64> {
 }
 
 /// An invoice in a list.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct InvoiceSummary {
     /// `QuickBooks` invoice id.
     pub id: String,

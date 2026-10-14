@@ -19,6 +19,7 @@ pub mod analytics_proxy;
 pub mod auth;
 pub mod billing;
 pub mod chat;
+pub mod commissions;
 pub mod db;
 pub mod deliverability;
 pub mod email_signature;

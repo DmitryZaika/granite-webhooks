@@ -87,7 +87,7 @@ impl Quote {
         QuoteDoc::from_stored(&json_value(self.draft_drawing_json.as_deref()))
     }
 
-    const fn options(&self) -> PriceOptions {
+    pub const fn options(&self) -> PriceOptions {
         PriceOptions {
             discount_pct: self.discount_pct,
             discount_amount: self.discount_amount,

@@ -23,6 +23,10 @@ pub struct Flags {
 #[serde(rename_all = "camelCase")]
 pub struct PriceLine {
     pub key: String,
+    /// What the quote prints, e.g. "42.5 sq ft Granite Black".
+    pub description: String,
+    /// `sq ft`, `lin ft` or none.
+    pub unit: Option<&'static str>,
     pub unit_price: Option<f64>,
     pub total: f64,
     #[serde(flatten)]
@@ -34,6 +38,8 @@ pub struct PriceLine {
 #[serde(rename_all = "camelCase")]
 pub struct AreaPrice {
     pub area_id: Option<String>,
+    /// The area's name ("Other Items" for lines outside any area).
+    pub name: String,
     pub quantity: f64,
     pub lines: Vec<PriceLine>,
     pub subtotal: f64,
@@ -260,6 +266,8 @@ struct Builder<'a> {
 
 struct Line {
     key: String,
+    description: String,
+    unit: Option<&'static str>,
     quantity: f64,
     unit_price: Option<f64>,
     flat: f64,
@@ -279,6 +287,12 @@ impl Builder<'_> {
         let total = unit_price.map_or(0.0, |p| round_money(p * l.quantity + flat, self.dollars));
         self.lines.push(PriceLine {
             key: l.key,
+            description: l
+                .description
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            unit: l.unit,
             unit_price,
             total,
             flags: l.flags,
@@ -287,15 +301,32 @@ impl Builder<'_> {
     }
 }
 
-const fn line(key: String, quantity: f64, unit_price: Option<f64>, flags: Flags) -> Line {
+const fn line(
+    key: String,
+    description: String,
+    unit: Option<&'static str>,
+    quantity: f64,
+    unit_price: Option<f64>,
+    flags: Flags,
+) -> Line {
     Line {
         key,
+        description,
+        unit,
         quantity,
         unit_price,
         flat: 0.0,
         flags,
     }
 }
+
+/// `fmtNum`: up to 4 decimals, as JavaScript prints numbers.
+fn fmt_num(v: f64) -> String {
+    num_str(js_round(v * 10000.0) / 10000.0)
+}
+
+const SQ_FT: Option<&str> = Some("sq ft");
+const LIN_FT: Option<&str> = Some("lin ft");
 
 /// Slab size of a slab-priced color that has none (the slab layout uses it too).
 const DEFAULT_SLAB: (f64, f64) = (126.0, 63.0);
@@ -393,10 +424,46 @@ fn drawing_lines(
                 slab_count * w * h
             };
             let slab_sq_ft = round1(sq_in / 144.0);
-            b.add(line(k("material"), slab_sq_ft, mat.price, mat.flags));
-            b.add(line(k("material-sqft"), 0.0, Some(0.0), mat.flags));
+            #[allow(clippy::float_cmp)]
+            let slabs = if slab_count == 1.0 { "Slab" } else { "Slabs" };
+            b.add(line(
+                k("material"),
+                format!(
+                    "{} sq ft - {} {slabs}{} {product} {variant}",
+                    fmt_num(slab_sq_ft),
+                    num_str(slab_count),
+                    if estimated { " (estimated)" } else { "" }
+                ),
+                SQ_FT,
+                slab_sq_ft,
+                mat.price,
+                mat.flags,
+            ));
+            b.add(line(
+                k("material-sqft"),
+                format!(
+                    "{} sq ft Countertop - Priced by the slab",
+                    fmt_num(r.counter_sq_ft)
+                ),
+                None,
+                0.0,
+                Some(0.0),
+                mat.flags,
+            ));
         } else {
-            b.add(line(k("material"), r.counter_sq_ft, mat.price, mat.flags));
+            let description = if mat.product.is_some() {
+                format!("{} sq ft {product} {variant}", fmt_num(r.counter_sq_ft))
+            } else {
+                format!("{} sq ft Countertop", fmt_num(r.counter_sq_ft))
+            };
+            b.add(line(
+                k("material"),
+                description,
+                SQ_FT,
+                r.counter_sq_ft,
+                mat.price,
+                mat.flags,
+            ));
         }
     }
 
@@ -404,6 +471,17 @@ fn drawing_lines(
         let sr = rule("arrSplashes");
         b.add(line(
             k(&format!("splash:{}", num_str(s.height))),
+            format!(
+                "{} sq ft - {}\" Splash{}",
+                fmt_num(s.sq_ft),
+                fmt_num(s.height),
+                if mat.by_slab {
+                    " Priced by the slab"
+                } else {
+                    ""
+                }
+            ),
+            if mat.by_slab { None } else { SQ_FT },
             if mat.by_slab { 0.0 } else { s.sq_ft },
             if mat.by_slab { Some(0.0) } else { mat_price },
             flags_of(filter_of(sr)),
@@ -417,6 +495,17 @@ fn drawing_lines(
             let wr = rule("arrWaterfallMiteredEdgeMaterialCharges");
             b.add(line(
                 k(&format!("{label}:{}", num_str(s.height))),
+                format!(
+                    "{} sq ft - {}\" {label}{}",
+                    fmt_num(s.sq_ft),
+                    fmt_num(s.height),
+                    if mat.by_slab {
+                        " Priced by the slab"
+                    } else {
+                        ""
+                    }
+                ),
+                if mat.by_slab { None } else { SQ_FT },
                 if mat.by_slab { 0.0 } else { s.sq_ft },
                 if mat.by_slab { Some(0.0) } else { mat_price },
                 flags_of(filter_of(wr)),
@@ -438,6 +527,8 @@ fn drawing_lines(
         };
         b.add(line(
             k("fabrication"),
+            format!("{} sq ft Fabrication", fmt_num(r.fabrication_sq_ft)),
+            SQ_FT,
             r.fabrication_sq_ft,
             price,
             flags_of(filter_of(fab)),
@@ -447,6 +538,8 @@ fn drawing_lines(
     if r.fabrication_sq_ft > 0.0 && enabled(inst) {
         b.add(line(
             k("installation"),
+            format!("{} sq ft Installation", fmt_num(r.fabrication_sq_ft)),
+            SQ_FT,
             r.fabrication_sq_ft,
             unless_no_product(Some(num(inst, "price").unwrap_or(0.0))),
             flags_of(filter_of(inst)),
@@ -456,6 +549,8 @@ fn drawing_lines(
         let wi = rule("arrWaterfallInstallationCharges");
         b.add(line(
             k("waterfallInstall"),
+            format!("{} Waterfall Installation", num_str(t.waterfall_count)),
+            None,
             t.waterfall_count,
             unless_no_product(Some(num(wi, "price").unwrap_or(0.0))),
             flags_of(filter_of(wi)),
@@ -477,11 +572,26 @@ fn drawing_lines(
             } else {
                 Some(linear.unwrap_or(0.0))
             };
-            b.add(line(k("miterCuts"), lin_ft, price, flags_of(filter_of(mc))));
+            b.add(line(
+                k("miterCuts"),
+                format!("{} lin ft - Mitered Cuts", fmt_num(lin_ft)),
+                LIN_FT,
+                lin_ft,
+                price,
+                flags_of(filter_of(mc)),
+            ));
         }
         if let Some(each) = each {
+            #[allow(clippy::float_cmp)]
+            let edges = if t.miter_count == 1.0 {
+                "Edge"
+            } else {
+                "Edges"
+            };
             b.add(line(
                 k("miterEach"),
+                format!("{} Mitered {edges}", num_str(t.miter_count)),
+                None,
                 t.miter_count,
                 unless_no_product(Some(each)),
                 flags_of(filter_of(mc)),
@@ -490,7 +600,14 @@ fn drawing_lines(
     }
 
     if let Some(delivery) = color.and_then(|c| c.delivery).filter(|d| *d > 0.0) {
-        b.add(line(k("delivery"), 1.0, Some(delivery), mat.flags));
+        b.add(line(
+            k("delivery"),
+            format!("Delivery - {product} {variant}"),
+            None,
+            1.0,
+            Some(delivery),
+            mat.flags,
+        ));
     }
 
     let edge_set = pick_edge_set(pl, product, variant);
@@ -520,8 +637,21 @@ fn drawing_lines(
             )
         });
         let flat = cost.is_some_and(|c| c.1);
+        let suffix = if !name.is_empty() {
+            format!(" - {name}")
+        } else if r.finished_lin_ft.len() > 1 {
+            format!(" - Edge {}", idx + 1)
+        } else {
+            String::new()
+        };
         b.add(line(
             k(&format!("edge:{idx}")),
+            if flat {
+                format!("Finished Edge{suffix}")
+            } else {
+                format!("{} lin ft Finished Edge{suffix}", fmt_num(lin))
+            },
+            if flat { None } else { LIN_FT },
             if flat { 1.0 } else { lin },
             cost.and_then(|c| c.0),
             flags_of(filter_of(edge_set)),
@@ -531,6 +661,8 @@ fn drawing_lines(
         let ae = rule("arrApplianceEdges");
         b.add(line(
             k("appliance"),
+            format!("{} lin ft Appliance Edge", fmt_num(r.appliance_lin_ft)),
+            LIN_FT,
             r.appliance_lin_ft,
             unless_no_product(Some(num(ae, "linearPrice").unwrap_or(0.0))),
             flags_of(filter_of(ae)),
@@ -542,6 +674,12 @@ fn drawing_lines(
         let flat_each = num(fr, "flatPrice").unwrap_or(0.0);
         b.add(Line {
             key: k("fullRadius"),
+            description: format!(
+                "{} - {} lin ft - Full Radius Edge",
+                num_str(t.full_radius_count),
+                fmt_num(lin)
+            ),
+            unit: LIN_FT,
             quantity: lin,
             unit_price: unless_no_product(Some(num(fr, "linearPrice").unwrap_or(0.0))),
             flat: flat_each * t.full_radius_count,
@@ -557,12 +695,23 @@ fn drawing_lines(
         };
         let sr = rule(rules);
         let range = range_for(arr(sr, "arrRanges"), "maxDimension", s.width);
+        let label = match s.kind {
+            SinkType::Farmer => "Farmer",
+            SinkType::DropIn => "Drop-In",
+            SinkType::Undermount => "Undermount",
+        };
         b.add(line(
             k(&format!(
                 "sinkCutout:{}:{}",
                 s.kind.as_str(),
                 num_str(s.width)
             )),
+            format!(
+                "{} - {}\" {label} Sink Cutout",
+                num_str(s.count),
+                fmt_num(s.width)
+            ),
+            None,
             s.count,
             unless_no_product(num(range, "price")),
             flags_of(filter_of(sr)),
@@ -574,6 +723,8 @@ fn drawing_lines(
             .find(|m| str_is(Some(m), "name", &s.name));
         b.add(line(
             format!("sinkModel:{}", s.name),
+            format!("{} Sink - {}", num_str(s.count), s.name),
+            None,
             s.count,
             num(model, "flatPrice"),
             Flags {
@@ -588,6 +739,8 @@ fn drawing_lines(
         let fh = rule("arrFaucetHoles");
         b.add(line(
             k("faucetHole"),
+            format!("{} Faucet Holes", num_str(t.faucet_holes)),
+            None,
             t.faucet_holes,
             unless_no_product(Some(num(fh, "faucetHolePrice").unwrap_or(0.0))),
             flags_of(filter_of(fh)),
@@ -597,6 +750,8 @@ fn drawing_lines(
         let oc = rule("arrOutletCutouts");
         b.add(line(
             k("outlet"),
+            format!("{} Outlet Cutouts", num_str(t.outlets)),
+            None,
             t.outlets,
             unless_no_product(Some(num(oc, "price").unwrap_or(0.0))),
             flags_of(filter_of(oc)),
@@ -607,6 +762,8 @@ fn drawing_lines(
         let range = range_for(arr(cr, "arrRanges"), "maxDimension", c.width);
         b.add(line(
             k(&format!("cooktop:{}", num_str(c.width))),
+            format!("{} Cooktop Cutout", num_str(c.count)),
+            None,
             c.count,
             unless_no_product(num(range, "dropInPrice").or_else(|| num(range, "price"))),
             flags_of(filter_of(cr)),
@@ -615,6 +772,16 @@ fn drawing_lines(
     for o in &t.other_cutouts {
         b.add(line(
             k(&format!("otherCutout:{}", o.name)),
+            format!(
+                "{} {}",
+                num_str(o.count),
+                if o.name.is_empty() {
+                    "Other Cutout"
+                } else {
+                    o.name.as_str()
+                }
+            ),
+            None,
             o.count,
             o.price,
             Flags {
@@ -649,6 +816,22 @@ fn drawing_lines(
                 (num(cr, "price").unwrap_or(0.0), filter_of(cr))
             }
         };
+        let size = match c.kind.as_str() {
+            "notch" => format!("{}\" x {}\"", fmt_num(c.length), fmt_num(c.depth)),
+            "bumpOut" => format!("{}\"", fmt_num(c.length)),
+            _ => format!("{}\"", fmt_num(c.size)),
+        };
+        let label = match c.kind.as_str() {
+            "radius" => "Outside Radius Corner",
+            "insideRadius" => "Inside Radius Corner",
+            "clip" => "Clipped Corner",
+            "insideDiagonal" => "Inside Diagonal Corner",
+            "recessedDiagonal" => "Recessed Diagonal Corner",
+            "notch" => "Notched Corner",
+            "bumpOut" => "Bumped Out Corner",
+            "roundNotch" => "Round Notch Corner",
+            _ => "undefined",
+        };
         b.add(line(
             k(&format!(
                 "corner:{}:{}:{}:{}",
@@ -657,6 +840,8 @@ fn drawing_lines(
                 num_str(c.length),
                 num_str(c.depth)
             )),
+            format!("{} - {size} {label}", num_str(c.count)),
+            None,
             c.count,
             unless_no_product(Some(price)),
             flags_of(f),
@@ -671,8 +856,17 @@ fn drawing_lines(
             _ => None,
         };
         let er = rules.and_then(rule);
+        let label = match e.kind.as_str() {
+            "bumpOut" => "Bump-Out",
+            "bumpIn" => "Bump-In",
+            "bumpOutArc" => "Bump-Out Arc",
+            "bumpInArc" => "Bump-In Arc",
+            _ => "undefined",
+        };
         b.add(line(
             k(&format!("edgeMod:{}:{}", e.kind, num_str(e.width))),
+            format!("{} - {}\" {label}", num_str(e.count), fmt_num(e.width)),
+            None,
             e.count,
             unless_no_product(Some(num(er, "flatPrice").unwrap_or(0.0))),
             flags_of(filter_of(er)),
@@ -700,12 +894,21 @@ fn follows_area(item: &QuoteItem, def: Option<&Value>, area_sq_ft: Option<f64>) 
     item.amount.is_none() || item.fill_base.is_none_or(|base| base != area)
 }
 
+#[allow(clippy::too_many_lines)]
 fn item_lines(b: &mut Builder, pl: &Value, items: &[&QuoteItem], area_sq_ft: Option<f64>) {
     for item in items {
         let key = format!("item:{}", item.id);
+        #[allow(clippy::float_cmp)]
+        let qty_prefix = if item.quantity == 1.0 {
+            String::new()
+        } else {
+            format!("{} - ", fmt_num(item.quantity))
+        };
         match item.kind {
             ItemKind::Text => b.add(line(
                 key,
+                item.name.clone(),
+                None,
                 0.0,
                 Some(0.0),
                 Flags {
@@ -717,6 +920,8 @@ fn item_lines(b: &mut Builder, pl: &Value, items: &[&QuoteItem], area_sq_ft: Opt
             )),
             ItemKind::Misc => b.add(line(
                 key,
+                format!("{qty_prefix}{}", item.name),
+                None,
                 item.quantity,
                 item.price,
                 Flags {
@@ -728,6 +933,9 @@ fn item_lines(b: &mut Builder, pl: &Value, items: &[&QuoteItem], area_sq_ft: Opt
             )),
             ItemKind::PriceList => {
                 let def = find_other_item(pl, &item.name, item.catalog_id);
+                let name = string(def, "name")
+                    .unwrap_or(item.name.as_str())
+                    .to_string();
                 let flags = Flags {
                     hidden: on(get(def, "priceHiddenOnQuote")),
                     allow_discount: def.is_none() || on(get(def, "allowDiscount")),
@@ -742,8 +950,13 @@ fn item_lines(b: &mut Builder, pl: &Value, items: &[&QuoteItem], area_sq_ft: Opt
                         item.amount.unwrap_or(0.0)
                     };
                     let range = range_for(ranges, "maxDimension", amount);
+                    let unit_name = string(def, "unitName").unwrap_or_default();
                     b.add(Line {
                         key,
+                        // `.replace('  ', ' ')`: the first double space only.
+                        description: format!("{} {unit_name} - {name}", fmt_num(amount))
+                            .replacen("  ", " ", 1),
+                        unit: if unit_name == "sq ft" { SQ_FT } else { None },
                         quantity: amount,
                         unit_price: Some(num(range, "unitPrice").unwrap_or(0.0)),
                         flat: num(range, "flatPrice").unwrap_or(0.0),
@@ -778,7 +991,20 @@ fn item_lines(b: &mut Builder, pl: &Value, items: &[&QuoteItem], area_sq_ft: Opt
                     .price
                     .or_else(|| num(opt, "flatPrice"))
                     .or_else(|| def.map(|_| 0.0));
-                b.add(line(key, item.quantity, price, flags));
+                let single_default = options.len() == 1
+                    && options[0].get("name").and_then(Value::as_str) == Some("Option 1");
+                let option_label = match option_name.as_deref() {
+                    Some(option) if !single_default => format!(" - {option}"),
+                    _ => String::new(),
+                };
+                b.add(line(
+                    key,
+                    format!("{qty_prefix}{name}{option_label}"),
+                    None,
+                    item.quantity,
+                    price,
+                    flags,
+                ));
             }
         }
     }
@@ -864,6 +1090,7 @@ pub fn price_quote(doc: &QuoteDoc, pl: &Value, opts: PriceOptions) -> Vec<Option
                     let quantity = area.quantity as f64;
                     AreaPrice {
                         area_id: Some(area.id.clone()),
+                        name: area.name.clone(),
                         quantity,
                         subtotal: sum_totals(&b.lines) * quantity,
                         missing: b.lines.iter().any(|l| l.missing),
@@ -889,6 +1116,7 @@ pub fn price_quote(doc: &QuoteDoc, pl: &Value, opts: PriceOptions) -> Vec<Option
             item_lines(&mut ob, pl, &others, None);
             let other = AreaPrice {
                 area_id: None,
+                name: "Other Items".into(),
                 quantity: 1.0,
                 subtotal: sum_totals(&ob.lines),
                 missing: ob.lines.iter().any(|l| l.missing),

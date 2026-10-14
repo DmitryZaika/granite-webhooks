@@ -18,6 +18,7 @@ pub mod call_coaching;
 pub mod calls;
 pub mod catalog;
 pub mod checklists;
+pub mod commissions;
 pub mod company;
 pub mod created;
 pub mod customer_sources;
@@ -118,6 +119,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(marketing::router())
         .merge(quote_presets::router())
         .merge(quote_extras::router())
+        .merge(commissions::router())
         .merge(quote_forms::router())
         .merge(quote_price_lists::router())
         .merge(reports::router())

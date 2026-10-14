@@ -121,7 +121,8 @@ async fn the_editor_saves_the_layout(pool: MySqlPool) {
     assert_eq!(form["sequence"], 4);
     assert_eq!(form["config"], config);
 
-    let long = json!({ "kind": "quote", "rows": [{ "fields": [{ "text": "x".repeat(200_001) }] }] });
+    let long =
+        json!({ "kind": "quote", "rows": [{ "fields": [{ "text": "x".repeat(200_001) }] }] });
     let res = server
         .put(&format!("/v1/quote-forms/{id}"))
         .with_session(sessions::ADMIN)
@@ -164,7 +165,10 @@ async fn header_logos_lose_their_blank_border(pool: MySqlPool) {
     image::DynamicImage::ImageRgba8(canvas)
         .write_to(&mut png, image::ImageFormat::Png)
         .unwrap();
-    storage.put(&key, png.into_inner(), "image/png").await.unwrap();
+    storage
+        .put(&key, png.into_inner(), "image/png")
+        .await
+        .unwrap();
 
     let res = server
         .post("/v1/quote-forms/images")

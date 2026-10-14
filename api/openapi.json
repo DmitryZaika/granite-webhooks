@@ -25969,6 +25969,603 @@
         ]
       }
     },
+    "/v1/commission-rules": {
+      "get": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "List commission rules",
+        "description": "The company's rules, highest priority first.",
+        "operationId": "list_commission_rules",
+        "responses": {
+          "200": {
+            "description": "The rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CommissionRule"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Add a commission rule",
+        "description": "It applies from the next sync.",
+        "operationId": "create_commission_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Check the rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/commission-rules/{id}": {
+      "put": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Save a commission rule",
+        "description": "Replaces the whole rule; it applies from the next sync.",
+        "operationId": "update_commission_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Check the rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Delete a commission rule",
+        "description": "Commissions already worked out keep what they earned.",
+        "operationId": "delete_commission_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/commission-settings": {
+      "get": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Get the commission settings",
+        "description": "Friday payroll and no base until saved.",
+        "operationId": "get_commission_settings",
+        "responses": {
+          "200": {
+            "description": "The settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommissionSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Save the commission settings",
+        "description": "A negative base becomes 0; the weekday is kept within 0 to 6.",
+        "operationId": "save_commission_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommissionSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/commissions": {
+      "get": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "List commissions",
+        "description": "The caller's (`mine`) or, for admins, everyone's (`company`) signed\nquotes with what they earn, and the paychecks: paid commissions, monthly\ngoal bonuses and the weekly base per payroll date.",
+        "operationId": "list_commissions",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`mine` (default) or `company` (admins).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The commissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Commissions"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee, or not an admin for `company`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/commissions/sync": {
+      "post": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Sync commissions with QuickBooks",
+        "description": "Works out what every signed quote earns and whether its customer paid\n(the matching `QuickBooks` invoice). Quotes paid and signed over 60 days\nago are left alone.",
+        "operationId": "sync_commissions",
+        "responses": {
+          "200": {
+            "description": "Synced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/commissions/payouts": {
+      "post": {
+        "tags": [
+          "commissions"
+        ],
+        "summary": "Mark commissions paid out",
+        "description": "Only commissions whose customer paid are marked.",
+        "operationId": "pay_out_commissions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Payout"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Marked"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/quote-forms": {
       "get": {
         "tags": [
@@ -44801,6 +45398,285 @@
           }
         }
       },
+      "CommissionPart": {
+        "type": "object",
+        "description": "One rule's share of a quote's commission.",
+        "required": [
+          "ruleId",
+          "rule",
+          "base",
+          "baseLabel",
+          "amount",
+          "note"
+        ],
+        "properties": {
+          "ruleId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The rule."
+          },
+          "rule": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "base": {
+            "type": "number",
+            "format": "double",
+            "description": "What it was applied to: dollars, sq ft or units."
+          },
+          "baseLabel": {
+            "type": "string",
+            "description": "What `base` counts."
+          },
+          "amount": {
+            "type": "number",
+            "format": "double",
+            "description": "Earned."
+          },
+          "note": {
+            "type": "string",
+            "description": "Where it applied, e.g. the area or the line."
+          }
+        }
+      },
+      "CommissionRow": {
+        "type": "object",
+        "description": "A signed quote's commission (`CommissionRow`).",
+        "required": [
+          "id",
+          "quoteId",
+          "quoteName",
+          "customerName",
+          "rep",
+          "quoteTotal",
+          "commission",
+          "parts",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Row id."
+          },
+          "quoteId": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The quote."
+          },
+          "quoteName": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "customerName": {
+            "type": "string",
+            "description": "The customer."
+          },
+          "userId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The rep."
+          },
+          "rep": {
+            "type": "string",
+            "description": "Their name (\"Unassigned\" when none)."
+          },
+          "signedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the quote was signed (YYYY-MM-DD)."
+          },
+          "quoteTotal": {
+            "type": "number",
+            "format": "double",
+            "description": "The option's total."
+          },
+          "commission": {
+            "type": "number",
+            "format": "double",
+            "description": "Earned."
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommissionPart"
+            },
+            "description": "How."
+          },
+          "status": {
+            "type": "string",
+            "description": "`paid`, `partial`, `unpaid` or `no_invoice`."
+          },
+          "paidDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the customer paid (YYYY-MM-DD)."
+          },
+          "payrollDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The payroll it is paid with (YYYY-MM-DD)."
+          },
+          "paidOutAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was paid out (YYYY-MM-DD)."
+          }
+        }
+      },
+      "CommissionRule": {
+        "type": "object",
+        "description": "A commission rule (`CommissionRule`).",
+        "required": [
+          "id",
+          "name",
+          "applies",
+          "rateType",
+          "rate",
+          "priority",
+          "stop",
+          "materials",
+          "colors",
+          "lineMatch",
+          "active"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Rule id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "applies": {
+            "type": "string",
+            "description": "`material` (the stone per area), `quote` (the whole quote before\ntax), `lines` (price lines matching `lineMatch`) or `monthly_goal`."
+          },
+          "rateType": {
+            "type": "string",
+            "description": "`percent` or `flat` (dollars per sq ft, unit, quote or goal)."
+          },
+          "rate": {
+            "type": "number",
+            "format": "double",
+            "description": "Percent or dollars."
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Higher goes first."
+          },
+          "stop": {
+            "type": "boolean",
+            "description": "Material rules: a match keeps lower rules from paying on the same area."
+          },
+          "materials": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Material rules: only these materials (empty: any)."
+          },
+          "colors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Material rules: only these colors (empty: any)."
+          },
+          "levelMin": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Material rules: lowest stone level."
+          },
+          "levelMax": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Material rules: highest stone level."
+          },
+          "lineMatch": {
+            "type": "string",
+            "description": "Line rules: text the line's key or description contains."
+          },
+          "threshold": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Monthly goals: the month's paid sales that earn the bonus."
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Off rules pay nothing."
+          }
+        }
+      },
+      "CommissionSettings": {
+        "type": "object",
+        "description": "Base pay and payroll week.",
+        "required": [
+          "baseWeekly",
+          "payrollWeekday"
+        ],
+        "properties": {
+          "baseWeekly": {
+            "type": "number",
+            "format": "double",
+            "description": "Paid every payroll week on top of commissions (not negative)."
+          },
+          "payrollWeekday": {
+            "type": "integer",
+            "format": "int32",
+            "description": "0 = Sunday … 6 = Saturday: the day payroll goes out.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "Commissions": {
+        "type": "object",
+        "description": "Commissions and paychecks.",
+        "required": [
+          "rows",
+          "weeks"
+        ],
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommissionRow"
+            },
+            "description": "Signed quotes, newest first."
+          },
+          "weeks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PayrollWeek"
+            },
+            "description": "Paychecks per payroll date, newest first."
+          }
+        }
+      },
       "CompanyDetails": {
         "type": "object",
         "description": "A company's settings as super admins edit them.",
@@ -55705,6 +56581,90 @@
           }
         }
       },
+      "Payout": {
+        "type": "object",
+        "description": "Commissions to mark paid out.",
+        "required": [
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Commission row ids; only paid ones are marked."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PayrollRep": {
+        "type": "object",
+        "description": "One rep's paycheck on a payroll date.",
+        "required": [
+          "rep",
+          "commission",
+          "bonus",
+          "base",
+          "total"
+        ],
+        "properties": {
+          "userId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The rep."
+          },
+          "rep": {
+            "type": "string",
+            "description": "Their name."
+          },
+          "commission": {
+            "type": "number",
+            "format": "double",
+            "description": "Paid commissions."
+          },
+          "bonus": {
+            "type": "number",
+            "format": "double",
+            "description": "Monthly goal bonuses."
+          },
+          "base": {
+            "type": "number",
+            "format": "double",
+            "description": "The weekly base."
+          },
+          "total": {
+            "type": "number",
+            "format": "double",
+            "description": "All of it."
+          }
+        }
+      },
+      "PayrollWeek": {
+        "type": "object",
+        "description": "A payroll date's paychecks.",
+        "required": [
+          "payrollDate",
+          "reps"
+        ],
+        "properties": {
+          "payrollDate": {
+            "type": "string",
+            "description": "The payroll date (YYYY-MM-DD)."
+          },
+          "reps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PayrollRep"
+            },
+            "description": "Per rep."
+          }
+        }
+      },
       "Pending": {
         "type": "object",
         "description": "A scheduled message.",
@@ -58860,6 +59820,91 @@
             "description": "The day's events with an address, 2 to 20."
           }
         }
+      },
+      "RuleInput": {
+        "type": "object",
+        "description": "A rule as an admin builds it (`commissionRuleSchema`).",
+        "required": [
+          "name",
+          "applies",
+          "rateType",
+          "rate"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name (1 to 120 characters)."
+          },
+          "applies": {
+            "type": "string",
+            "description": "`material`, `quote`, `lines` or `monthly_goal`."
+          },
+          "rateType": {
+            "type": "string",
+            "description": "`percent` or `flat`."
+          },
+          "rate": {
+            "type": "number",
+            "format": "double",
+            "description": "Percent or dollars; not negative."
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Higher goes first."
+          },
+          "stop": {
+            "type": "boolean",
+            "description": "Material rules: a match keeps lower rules from paying on the area."
+          },
+          "materials": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Material rules: only these materials."
+          },
+          "colors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Material rules: only these colors."
+          },
+          "levelMin": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Material rules: lowest level."
+          },
+          "levelMax": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Material rules: highest level."
+          },
+          "lineMatch": {
+            "type": "string",
+            "description": "Line rules: text the line contains (up to 120 characters)."
+          },
+          "threshold": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Monthly goals: the month's paid sales that earn the bonus."
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Off rules pay nothing."
+          }
+        },
+        "additionalProperties": false
       },
       "SaleContract": {
         "type": "object",
@@ -63383,6 +64428,25 @@
           "name": {
             "type": "string",
             "description": "Name."
+          }
+        }
+      },
+      "SyncResult": {
+        "type": "object",
+        "description": "What a sync did.",
+        "required": [
+          "synced",
+          "qbo"
+        ],
+        "properties": {
+          "synced": {
+            "type": "integer",
+            "description": "Quotes worked out.",
+            "minimum": 0
+          },
+          "qbo": {
+            "type": "string",
+            "description": "`ok`, `not_connected` (payments unknown) or `error` (some lookups failed)."
           }
         }
       },
