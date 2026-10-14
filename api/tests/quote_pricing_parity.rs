@@ -24,6 +24,9 @@ struct Line {
     description: String,
     unit: Option<String>,
     total: f64,
+    note: Option<String>,
+    #[serde(rename = "flatEach")]
+    flat_each: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -112,6 +115,8 @@ fn pricing_and_commissions_match_the_crm() {
                         || line.description != want.description
                         || line.unit != want.unit.as_deref()
                         || !close(line.total, want.total)
+                        || line.note != want.note.as_deref()
+                        || line.flat_each != want.flat_each
                     {
                         problems.push(at(&format!(
                             "{} {:?} {:?} {} vs {} {:?} {:?} {}",

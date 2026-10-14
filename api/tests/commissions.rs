@@ -137,7 +137,10 @@ async fn the_sync_works_out_signed_quotes_and_payroll_pays_them(pool: MySqlPool)
         .await;
     res.assert_status_ok();
     // The company has no QuickBooks: payments are unknown.
-    assert_eq!(res.json::<Value>(), json!({ "synced": 1, "qbo": "not_connected" }));
+    assert_eq!(
+        res.json::<Value>(),
+        json!({ "synced": 1, "qbo": "not_connected" })
+    );
 
     let mine = server
         .get("/v1/commissions")

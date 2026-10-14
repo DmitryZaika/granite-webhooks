@@ -32,6 +32,12 @@ pub struct PriceLine {
     #[serde(flatten)]
     pub flags: Flags,
     pub missing: bool,
+    /// `slab` on the countertop line of a color priced by the slab.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<&'static str>,
+    /// Flat price per item (size tiers, full radius) on top of the unit price.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flat_each: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -272,6 +278,8 @@ struct Line {
     unit_price: Option<f64>,
     flat: f64,
     flags: Flags,
+    note: Option<&'static str>,
+    flat_each: f64,
 }
 
 impl Builder<'_> {
@@ -297,6 +305,8 @@ impl Builder<'_> {
             total,
             flags: l.flags,
             missing: unit_price.is_none(),
+            note: l.note,
+            flat_each: (l.flat_each != 0.0 && over.is_none()).then_some(l.flat_each),
         });
     }
 }
@@ -317,6 +327,8 @@ const fn line(
         unit_price,
         flat: 0.0,
         flags,
+        note: None,
+        flat_each: 0.0,
     }
 }
 
@@ -439,17 +451,20 @@ fn drawing_lines(
                 mat.price,
                 mat.flags,
             ));
-            b.add(line(
-                k("material-sqft"),
-                format!(
-                    "{} sq ft Countertop - Priced by the slab",
-                    fmt_num(r.counter_sq_ft)
-                ),
-                None,
-                0.0,
-                Some(0.0),
-                mat.flags,
-            ));
+            b.add(Line {
+                note: Some("slab"),
+                ..line(
+                    k("material-sqft"),
+                    format!(
+                        "{} sq ft Countertop - Priced by the slab",
+                        fmt_num(r.counter_sq_ft)
+                    ),
+                    None,
+                    0.0,
+                    Some(0.0),
+                    mat.flags,
+                )
+            });
         } else {
             let description = if mat.product.is_some() {
                 format!("{} sq ft {product} {variant}", fmt_num(r.counter_sq_ft))
@@ -684,6 +699,8 @@ fn drawing_lines(
             unit_price: unless_no_product(Some(num(fr, "linearPrice").unwrap_or(0.0))),
             flat: flat_each * t.full_radius_count,
             flags: flags_of(filter_of(fr)),
+            note: None,
+            flat_each,
         });
     }
 
@@ -961,6 +978,8 @@ fn item_lines(b: &mut Builder, pl: &Value, items: &[&QuoteItem], area_sq_ft: Opt
                         unit_price: Some(num(range, "unitPrice").unwrap_or(0.0)),
                         flat: num(range, "flatPrice").unwrap_or(0.0),
                         flags,
+                        note: None,
+                        flat_each: num(range, "flatPrice").unwrap_or(0.0),
                     });
                     continue;
                 }

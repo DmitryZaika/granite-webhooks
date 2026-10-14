@@ -25969,6 +25969,1453 @@
         ]
       }
     },
+    "/v1/quotes/{id}/drawing": {
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Save the drawing",
+        "description": "A new immutable revision (with each option's total) that becomes the\nquote's drawing; the caller's unsaved drawing is dropped. A quote not\nsigned yet cannot keep a sold-out color.",
+        "operationId": "save_quote_drawing",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedDrawing"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRevision"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a drawing, or a sold-out color",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/autosave": {
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Keep an unsaved drawing",
+        "description": "The caller's work in progress, offered back when they open the editor.",
+        "operationId": "autosave_quote_drawing",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnsavedDrawing"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Kept"
+          },
+          "400": {
+            "description": "Not a drawing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Drop the unsaved drawing",
+        "description": "The caller's work in progress on this quote.",
+        "operationId": "discard_quote_autosave",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Dropped"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/revisions/{revision_id}": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Get a revision's drawing",
+        "description": "To load into the editor.",
+        "operationId": "get_quote_revision",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "path",
+            "description": "Revision id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The drawing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionDrawing"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote or revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/prices": {
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Move a quote to today's prices",
+        "description": "The price list's newest revision and today's prices; sinks placed from\na sink model take its current type and shape.",
+        "operationId": "update_quote_prices",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Updated"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/sale": {
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Mark a quote sold",
+        "description": "The quote keeps the option sold and its deal is won with that option's\ntotal (a won deal is made when the customer has none).",
+        "operationId": "mark_quote_sold",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Sale"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Sold",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaleResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an option of the quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Undo a sale",
+        "description": "The quote is active again (no option, no signature) and its deal reopens.",
+        "operationId": "undo_quote_sale",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Undone"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/copies": {
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Duplicate a quote",
+        "description": "A new draft for the same customer and deal with the quote's notes, tax,\ndiscounts and terms, optionally its address and drawing.",
+        "operationId": "copy_quote",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteCopy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/emails": {
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Email the quote",
+        "description": "Sends the customer a link to the quote (from the caller's sending\naddress, replies to the caller), records it with the revision and\nexpiration, and moves the deal to \"Got a Quote\".",
+        "operationId": "email_quote",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteEmail"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Sent"
+          },
+          "400": {
+            "description": "No recipient or subject",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The email could not be sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/emails/{email_id}": {
+      "patch": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Switch an email's link off or on",
+        "description": "The customer link from that email stops (or starts again) opening the quote.",
+        "operationId": "set_quote_email_link",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "email_id",
+            "in": "path",
+            "description": "Quote email id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailLink"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/portal-token": {
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Get the customer link",
+        "description": "Made the first time it is asked for.",
+        "operationId": "quote_portal_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortalToken"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/prints": {
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Record a print",
+        "description": "Shown in the deal's history as \"Quote printed\"; the deal moves to \"Got a\nQuote\". Never blocks the print.",
+        "operationId": "record_quote_print",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuotePrint"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/quote-email-templates": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List the Email dialog's templates",
+        "description": "The company's quote email templates and the caller's own, in the\ncaller's order, with the one to start with.",
+        "operationId": "list_my_quote_email_templates",
+        "responses": {
+          "200": {
+            "description": "The templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyEmailTemplates"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Save a template of my own",
+        "description": "Only the caller sees it.",
+        "operationId": "create_my_quote_email_template",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MyTemplateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name or subject",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/quote-email-templates/{id}": {
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Edit a template of my own",
+        "description": "Never a company template.",
+        "operationId": "update_my_quote_email_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MyTemplateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "No name or subject",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not one of the caller's templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Delete a template of my own",
+        "description": "Never a company template.",
+        "operationId": "delete_my_quote_email_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/public/quote-portal/{token}": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Open a customer's quote link",
+        "description": "The quote with its prices, drawing (no supplier costs), color photos\nand, when it was emailed with a company form, that form. An emailed\nlink (`e`) counts as a view. A switched-off link answers `inactive`.",
+        "operationId": "get_quote_portal",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The quote's link token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "e",
+            "in": "query",
+            "description": "The quote email's token.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortalQuote"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/quote-portal/{token}/acceptance": {
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Accept and sign a quote",
+        "description": "Signing is a sale: the quote is sold with the option and its deal won.\nRefused once signed, for an option with a sold-out color, or when the\nlink is switched off.",
+        "operationId": "accept_quote_portal",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The quote's link token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Acceptance"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Signed"
+          },
+          "400": {
+            "description": "No such option, no signature, or a sold-out color",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already signed, or the link is off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/commission-rules": {
       "get": {
         "tags": [
@@ -32963,9 +34410,171 @@
             "session_cookie": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Create a quote",
+        "description": "An empty drawing (the company's counter depth and rounding) with the\nprice list's \"always include\" extras, the caller as sales rep, the\ncustomer's address, phone and email copied, and the price list's default\ntax rate and payment terms (else the company's first payment terms).",
+        "operationId": "create_quote",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewQuote"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/quotes/{id}": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Open a quote",
+        "description": "The quote, its drawing (a saved revision's with `revision`), its prices\n(the snapshot it was made with plus today's choices, and today's list),\nrevisions, emails, contracts, the sales reps, color photos, the sender\naddress and the caller's unsaved drawing.",
+        "operationId": "get_quote",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "query",
+            "description": "Revision id.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
       "delete": {
         "tags": [
           "quotes"
@@ -33011,6 +34620,96 @@
           },
           "404": {
             "description": "No such quote in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Change a quote",
+        "description": "Its info (name, notes, contact, terms, sales rep, customer), settings\n(tax, discounts, expiration) and price list. A new price list or its\nnewest revision gives the quote today's prices on its next load.",
+        "operationId": "update_quote",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteChanges"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Customer not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote",
             "content": {
               "application/json": {
                 "schema": {
@@ -42337,6 +44036,33 @@
   },
   "components": {
     "schemas": {
+      "Acceptance": {
+        "type": "object",
+        "description": "The customer's acceptance.",
+        "required": [
+          "option",
+          "signature"
+        ],
+        "properties": {
+          "option": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Index of the option accepted."
+          },
+          "signature": {
+            "type": "string",
+            "description": "The signature (a PNG data URL)."
+          },
+          "e": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The email the link came from."
+          }
+        },
+        "additionalProperties": false
+      },
       "Account": {
         "type": "object",
         "description": "`GET /v1/me/account`.",
@@ -43802,6 +45528,26 @@
           }
         ],
         "description": "`POST /v1/ai/compose/autocomplete`."
+      },
+      "Autosave": {
+        "type": "object",
+        "description": "The caller's unsaved drawing.",
+        "required": [
+          "doc"
+        ],
+        "properties": {
+          "doc": {
+            "type": "object",
+            "description": "The drawing."
+          },
+          "saved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When (ISO 8601)."
+          }
+        }
       },
       "BillingGate": {
         "allOf": [
@@ -50182,6 +51928,20 @@
           }
         }
       },
+      "EmailLink": {
+        "type": "object",
+        "description": "An email link on or off.",
+        "required": [
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether the link opens the quote."
+          }
+        },
+        "additionalProperties": false
+      },
       "EmailTemplate": {
         "type": "object",
         "description": "An email template as the composer's picker shows it.",
@@ -54926,6 +56686,58 @@
           }
         }
       },
+      "MyEmailTemplates": {
+        "type": "object",
+        "description": "The Email dialog's templates.",
+        "required": [
+          "templates",
+          "ordering_mode"
+        ],
+        "properties": {
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmailTemplate"
+            },
+            "description": "The company's and the caller's own, in the caller's order."
+          },
+          "ordering_mode": {
+            "type": "string",
+            "description": "`automatic` (most used first) or `custom` (the caller's drag order)."
+          },
+          "default_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The one the dialog starts with: what the caller sends most, else the\ncompany's most used, else the first."
+          }
+        }
+      },
+      "MyTemplateInput": {
+        "type": "object",
+        "description": "One of the caller's own templates.",
+        "required": [
+          "name",
+          "subject"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name (required, up to 120 characters)."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Subject (required, up to 255 characters)."
+          },
+          "body": {
+            "type": "string",
+            "description": "Body; `[PDFLink]` is added when it has no link."
+          }
+        },
+        "additionalProperties": false
+      },
       "NameInput": {
         "type": "object",
         "description": "Body of `POST /v1/deal-pipelines` and `POST /v1/deal-pipelines/{id}/stages`.",
@@ -55295,6 +57107,33 @@
             "description": "At least one question, each 1 to 5000 characters."
           }
         }
+      },
+      "NewQuote": {
+        "type": "object",
+        "description": "Body of `POST /v1/quotes`.",
+        "required": [
+          "customer_id"
+        ],
+        "properties": {
+          "customer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The customer."
+          },
+          "quote_name": {
+            "type": "string",
+            "description": "Name; blank takes the customer's."
+          },
+          "price_list_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Price list; none takes the company's default."
+          }
+        },
+        "additionalProperties": false
       },
       "NewQuoteForm": {
         "type": "object",
@@ -57144,6 +58983,139 @@
           }
         }
       },
+      "PortalQuote": {
+        "type": "object",
+        "description": "A quote as the customer sees it.",
+        "required": [
+          "inactive",
+          "doc",
+          "prices",
+          "sold_out",
+          "stone_images"
+        ],
+        "properties": {
+          "inactive": {
+            "type": "boolean",
+            "description": "The link was switched off: only this is set."
+          },
+          "quote": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PortalQuoteInfo",
+                "description": "The quote."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "inventory_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The company's public stone catalog."
+          },
+          "doc": {
+            "type": "object",
+            "description": "The drawing, without supplier costs."
+          },
+          "prices": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Each option priced."
+          },
+          "sold_out": {
+            "type": "array",
+            "items": {
+              "type": "boolean"
+            },
+            "description": "Per option: it has a sold-out color and cannot be accepted."
+          },
+          "form_view": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The company form to show the quote in (`{config, data}`), if any."
+          },
+          "stone_images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoneImage"
+            },
+            "description": "Photos of the quote's colors."
+          }
+        }
+      },
+      "PortalQuoteInfo": {
+        "type": "object",
+        "description": "The quote's own fields the customer sees.",
+        "required": [
+          "id",
+          "name",
+          "expired"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Quote id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "signed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the customer signed (ISO 8601)."
+          },
+          "accepted": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The option accepted."
+          },
+          "signature_data": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The signature (a PNG data URL)."
+          },
+          "expiration_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expires on (YYYY-MM-DD)."
+          },
+          "expired": {
+            "type": "boolean",
+            "description": "It has expired."
+          }
+        }
+      },
+      "PortalToken": {
+        "type": "object",
+        "description": "The customer link's token.",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Open `/quote-portal/{token}`."
+          }
+        }
+      },
       "PositionRow": {
         "type": "object",
         "description": "A position the user holds in the current company.",
@@ -58575,6 +60547,473 @@
           }
         }
       },
+      "QuoteChanges": {
+        "type": "object",
+        "description": "Changes to a quote; fields left out stay.",
+        "properties": {
+          "quote_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name (blank keeps it)."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes (blank clears)."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Job address (blank clears)."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone (blank clears)."
+          },
+          "phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's second phone (saved on the customer; blank clears)."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email (blank clears)."
+          },
+          "address_notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address notes (blank clears)."
+          },
+          "terms": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Payment terms."
+          },
+          "salesperson_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A sales rep of the company."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Another customer of the company."
+          },
+          "tax_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Tax percent."
+          },
+          "discount_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Discount percent."
+          },
+          "discount_amount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Discount in dollars (not negative)."
+          },
+          "expiration_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expires on (YYYY-MM-DD)."
+          },
+          "price_list_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A price list: the quote takes its newest revision (the same list moves to its newest)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuoteContract": {
+        "type": "object",
+        "description": "A contract sent for signature from this quote.",
+        "required": [
+          "id",
+          "filename",
+          "status",
+          "signer_name",
+          "signer_email",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Signature request id."
+          },
+          "filename": {
+            "type": "string",
+            "description": "File name without `.pdf`."
+          },
+          "status": {
+            "type": "string",
+            "description": "Request status."
+          },
+          "signer_name": {
+            "type": "string",
+            "description": "Signer."
+          },
+          "signer_email": {
+            "type": "string",
+            "description": "Signer's email."
+          },
+          "sent_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who the email carrying it went to."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was sent (ISO 8601)."
+          },
+          "signed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was signed (ISO 8601)."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where to open it (an API path, or the file's URL)."
+          }
+        }
+      },
+      "QuoteCopy": {
+        "type": "object",
+        "description": "A copy of a quote.",
+        "required": [
+          "quote_name"
+        ],
+        "properties": {
+          "quote_name": {
+            "type": "string",
+            "description": "The copy's name (required)."
+          },
+          "quote_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Type; blank keeps the quote's."
+          },
+          "price_list_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Another price list (its newest revision); none keeps the quote's."
+          },
+          "salesperson_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Another sales rep; none keeps the quote's."
+          },
+          "copy_address": {
+            "type": "boolean",
+            "description": "Copy the address, phone, email and address notes."
+          },
+          "copy_drawing": {
+            "type": "boolean",
+            "description": "Copy the drawing."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuoteDetail": {
+        "type": "object",
+        "description": "Everything the quote page and the editor show.",
+        "required": [
+          "quote",
+          "doc",
+          "price_list",
+          "latest_price_list",
+          "revisions",
+          "emails",
+          "contracts",
+          "salespeople",
+          "stone_icons",
+          "stone_images",
+          "sender"
+        ],
+        "properties": {
+          "quote": {
+            "$ref": "#/components/schemas/QuoteInfo",
+            "description": "The quote."
+          },
+          "doc": {
+            "type": "object",
+            "description": "The drawing (or the revision's), as stored."
+          },
+          "viewing_revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The revision shown instead of the current drawing."
+          },
+          "price_list": {
+            "type": "object",
+            "description": "The quote's prices: its snapshot with today's new choices."
+          },
+          "latest_price_list": {
+            "type": "object",
+            "description": "The same list as it prices today."
+          },
+          "revisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteRevision"
+            },
+            "description": "Saved revisions, newest first."
+          },
+          "emails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteEmailRow"
+            },
+            "description": "Emails that carried the link, newest first."
+          },
+          "contracts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteContract"
+            },
+            "description": "Contracts sent from the quote."
+          },
+          "salespeople": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Salesperson"
+            },
+            "description": "The company's sales reps."
+          },
+          "stone_icons": {
+            "type": "object",
+            "description": "Small photo per color: by `name\\0material` and by name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "stone_images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoneImage"
+            },
+            "description": "Photos of the quote's colors (the browser builds the previews)."
+          },
+          "sender": {
+            "type": "string",
+            "description": "The address the caller's mail leaves from."
+          },
+          "autosave": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Autosave",
+                "description": "The caller's unsaved drawing."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "QuoteEmail": {
+        "type": "object",
+        "description": "An email with the quote's link.",
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ],
+        "properties": {
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Recipients (required)."
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Copies."
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Blind copies."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Subject (required); `{{variables}}` are filled in."
+          },
+          "body": {
+            "type": "string",
+            "description": "Plain text; `{{variables}}` are filled in and `[QuoteLink]`/`[PDFLink]`\nbecome the link (added at the end when missing)."
+          },
+          "form_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A company form the link shows the quote in."
+          },
+          "template_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The template used (counts toward the default)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuoteEmailRow": {
+        "type": "object",
+        "description": "An email that carried the quote's link.",
+        "required": [
+          "id",
+          "view_count"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Email id."
+          },
+          "revision_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The revision sent."
+          },
+          "recipients": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "To."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subject."
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When (ISO 8601)."
+          },
+          "sent_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who sent it."
+          },
+          "view_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many times the link was opened."
+          },
+          "last_viewed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last opened (ISO 8601)."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The link expires on (YYYY-MM-DD)."
+          },
+          "body_html": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The message as sent."
+          },
+          "deactivated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The link was switched off (ISO 8601)."
+          }
+        }
+      },
       "QuoteEmailTemplate": {
         "type": "object",
         "description": "A default for emailing quotes.",
@@ -58719,6 +61158,230 @@
           "kind": {
             "type": "string",
             "description": "`quote` or `contract` (ends with signature lines)."
+          }
+        }
+      },
+      "QuoteInfo": {
+        "type": "object",
+        "description": "The quote's own fields.",
+        "required": [
+          "id",
+          "name",
+          "customer_id",
+          "terms",
+          "tax_pct",
+          "discount_pct",
+          "discount_amount"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Quote id."
+          },
+          "quote_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its own name."
+          },
+          "name": {
+            "type": "string",
+            "description": "What it is called (its name, else the customer's)."
+          },
+          "expiration_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expires on (YYYY-MM-DD)."
+          },
+          "price_list_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The price list."
+          },
+          "price_list_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          },
+          "price_list_revision_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The revision the quote prices with."
+          },
+          "price_list_revision_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its number."
+          },
+          "sales_rep": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sales rep's name."
+          },
+          "salesperson_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Sales rep."
+          },
+          "quote_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Type."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Notes."
+          },
+          "customer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The customer."
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their name."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The job's address."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The quote's phone."
+          },
+          "customer_phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's phone."
+          },
+          "phone_2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's second phone."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The quote's email."
+          },
+          "address_notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address notes."
+          },
+          "current_revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Latest saved revision."
+          },
+          "current_step": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Editor step."
+          },
+          "portal_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer link's token."
+          },
+          "terms": {
+            "type": "object",
+            "description": "Payment terms (`terms`, `mode`, `deposits`, `remaining`)."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`draft`, `active`, `accepted`, `lost` or `converted`."
+          },
+          "sold_option": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Index of the option sold or accepted."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The deal."
+          },
+          "signed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the customer signed (ISO 8601)."
+          },
+          "tax_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Tax percent."
+          },
+          "discount_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Discount percent."
+          },
+          "discount_amount": {
+            "type": "number",
+            "format": "double",
+            "description": "Discount in dollars."
           }
         }
       },
@@ -58895,6 +61558,58 @@
           }
         },
         "additionalProperties": false
+      },
+      "QuotePrint": {
+        "type": "object",
+        "description": "A print of the quote.",
+        "properties": {
+          "form_label": {
+            "type": "string",
+            "description": "The form printed, as the deal's history names it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuoteRevision": {
+        "type": "object",
+        "description": "A saved revision.",
+        "required": [
+          "id",
+          "revision_number"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Revision id."
+          },
+          "revision_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its number."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When (ISO 8601)."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who saved it."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What changed."
+          }
+        }
       },
       "QuoteSettings": {
         "type": "object",
@@ -59651,6 +62366,19 @@
           }
         }
       },
+      "RevisionDrawing": {
+        "type": "object",
+        "description": "A revision's drawing.",
+        "required": [
+          "doc"
+        ],
+        "properties": {
+          "doc": {
+            "type": "object",
+            "description": "The drawing."
+          }
+        }
+      },
       "RingcentralCallback": {
         "type": "object",
         "description": "Body of `POST /v1/ringcentral/connection`.",
@@ -59906,6 +62634,21 @@
         },
         "additionalProperties": false
       },
+      "Sale": {
+        "type": "object",
+        "description": "The option sold.",
+        "required": [
+          "option"
+        ],
+        "properties": {
+          "option": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Index of the color option sold."
+          }
+        },
+        "additionalProperties": false
+      },
       "SaleContract": {
         "type": "object",
         "description": "A sale as the sell / edit form shows it: who bought, who sold, and the\nrooms with their slabs, sinks and faucets.",
@@ -60112,6 +62855,20 @@
           }
         },
         "additionalProperties": false
+      },
+      "SaleResult": {
+        "type": "object",
+        "description": "What selling did.",
+        "properties": {
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The deal marked won (none: the quote has no sales rep to make one)."
+          }
+        }
       },
       "SaleRoom": {
         "type": "object",
@@ -60673,6 +63430,34 @@
           "unavailable"
         ]
       },
+      "Salesperson": {
+        "type": "object",
+        "description": "A sales rep a quote can name.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "User id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone."
+          }
+        }
+      },
       "SamplesInput": {
         "type": "object",
         "description": "Body of `PATCH /v1/stones/{id}/samples`; at least one field.",
@@ -60745,6 +63530,35 @@
             "description": "Conversation it will start."
           }
         }
+      },
+      "SavedDrawing": {
+        "type": "object",
+        "description": "A drawing to save.",
+        "required": [
+          "doc"
+        ],
+        "properties": {
+          "doc": {
+            "type": "object",
+            "description": "The drawing (`QuoteDoc`)."
+          },
+          "step": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The editor step to come back to."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What changed (up to 500 characters)."
+          }
+        },
+        "additionalProperties": false
       },
       "SavedFeedback": {
         "type": "object",
@@ -60835,6 +63649,20 @@
           }
         },
         "additionalProperties": false
+      },
+      "SavedRevision": {
+        "type": "object",
+        "description": "The revision saved.",
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its number."
+          }
+        }
       },
       "ScheduleEvent": {
         "type": "object",
@@ -65762,6 +68590,20 @@
             "description": "Newest unread message id, to notice new mail between polls."
           }
         }
+      },
+      "UnsavedDrawing": {
+        "type": "object",
+        "description": "An unsaved drawing.",
+        "required": [
+          "doc"
+        ],
+        "properties": {
+          "doc": {
+            "type": "object",
+            "description": "The drawing (`QuoteDoc`)."
+          }
+        },
+        "additionalProperties": false
       },
       "UpdateSalesGoal": {
         "type": "object",

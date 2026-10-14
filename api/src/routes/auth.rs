@@ -521,7 +521,7 @@ pub struct ResetRequest {
 
 /// The app origin for the user's company: `https://{subdomain}.{apex}` when
 /// the company has a subdomain and the app is not on localhost, else `APP_URL`.
-fn app_origin(app_url: &str, subdomain: Option<&str>) -> String {
+pub fn app_origin(app_url: &str, subdomain: Option<&str>) -> String {
     let Some(subdomain) = subdomain else {
         return app_url.to_string();
     };

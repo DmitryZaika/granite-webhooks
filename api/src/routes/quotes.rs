@@ -21,8 +21,15 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
-        .routes(routes!(list_quotes))
-        .routes(routes!(delete_quote))
+        .routes(routes!(
+            list_quotes,
+            crate::routes::quote_editor::create_quote
+        ))
+        .routes(routes!(
+            delete_quote,
+            crate::routes::quote_editor::get_quote,
+            crate::routes::quote_editor::update_quote
+        ))
         .routes(routes!(inventory_slabs))
         .routes(routes!(print_preview))
 }

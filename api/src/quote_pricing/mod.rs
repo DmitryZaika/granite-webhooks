@@ -293,6 +293,12 @@ pub async fn load_stock(pool: &MySqlPool, company_id: i32) -> ApiResult<Stock> {
 /// `pricingForQuote(quote).priceList`: the snapshot the quote was made with
 /// (taken now from its revision if it has none), with today's new choices.
 pub async fn price_list_for_quote(pool: &MySqlPool, quote: &Quote) -> ApiResult<Value> {
+    Ok(pricing_for_quote(pool, quote).await?.0)
+}
+
+/// `pricingForQuote`: the quote's prices (its snapshot with today's new
+/// choices) and `latest`, the same list as it prices today.
+pub async fn pricing_for_quote(pool: &MySqlPool, quote: &Quote) -> ApiResult<(Value, Value)> {
     let snapshot: Option<Value> = sqlx::query_scalar::<_, Option<String>>(
         "SELECT CAST(price_snapshot_json AS CHAR) FROM quotes WHERE id = ?",
     )
@@ -349,7 +355,178 @@ pub async fn price_list_for_quote(pool: &MySqlPool, quote: &Quote) -> ApiResult<
             .await;
         taken
     };
-    Ok(price_list::with_live_choices(&taken, &latest))
+    Ok((price_list::with_live_choices(&taken, &latest), latest))
+}
+
+fn lower(text: &str) -> String {
+    text.trim().to_lowercase()
+}
+
+/// `isSoldOutColor`.
+fn is_sold_out(price_list: &Value, product: &str, color: &str) -> bool {
+    if color.trim().is_empty() {
+        return false;
+    }
+    js::arr(Some(price_list), "arrProducts")
+        .iter()
+        .find(|p| {
+            lower(p.get("name").and_then(Value::as_str).unwrap_or_default()) == lower(product)
+        })
+        .is_some_and(|p| {
+            js::arr(Some(p), "arrVariants").iter().any(|v| {
+                js::truthy(v.get("soldOut"))
+                    && lower(v.get("name").and_then(Value::as_str).unwrap_or_default())
+                        == lower(color)
+            })
+        })
+}
+
+/// `optionSoldOutColors`: sold-out colors on one option, once each.
+pub fn option_sold_out_colors(doc: &QuoteDoc, price_list: &Value, index: usize) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let Some(option) = doc.color_options.get(index) else {
+        return found;
+    };
+    for area in &doc.areas {
+        let Some(picked) = option.by_area.get(&area.id) else {
+            continue;
+        };
+        let color = picked.color.trim();
+        if is_sold_out(price_list, &picked.product, color)
+            && !found.iter().any(|c| lower(c) == lower(color))
+        {
+            found.push(color.to_string());
+        }
+    }
+    found
+}
+
+/// `soldOutColorsInDoc`: sold-out colors anywhere on the quote, once each.
+pub fn sold_out_colors(doc: &QuoteDoc, price_list: &Value) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for i in 0..doc.color_options.len() {
+        for color in option_sold_out_colors(doc, price_list, i) {
+            if !found.iter().any(|c| lower(c) == lower(&color)) {
+                found.push(color);
+            }
+        }
+    }
+    found
+}
+
+/// `soldOutMessage`.
+pub fn sold_out_message(colors: &[String]) -> String {
+    let names = colors.join(", ");
+    if colors.len() == 1 {
+        format!("{names} is sold out and cannot be on a quote. Pick another color.")
+    } else {
+        format!("{names} are sold out and cannot be on a quote. Pick other colors.")
+    }
+}
+
+/// `sinkShapeByCode`.
+fn sink_shape_by_code(code: f64) -> &'static str {
+    const SPLITS: [&str; 5] = ["double", "60/40", "40/60", "70/30", "30/70"];
+    const SQUARE: [&str; 5] = [
+        "double-square",
+        "60/40-square",
+        "40/60-square",
+        "70/30-square",
+        "30/70-square",
+    ];
+    const ROUNDED: [&str; 5] = [
+        "double-rounded",
+        "60/40-rounded",
+        "40/60-rounded",
+        "70/30-rounded",
+        "30/70-rounded",
+    ];
+    #[allow(clippy::cast_possible_truncation)]
+    let code = if code.fract() == 0.0 { code as i64 } else { -1 };
+    match code {
+        8 => "square",
+        9 => "rounded",
+        2 => "oval",
+        3..=7 => SPLITS[usize::try_from(code - 3).unwrap_or_default()],
+        10..=19 => {
+            let i = usize::try_from((code - 10) / 2).unwrap_or_default();
+            if code % 2 == 0 { SQUARE[i] } else { ROUNDED[i] }
+        }
+        _ => "rectangle",
+    }
+}
+
+/// `withCurrentSinkModels`: sinks placed from a sink model take the
+/// model's current type and shape. `None` when nothing changed.
+pub fn with_current_sink_models(doc: &Value, price_list: &Value) -> Option<Value> {
+    let models = js::arr(Some(price_list), "arrSinkModels");
+    let mut doc = doc.clone();
+    let mut changed = false;
+    for counter in doc.get_mut("counters")?.as_array_mut()? {
+        let Some(runs) = counter.get_mut("runs").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for run in runs {
+            let Some(cutouts) = run.get_mut("cutouts").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            for cut in cutouts {
+                let model_name = cut
+                    .get("sinkModel")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if cut.get("kind").and_then(Value::as_str) != Some("sink") || model_name.is_empty()
+                {
+                    continue;
+                }
+                let Some(model) = models.iter().find(|m| {
+                    lower(m.get("name").and_then(Value::as_str).unwrap_or_default())
+                        == lower(model_name)
+                }) else {
+                    continue;
+                };
+                let sink_type = match js::num(Some(model), "sinkType") {
+                    Some(c) if (c - 1.0).abs() < f64::EPSILON => "dropIn",
+                    Some(c) if (c - 2.0).abs() < f64::EPSILON => "undermount",
+                    Some(c) if (c - 3.0).abs() < f64::EPSILON => "farmer",
+                    _ => cut
+                        .get("sinkType")
+                        .and_then(Value::as_str)
+                        .unwrap_or("undermount"),
+                }
+                .to_string();
+                let sink_shape =
+                    sink_shape_by_code(js::num(Some(model), "sinkShape").unwrap_or(0.0));
+                if cut.get("sinkType").and_then(Value::as_str) == Some(sink_type.as_str())
+                    && cut.get("sinkShape").and_then(Value::as_str) == Some(sink_shape)
+                {
+                    continue;
+                }
+                changed = true;
+                cut["sinkType"] = Value::String(sink_type);
+                cut["sinkShape"] = Value::String(sink_shape.into());
+            }
+        }
+    }
+    changed.then_some(doc)
+}
+
+/// `customerQuoteDoc`: the quote as a customer may see it, without
+/// supplier costs.
+pub fn customer_doc(doc: &Value) -> Value {
+    let mut doc = doc.clone();
+    if let Some(options) = doc.get_mut("colorOptions").and_then(Value::as_array_mut) {
+        for option in options {
+            if let Some(areas) = option.get_mut("byArea").and_then(Value::as_object_mut) {
+                for color in areas.values_mut() {
+                    if let Some(color) = color.as_object_mut() {
+                        color.remove("supplier");
+                    }
+                }
+            }
+        }
+    }
+    doc
 }
 
 /// The quote's total for one color option (what the quote shows), or none.
@@ -581,4 +758,49 @@ pub async fn sell_quote_for_signed_contract(
     let option_index = quote.2.or_else(|| (options == 1).then_some(0));
     mark_quote_sold(pool, quote.0, company_id, option_index, None).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod sold_out_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn sold_out_colors_are_found_once() {
+        let doc = QuoteDoc::parse(&json!({
+            "version": 2,
+            "areas": [{ "id": "a", "name": "A", "quantity": 1 }, { "id": "b", "name": "B", "quantity": 1 }],
+            "colorOptions": [
+                { "id": "o1", "byArea": { "a": { "product": "Granite", "color": "Black" }, "b": { "product": "granite", "color": " black " } } },
+                { "id": "o2", "byArea": { "a": { "product": "Granite", "color": "Ubatuba" } } },
+            ],
+        }))
+        .unwrap();
+        let list = json!({ "arrProducts": [{ "name": "Granite", "arrVariants": [
+            { "name": "Black", "soldOut": true }, { "name": "Ubatuba" },
+        ] }] });
+        assert_eq!(
+            option_sold_out_colors(&doc, &list, 0),
+            vec!["Black".to_string()]
+        );
+        assert_eq!(option_sold_out_colors(&doc, &list, 1), Vec::<String>::new());
+        assert_eq!(
+            sold_out_message(&sold_out_colors(&doc, &list)),
+            "Black is sold out and cannot be on a quote. Pick another color."
+        );
+    }
+
+    #[test]
+    fn sinks_follow_their_model() {
+        let doc = json!({ "counters": [{ "runs": [{ "cutouts": [
+            { "kind": "sink", "sinkModel": "LSB 32", "sinkType": "farmer", "sinkShape": "rectangle" },
+        ] }] }] });
+        let list =
+            json!({ "arrSinkModels": [{ "name": "lsb 32", "sinkType": 2, "sinkShape": 13 }] });
+        let next = with_current_sink_models(&doc, &list).unwrap();
+        let cut = &next["counters"][0]["runs"][0]["cutouts"][0];
+        assert_eq!(cut["sinkType"], "undermount");
+        assert_eq!(cut["sinkShape"], "60/40-rounded");
+        assert!(with_current_sink_models(&next, &list).is_none());
+    }
 }

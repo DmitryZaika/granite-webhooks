@@ -484,6 +484,13 @@ fn linked_extra(id: i64, item: &Value, link: Option<&Value>) -> Value {
     Value::Object(item)
 }
 
+/// `applyExtrasCatalog`: the list's extras as quotes see them.
+pub fn apply_catalog(info: &Value, catalog: &[(i64, Value)]) -> Value {
+    let mut info = info.clone();
+    apply_extras_catalog(&mut info, catalog);
+    info
+}
+
 fn apply_extras_catalog(info: &mut Value, catalog: &[(i64, Value)]) {
     let links = get(Some(info), "extraLinks");
     let mut items: Vec<Value> = catalog
