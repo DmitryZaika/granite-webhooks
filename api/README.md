@@ -348,9 +348,47 @@ curl -H "Cookie: $C" -H 'content-type: application/json' \
 
 ## Deploying
 
-`make deploy-api` creates/updates the `granite-api` Lambda. It needs these
-environment variables: `DATABASE_URL`, `SESSION_SECRET` (same as Remix),
-optionally `API_ALLOWED_ORIGINS`. Expose it on `api.granite-manager.com`
-(CloudFront or an API Gateway custom domain in front of the function URL) so
-the session cookie is sent; then set `VITE_GRANITE_API_URL` in the frontend's
-`.env.prod` (pages that use the API do not work without it).
+```
+make build <api|webhooks|time-triggered>
+make deploy <api|webhooks|time-triggered> <dev|prod>
+```
+
+`make deploy` builds the binary and uploads it to the Lambda for that app and
+environment (`granite-api`, `granite-api-dev`, `granite-webhooks`,
+`granite-webhooks-dev`, `time-triggered`; there is no dev time-triggered). It
+creates the Lambda when it does not exist and never changes its environment
+variables.
+
+Production `granite-api` needs `DATABASE_URL`, `SESSION_SECRET` (same as
+Remix), optionally `API_ALLOWED_ORIGINS`, and is served on
+`api.granite-manager.com` (CloudFront in front of the function URL) so the
+session cookie is sent.
+
+## Dev environment
+
+`granite-api-dev` and `granite-webhooks-dev` never touch production:
+
+- `DATABASE_URL` points at the `duplicate` database, never `main`.
+- Their secrets (`SESSION_SECRET`, `LAMBDA_KEY`, `REMIX_KEY`/`WEBHOOKS_KEY`,
+  `WEBHOOK_SECRET`) are their own.
+- `SESSION_COOKIE_DOMAIN=none`: the dev session cookie is host-only on
+  `api-dev.granite-manager.com`, so signing in on dev never replaces the
+  production cookie on `.granite-manager.com`. The browser then sends both
+  `__session` cookies to dev; the API uses the one that verifies.
+- No `AES_KEY`: the integration tokens copied into `duplicate` (QuickBooks,
+  RingCentral) stay unreadable, so dev cannot refresh production's tokens.
+  CloudTalk, RingCentral, QuickBooks, Calendly and Telegram are not configured.
+- Files go to `granite-storage-dev-<account>` (us-east-1) through the
+  `granite-storage-dev` IAM user, which can reach only that bucket.
+
+`infra/dev-api.yaml` (stack `granite-api-dev`, us-east-1) holds the dev bucket,
+its IAM user, and CloudFront + certificate + DNS for
+`https://api-dev.granite-manager.com` in front of the function URL:
+
+```
+aws cloudformation deploy --region us-east-1 --stack-name granite-api-dev \
+  --template-file infra/dev-api.yaml --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides FunctionUrlDomain=<granite-api-dev function URL host>
+```
+
+The frontend's `make deploy-dev` builds against `api-dev.granite-manager.com`.
