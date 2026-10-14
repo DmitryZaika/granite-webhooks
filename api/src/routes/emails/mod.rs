@@ -11,6 +11,7 @@
 //! - `POST /v1/emails/threads/{mark-read,mark-unread,delete,restore,purge}` → bulk changes
 //! - `POST /v1/emails`                            → send (or schedule) an email
 //! - `POST /v1/email-attachments/{id}/deal`      → save an attachment to a deal
+//! - `GET  /v1/email-attachments/{id}/preview`   → a picture attachment for an `<img>` (HEIC → JPEG)
 //! - `GET  /v1/deals/file-urls`                   → file URLs of a deal or a customer's deals
 //! - `GET  /v1/emails/{id}/images`                 → an email's pictures, for the photo viewer
 //! - `POST /v1/emails/drafts`, `GET|PUT|DELETE /v1/emails/drafts/{id}` → the caller's drafts
@@ -20,6 +21,7 @@
 //! The `webhooks` Lambda builds and sends the MIME message (it owns SES).
 
 mod admin_list;
+mod attachment_preview;
 pub mod attachment_token;
 mod attachments;
 mod conversation;
@@ -31,6 +33,8 @@ mod names;
 mod sales_mailbox;
 pub mod schemas;
 pub mod send;
+pub mod signature_mail;
+pub mod signatures;
 pub mod sql;
 pub mod thread;
 
@@ -58,6 +62,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(attachments::add_to_deal))
         .routes(routes!(attachments::deal_file_urls))
         .routes(routes!(attachments::email_images))
+        .routes(routes!(attachment_preview::preview))
         .routes(routes!(conversation::conversation))
         .routes(routes!(
             drafts::get_draft,

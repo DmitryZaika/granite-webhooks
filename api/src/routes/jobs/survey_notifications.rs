@@ -280,6 +280,7 @@ async fn send_sms(
         text: text.to_string(),
         attachments: Vec::new(),
         is_automated: true,
+        idempotency_key: None,
     };
     match state.webhooks.send_sms(&sms).await {
         Ok(_) => Ok(true),

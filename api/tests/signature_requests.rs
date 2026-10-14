@@ -61,14 +61,14 @@ async fn open_requests_are_refreshed_from_signwell(pool: MySqlPool) {
     assert_eq!(ids, [9103, 9102, 9101, 9104]);
     assert_eq!(
         rows[0]["view_url"],
-        "/api/signatures/9103/document?customerId=1000"
+        "/v1/signatures/9103/document?customer_id=1000"
     );
     assert_eq!(rows[0]["status"], "sent");
     assert_eq!(rows[1]["status"], "viewed");
     assert_eq!(rows[2]["status"], "signed");
     assert_eq!(
         rows[2]["view_url"],
-        "/api/signature-requests/9101/signed-pdf"
+        "/v1/signature-requests/9101/signed-pdf"
     );
     assert_eq!(
         rows[3]["status"], "declined",

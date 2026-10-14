@@ -5,10 +5,12 @@
 //! - `POST /v1/calls/{provider}` → call a number: `CloudTalk` rings the
 //!   caller's agent first, `RingCentral` rings their line (`RingOut`)
 //! - `POST /v1/call-transcripts` → a recorded call's transcript
+//! - `GET /v1/calls/{provider}/{media_id}/recording` → where to load a call's audio
 //!
 //! Replaces the Remix `api.{cloudtalk,ringcentral}.{dealCalls,customerCalls}`,
-//! `api.cloudtalk.call` and `api.ringcentral.ringout` routes.
+//! `api.cloudtalk.call`, `api.ringcentral.ringout` and `userCallMedia` routes.
 
+mod audio;
 pub mod recording;
 pub mod ringcentral;
 mod transcript;
@@ -38,6 +40,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, start))
         .routes(routes!(transcript::transcribe))
+        .routes(routes!(audio::recording))
 }
 
 /// Query of `GET /v1/calls/{provider}`: a deal, or one or two phones.

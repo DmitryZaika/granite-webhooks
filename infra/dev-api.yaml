@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Dev backend around the granite-api-dev Lambda: https://api-dev.granite-manager.com
+  (CloudFront in front of its function URL) and a file bucket of its own, so dev
+  never writes to production storage. Deploy in us-east-1 (CloudFront certificates
+  live there). See api/README.md "Dev environment".
+
+Parameters:
+  FunctionUrlDomain:
+    Type: String
+    Description: Host of granite-api-dev's function URL (xxxx.lambda-url.us-east-2.on.aws).
+  DomainName:
+    Type: String
+    Default: api-dev.granite-manager.com
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Default: Z09213062QDJ105YROL3K
+
+Resources:
+  # Uploaded files. Public read like production's bucket: the app links to
+  # objects directly. Browsers upload with presigned PUT URLs.
+  StorageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub granite-storage-dev-${AWS::AccountId}
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [GET, HEAD]
+            AllowedOrigins: ['*']
+            AllowedHeaders: ['*']
+            MaxAge: 3000
+          - AllowedMethods: [PUT]
+            AllowedOrigins:
+              - https://*.granite-manager.com
+              - http://localhost:5173
+            AllowedHeaders: ['*']
+            MaxAge: 3000
+
+  StorageBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StorageBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub ${StorageBucket.Arn}/*
+
+  # The API signs S3 requests with static keys (STORAGE_ACCESS_KEY); this user
+  # can reach the dev bucket only. Its access key is made outside the stack.
+  StorageUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: granite-storage-dev
+      Policies:
+        - PolicyName: dev-bucket
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub ${StorageBucket.Arn}/*
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt StorageBucket.Arn
+
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+
+  # Same shape as production's api.granite-manager.com distribution.
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: Granite API (dev)
+        Enabled: true
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Aliases: [!Ref DomainName]
+        ViewerCertificate:
+          AcmCertificateArn: !Ref Certificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: lambda
+            DomainName: !Ref FunctionUrlDomain
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+              OriginReadTimeout: 30
+        DefaultCacheBehavior:
+          TargetOriginId: lambda
+          ViewerProtocolPolicy: https-only
+          Compress: true
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed CachingDisabled
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed AllViewerExceptHostHeader
+
+  Record:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2 # CloudFront's fixed zone
+
+Outputs:
+  StorageBucketName:
+    Value: !Ref StorageBucket
+  StorageUserName:
+    Value: !Ref StorageUser
+  ApiUrl:
+    Value: !Sub https://${DomainName}

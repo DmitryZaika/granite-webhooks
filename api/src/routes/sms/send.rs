@@ -43,7 +43,7 @@ const STORED_TYPES: [&str; 10] = [
     "text/csv",
 ];
 
-/// A file uploaded for the text (`POST /api/<provider>/sms/upload-image`).
+/// A file prepared for the text (`POST /v1/sms/attachments`).
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct SmsFile {
     /// Its key, under `sms-attachments/<company id>/`.
@@ -349,6 +349,7 @@ pub async fn deliver_now(
         text: request.text.trim().to_string(),
         attachments,
         is_automated: false,
+        idempotency_key: None,
     };
     let ids = match state.webhooks.send_sms(&outgoing).await {
         Ok(ids) => ids,

@@ -363,6 +363,33 @@ pub struct SendEmailRequest {
     /// With `send_at`: cancel when the customer writes first.
     #[serde(default)]
     pub cancel_if_customer_messages: bool,
+    /// PDF attachments sent for e-signature: the email carries their signing
+    /// links instead of the files (at most 20, one message to everyone).
+    #[serde(default)]
+    pub signature_requests: Vec<SignatureRequestInput>,
+    /// The composer's id of this send (a UUID), so a retried send reuses its
+    /// signature documents.
+    pub signature_send_key: Option<String>,
+}
+
+/// A document to sign.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SignatureRequestInput {
+    /// The attachment's file name.
+    pub filename: String,
+    /// The attachment's URL (matched first, then the file name).
+    pub url: Option<String>,
+    /// Who signs.
+    #[serde(alias = "signerName")]
+    pub signer_name: String,
+    /// Where the signing link goes.
+    #[serde(alias = "signerEmail")]
+    pub signer_email: String,
+    /// Where to sign and what the sender filled in (1 to 20).
+    pub fields: Vec<crate::signing_pdf::SignatureField>,
+    /// The signer is reminded until they sign.
+    #[serde(default)]
+    pub reminders: bool,
 }
 
 /// A file attached to an email being sent.

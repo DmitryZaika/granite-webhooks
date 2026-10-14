@@ -8,3 +8,40 @@ members = [
     "test-db/macros",
 ]
 resolver = "2"
+
+# Image and PDF decoding are many times slower unoptimized; keep tests fast.
+[profile.dev.package.zune-heic]
+opt-level = 3
+
+[profile.dev.package.hayro]
+opt-level = 3
+
+[profile.dev.package.vello_cpu]
+opt-level = 3
+
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.image-webp]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.gif]
+opt-level = 3
+
+[profile.dev.package.color_quant]
+opt-level = 3
+
+[profile.dev.package.weezl]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3

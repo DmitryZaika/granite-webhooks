@@ -339,6 +339,7 @@ pub async fn notify_booking(
                 text: text.clone(),
                 attachments: Vec::new(),
                 is_automated: true,
+                idempotency_key: None,
             };
             match state.webhooks.send_sms(&sms).await {
                 Ok(_) => return Ok(Some(Channel::Sms)),

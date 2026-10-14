@@ -6,15 +6,16 @@
 //! - `DELETE /v1/delayed/{kind}/{id}` → cancel
 //!
 //! Reading the list first sends the caller's messages that are due (and
-//! drops those whose customer wrote back, when asked to). The CRM's job still
-//! sends everyone else's. Rows with e-signature requests are left to it.
+//! drops those whose customer wrote back, when asked to). The scheduled job
+//! (`POST /v1/jobs/sms-followups`) sends everyone else's, e-signature
+//! requests included.
 //! Replaces the Remix `api.sms.delayed` and `api.email.delayed` routes.
 
 use crate::auth::EmployeeUser;
 use crate::auth::session::{SessionUser, find_user};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
-use crate::routes::emails::schemas::SendAttachment;
+use crate::routes::emails::schemas::{SendAttachment, SignatureRequestInput};
 use crate::routes::emails::send::{Cleaned, deliver};
 use crate::routes::sms::provider::SmsProvider;
 use crate::routes::sms::send::{SendSmsRequest, SmsFile, Undelivered, check, deliver_now};
@@ -323,6 +324,88 @@ async fn mark(
     Ok(())
 }
 
+/// The deal a scheduled message belongs to: the one it was sent from, else
+/// the customer's latest.
+async fn deal_for(pool: &MySqlPool, row: &Row) -> Result<Option<i32>, sqlx::Error> {
+    if let Some(deal_id) = number(&json(&row.payload_json), "dealId").filter(|id| *id > 0) {
+        return Ok(Some(deal_id));
+    }
+    let Some(customer_id) = row.customer_id else {
+        return Ok(None);
+    };
+    // `deals.id` is unsigned: cast it, or decoding fails and the notice is lost.
+    let id: Option<i64> = sqlx::query_scalar(
+        "SELECT CAST(d.id AS SIGNED) FROM deals d
+           JOIN customers c ON c.id = d.customer_id
+          WHERE d.customer_id = ? AND c.company_id = ? AND d.deleted_at IS NULL
+          ORDER BY d.is_won IS NULL DESC, d.id DESC
+          LIMIT 1",
+    )
+    .bind(customer_id)
+    .bind(row.company_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(id.and_then(|id| i32::try_from(id).ok()))
+}
+
+/// The bell notice for a sent (or failed) scheduled message, e.g.
+/// `Scheduled SMS sent: "See you Monday"`, at most 255 characters.
+fn outcome_message(kind: Kind, payload: &Value, sent: bool) -> String {
+    let key = match kind {
+        Kind::Sms => "text",
+        Kind::Emails => "subject",
+    };
+    let preview = field(payload, key)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let what = match kind {
+        Kind::Sms => "Scheduled SMS",
+        Kind::Emails => "Scheduled email",
+    };
+    let outcome = if sent { "sent" } else { "failed to send" };
+    let message = if preview.is_empty() {
+        format!("{what} {outcome}")
+    } else {
+        format!("{what} {outcome}: \"{preview}\"")
+    };
+    if message.chars().count() > 255 {
+        format!("{}...\"", message.chars().take(251).collect::<String>())
+    } else {
+        message
+    }
+}
+
+/// Tells the sender their scheduled message went out (or could not). The
+/// bell lists deal notifications, so a message with no deal gets none; a
+/// failure here never changes the message's own status.
+async fn notify_outcome(pool: &MySqlPool, kind: Kind, row: &Row, sent: bool) {
+    let notified = async {
+        let Some(deal_id) = deal_for(pool, row).await? else {
+            return Ok(());
+        };
+        sqlx::query(
+            "INSERT INTO notifications (user_id, customer_id, deal_id, message, notification_type, due_at)
+             VALUES (?, ?, ?, ?, ?, NOW())",
+        )
+        .bind(row.user_id)
+        .bind(row.customer_id)
+        .bind(deal_id)
+        .bind(outcome_message(kind, &json(&row.payload_json), sent))
+        .bind(if sent {
+            "delayed_message_sent"
+        } else {
+            "delayed_message_failed"
+        })
+        .execute(pool)
+        .await
+        .map(|_| ())
+    };
+    if let Err(error) = notified.await {
+        tracing::warn!(id = row.id, table = kind.table(), %error, "scheduled message notice not saved");
+    }
+}
+
 fn number(payload: &Value, key: &str) -> Option<i32> {
     match &payload[key] {
         Value::String(text) => text.trim().parse().ok(),
@@ -350,11 +433,19 @@ fn embedded_list(payload: &Value, key: &str) -> Vec<Value> {
     }
 }
 
-fn has_signature_requests(payload: &Value) -> bool {
-    !embedded_list(payload, "signatureRequests").is_empty()
-}
-
-fn email_from_payload(payload: &Value) -> Cleaned {
+/// The scheduled email as the send route takes it; signature documents are
+/// sent with the row as the send's identity.
+fn email_from_payload(payload: &Value, delayed_email_id: i64) -> Cleaned {
+    let signature_requests: Vec<SignatureRequestInput> =
+        embedded_list(payload, "signatureRequests")
+            .into_iter()
+            .filter_map(|request| serde_json::from_value(request).ok())
+            .collect();
+    let (subject, body) = crate::routes::emails::signatures::with_defaults(
+        field(payload, "subject").trim(),
+        &field(payload, "body"),
+        &signature_requests,
+    );
     let attachments = embedded_list(payload, "uploadedAttachments")
         .iter()
         .filter_map(|file| {
@@ -378,8 +469,8 @@ fn email_from_payload(payload: &Value) -> Cleaned {
         to: strings(payload, "to"),
         cc: strings(payload, "cc"),
         bcc: strings(payload, "bcc"),
-        subject: field(payload, "subject").trim().to_string(),
-        body: field(payload, "body"),
+        subject: subject.trim().to_string(),
+        body,
         thread_id: Some(field(payload, "threadId")).filter(|id| !id.is_empty()),
         deal_id: number(payload, "dealId"),
         customer_id: number(payload, "customerId"),
@@ -388,6 +479,10 @@ fn email_from_payload(payload: &Value) -> Cleaned {
         template_id: number(payload, "templateId"),
         send_at: None,
         cancel_if_customer_messages: false,
+        automated: false,
+        signature_requests,
+        signature_send_key: None,
+        delayed_email_id: Some(delayed_email_id),
     }
 }
 
@@ -427,7 +522,7 @@ async fn deliver_row(
         return Err("missing_sender_or_payload".into());
     }
     match kind {
-        Kind::Emails => deliver(state, user, &email_from_payload(&payload))
+        Kind::Emails => deliver(state, user, &email_from_payload(&payload, row.id))
             .await
             .map(|_| ())
             .map_err(|err| err.to_string()),
@@ -455,22 +550,48 @@ pub async fn process_due(
     company_id: i32,
     user_id: i32,
 ) -> Result<(), sqlx::Error> {
+    process_due_in(state, Some((company_id, user_id)))
+        .await
+        .map(|_| ())
+}
+
+/// Due messages looked at (emails, texts).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+pub struct DueRun {
+    /// Due emails looked at.
+    pub emails: usize,
+    /// Due texts looked at.
+    pub sms: usize,
+}
+
+/// Sends the due messages of one user (`Some((company, user))`) or of
+/// everyone (the scheduled job).
+pub async fn process_due_in(
+    state: &AppState,
+    scope: Option<(i32, i32)>,
+) -> Result<DueRun, sqlx::Error> {
     let pool = &state.pool;
+    let mut run = DueRun::default();
     for kind in [Kind::Emails, Kind::Sms] {
-        let rows: Vec<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "{} WHERE status = 'pending' AND send_at <= UTC_TIMESTAMP() AND company_id = ? AND user_id = ?
+        let scoped = if scope.is_some() {
+            " AND company_id = ? AND user_id = ?"
+        } else {
+            ""
+        };
+        let mut query = sqlx::query_as::<_, Row>(sqlx::AssertSqlSafe(format!(
+            "{} WHERE status = 'pending' AND send_at <= UTC_TIMESTAMP(){scoped}
               ORDER BY send_at, id LIMIT ?",
             select(kind)
-        )))
-        .bind(company_id)
-        .bind(user_id)
-        .bind(DUE_BATCH_LIMIT)
-        .fetch_all(pool)
-        .await?;
+        )));
+        if let Some((company_id, user_id)) = scope {
+            query = query.bind(company_id).bind(user_id);
+        }
+        let rows = query.bind(DUE_BATCH_LIMIT).fetch_all(pool).await?;
+        match kind {
+            Kind::Emails => run.emails = rows.len(),
+            Kind::Sms => run.sms = rows.len(),
+        }
         for row in rows {
-            if kind == Kind::Emails && has_signature_requests(&json(&row.payload_json)) {
-                continue;
-            }
             let claimed = sqlx::query(sqlx::AssertSqlSafe(format!(
                 "UPDATE {} SET status = 'sending' WHERE id = ? AND status = 'pending' AND send_at <= UTC_TIMESTAMP()",
                 kind.table()
@@ -495,18 +616,23 @@ pub async fn process_due(
                     Some("missing_sender_or_payload"),
                 )
                 .await?;
+                notify_outcome(pool, kind, &row, false).await;
                 continue;
             };
             match deliver_row(state, kind, &row, &user).await {
-                Ok(()) => mark(pool, kind, row.id, "sent", None).await?,
+                Ok(()) => {
+                    mark(pool, kind, row.id, "sent", None).await?;
+                    notify_outcome(pool, kind, &row, true).await;
+                }
                 Err(error) => {
                     tracing::warn!(id = row.id, table = kind.table(), %error, "scheduled message failed");
                     mark(pool, kind, row.id, "failed", Some(&error)).await?;
+                    notify_outcome(pool, kind, &row, false).await;
                 }
             }
         }
     }
-    Ok(())
+    Ok(run)
 }
 
 async fn cancel_row(
@@ -820,5 +946,27 @@ pub async fn cancel(
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_notice_names_the_message() {
+        let text = json!({ "text": "See  you\n Monday" });
+        assert_eq!(
+            outcome_message(Kind::Sms, &text, true),
+            "Scheduled SMS sent: \"See you Monday\""
+        );
+        assert_eq!(
+            outcome_message(Kind::Emails, &json!({}), false),
+            "Scheduled email failed to send"
+        );
+        let long = outcome_message(Kind::Sms, &json!({ "text": "a".repeat(300) }), true);
+        assert_eq!(long.chars().count(), 255);
+        assert!(long.ends_with("a...\""));
     }
 }

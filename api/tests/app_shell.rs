@@ -94,3 +94,53 @@ async fn supplier_lists_can_be_limited_to_used_ones(pool: MySqlPool) {
         .await
         .assert_status_bad_request();
 }
+
+#[test_db::test(seed)]
+async fn the_shell_says_what_the_home_company_can_do(pool: MySqlPool) {
+    let server = common::server(pool);
+    let shell = server
+        .get("/v1/app/shell")
+        .with_session(common::sessions::REP)
+        .await
+        .json::<serde_json::Value>();
+    let capabilities = &shell["feature_capabilities"];
+    for key in [
+        "cloudtalk",
+        "quickbooks",
+        "verified_domain",
+        "sms_provider",
+        "followup_tours",
+        "onboarding",
+    ] {
+        assert!(capabilities[key].is_boolean(), "{key}");
+    }
+}
+
+#[test_db::test(seed)]
+async fn a_company_frame_needs_no_session(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO stone_types (company_id, name) VALUES (100, 'Quartz'), (100, 'Granite');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = common::server(pool);
+    let frame = server
+        .get("/v1/public/companies/100/frame")
+        .await
+        .json::<serde_json::Value>();
+    assert_eq!(frame["name"], "Acme Stone", "{frame}");
+    assert!(
+        frame["stone_types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "Quartz")
+    );
+    assert!(frame["stone_suppliers"].is_array());
+    let unknown = server
+        .get("/v1/public/companies/999999/frame")
+        .await
+        .json::<serde_json::Value>();
+    assert_eq!(unknown["name"], serde_json::Value::Null);
+}

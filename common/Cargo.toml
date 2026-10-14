@@ -21,6 +21,8 @@ thiserror = "2.0"
 tracing = "0.1"
 urlencoding = "2.1.3"
 serde_urlencoded = "0.7"
+regex = "1"
+ammonia = "4.2.3"
 
 
 [dev-dependencies]

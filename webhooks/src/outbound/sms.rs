@@ -45,6 +45,10 @@ pub struct OutgoingSms {
     pub attachments: Vec<SmsAttachment>,
     #[serde(default)]
     pub is_automated: bool,
+    /// Reused when the same message is retried, so the provider drops a
+    /// repeat (follow-up steps); a fresh one per send otherwise.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -329,8 +333,13 @@ impl Delivery<'_> {
         &self,
         message: &Planned<'_>,
         caption: &str,
+        index: usize,
     ) -> Result<(i64, Result<(), String>), sqlx::Error> {
-        let idempotency_key = uuid::Uuid::new_v4().to_string();
+        // Only the first message of a split send reuses the caller's key.
+        let idempotency_key = match &self.sms.idempotency_key {
+            Some(key) if index == 0 => key.clone(),
+            _ => uuid::Uuid::new_v4().to_string(),
+        };
         let id = insert_pending_outbound(
             self.pool,
             self.provider,
@@ -446,7 +455,7 @@ pub async fn deliver(
     };
     let mut ids = Vec::with_capacity(planned.len());
     for (index, message) in planned.iter().enumerate() {
-        let (id, outcome) = delivery.send_planned(message, text).await?;
+        let (id, outcome) = delivery.send_planned(message, text, index).await?;
         let Err(token) = outcome else {
             ids.push(id);
             continue;
@@ -505,6 +514,7 @@ mod tests {
             text: " Hello ".into(),
             attachments,
             is_automated: false,
+            idempotency_key: None,
         }
     }
 
@@ -595,6 +605,26 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(files, 1);
+    }
+
+    #[test_db::test]
+    async fn a_follow_up_step_keeps_its_idempotency_key(pool: MySqlPool) {
+        cloudtalk_company(&pool, 93).await;
+        let stub = StubServer::start(cloudtalk_stub(
+            json!({ "responseData": { "success": true } }),
+        ))
+        .await;
+        use_cloudtalk(&stub.base);
+        let mut step = sms("cloudtalk", 93, Vec::new());
+        step.is_automated = true;
+        step.idempotency_key = Some("sms-flow-12-3".into());
+        deliver(&pool, &Client::new(), &step).await.unwrap();
+        let stored: (Option<String>, bool) =
+            sqlx::query_as("SELECT idempotency_key, is_automated <> 0 FROM cloudtalk_sms")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, (Some("sms-flow-12-3".into()), true));
     }
 
     #[test_db::test]

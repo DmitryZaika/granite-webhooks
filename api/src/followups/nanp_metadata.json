@@ -1,0 +1,263 @@
+[
+ {
+  "country": "US",
+  "leadingDigits": null,
+  "nationalNumberPattern": "[2-9]\\d{9}|3\\d{6}",
+  "hasTypes": true,
+  "types": [
+   {
+    "type": "FIXED_LINE",
+    "pattern": "(?:274[27]|(?:472|983)[2-47-9])\\d{6}|(?:2(?:0[1-35-9]|1[02-9]|2[03-57-9]|3[1459]|4[08]|5[1-46]|6[0279]|7[0269]|8[13])|3(?:0[1-57-9]|1[02-9]|2[013-79]|3[0-24679]|4[167]|5[0-3]|6[01349]|8[056])|4(?:0[124-9]|1[02-579]|2[3-5]|3[0245]|4[023578]|58|6[349]|7[0589]|8[04])|5(?:0[1-57-9]|1[0235-8]|20|3[0149]|4[01]|5[179]|6[1-47]|7[0-5]|8[0256])|6(?:0[1-35-9]|1[024-9]|2[03689]|3[016]|4[0156]|5[01679]|6[0-279]|78|8[0-269])|7(?:0[1-46-8]|1[2-9]|2[04-8]|3[0-2478]|4[0378]|5[47]|6[02359]|7[0-59]|8[156])|8(?:0[1-68]|1[02-8]|2[0168]|3[0-2589]|4[03578]|5[046-9]|6[02-5]|7[028])|9(?:0[1346-9]|1[02-9]|2[0589]|3[0146-8]|4[01357-9]|5[12469]|7[0-3589]|8[04-69]))[2-9]\\d{6}",
+    "possibleLengths": [
+     10
+    ]
+   },
+   {
+    "type": "MOBILE",
+    "pattern": "",
+    "possibleLengths": [
+     10
+    ]
+   },
+   {
+    "type": "PREMIUM_RATE",
+    "pattern": "900[2-9]\\d{6}",
+    "possibleLengths": [
+     10
+    ]
+   },
+   {
+    "type": "TOLL_FREE",
+    "pattern": "8(?:00|33|44|55|66|77|88)[2-9]\\d{6}",
+    "possibleLengths": [
+     10
+    ]
+   },
+   {
+    "type": "PERSONAL_NUMBER",
+    "pattern": "52(?:3(?:[2-46-9][02-9]\\d|5(?:[02-46-9]\\d|5[0-46-9]))|4(?:[2-478][02-9]\\d|5(?:[034]\\d|2[024-9]|5[0-46-9])|6(?:0[1-9]|[2-9]\\d)|9(?:[05-9]\\d|2[0-5]|49)))\\d{4}|52[34][2-9]1[02-9]\\d{4}|5(?:00|2[125-9]|3[23]|44|66|77|88)[2-9]\\d{6}",
+    "possibleLengths": [
+     10
+    ]
+   }
+  ]
+ },
+ {
+  "country": "AG",
+  "leadingDigits": "268",
+  "nationalNumberPattern": "(?:268|[58]\\d\\d|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "AI",
+  "leadingDigits": "264",
+  "nationalNumberPattern": "(?:264|[58]\\d\\d|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "AS",
+  "leadingDigits": "684",
+  "nationalNumberPattern": "(?:[58]\\d\\d|684|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "BB",
+  "leadingDigits": "246",
+  "nationalNumberPattern": "(?:246|[58]\\d\\d|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "BM",
+  "leadingDigits": "441",
+  "nationalNumberPattern": "(?:441|[58]\\d\\d|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "BS",
+  "leadingDigits": "242",
+  "nationalNumberPattern": "(?:242|[58]\\d\\d|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "CA",
+  "leadingDigits": null,
+  "nationalNumberPattern": "[2-9]\\d{9}|3\\d{6}",
+  "hasTypes": true,
+  "types": [
+   {
+    "type": "FIXED_LINE",
+    "pattern": "(?:2(?:04|[23]6|[48]9|5[07]|63)|3(?:06|43|54|6[578]|82)|4(?:03|1[68]|[26]8|3[178]|50|74)|5(?:06|1[49]|48|79|8[147])|6(?:04|[18]3|39|47|72)|7(?:0[59]|42|53|78|8[02])|8(?:[06]7|19|25|7[39])|9(?:0[25]|42))[2-9]\\d{6}",
+    "possibleLengths": [
+     10
+    ]
+   },
+   {
+    "type": "MOBILE",
+    "pattern": "",
+    "possibleLengths": [
+     10
+    ]
+   },
+   {
+    "type": "PREMIUM_RATE",
+    "pattern": "900[2-9]\\d{6}",
+    "possibleLengths": [
+     10
+    ]
+   },
+   {
+    "type": "TOLL_FREE",
+    "pattern": "8(?:00|33|44|55|66|77|88)[2-9]\\d{6}",
+    "possibleLengths": [
+     10
+    ]
+   },
+   {
+    "type": "VOIP",
+    "pattern": "600[2-9]\\d{6}",
+    "possibleLengths": [
+     10
+    ]
+   },
+   {
+    "type": "PERSONAL_NUMBER",
+    "pattern": "52(?:3(?:[2-46-9][02-9]\\d|5(?:[02-46-9]\\d|5[0-46-9]))|4(?:[2-478][02-9]\\d|5(?:[034]\\d|2[024-9]|5[0-46-9])|6(?:0[1-9]|[2-9]\\d)|9(?:[05-9]\\d|2[0-5]|49)))\\d{4}|52[34][2-9]1[02-9]\\d{4}|(?:5(?:2[125-9]|3[23]|44|66|77|88)|6(?:22|33))[2-9]\\d{6}",
+    "possibleLengths": [
+     10
+    ]
+   },
+   {
+    "type": "UAN",
+    "pattern": "310\\d{4}",
+    "possibleLengths": [
+     7
+    ]
+   }
+  ]
+ },
+ {
+  "country": "DM",
+  "leadingDigits": "767",
+  "nationalNumberPattern": "(?:[58]\\d\\d|767|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "DO",
+  "leadingDigits": "8001|8[024]9",
+  "nationalNumberPattern": "(?:[58]\\d\\d|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "GD",
+  "leadingDigits": "473",
+  "nationalNumberPattern": "(?:473|[58]\\d\\d|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "GU",
+  "leadingDigits": "671",
+  "nationalNumberPattern": "(?:[58]\\d\\d|671|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "JM",
+  "leadingDigits": "658|876",
+  "nationalNumberPattern": "(?:[58]\\d\\d|658|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "KN",
+  "leadingDigits": "869",
+  "nationalNumberPattern": "(?:[58]\\d\\d|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "KY",
+  "leadingDigits": "345",
+  "nationalNumberPattern": "(?:345|[58]\\d\\d|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "LC",
+  "leadingDigits": "758",
+  "nationalNumberPattern": "(?:[58]\\d\\d|758|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "MP",
+  "leadingDigits": "670",
+  "nationalNumberPattern": "[58]\\d{9}|(?:67|90)0\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "MS",
+  "leadingDigits": "664",
+  "nationalNumberPattern": "(?:[58]\\d\\d|664|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "PR",
+  "leadingDigits": "787|939",
+  "nationalNumberPattern": "(?:[589]\\d\\d|787)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "SX",
+  "leadingDigits": "721",
+  "nationalNumberPattern": "7215\\d{6}|(?:[58]\\d\\d|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "TC",
+  "leadingDigits": "649",
+  "nationalNumberPattern": "(?:[58]\\d\\d|649|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "TT",
+  "leadingDigits": "868",
+  "nationalNumberPattern": "(?:[58]\\d\\d|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "VC",
+  "leadingDigits": "784",
+  "nationalNumberPattern": "(?:[58]\\d\\d|784|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "VG",
+  "leadingDigits": "284",
+  "nationalNumberPattern": "(?:284|[58]\\d\\d|900)\\d{7}",
+  "hasTypes": false,
+  "types": []
+ },
+ {
+  "country": "VI",
+  "leadingDigits": "340",
+  "nationalNumberPattern": "[58]\\d{9}|(?:34|90)0\\d{7}",
+  "hasTypes": false,
+  "types": []
+ }
+]

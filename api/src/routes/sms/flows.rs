@@ -196,7 +196,7 @@ fn bad(token: &str) -> ApiError {
 }
 
 /// Text between `{{` and `}}` without tags and entities (`cleanVariableName`).
-fn variable_names(text: &str) -> Vec<String> {
+pub fn variable_names(text: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut rest = text;
     while let Some(start) = rest.find("{{") {
@@ -277,7 +277,7 @@ fn checked(name: &str, steps: &[StepInput]) -> ApiResult<String> {
     Ok(name.to_string())
 }
 
-async fn steps_by_flow(
+pub async fn steps_by_flow(
     pool: &MySqlPool,
     company_id: i32,
     flow_ids: &[i32],
@@ -570,6 +570,31 @@ pub async fn create(
             id: i32::try_from(id).unwrap_or_default(),
         }),
     ))
+}
+
+/// Saves a personal flow of the caller's own text (no templates), e.g. an
+/// AI follow-up the rep approved; its id.
+pub async fn insert_personal_flow(
+    pool: &MySqlPool,
+    user: &SessionUser,
+    name: &str,
+    steps: &[StepInput],
+) -> Result<i32, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let id = sqlx::query(
+        "INSERT INTO sms_flows (company_id, user_id, name, created_by) VALUES (?, ?, ?, ?)",
+    )
+    .bind(user.company_id)
+    .bind(user.id)
+    .bind(name)
+    .bind(user.id)
+    .execute(&mut *tx)
+    .await?
+    .last_insert_id();
+    let id = i64::try_from(id).map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
+    insert_steps(&mut tx, id, steps).await?;
+    tx.commit().await?;
+    Ok(i32::try_from(id).unwrap_or_default())
 }
 
 /// The flow, when the caller may change it; 403 when it is the company's

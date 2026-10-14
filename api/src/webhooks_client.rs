@@ -312,6 +312,10 @@ pub struct OutgoingSms {
     pub text: String,
     pub attachments: Vec<OutgoingSmsFile>,
     pub is_automated: bool,
+    /// Kept across retries of one follow-up step so the provider drops a
+    /// repeat; `None` for a fresh key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

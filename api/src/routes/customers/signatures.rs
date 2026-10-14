@@ -30,8 +30,8 @@ pub struct SignatureRequest {
     pub status: String,
     /// When it was sent.
     pub created_at: Option<DateTime<Utc>>,
-    /// Where to open it: the signed PDF or native document through the web
-    /// app, else the original file.
+    /// Where to open it: an API path (`/v1/...`, the signed PDF or native
+    /// document) to open on the API's host, else the original file's URL.
     pub view_url: String,
 }
 
@@ -106,18 +106,44 @@ pub fn status_from_document(document: &Value) -> Option<&'static str> {
     }
 }
 
-async fn refresh(state: &AppState, company_id: i32, customer_id: i32) -> Result<(), sqlx::Error> {
-    let open: Vec<(i64, String, String)> = sqlx::query_as(
+/// Which requests to freshen.
+#[derive(Debug, Clone, Copy)]
+pub enum RefreshScope {
+    /// A customer's.
+    Customer(i32),
+    /// Those a user sent.
+    SentBy(i32),
+    /// The whole company's.
+    Company,
+}
+
+/// Checks the open `SignWell` requests in `scope` with `SignWell` (at most
+/// 50) and moves their status forward.
+pub async fn refresh(
+    state: &AppState,
+    company_id: i32,
+    scope: RefreshScope,
+) -> Result<(), sqlx::Error> {
+    let mut query = sqlx::QueryBuilder::new(
         "SELECT CAST(id AS SIGNED), CAST(status AS CHAR), provider_document_id FROM signature_requests
-          WHERE company_id = ? AND customer_id = ? AND provider = 'signwell'
-            AND status IN ('draft', 'sent', 'viewed') AND TRIM(COALESCE(provider_document_id, '')) <> ''
-          ORDER BY id DESC LIMIT ?",
-    )
-    .bind(company_id)
-    .bind(customer_id)
-    .bind(MAX_REFRESH)
-    .fetch_all(&state.pool)
-    .await?;
+          WHERE company_id = ",
+    );
+    query.push_bind(company_id);
+    match scope {
+        RefreshScope::Customer(id) => {
+            query.push(" AND customer_id = ").push_bind(id);
+        }
+        RefreshScope::SentBy(id) => {
+            query.push(" AND created_by_user_id = ").push_bind(id);
+        }
+        RefreshScope::Company => {}
+    }
+    query.push(
+        " AND provider = 'signwell' AND status IN ('draft', 'sent', 'viewed')
+          AND TRIM(COALESCE(provider_document_id, '')) <> '' ORDER BY id DESC LIMIT ",
+    );
+    query.push_bind(MAX_REFRESH);
+    let open: Vec<(i64, String, String)> = query.build_query_as().fetch_all(&state.pool).await?;
     if open.is_empty() {
         return Ok(());
     }
@@ -201,7 +227,7 @@ pub async fn signature_requests(
     .fetch_optional(&state.pool)
     .await?;
     found.ok_or(ApiError::NotFound)?;
-    refresh(&state, user.company_id, customer_id).await?;
+    refresh(&state, user.company_id, RefreshScope::Customer(customer_id)).await?;
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT CAST(id AS SIGNED) AS id, filename, file_url, signer_name, signer_email,
                 CAST(status AS CHAR) AS status, provider, provider_document_id, created_at
@@ -216,7 +242,7 @@ pub async fn signature_requests(
     for row in rows {
         let view_url = if row.provider == "native" {
             format!(
-                "/api/signatures/{}/document?customerId={customer_id}",
+                "/v1/signatures/{}/document?customer_id={customer_id}",
                 row.id
             )
         } else if row.status == "signed"
@@ -225,7 +251,7 @@ pub async fn signature_requests(
                 .as_deref()
                 .is_some_and(|id| !id.is_empty())
         {
-            format!("/api/signature-requests/{}/signed-pdf", row.id)
+            format!("/v1/signature-requests/{}/signed-pdf", row.id)
         } else {
             state
                 .storage

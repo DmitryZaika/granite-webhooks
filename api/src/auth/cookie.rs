@@ -35,7 +35,14 @@ pub struct SessionData {
 /// Value of the named cookie in a `Cookie` header, percent-decoded the way the
 /// `cookie` npm package does it (first occurrence wins, quotes stripped).
 pub fn cookie_value(header: &str, name: &str) -> Option<String> {
-    header.split(';').find_map(|pair| {
+    cookie_values(header, name).next()
+}
+
+/// Every value of the named cookie in a `Cookie` header, in order. A browser
+/// sends two `__session` cookies when a host-only one (dev's API) sits next to
+/// the shared-domain one (production's); only one verifies with our secret.
+pub fn cookie_values<'a>(header: &'a str, name: &'a str) -> impl Iterator<Item = String> + 'a {
+    header.split(';').filter_map(move |pair| {
         let (key, value) = pair.split_once('=')?;
         if key.trim() != name {
             return None;
@@ -103,6 +110,19 @@ fn encode_json(json: &[u8], secret: &str) -> String {
     utf8_percent_encode(&format!("{payload}.{signature}"), COOKIE_VALUE_ENCODE).to_string()
 }
 
+/// Decodes an unsigned React Router cookie (`createCookie` without secrets):
+/// base64 of the UTF-8 JSON. `None` when it is not one.
+pub fn decode_plain(value: &str) -> Option<serde_json::Value> {
+    let json = STANDARD.decode(value.trim()).ok()?;
+    serde_json::from_slice(&json).ok()
+}
+
+/// Inverse of [`decode_plain`]; returns the percent-encoded cookie value.
+pub fn encode_plain(value: &serde_json::Value) -> String {
+    let payload = STANDARD.encode(serde_json::to_vec(value).expect("JSON serializes"));
+    utf8_percent_encode(&payload, COOKIE_VALUE_ENCODE).to_string()
+}
+
 /// Where the session cookie is set: the shared parent domain (so the API
 /// and every company subdomain see it), and whether it is HTTPS only.
 #[derive(Debug, Clone, Default)]
@@ -127,6 +147,12 @@ impl CookieConfig {
             attributes.push_str(domain);
         }
         attributes
+    }
+
+    /// A `Set-Cookie` value for another `HttpOnly` cookie of the app, on the
+    /// session's domain.
+    pub fn set_cookie(&self, name: &str, value: &str, max_age: i64) -> String {
+        format!("{name}={value}; {}", self.attributes(max_age, true))
     }
 
     /// `Set-Cookie` values that store `value` as the session. With a shared
@@ -194,6 +220,19 @@ mod tests {
             Some("11111111-2222-4333-8444-555555555555")
         );
         assert_eq!(data.active_company_id, Some(101));
+    }
+
+    #[test]
+    fn finds_our_session_among_same_named_cookies() {
+        let header = format!("__session=foreign.c2lnbmF0dXJl; theme=dark; __session={PLAIN}");
+        let ours = cookie_values(&header, SESSION_COOKIE_NAME)
+            .find_map(|value| decode_session(&value, "test-secret"))
+            .unwrap();
+        assert_eq!(
+            ours.session_id.as_deref(),
+            Some("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+        );
+        assert_eq!(cookie_values(&header, SESSION_COOKIE_NAME).count(), 2);
     }
 
     #[test]

@@ -24,7 +24,7 @@
 
 use crate::auth::CurrentUser;
 use crate::auth::cookie::{
-    SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS, SessionData, cookie_value, decode_session,
+    SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS, SessionData, cookie_values, decode_session,
     decode_session_map, encode_session, encode_session_map,
 };
 use crate::auth::session::{SUPER_ADMIN_POSITION, SessionUser, find_session_user, user_positions};
@@ -130,8 +130,8 @@ fn request_session(
         .get_all(COOKIE)
         .iter()
         .filter_map(|header| header.to_str().ok())
-        .find_map(|header| cookie_value(header, SESSION_COOKIE_NAME))
-        .and_then(|value| decode_session_map(&value, secret))
+        .flat_map(|header| cookie_values(header, SESSION_COOKIE_NAME))
+        .find_map(|value| decode_session_map(&value, secret))
 }
 
 /// The request's session id, when its cookie verifies.
@@ -140,8 +140,8 @@ pub(crate) fn request_session_id(headers: &HeaderMap, secret: &str) -> Option<St
         .get_all(COOKIE)
         .iter()
         .filter_map(|header| header.to_str().ok())
-        .find_map(|header| cookie_value(header, SESSION_COOKIE_NAME))
-        .and_then(|value| decode_session(&value, secret))
+        .flat_map(|header| cookie_values(header, SESSION_COOKIE_NAME))
+        .find_map(|value| decode_session(&value, secret))
         .and_then(|session| session.session_id)
 }
 
@@ -177,7 +177,7 @@ fn home_path(user: &SessionUser, positions: &[i32]) -> String {
     "/employee".into()
 }
 
-async fn company_subdomain(
+pub(crate) async fn company_subdomain(
     pool: &sqlx::MySqlPool,
     company_id: i32,
 ) -> sqlx::Result<Option<String>> {
@@ -521,7 +521,7 @@ pub struct ResetRequest {
 
 /// The app origin for the user's company: `https://{subdomain}.{apex}` when
 /// the company has a subdomain and the app is not on localhost, else `APP_URL`.
-fn app_origin(app_url: &str, subdomain: Option<&str>) -> String {
+pub fn app_origin(app_url: &str, subdomain: Option<&str>) -> String {
     let Some(subdomain) = subdomain else {
         return app_url.to_string();
     };
@@ -805,6 +805,6 @@ mod tests {
 
     #[test]
     fn the_dummy_hash_is_a_bcrypt_hash() {
-        assert!(bcrypt::verify("x", &*DUMMY_HASH).is_ok());
+        assert!(bcrypt::verify("x", &DUMMY_HASH).is_ok());
     }
 }

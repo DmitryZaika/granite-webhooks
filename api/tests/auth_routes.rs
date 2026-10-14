@@ -51,8 +51,7 @@ fn session_cookie(response: &axum_test::TestResponse) -> String {
         .get_all("set-cookie")
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .filter(|v| v.starts_with("__session=") && !v.starts_with("__session=;"))
-        .last()
+        .rfind(|v| v.starts_with("__session=") && !v.starts_with("__session=;"))
         .expect("session cookie")
         .to_string();
     set.split(';').next().unwrap().to_string()

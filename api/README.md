@@ -66,6 +66,87 @@ Create the others as their first route is migrated, following the same files.
 them from `security` and 401. They must never return costs, hidden items or
 other companies' data; `tests/public.rs` checks that.
 
+`/v1/webhooks/...` are third parties' callbacks (Stripe, SignWell): no
+session either, the sender proves itself (`Stripe-Signature` with
+`STRIPE_WEBHOOK_SECRET`; SignWell's `?token=` = `SIGNWELL_WEBHOOK_SECRET` or
+its event hash keyed with `SIGNWELL_WEBHOOK_ID`).
+Point the provider's webhook at `https://api.granite-manager.com/v1/webhooks/<name>`.
+
+### Streaming answers
+
+The AI chat (`POST /v1/ai/chat`, server-sent events) and other long AI
+calls outlast API Gateway's 30 s. The same binary also runs behind a Lambda
+Function URL in `RESPONSE_STREAM` mode: set `LAMBDA_RESPONSE_STREAMING=1` on
+that function (`main.rs` then uses `run_with_streaming_response`). Put it on
+a subdomain of the session cookie's domain (for example through CloudFront)
+so the browser sends the cookie; the frontend calls it from
+`VITE_GRANITE_STREAM_URL`. The chat's CRM manual is
+`api/src/chat/crm_manual.json`, rebuilt from the CRM repo with
+`node scripts/sync-crm-manual.mjs ../general_datebase`.
+
+### Pictures, PDFs and audio
+
+Pure Rust, so nothing to install on Lambda: `images.rs` reads phone photos
+(HEIC with `zune-heic`) and makes thumbnails and SMS-ready pictures;
+`pdf_preview.rs` draws a PDF's first page with `hayro`. Responses stay
+under Lambda's 6 MB: big files go up with presigned PUTs (`POST
+/v1/uploads`) and down with presigned GETs or redirects (document and
+attachment previews, call recordings copied to the bucket, quote prints).
+The bucket's CORS must allow `GET` and `HEAD` too: the call player fetches
+the recording. `CLOUDTALK_BASE_URL` points CloudTalk calls at a stand-in
+(the frontend's browser tests).
+
+Signed documents (`routes/signatures.rs`) open in a browser tab with the
+session cookie. Native ones are read from the private
+`SIGNATURE_STORAGE_BUCKET` (same storage credentials) and hash-checked;
+SignWell signed copies are fetched and titled "<document> signed". PDFs over
+4 MB redirect to a presigned link (big SignWell copies are stored under
+`signed-documents/`, which a bucket lifecycle rule may expire after a day).
+
+Native signatures are on with `NATIVE_SIGNATURES_ENABLED=1`,
+`SIGNATURE_INVITATION_SECRET` (32 bytes, base64url) and
+`SIGNATURE_APP_ORIGIN` (`native_signing.rs`); the scheduled
+`POST /v1/jobs/signature-reminders` then expires open requests and sends
+reminders and notifications (it does nothing while they are off).
+
+Sending documents for signature (`POST /v1/emails` with
+`signature_requests`, `routes/emails/signatures.rs`): through SignWell by
+default (the company's `signwell_api_key`, else `SIGNWELL_API_KEY`;
+`SIGNWELL_TEST_MODE=true` for test documents), natively when enabled. A
+native send also needs the company's verified settings in
+`SIGNATURE_VERIFIED_COMPANY_SETTINGS` (`{"<company id>": {"verifiedAt",
+"evidenceReference", "settings"}}`) and a `SIGNATURE_STORAGE_BUCKET` that
+blocks all public access. `signing_pdf.rs` freezes the PDF's form and prints
+what the sender filled in, matching pdf-lib's output.
+
+SignWell reports viewed / signed / declined documents to
+`POST /v1/webhooks/signwell` (`routes/signwell_webhook.rs`): the sender is
+emailed (links to `SIGNATURE_APP_ORIGIN`) and notified in the app, and a
+signed contract ("<contract form> - <quote name>.pdf") sells its quote: the
+deal is won with the sold option's total. `quote_pricing/` prices quotes as
+the CRM does (`priceQuote`, the price snapshot, stock sync and extras),
+checked line by line against the TypeScript on the Moraware fixtures.
+
+### SMS / email flows
+
+`followups/processor.rs` sends the due steps of flows (`sms_flow_enrollments`)
+from the scheduled `POST /v1/jobs/sms-followups`, which also sends lead-list
+drip texts and everyone's scheduled emails and texts; a rep's start or "send
+now" sends the first step before the response. After an outbound call the
+`webhooks` Lambda posts to `POST /v1/followups/call-check` (with
+`LAMBDA_KEY`; it needs `API_URL` set to this API). Follow-up texts reuse
+`sms-flow-<run>-<step>` / `sms-drip-<row>` as the provider's idempotency key.
+
+### Billing (Stripe)
+
+`src/billing/` keeps `company_billing` in step with Stripe (the state machine
+is a port of the CRM's `stripeBilling.ts`, tested in memory in
+`billing/machine.rs`, against MySQL in `tests/billing.rs` with a fake Stripe,
+and against Stripe's test mode in `tests/billing_stripe_live.rs` when
+`STRIPE_TEST_SECRET_KEY=sk_test_...` is set). Env: `STRIPE_SECRET_KEY`,
+`STRIPE_WEBHOOK_SECRET`, `STRIPE_BILLING_PLANS` (`price|Name|cents,...`) or
+`STRIPE_PRICE_ID`.
+
 ### Uploads and storage
 
 Images go straight from the browser to the bucket with a presigned PUT
@@ -267,9 +348,47 @@ curl -H "Cookie: $C" -H 'content-type: application/json' \
 
 ## Deploying
 
-`make deploy-api` creates/updates the `granite-api` Lambda. It needs these
-environment variables: `DATABASE_URL`, `SESSION_SECRET` (same as Remix),
-optionally `API_ALLOWED_ORIGINS`. Expose it on `api.granite-manager.com`
-(CloudFront or an API Gateway custom domain in front of the function URL) so
-the session cookie is sent; then set `VITE_GRANITE_API_URL` in the frontend's
-`.env.prod` (pages that use the API do not work without it).
+```
+make build <api|webhooks|time-triggered>
+make deploy <api|webhooks|time-triggered> <dev|prod>
+```
+
+`make deploy` builds the binary and uploads it to the Lambda for that app and
+environment (`granite-api`, `granite-api-dev`, `granite-webhooks`,
+`granite-webhooks-dev`, `time-triggered`; there is no dev time-triggered). It
+creates the Lambda when it does not exist and never changes its environment
+variables.
+
+Production `granite-api` needs `DATABASE_URL`, `SESSION_SECRET` (same as
+Remix), optionally `API_ALLOWED_ORIGINS`, and is served on
+`api.granite-manager.com` (CloudFront in front of the function URL) so the
+session cookie is sent.
+
+## Dev environment
+
+`granite-api-dev` and `granite-webhooks-dev` never touch production:
+
+- `DATABASE_URL` points at the `duplicate` database, never `main`.
+- Their secrets (`SESSION_SECRET`, `LAMBDA_KEY`, `REMIX_KEY`/`WEBHOOKS_KEY`,
+  `WEBHOOK_SECRET`) are their own.
+- `SESSION_COOKIE_DOMAIN=none`: the dev session cookie is host-only on
+  `api-dev.granite-manager.com`, so signing in on dev never replaces the
+  production cookie on `.granite-manager.com`. The browser then sends both
+  `__session` cookies to dev; the API uses the one that verifies.
+- No `AES_KEY`: the integration tokens copied into `duplicate` (QuickBooks,
+  RingCentral) stay unreadable, so dev cannot refresh production's tokens.
+  CloudTalk, RingCentral, QuickBooks, Calendly and Telegram are not configured.
+- Files go to `granite-storage-dev-<account>` (us-east-1) through the
+  `granite-storage-dev` IAM user, which can reach only that bucket.
+
+`infra/dev-api.yaml` (stack `granite-api-dev`, us-east-1) holds the dev bucket,
+its IAM user, and CloudFront + certificate + DNS for
+`https://api-dev.granite-manager.com` in front of the function URL:
+
+```
+aws cloudformation deploy --region us-east-1 --stack-name granite-api-dev \
+  --template-file infra/dev-api.yaml --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides FunctionUrlDomain=<granite-api-dev function URL host>
+```
+
+The frontend's `make deploy-dev` builds against `api-dev.granite-manager.com`.

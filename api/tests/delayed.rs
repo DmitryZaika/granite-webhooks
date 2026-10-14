@@ -181,4 +181,29 @@ async fn a_due_email_goes_out_when_the_list_is_read(pool: MySqlPool) {
     assert_eq!(emails.len(), 1);
     assert_eq!(emails[0].subject, "Hello");
     assert_eq!(emails[0].to, ["alice@example.com"]);
+
+    // The sender hears it went out, on Alice's latest deal.
+    let notice: (i64, Option<i64>, String, String) = sqlx::query_as(
+        "SELECT CAST(user_id AS SIGNED), CAST(deal_id AS SIGNED), message, notification_type
+           FROM notifications WHERE notification_type LIKE 'delayed_message_%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let latest: i64 = sqlx::query_scalar(
+        "SELECT CAST(id AS SIGNED) FROM deals WHERE customer_id = 1000 AND deleted_at IS NULL
+          ORDER BY is_won IS NULL DESC, id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        notice,
+        (
+            100,
+            Some(latest),
+            "Scheduled email sent: \"Hello\"".into(),
+            "delayed_message_sent".into()
+        )
+    );
 }

@@ -280,3 +280,84 @@ pub async fn domain_verified(domain: &str) -> Option<bool> {
     }
     Some(verified)
 }
+
+/// SES identities of the account: (verified, pending), lowercased.
+pub type IdentitySets = (
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+);
+
+static IDENTITY_SETS: std::sync::LazyLock<
+    std::sync::Mutex<Option<(std::time::Instant, IdentitySets)>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Every email identity of the SES account and whether it is verified
+/// (`loadSesIdentitySets`). `None` when SES could not be asked (no
+/// permission, timeout, or `SES_DOMAIN_CHECK=off`). Cached ten minutes.
+pub async fn identity_sets() -> Option<IdentitySets> {
+    if std::env::var("SES_DOMAIN_CHECK").is_ok_and(|value| value.trim() == "off") {
+        return None;
+    }
+    if let Ok(cached) = IDENTITY_SETS.lock()
+        && let Some((at, sets)) = cached.as_ref()
+        && at.elapsed() < DOMAIN_CHECK_TTL
+    {
+        return Some(sets.clone());
+    }
+    let list = async {
+        let region_provider = RegionProviderChain::first_try(Region::new("us-east-2"));
+        let shared_config = aws_config::from_env().region(region_provider).load().await;
+        let client = Client::new(&shared_config);
+        let mut verified = std::collections::HashSet::new();
+        let mut pending = std::collections::HashSet::new();
+        let mut next: Option<String> = None;
+        loop {
+            let page = client
+                .list_email_identities()
+                .page_size(100)
+                .set_next_token(next.take())
+                .send()
+                .await?;
+            for identity in page.email_identities() {
+                let Some(name) = identity.identity_name().map(|n| n.trim().to_lowercase()) else {
+                    continue;
+                };
+                match identity.verification_status() {
+                    Some(aws_sdk_sesv2::types::VerificationStatus::Success) => {
+                        verified.insert(name);
+                    }
+                    Some(aws_sdk_sesv2::types::VerificationStatus::Pending) => {
+                        pending.insert(name);
+                    }
+                    _ => {}
+                }
+            }
+            match page.next_token() {
+                Some(token) => next = Some(token.to_string()),
+                None => break,
+            }
+        }
+        Ok::<
+            _,
+            aws_sdk_sesv2::error::SdkError<
+                aws_sdk_sesv2::operation::list_email_identities::ListEmailIdentitiesError,
+            >,
+        >((verified, pending))
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(5), list).await {
+        Ok(Ok(sets)) => {
+            if let Ok(mut cached) = IDENTITY_SETS.lock() {
+                *cached = Some((std::time::Instant::now(), sets.clone()));
+            }
+            Some(sets)
+        }
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "SES ListEmailIdentities failed");
+            None
+        }
+        Err(_) => {
+            tracing::warn!("SES ListEmailIdentities timed out");
+            None
+        }
+    }
+}

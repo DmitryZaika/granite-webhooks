@@ -91,6 +91,8 @@ pub struct AppShell {
     pub user_signature_access: bool,
     /// The acting company's switches.
     pub company_features: ShellFeatures,
+    /// What the user's home company can do, as the guided tours gate on it.
+    pub feature_capabilities: crate::routes::onboarding::team::TeamCapabilities,
 }
 
 /// A company of the switcher.
@@ -190,6 +192,9 @@ pub async fn shell(
             },
         );
     let features = company_features(pool, user.company_id).await?;
+    let feature_capabilities =
+        crate::routes::onboarding::team::capabilities(pool, home.unwrap_or(user.company_id))
+            .await?;
     let portal = portal(&user, user_is_super_admin, &all);
     let sms_images_enabled = !std::env::var("SMS_IMAGES_ENABLED").is_ok_and(|value| {
         matches!(
@@ -223,6 +228,7 @@ pub async fn shell(
             onboarding: features.onboarding,
             leaderboard: features.leaderboard,
         },
+        feature_capabilities,
         user,
     }))
 }

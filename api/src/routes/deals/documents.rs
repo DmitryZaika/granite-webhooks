@@ -150,14 +150,16 @@ async fn quote_events(
         .collect())
 }
 
-const QUOTE_EMAILS_SQL: &str = "SELECT CAST(e.id AS SIGNED) AS id, CAST(e.quote_id AS SIGNED) AS quote_id,
+const QUOTE_EMAILS_SQL: &str =
+    "SELECT CAST(e.id AS SIGNED) AS id, CAST(e.quote_id AS SIGNED) AS quote_id,
             e.recipients AS detail, DATE_FORMAT(e.sent_at, ?) AS at, u.name AS actor
        FROM quote_emails e
        JOIN quotes q ON q.id = e.quote_id
        LEFT JOIN users u ON u.id = e.sent_by
       WHERE q.company_id = ? AND q.deal_id = ? AND q.deleted_at IS NULL";
 
-const QUOTE_PRINTS_SQL: &str = "SELECT CAST(p.id AS SIGNED) AS id, CAST(p.quote_id AS SIGNED) AS quote_id,
+const QUOTE_PRINTS_SQL: &str =
+    "SELECT CAST(p.id AS SIGNED) AS id, CAST(p.quote_id AS SIGNED) AS quote_id,
             p.form AS detail, DATE_FORMAT(p.printed_at, ?) AS at, u.name AS actor
        FROM quote_prints p
        JOIN quotes q ON q.id = p.quote_id
@@ -329,8 +331,16 @@ mod tests {
     fn contract_files_match_their_quote() {
         let quotes = [quote(1, Some("Smith: Kitchen")), quote(2, None)];
         let forms = ["Install Agreement".to_string()];
-        assert!(is_quote_contract("Contract - Smith  Kitchen.pdf", &forms, &quotes));
-        assert!(is_quote_contract("install agreement - smith  kitchen.PDF", &forms, &quotes));
+        assert!(is_quote_contract(
+            "Contract - Smith  Kitchen.pdf",
+            &forms,
+            &quotes
+        ));
+        assert!(is_quote_contract(
+            "install agreement - smith  kitchen.PDF",
+            &forms,
+            &quotes
+        ));
         assert!(is_quote_contract("Contract - Quote.pdf", &forms, &quotes));
         assert!(!is_quote_contract("Template approval.pdf", &forms, &quotes));
         assert_eq!(without_pdf("Contract - A.PdF"), "Contract - A");

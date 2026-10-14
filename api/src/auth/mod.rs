@@ -21,7 +21,7 @@ use crate::state::AppState;
 use axum::extract::FromRequestParts;
 use axum::http::header::COOKIE;
 use axum::http::request::Parts;
-use cookie::{SESSION_COOKIE_NAME, cookie_value, decode_session};
+use cookie::{SESSION_COOKIE_NAME, cookie_values, decode_session};
 use session::{SessionUser, effective_user, find_session_user, user_positions};
 
 async fn authenticate(parts: &Parts, state: &AppState) -> Result<SessionUser, ApiError> {
@@ -39,8 +39,8 @@ async fn authenticate_with_positions(
         .get_all(COOKIE)
         .iter()
         .filter_map(|header| header.to_str().ok())
-        .find_map(|header| cookie_value(header, SESSION_COOKIE_NAME))
-        .and_then(|value| decode_session(&value, &state.session_secret))
+        .flat_map(|header| cookie_values(header, SESSION_COOKIE_NAME))
+        .find_map(|value| decode_session(&value, &state.session_secret))
         .ok_or(ApiError::Unauthorized)?;
     let session_id = session.session_id.ok_or(ApiError::Unauthorized)?;
     let user = find_session_user(&state.pool, &session_id)
@@ -152,6 +152,26 @@ impl FromRequestParts<AppState> for UserManager {
             .iter()
             .any(|row| row.company_id == user.company_id && row.position_id == MANAGER_POSITION);
         if user.is_superuser || ((user.is_admin) && manager) {
+            Ok(Self(user))
+        } else {
+            Err(ApiError::Forbidden)
+        }
+    }
+}
+
+/// Who may pay for the company (`userCanManageBilling`): an employee who is
+/// a Manager of the company the request acts in.
+pub struct BillingManager(pub SessionUser);
+
+impl FromRequestParts<AppState> for BillingManager {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        let (user, positions) = authenticate_with_positions(parts, state).await?;
+        let manager = positions
+            .iter()
+            .any(|row| row.company_id == user.company_id && row.position_id == MANAGER_POSITION);
+        if (user.is_employee || user.is_admin || user.is_superuser) && manager {
             Ok(Self(user))
         } else {
             Err(ApiError::Forbidden)

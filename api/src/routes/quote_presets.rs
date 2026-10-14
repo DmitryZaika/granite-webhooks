@@ -490,15 +490,25 @@ pub async fn get_settings(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<QuoteSettings>> {
+    Ok(Json(
+        load_quote_settings(&state.pool, user.company_id).await?,
+    ))
+}
+
+/// The company's measurement settings (`loadQuoteSettings`).
+pub async fn load_quote_settings(
+    pool: &sqlx::MySqlPool,
+    company_id: i32,
+) -> ApiResult<QuoteSettings> {
     let row: Option<(f64, f64)> = sqlx::query_as(
         "SELECT CAST(measurement_rounding AS DOUBLE), CAST(default_counter_depth AS DOUBLE)
            FROM quote_settings WHERE company_id = ?",
     )
-    .bind(user.company_id)
-    .fetch_optional(&state.pool)
+    .bind(company_id)
+    .fetch_optional(pool)
     .await?;
     let (saved_rounding, depth) = row.unwrap_or((DEFAULT_ROUNDING, DEFAULT_DEPTH));
-    Ok(Json(QuoteSettings {
+    Ok(QuoteSettings {
         units: "in".into(),
         rounding: rounding(saved_rounding),
         default_depth: if depth.is_finite() && depth > 0.0 {
@@ -506,7 +516,7 @@ pub async fn get_settings(
         } else {
             DEFAULT_DEPTH
         },
-    }))
+    })
 }
 
 /// Save the quote settings

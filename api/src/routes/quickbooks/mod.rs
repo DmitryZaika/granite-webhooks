@@ -268,31 +268,43 @@ pub async fn customer_invoices(
     EmployeeUser(user): EmployeeUser,
     Path(customer_id): Path<i32>,
 ) -> ApiResult<Json<CustomerInvoices>> {
-    let row = customer(&state, user.company_id, customer_id).await?;
+    invoices_of_customer(&state, user.company_id, customer_id)
+        .await
+        .map(Json)
+}
+
+/// A customer's `QuickBooks` invoices, linking the customer first when it
+/// is not linked yet (also for the customer's own view).
+pub async fn invoices_of_customer(
+    state: &AppState,
+    company_id: i32,
+    customer_id: i32,
+) -> ApiResult<CustomerInvoices> {
+    let row = customer(state, company_id, customer_id).await?;
     let result = async {
-        let access = state.qbo.access(&state.pool, user.company_id).await?;
+        let access = state.qbo.access(&state.pool, company_id).await?;
         let qbo_id = if let Some(id) = row.qbo_id.clone() {
             id
         } else {
-            let Some(id) = resolve_qbo_id(&state, &access, &row).await? else {
+            let Some(id) = resolve_qbo_id(state, &access, &row).await? else {
                 return Ok(CustomerInvoices::empty(InvoicesStatus::MissingQboId));
             };
             sqlx::query("UPDATE customers SET qbo_id = ? WHERE id = ? AND company_id = ? AND deleted_at IS NULL")
                 .bind(&id)
                 .bind(customer_id)
-                .bind(user.company_id)
+                .bind(company_id)
                 .execute(&state.pool)
                 .await?;
             id
         };
         Ok::<_, QboError>(CustomerInvoices {
             status: InvoicesStatus::Ok,
-            invoices: invoices_for(&state, &access, &qbo_id).await?,
+            invoices: invoices_for(state, &access, &qbo_id).await?,
             qbo_id: Some(qbo_id),
         })
     }
     .await;
-    Ok(Json(match result {
+    Ok(match result {
         Ok(found) => found,
         Err(err) if err.is_not_connected() => CustomerInvoices::empty(InvoicesStatus::NotConnected),
         Err(QboError::Database(err)) => return Err(err.into()),
@@ -300,7 +312,7 @@ pub async fn customer_invoices(
             tracing::error!(error = %err, customer_id, "QuickBooks invoices failed");
             CustomerInvoices::empty(InvoicesStatus::Error)
         }
-    }))
+    })
 }
 
 /// The access token, once the invoice is known to be the customer's.
@@ -514,13 +526,24 @@ pub async fn customer_invoice_pdf(
     EmployeeUser(user): EmployeeUser,
     Path((customer_id, invoice_id)): Path<(i32, String)>,
 ) -> ApiResult<impl IntoResponse> {
-    let access = owned_invoice(&state, user.company_id, customer_id, &invoice_id).await?;
+    customer_invoice_pdf_of(&state, user.company_id, customer_id, &invoice_id).await
+}
+
+/// The PDF of one of a customer's `QuickBooks` invoices (also for the
+/// customer's own view).
+pub async fn customer_invoice_pdf_of(
+    state: &AppState,
+    company_id: i32,
+    customer_id: i32,
+    invoice_id: &str,
+) -> ApiResult<axum::response::Response> {
+    let access = owned_invoice(state, company_id, customer_id, invoice_id).await?;
     let bytes = state
         .qbo
-        .invoice_pdf(&access, &invoice_id)
+        .invoice_pdf(&access, invoice_id)
         .await
         .map_err(qbo_error)?;
-    Ok(pdf_response(&invoice_id, bytes))
+    Ok(pdf_response(invoice_id, bytes).into_response())
 }
 
 /// Get a QuickBooks invoice as a PDF

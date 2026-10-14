@@ -51,6 +51,19 @@ impl Font {
         units * size / 1000.0
     }
 
+    /// WinAnsi bytes, or `None` when the font lacks a character (pdf-lib's
+    /// `encodeText` throws).
+    pub fn try_encode(self, text: &str) -> Option<Vec<u8>> {
+        text.chars()
+            .map(|ch| {
+                self.table()
+                    .iter()
+                    .find(|(glyph, _, _)| *glyph == ch)
+                    .map(|(_, code, _)| *code)
+            })
+            .collect()
+    }
+
     /// WinAnsi bytes; characters the font lacks print as `?`.
     fn encode(self, text: &str) -> Vec<u8> {
         text.chars().map(|ch| self.glyph(ch).0).collect()
@@ -68,6 +81,16 @@ pub struct Image {
 }
 
 impl Image {
+    /// Red, green and blue bytes, row by row.
+    pub fn rgb(&self) -> &[u8] {
+        &self.rgb
+    }
+
+    /// The alpha bytes, when not fully opaque.
+    pub fn alpha(&self) -> Option<&[u8]> {
+        self.alpha.as_deref()
+    }
+
     /// A PNG or JPEG (anything the `image` crate reads); `None` when unreadable.
     pub fn decode(bytes: &[u8]) -> Option<Self> {
         let decoded = image::load_from_memory(bytes).ok()?;

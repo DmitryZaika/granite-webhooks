@@ -15,22 +15,43 @@
 )]
 
 pub mod ai;
+pub mod analytics_proxy;
 pub mod auth;
+pub mod billing;
+pub mod chat;
+pub mod commissions;
 pub mod db;
+pub mod deliverability;
 pub mod email_signature;
 pub mod error;
 pub mod extract;
+pub mod followups;
+pub mod images;
+pub mod kitchen_design;
 pub mod maps;
+pub mod native_delivery;
+pub mod native_signing;
+pub mod oauth_state;
 pub mod openapi;
 pub mod pdf;
 pub mod pdf_fonts;
+pub mod pdf_preview;
 pub mod period;
+pub mod posthog;
+pub mod price_list_chunking;
+pub mod price_lists;
 pub mod qbo;
+pub mod quote_pricing;
+pub mod ringcentral_connect;
 pub mod routes;
 pub mod serde_helpers;
+pub mod setup_checklist;
+pub mod signing_pdf;
+pub mod signwell;
 pub mod sql;
 pub mod state;
 pub mod storage;
+pub mod supplier_file_processor;
 pub mod telegram;
 pub mod thumbnails;
 pub mod transcribe;
@@ -64,7 +85,7 @@ async fn check_origin(State(state): State<AppState>, request: Request, next: Nex
         && let Some(origin) = request.headers().get(ORIGIN)
         && !origin
             .to_str()
-            .is_ok_and(|origin| state::origin_allowed(&state.allowed_origins, origin))
+            .is_ok_and(|origin| state.origin_allowed(origin))
     {
         return (
             StatusCode::FORBIDDEN,
@@ -86,6 +107,10 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/openapi.json",
             get(move || async move { ([(CONTENT_TYPE, "application/json")], spec.to_string()) }),
+        )
+        .route(
+            "/ingest/{*rest}",
+            axum::routing::any(analytics_proxy::relay),
         )
         .merge(routes)
         .layer(middleware::from_fn_with_state(state.clone(), check_origin))

@@ -108,54 +108,6 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
     Ok(sent_count)
 }
 
-async fn post_app_process_route(path: &str, label: &str) -> Result<usize, Error> {
-    let app_url = match std::env::var("APP_URL") {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::warn!(?error, "APP_URL is not set; skipping {label}");
-            return Ok(0);
-        }
-    };
-    let lambda_key = match std::env::var("LAMBDA_KEY") {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::warn!(?error, "LAMBDA_KEY is not set; skipping {label}");
-            return Ok(0);
-        }
-    };
-
-    let url = format!(
-        "{}/{}",
-        app_url.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    );
-    let client = Client::new();
-    let response = client
-        .post(url)
-        .header("Authorization", lambda_key)
-        .send()
-        .await
-        .map_err(|error| Error::from(error.to_string()))?;
-
-    if !response.status().is_success() {
-        tracing::warn!(
-            status = response.status().as_u16(),
-            "Failed to process {label}"
-        );
-        return Ok(0);
-    }
-
-    let body = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|error| Error::from(error.to_string()))?;
-    let processed = body
-        .get("processed")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(0);
-    Ok(usize::try_from(processed).unwrap_or(0))
-}
-
 /// Runs a scheduled job of the API (`POST <API_URL>/v1/jobs/<job>`).
 async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
     let api_url = match std::env::var("API_URL") {
@@ -180,7 +132,10 @@ async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
         .await
         .map_err(|error| Error::from(error.to_string()))?;
     if !response.status().is_success() {
-        tracing::warn!(status = response.status().as_u16(), "Failed to process {label}");
+        tracing::warn!(
+            status = response.status().as_u16(),
+            "Failed to process {label}"
+        );
         return Ok(0);
     }
     let body = response
@@ -203,15 +158,53 @@ async fn process_maintenance_due_reminders() -> Result<usize, Error> {
 }
 
 async fn process_sms_followups() -> Result<usize, Error> {
-    post_app_process_route("api/sms-followups/process", "sms follow-ups").await
+    post_api_job("sms-followups", "sms follow-ups").await
 }
 
 async fn process_call_points() -> Result<usize, Error> {
     post_api_job("call-points", "call points").await
 }
 
+async fn process_signature_reminders() -> Result<usize, Error> {
+    post_api_job("signature-reminders", "e-signature reminders").await
+}
+
 async fn process_checklist_surveys() -> Result<usize, Error> {
     post_api_job("survey-notifications", "checklist survey notifications").await
+}
+
+/// Starts the supplier price file job without waiting for it: a big PDF takes
+/// minutes, and the API Lambda keeps working after this request gives up.
+/// Sent to the long-running deployment (`API_STREAM_URL`) when there is one.
+async fn start_supplier_files_job() {
+    let Some(api_url) = std::env::var("API_STREAM_URL")
+        .ok()
+        .or_else(|| std::env::var("API_URL").ok())
+    else {
+        tracing::warn!("API_URL is not set; skipping supplier files");
+        return;
+    };
+    let Ok(lambda_key) = std::env::var("LAMBDA_KEY") else {
+        tracing::warn!("LAMBDA_KEY is not set; skipping supplier files");
+        return;
+    };
+    let url = format!("{}/v1/jobs/supplier-files", api_url.trim_end_matches('/'));
+    let sent = Client::new()
+        .post(url)
+        .header("Authorization", lambda_key)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await;
+    match sent {
+        Ok(response) if !response.status().is_success() => tracing::warn!(
+            status = response.status().as_u16(),
+            "Failed to start supplier files"
+        ),
+        Err(error) if !error.is_timeout() => {
+            tracing::warn!(?error, "Failed to start supplier files");
+        }
+        _ => {}
+    }
 }
 
 pub fn scheduled_email_recipient(email: Option<&str>) -> Option<&str> {
@@ -338,6 +331,7 @@ pub(crate) async fn function_handler(
     let maintenance_reminder_count = process_maintenance_due_reminders().await?;
     let sms_followup_count = process_sms_followups().await?;
     let checklist_survey_count = process_checklist_surveys().await?;
+    start_supplier_files_job().await;
     let call_points_count = match process_call_points().await {
         Ok(count) => count,
         Err(error) => {
@@ -345,15 +339,26 @@ pub(crate) async fn function_handler(
             0
         }
     };
+    let signature_reminder_count = match process_signature_reminders().await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                "Failed to process e-signature reminders; continuing"
+            );
+            0
+        }
+    };
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, and {} call points",
+        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, and {} e-signature reminders",
         processed_email_count,
         reminder_count,
         estimate_reminder_count,
         maintenance_reminder_count,
         sms_followup_count,
         checklist_survey_count,
-        call_points_count
+        call_points_count,
+        signature_reminder_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);
@@ -381,7 +386,7 @@ mod tests {
             .find("async fn send_due_activity_deadline_reminders")
             .expect("reminder function");
         let fn_end = source
-            .find("async fn post_app_process_route")
+            .find("/// Runs a scheduled job of the API")
             .expect("next function");
         let body = &source[fn_start..fn_end];
         assert!(
