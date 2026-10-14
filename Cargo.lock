@@ -6044,8 +6044,6 @@ dependencies = [
 name = "webhooks"
 version = "0.1.0"
 dependencies = [
- "aes-gcm",
- "ammonia",
  "aws-config",
  "aws-sdk-s3",
  "axum",
