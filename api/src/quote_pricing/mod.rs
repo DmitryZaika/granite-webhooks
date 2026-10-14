@@ -18,6 +18,7 @@
 )]
 
 pub mod doc;
+pub mod edit;
 pub mod geometry;
 pub mod js;
 pub mod price_list;
@@ -102,7 +103,7 @@ fn number(text: Option<String>) -> Option<f64> {
 
 /// `loadPricingStock` + `loadExtrasCatalog`.
 #[allow(clippy::too_many_lines, clippy::items_after_statements)]
-async fn load_stock(pool: &MySqlPool, company_id: i32) -> ApiResult<Stock> {
+pub async fn load_stock(pool: &MySqlPool, company_id: i32) -> ApiResult<Stock> {
     type StoneRow = (
         i32,
         String,

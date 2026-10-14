@@ -504,6 +504,14 @@ fn apply_extras_catalog(info: &mut Value, catalog: &[(i64, Value)]) {
 
 /// `syncPriceListWithStock(info, { ...stock, extras })`.
 pub fn sync_with_stock(info: &Value, stock: &Stock) -> Value {
+    let mut synced = sync_with_inventory(info, stock);
+    apply_extras_catalog(&mut synced, &stock.extras);
+    synced
+}
+
+/// `syncPriceListWithStock(info, stock)` without the extras catalog: the
+/// list as its editor sees and saves it.
+pub fn sync_with_inventory(info: &Value, stock: &Stock) -> Value {
     // (key, name, colors by key), in the order first seen.
     let mut materials: Vec<Material> = Vec::new();
     for stone in &stock.stones {
@@ -590,7 +598,6 @@ pub fn sync_with_stock(info: &Value, stock: &Stock) -> Value {
         arr(Some(info), "arrSinkModels"),
         &stock.sinks,
     ));
-    apply_extras_catalog(&mut synced, &stock.extras);
     synced
 }
 

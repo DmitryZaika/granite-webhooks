@@ -48,7 +48,9 @@ pub mod places;
 pub mod public;
 pub mod questionnaires;
 pub mod quickbooks;
+pub mod quote_extras;
 pub mod quote_presets;
+pub mod quote_price_lists;
 pub mod quotes;
 pub mod reports;
 pub mod sales;
@@ -114,6 +116,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(maintenance::router())
         .merge(marketing::router())
         .merge(quote_presets::router())
+        .merge(quote_extras::router())
+        .merge(quote_price_lists::router())
         .merge(reports::router())
         .merge(shop::router())
         .merge(survey_results::router())

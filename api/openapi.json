@@ -25702,6 +25702,992 @@
         ]
       }
     },
+    "/v1/quote-extras": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List the extras catalog",
+        "description": "In order, with how many extras the price lists still keep themselves.",
+        "operationId": "list_quote_extras",
+        "responses": {
+          "200": {
+            "description": "The catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtrasCatalog"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Save the extras catalog",
+        "description": "Each extra's content and order; extras left out are deleted (price lists\nstop offering them). Names must be unique.",
+        "operationId": "save_quote_extras",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditedCatalog"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "A name is listed twice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Add an extra",
+        "description": "Every price list offers it, except `off_list_ids`, which each get a\nrevision that switches it off.",
+        "operationId": "create_quote_extra",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewExtra"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-extras/moves": {
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Move the lists' own extras into the catalog",
+        "description": "Once: extras with the same name become one catalog extra (the first\nlist's version wins), and each list links to them, keeping its own\nprices where they differ.",
+        "operationId": "move_quote_list_extras",
+        "responses": {
+          "200": {
+            "description": "Moved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovedExtras"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-price-lists": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List price lists",
+        "description": "Every list of the company, with the one new quotes get.",
+        "operationId": "list_quote_price_lists",
+        "responses": {
+          "200": {
+            "description": "The lists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceLists"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Create a price list",
+        "description": "An empty list (list-wide settings only), last in order.",
+        "operationId": "create_quote_price_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPriceList"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-price-lists/default": {
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Choose the default price list",
+        "description": "New quotes get this list; it is activated. The lists keep their order.",
+        "operationId": "set_default_quote_price_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DefaultPriceList"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-price-lists/{id}": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Open a price list",
+        "description": "Its prices as saved and as matched to today's inventory, the stones and\nsinks in stock, and its history.",
+        "operationId": "get_quote_price_list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Price list id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceListEditor"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Save a price list",
+        "description": "The name and status, and, with `info`, the prices as a new revision:\nsinks' cutouts and colors' display are saved onto the inventory, the\nlist is matched to the inventory, keeps only its own extras, and must be\nunambiguous (else 422 with every problem).",
+        "operationId": "save_quote_price_list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Price list id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedPriceList"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "No name, or the prices could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The prices are ambiguous",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceListProblems"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Delete a price list",
+        "description": "Quotes made with it keep their prices; it can no longer be picked.",
+        "operationId": "delete_quote_price_list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Price list id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Rename or (de)activate a price list",
+        "description": "Without a new revision.",
+        "operationId": "update_quote_price_list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Price list id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PriceListMeta"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Empty name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-price-lists/{id}/copies": {
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Duplicate a price list",
+        "description": "A copy named \"… (copy)\" with the current prices, right after it.",
+        "operationId": "copy_quote_price_list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Price list id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Nothing to copy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-price-lists/{id}/revisions/{revision_id}/restore": {
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Restore a revision",
+        "description": "The revision's prices become a new revision.",
+        "operationId": "restore_quote_price_list_revision",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Price list id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "path",
+            "description": "Revision id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoredRevision"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list or revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/reports/cut-slabs": {
       "get": {
         "tags": [
@@ -42491,6 +43477,25 @@
           }
         }
       },
+      "CatalogExtra": {
+        "type": "object",
+        "description": "A catalog extra.",
+        "required": [
+          "id",
+          "item"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Extra id."
+          },
+          "item": {
+            "type": "object",
+            "description": "The extra (`OtherItem`: name, category, options or per-unit tiers)."
+          }
+        }
+      },
       "Channel": {
         "type": "string",
         "description": "Which kind of message.",
@@ -46453,6 +47458,21 @@
           }
         }
       },
+      "DefaultPriceList": {
+        "type": "object",
+        "description": "A list to star.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Price list id."
+          }
+        },
+        "additionalProperties": false
+      },
       "DefaultQuestionnaire": {
         "type": "object",
         "description": "The caller's default questionnaire.",
@@ -47373,6 +48393,23 @@
             "description": "Email addresses, primary first."
           }
         }
+      },
+      "EditedCatalog": {
+        "type": "object",
+        "description": "The catalog as edited.",
+        "required": [
+          "extras"
+        ],
+        "properties": {
+          "extras": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogExtra"
+            },
+            "description": "Every extra kept, in order; extras left out are deleted."
+          }
+        },
+        "additionalProperties": false
       },
       "EditedUser": {
         "type": "object",
@@ -48432,6 +49469,28 @@
               "type": "object"
             },
             "description": "1 to 200 events, oldest first. Each has a `type` and an ISO 8601 `at`:\n`journey.position` (`moduleId`, `stepKey`), `journey.module_step`,\n`journey.module_completed`, `journey.module_reopened` (`moduleId`),\n`journey.dismissed`, `journey.resumed`, `journey.completed`,\n`journey.feedback_dismissed`, `task.position` and `task.closed`\n(`taskId`, `version`, `stepKey`), `task.step_done` (`taskId`,\n`version`, `steps`: step key → `action` | `manual`), `task.completed`\n(`taskId`, `version`)."
+          }
+        }
+      },
+      "ExtrasCatalog": {
+        "type": "object",
+        "description": "The catalog.",
+        "required": [
+          "catalog",
+          "list_only"
+        ],
+        "properties": {
+          "catalog": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogExtra"
+            },
+            "description": "In order."
+          },
+          "list_only": {
+            "type": "integer",
+            "description": "Extras the price lists still keep only for themselves (to move here).",
+            "minimum": 0
           }
         }
       },
@@ -52162,6 +53221,20 @@
           }
         }
       },
+      "MovedExtras": {
+        "type": "object",
+        "description": "How many catalog extras the move made.",
+        "required": [
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "description": "New catalog extras.",
+            "minimum": 0
+          }
+        }
+      },
       "NameInput": {
         "type": "object",
         "description": "Body of `POST /v1/deal-pipelines` and `POST /v1/deal-pipelines/{id}/stages`.",
@@ -52328,6 +53401,28 @@
         },
         "additionalProperties": false
       },
+      "NewExtra": {
+        "type": "object",
+        "description": "A new extra.",
+        "required": [
+          "item"
+        ],
+        "properties": {
+          "item": {
+            "type": "object",
+            "description": "The extra (`OtherItem`)."
+          },
+          "off_list_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Price lists that do not offer it."
+          }
+        },
+        "additionalProperties": false
+      },
       "NewFile": {
         "type": "object",
         "description": "One uploaded file to attach.",
@@ -52447,6 +53542,20 @@
             "description": "The customer's name (at most 200 characters are kept)."
           }
         }
+      },
+      "NewPriceList": {
+        "type": "object",
+        "description": "A new price list.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name, unique in the company."
+          }
+        },
+        "additionalProperties": false
       },
       "NewQuestion": {
         "type": "object",
@@ -54482,6 +55591,244 @@
           }
         }
       },
+      "PriceListEditor": {
+        "type": "object",
+        "description": "A list in the editor.",
+        "required": [
+          "price_list",
+          "info",
+          "synced_info",
+          "stock",
+          "revisions"
+        ],
+        "properties": {
+          "price_list": {
+            "$ref": "#/components/schemas/PriceListRow",
+            "description": "The list."
+          },
+          "info": {
+            "type": "object",
+            "description": "Its current prices, as saved."
+          },
+          "synced_info": {
+            "type": "object",
+            "description": "The prices matched to today's inventory (what the editor starts from)."
+          },
+          "stock": {
+            "type": "object",
+            "description": "Stones in stock and sinks in stock."
+          },
+          "revisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriceListRevision"
+            },
+            "description": "Every revision, newest first."
+          }
+        }
+      },
+      "PriceListMeta": {
+        "type": "object",
+        "description": "Name or status of a list.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New name."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`active` or `inactive`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PriceListProblems": {
+        "type": "object",
+        "description": "Why the prices were not saved.",
+        "required": [
+          "error",
+          "errors"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "The first problem."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every problem."
+          }
+        }
+      },
+      "PriceListRevision": {
+        "type": "object",
+        "description": "A revision of a list.",
+        "required": [
+          "id",
+          "revision_number"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Revision id."
+          },
+          "revision_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its number in the list."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was saved (ISO 8601)."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who saved it."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What changed."
+          }
+        }
+      },
+      "PriceListRow": {
+        "type": "object",
+        "description": "A price list (`PriceListRow`).",
+        "required": [
+          "id",
+          "company_id",
+          "name",
+          "status",
+          "sequence"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Price list id."
+          },
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name, unique in the company."
+          },
+          "status": {
+            "type": "string",
+            "description": "`active` or `inactive`."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Order in the lists."
+          },
+          "current_revision_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The revision quotes price with now."
+          },
+          "revision_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its number."
+          },
+          "revision_created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was saved (ISO 8601)."
+          },
+          "revision_created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who saved it."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the list was made (ISO 8601)."
+          },
+          "created_by_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who made it."
+          },
+          "units": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`in` or `mm`, from the current revision."
+          },
+          "expiration_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Days a quote stays valid, from the current revision."
+          }
+        }
+      },
+      "PriceLists": {
+        "type": "object",
+        "description": "The company's price lists.",
+        "required": [
+          "price_lists"
+        ],
+        "properties": {
+          "price_lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriceListRow"
+            },
+            "description": "Active first, then by sequence and name."
+          },
+          "default_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The list new quotes get."
+          }
+        }
+      },
       "PriceOffers": {
         "type": "object",
         "description": "Body of `GET /v1/suppliers/price-offers`.",
@@ -56421,6 +57768,20 @@
           }
         }
       },
+      "RestoredRevision": {
+        "type": "object",
+        "description": "A restored revision.",
+        "required": [
+          "revision_number"
+        ],
+        "properties": {
+          "revision_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The number of the revision restored."
+          }
+        }
+      },
       "RingcentralCallback": {
         "type": "object",
         "description": "Body of `POST /v1/ringcentral/connection`.",
@@ -57457,6 +58818,39 @@
             "description": "True when escalated."
           }
         }
+      },
+      "SavedPriceList": {
+        "type": "object",
+        "description": "Body of saving a list.",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name, unique in the company."
+          },
+          "status": {
+            "type": "string",
+            "description": "`active` or `inactive`."
+          },
+          "info": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The edited prices; left out when only the name or status changed."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What changed (up to 500 characters)."
+          }
+        },
+        "additionalProperties": false
       },
       "ScheduleEvent": {
         "type": "object",
