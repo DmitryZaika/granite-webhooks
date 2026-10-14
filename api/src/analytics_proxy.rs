@@ -35,10 +35,10 @@ pub fn upstream_url(rest: &str, query: Option<&str>) -> String {
     } else {
         API_HOST
     };
-    match query.filter(|q| !q.is_empty()) {
-        Some(query) => format!("{host}/{rest}?{query}"),
-        None => format!("{host}/{rest}"),
-    }
+    query.filter(|q| !q.is_empty()).map_or_else(
+        || format!("{host}/{rest}"),
+        |query| format!("{host}/{rest}?{query}"),
+    )
 }
 
 pub async fn relay(
