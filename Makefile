@@ -9,6 +9,7 @@ BUILD_BASE := uvx cargo-lambda lambda build --release --x86-64
 # --- Build and deploy ---
 #   make build <app>          app: api, webhooks, time-triggered
 #   make deploy <app> <env>   env: dev, prod
+#   make deploy-all           api and webhooks, each to dev and prod
 # Each app is a crate whose binary has the same name.
 APPS := api webhooks time-triggered
 ENVS := dev prod
@@ -51,6 +52,14 @@ deploy:
 			--binary-name $(APP) \
 			$$function || exit 1; \
 	done
+
+# api and webhooks, each built and deployed to dev and prod.
+.PHONY: deploy-all
+deploy-all:
+	$(MAKE) deploy APP=api ENV=dev
+	$(MAKE) deploy APP=api ENV=prod
+	$(MAKE) deploy APP=webhooks ENV=dev
+	$(MAKE) deploy APP=webhooks ENV=prod
 
 # --- Local ---
 WATCH_BASE := uvx cargo-lambda lambda watch --release
