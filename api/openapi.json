@@ -11175,7 +11175,7 @@
           "public"
         ],
         "summary": "Answer the survey",
-        "description": "Saves the customer's ratings for the company. With a valid link\n(`checklist_id` and `token`) the checklist's reminders stop; a missing or\nforged token only skips that. No session needed.",
+        "description": "Saves the customer's ratings for the company, with their name only when\nthey give one (otherwise anonymous). With a valid link\n(`checklist_id` and `token`) the checklist's reminders stop; a missing or\nforged token only skips that. No session needed.",
         "operationId": "create_public_survey",
         "parameters": [
           {
@@ -11204,7 +11204,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "A rating outside 1-5, or someone who is not the company's sales rep or installer",
+            "description": "A rating outside 1-5, a name over 255 characters, or someone who is not the company's sales rep or installer",
             "content": {
               "application/json": {
                 "schema": {
@@ -18322,6 +18322,88 @@
         ]
       }
     },
+    "/v1/emails/{id}/reads": {
+      "get": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "List every open of a sent email",
+        "description": "Each time the recipient opened one of the company's emails, newest\nfirst (at most 200). Opens in the first 5 seconds after sending are left\nout: those are mail scanners and image proxies, not the client. The\nlatest of these is the `client_read_at` the mailbox lists show.",
+        "operationId": "list_email_reads",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Email id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Opens, newest first (empty when never opened)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EmailRead"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such email in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/email-attachments/{id}/preview": {
       "get": {
         "tags": [
@@ -19512,7 +19594,7 @@
           "templates"
         ],
         "summary": "Fill template variables",
-        "description": "Fills `{{user.*}}`, `{{customer.*}}`, `{{company.*}}` and\n`{{current_date}}` for the caller, the deal and the customer (given, or\nfound by `recipient_email`). Unknown variables are left as they are.",
+        "description": "Fills `{{user.*}}`, `{{customer.*}}`, `{{company.*}}`, `{{deal.*}}` and\n`{{current_date}}` for the caller, the deal and the customer (given, or\nfound by `recipient_email`). Keys match case-insensitively:\n`user.name`, `user.first_name`, `user.last_name`, `user.email`,\n`user.phone_number`; `customer.name`, `customer.first_name`,\n`customer.last_name`, `customer.email`, `customer.phone`,\n`customer.address`, `customer.inventory_link`; `company.name`,\n`company.address`, `company.hours_of_operation`, `company.domain`,\n`company.subdomain`, `company.id`; `deal.name` and `deal.amount`\n(e.g. `$4,500.00`, only with `deal_id`). `{{quote.*}}` are filled only\nwhen a quote is emailed (`POST /v1/quotes/{id}/emails`). Variables\nwithout a value, and unknown ones, are left as they are.",
         "operationId": "fill_template",
         "requestBody": {
           "content": {
@@ -26694,7 +26776,7 @@
             "description": "Sent"
           },
           "400": {
-            "description": "No recipient or subject",
+            "description": "No recipient or subject, or a `{{quote.*}}`/`{{deal.*}}` variable the quote or its deal has no value for yet (the message names it)",
             "content": {
               "application/json": {
                 "schema": {
@@ -27278,13 +27360,147 @@
         ]
       }
     },
+    "/v1/quotes/suggestions": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List remembered area names and items",
+        "description": "Area names and miscellaneous / text items (description, last price,\nquantity and Hide On Quote / Allow Discount / Taxable flags) typed on the\ncompany's 500 most recently changed, not deleted quotes, to offer them\nagain while a quote is drawn. Each comes once (names compared ignoring\ncase and spaces around them), with how many quotes used it and the values\nof the latest one; most used first, then most recent. Default area names\n(`Area #1`, `Area #2`, ...) are left out. At most 60 names and 150 items.",
+        "operationId": "list_quote_suggestions",
+        "responses": {
+          "200": {
+            "description": "Remembered names and items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteSuggestions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/stone-image": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Get a color's stone photo",
+        "description": "The catalog photo of one color as the quote shows it on the customer's\npreview: the company's in-stock stone with this name (regular stock, or a\nslab not sold, cut or deleted; a stone of the given product type first,\none with free slabs first). Returns `{\"image\": null}` when no stone of\nthat name is in stock or `color` is empty. The editor uses\nit to paint the area's pieces in the Color & Edge preview.",
+        "operationId": "get_quote_stone_image",
+        "parameters": [
+          {
+            "name": "color",
+            "in": "query",
+            "description": "Color name as picked on the quote (any case), e.g. `Calacatta Laza`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "product",
+            "in": "query",
+            "description": "Product (material) it was picked under (any case); a stone of this\ntype is preferred, any type is used otherwise. May be empty.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The photo, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoneImageLookup"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/public/quote-portal/{token}": {
       "get": {
         "tags": [
           "quotes"
         ],
         "summary": "Open a customer's quote link",
-        "description": "The quote with its prices, drawing (no supplier costs), color photos\nand, when it was emailed with a company form, that form. An emailed\nlink (`e`) counts as a view. A switched-off link answers `inactive`.",
+        "description": "The quote with its prices, drawing (no supplier costs), color photos\nand, when it was emailed with a company form, that form. An emailed\nlink (`e`) counts as a view, and each view is kept with its time, IP\naddress and browser (listed on the quote's emails). A switched-off link\nanswers `inactive`.",
         "operationId": "get_quote_portal",
         "parameters": [
           {
@@ -27346,7 +27562,7 @@
           "quotes"
         ],
         "summary": "Accept and sign a quote",
-        "description": "Signing is a sale: the quote is sold with the option and its deal won.\nRefused once signed, for an option with a sold-out color, or when the\nlink is switched off.",
+        "description": "Signing is a sale: the quote is sold with the option and its deal won.\nThe quote's sales rep (its salesperson, else its creator, else the\ndeal's owner) is then emailed the customer, the option, each area's\nmaterial, color and edges, and the total, and notified in the app when\nthe quote has a deal. Refused once signed, for an option with a\nsold-out color, or when the link is switched off.",
         "operationId": "accept_quote_portal",
         "parameters": [
           {
@@ -34786,7 +35002,7 @@
           "quotes"
         ],
         "summary": "List a stone's free slabs",
-        "description": "Slabs not sold, cut or deleted of the company's stones with this name\n(and type), and of the stones they show slabs from, for a quote's slab\nlayout.",
+        "description": "Slabs not sold, cut or deleted of the company's stones with this name\n(and type), and of the stones they show slabs from, for a quote's slab\nlayout. What is left of a partly sold slab is marked `leftover`.\n`stone_url` is the photo of such a stone that is in stock (regular\nstock or a free slab), null when none is.",
         "operationId": "list_quote_inventory_slabs",
         "parameters": [
           {
@@ -37562,7 +37778,7 @@
           "ai"
         ],
         "summary": "Draft the next message",
-        "description": "Drafts the next SMS or email to a customer from the whole conversation:\na fast reply, a follow-up on the open topic, or a custom draft (and\nrevisions of it).",
+        "description": "Drafts the next SMS or email to a customer from the whole conversation\n(SMS and email together), the customer's profile, deals and quotes\n(colors, totals, sent / opened / signed), the company's AI instructions\nand the rep's own recent messages: a fast reply, a follow-up on the open\ntopic, or a custom draft (and revisions of it). The draft greets the\ncustomer by name only in a new conversation or when the last SMS or email\nwith them is more than 60 days old; otherwise it has no greeting and no\nname. Takes several seconds (a larger model).",
         "operationId": "draft_conversation_reply",
         "requestBody": {
           "content": {
@@ -45286,6 +45502,32 @@
           }
         }
       },
+      "AreaNameSuggestion": {
+        "type": "object",
+        "description": "An area name used on earlier quotes.",
+        "required": [
+          "name",
+          "uses"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name, spelled as on the latest quote that used it (e.g. `Kitchen`)."
+          },
+          "uses": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many of the recent quotes use it."
+          },
+          "last_used": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the latest quote using it was last changed (UTC, ISO 8601); null if unknown."
+          }
+        }
+      },
       "AttachableStone": {
         "type": "object",
         "description": "A stone to attach.",
@@ -52061,6 +52303,26 @@
         },
         "additionalProperties": false
       },
+      "EmailRead": {
+        "type": "object",
+        "description": "One time the recipient opened the email.",
+        "required": [
+          "read_at"
+        ],
+        "properties": {
+          "read_at": {
+            "type": "string",
+            "description": "When it was opened (ISO 8601, UTC)."
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reader's mail app or browser (`User-Agent`), when known."
+          }
+        }
+      },
       "EmailTemplate": {
         "type": "object",
         "description": "An email template as the composer's picker shows it.",
@@ -55201,7 +55463,7 @@
           },
           "leftover": {
             "type": "boolean",
-            "description": "A remnant."
+            "description": "A remnant, or what is left of a partly sold slab (its size and photo\nare the whole slab's)."
           }
         }
       },
@@ -55473,6 +55735,66 @@
               "null"
             ],
             "description": "A hint (the domain, the expected DNS name), or null."
+          }
+        }
+      },
+      "ItemSuggestion": {
+        "type": "object",
+        "description": "A miscellaneous or text item used on earlier quotes, with the values it\nhad the last time.",
+        "required": [
+          "kind",
+          "description",
+          "quantity",
+          "hide_on_quote",
+          "allow_discount",
+          "taxable",
+          "uses"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`misc` (a priced line typed by hand) or `text` (a line of text, no price)."
+          },
+          "description": {
+            "type": "string",
+            "description": "The description, spelled as on the latest quote that used it."
+          },
+          "price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Price in dollars the last time; null when it had none (always null for `text`)."
+          },
+          "quantity": {
+            "type": "number",
+            "format": "double",
+            "description": "Quantity the last time (1 when not set)."
+          },
+          "hide_on_quote": {
+            "type": "boolean",
+            "description": "The line was hidden on the printed quote."
+          },
+          "allow_discount": {
+            "type": "boolean",
+            "description": "The project discount applied to it."
+          },
+          "taxable": {
+            "type": "boolean",
+            "description": "Tax applied to it."
+          },
+          "uses": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many of the recent quotes use it."
+          },
+          "last_used": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the latest quote using it was last changed (UTC, ISO 8601); null if unknown."
           }
         }
       },
@@ -61072,11 +61394,11 @@
           },
           "subject": {
             "type": "string",
-            "description": "Subject (required); `{{variables}}` are filled in."
+            "description": "Subject (required); `{{variables}}` are filled in like the body's."
           },
           "body": {
             "type": "string",
-            "description": "Plain text; `{{variables}}` are filled in and `[QuoteLink]`/`[PDFLink]`\nbecome the link (added at the end when missing)."
+            "description": "Plain text. `{{variables}}` are filled in: the `POST /v1/templates/fill`\nones (`user.*`, `customer.*`, `company.*`, `deal.*` when the quote has a\ndeal, `current_date`) plus `{{quote.name}}`, `{{quote.total}}`\n(accepted option, else the first, e.g. `$12,345.00`), `{{quote.color}}`\n(that option's materials and colors), `{{quote.link}}` (the customer's\nlink) and `{{quote.expiration}}` (e.g. `November 5, 2026`). A\n`{{quote.*}}` or `{{deal.*}}` with no value yet is refused (400);\nother unknown variables are left as typed. `[QuoteLink]`/`[PDFLink]` become a \"View\nyour quote\" link; one is added at the end when the link is missing."
           },
           "form_id": {
             "type": [
@@ -61102,7 +61424,8 @@
         "description": "An email that carried the quote's link.",
         "required": [
           "id",
-          "view_count"
+          "view_count",
+          "views"
         ],
         "properties": {
           "id": {
@@ -61178,6 +61501,13 @@
               "null"
             ],
             "description": "The link was switched off (ISO 8601)."
+          },
+          "views": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteEmailView"
+            },
+            "description": "Every time the link was opened, newest first. Views from before\nviews were kept one by one are only in `view_count`, so this list\ncan be shorter than the count."
           }
         }
       },
@@ -61252,6 +61582,33 @@
           }
         },
         "additionalProperties": false
+      },
+      "QuoteEmailView": {
+        "type": "object",
+        "description": "One opening of an emailed quote link.",
+        "required": [
+          "viewed_at"
+        ],
+        "properties": {
+          "viewed_at": {
+            "type": "string",
+            "description": "When (ISO 8601)."
+          },
+          "ip_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The viewer's IP address, when known."
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The viewer's browser (`User-Agent`), when known."
+          }
+        }
       },
       "QuoteForm": {
         "type": "object",
@@ -61844,6 +62201,30 @@
           }
         },
         "additionalProperties": false
+      },
+      "QuoteSuggestions": {
+        "type": "object",
+        "description": "`GET /v1/quotes/suggestions`.",
+        "required": [
+          "area_names",
+          "items"
+        ],
+        "properties": {
+          "area_names": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AreaNameSuggestion"
+            },
+            "description": "Area names, most used first (ties: most recent first). Default names\nsuch as `Area #2` are left out."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ItemSuggestion"
+            },
+            "description": "Miscellaneous and text items, most used first (ties: most recent first)."
+          }
+        }
       },
       "QuoteTaxRate": {
         "type": "object",
@@ -66343,6 +66724,23 @@
           }
         }
       },
+      "StoneImageLookup": {
+        "type": "object",
+        "description": "`GET /v1/quotes/stone-image`.",
+        "properties": {
+          "image": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StoneImage",
+                "description": "The color's photo; null when the company's catalog has no stone of\nthat name with a photo (e.g. an Other Color typed by hand)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "StoneInput": {
         "type": "object",
         "description": "Body of `POST /v1/stones` and `PUT /v1/stones/{id}`.",
@@ -67109,6 +67507,13 @@
             "format": "int32",
             "description": "Survey id."
           },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the customer left; null when they stayed anonymous."
+          },
           "sales_rep_name": {
             "type": [
               "string",
@@ -67209,6 +67614,13 @@
           "installation_rating"
         ],
         "properties": {
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's name, only if they choose to give it (up to 255\ncharacters); null or blank keeps the answers anonymous."
+          },
           "sales_rep_id": {
             "type": "integer",
             "format": "int32",

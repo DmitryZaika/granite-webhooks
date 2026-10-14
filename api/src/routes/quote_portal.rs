@@ -12,7 +12,7 @@ use crate::extract::JsonBody;
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::pricing::{OptionPrice, price_quote};
 use crate::quote_pricing::{
-    customer_doc, load_company_quote, mark_quote_sold, option_sold_out_colors, pricing_for_quote,
+    customer_doc, load_company_quote, option_sold_out_colors, pricing_for_quote,
 };
 use crate::routes::auth::{app_origin, company_subdomain};
 use crate::routes::emails::signature_mail::{
@@ -363,8 +363,9 @@ pub struct Acceptance {
 
 /// Accept and sign a quote
 ///
-/// Signing is a sale: the quote is sold with the option and its deal won.
-/// The quote's sales rep (its salesperson, else its creator, else the
+/// Records the option and the signature and sets the quote's status to
+/// `accepted`; it does not mark the quote sold or win its deal (staff do
+/// that). The quote's sales rep (its salesperson, else its creator, else the
 /// deal's owner) is then emailed the customer, the option, each area's
 /// material, color and edges, and the total, and notified in the app when
 /// the quote has a deal. Refused once signed, for an option with a
@@ -432,30 +433,12 @@ pub async fn accept_quote(
     if signed == 0 {
         return Ok(StatusCode::NO_CONTENT);
     }
-    let deal_id = match mark_quote_sold(
-        &state.pool,
-        row.id,
-        row.company_id,
-        Some(input.option),
-        None,
-    )
-    .await
-    {
-        Ok(sale) => sale.and_then(|s| s.deal_id),
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                quote = row.id,
-                "could not mark the quote sold after signing"
-            );
-            None
-        }
-    };
+    // Signing does not sell the quote: staff mark it sold themselves.
     let total = price_quote(&doc, &price_list, quote.options())
         .get(index)
         .map(|o| o.total)
         .filter(|t| t.is_finite());
-    notify_signed(&state, &row, &doc, index, total, deal_id.or(row.deal_id)).await;
+    notify_signed(&state, &row, &doc, index, total, row.deal_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -528,14 +511,20 @@ async fn notify_signed(
             .into_iter()
             .flatten()
         {
+            // Any company: the ids come from the quote itself, and a super
+            // admin working in this company belongs to another one.
             recipient = sqlx::query_as(
-                "SELECT id, email, name FROM users WHERE id = ? AND company_id = ? AND is_deleted = 0 LIMIT 1",
+                "SELECT id, email, name FROM users WHERE id = ? AND is_deleted = 0 LIMIT 1",
             )
             .bind(id)
-            .bind(row.company_id)
             .fetch_optional(&state.pool)
             .await?;
-            if recipient.is_some() {
+            // Someone without an email can't be told: try the next one.
+            if recipient
+                .as_ref()
+                .and_then(|r| r.email.as_deref())
+                .is_some_and(|e| !e.trim().is_empty())
+            {
                 break;
             }
         }
@@ -550,7 +539,13 @@ async fn notify_signed(
     .await;
     let (recipient, (company_name, logo_url), subdomain) = match found {
         Ok((Some(recipient), company, subdomain)) => (recipient, company, subdomain),
-        Ok((None, ..)) => return,
+        Ok((None, ..)) => {
+            tracing::warn!(
+                quote = row.id,
+                "nobody to notify that the quote was signed (no salesperson, creator or deal owner)"
+            );
+            return;
+        }
         Err(error) => {
             tracing::error!(
                 ?error,
@@ -607,6 +602,11 @@ async fn notify_signed(
         .map(str::trim)
         .filter(|e| !e.is_empty())
     else {
+        tracing::warn!(
+            quote = row.id,
+            user = recipient.id,
+            "the quote was signed but its rep has no email"
+        );
         return;
     };
     let sender_name = recipient

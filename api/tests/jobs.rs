@@ -178,7 +178,8 @@ async fn the_survey_goes_out_once_then_reminds(pool: MySqlPool) {
     // Alice's checklist (seed 9000) was signed 30 hours ago.
     sqlx::raw_sql(
         "DELETE FROM emails WHERE message_id LIKE 'checklist-survey-%';
-         UPDATE checklists SET created_at = UTC_TIMESTAMP() - INTERVAL 30 HOUR WHERE id = 9000;",
+         UPDATE checklists SET created_at = UTC_TIMESTAMP() - INTERVAL 30 HOUR, installer_id = 101
+          WHERE id = 9000;",
     )
     .execute(&pool)
     .await
@@ -200,6 +201,8 @@ async fn the_survey_goes_out_once_then_reminds(pool: MySqlPool) {
                 .body
                 .contains("/customer/100/survey?c=9000&amp;t=")
         );
+        // The checklist's installer rides along so the form picks them.
+        assert!(emails[0].body.contains("&amp;i=101"));
     }
     let again = survey(&state, chrono::Utc::now()).await.unwrap();
     assert_eq!((again.initial.sent, again.initial.skipped), (0, 1));

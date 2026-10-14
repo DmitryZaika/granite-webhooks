@@ -507,7 +507,8 @@ async fn the_customer_accepts_and_signs(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .json::<Value>();
-    assert_eq!(quote["quote"]["status"], "converted");
+    // Signed, but not sold: staff mark it sold themselves.
+    assert_eq!(quote["quote"]["status"], "accepted");
     assert!(quote["quote"]["signed_at"].is_string());
     server
         .post(&format!("/v1/public/quote-portal/{token}/acceptance"))

@@ -529,7 +529,11 @@ pub struct RoundedTakeoff {
 /// Price list `materialRounding`: "up" rounds each sq ft quantity up to a
 /// whole foot; anything else is Moraware's nearest 0.1 ft.
 pub fn round_sq_ft(v: f64, up: bool) -> f64 {
-    if up { (v - 1e-9).ceil().max(0.0) } else { round1(v) }
+    if up {
+        (v - 1e-9).ceil().max(0.0)
+    } else {
+        round1(v)
+    }
 }
 
 /// Sq ft follow `sq_ft_up` (see `round_sq_ft`); lin ft stay at 0.1 ft.
@@ -573,7 +577,11 @@ mod tests {
     fn sample() -> AreaTakeoff {
         AreaTakeoff {
             counter_sq_ft: 41.23,
-            splash: vec![HeightQty { height: 4.0, sq_ft: 3.01, lin_ft: 9.04 }],
+            splash: vec![HeightQty {
+                height: 4.0,
+                sq_ft: 3.01,
+                lin_ft: 9.04,
+            }],
             appliance_lin_ft: 2.26,
             ..AreaTakeoff::default()
         }

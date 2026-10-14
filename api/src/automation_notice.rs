@@ -146,7 +146,11 @@ fn template_notice(
             format!("An automatic {noun} is off"),
             format!(
                 "{editor} {} the {noun} template <b>{}</b>. Customers no longer get it automatically, and the ones still waiting for it won't receive it. This is what used to go out:",
-                if after.is_none() { "deleted" } else { "turned off automatic sending for" },
+                if after.is_none() {
+                    "deleted"
+                } else {
+                    "turned off automatic sending for"
+                },
                 escape_html(name)
             ),
         ),
@@ -169,7 +173,11 @@ fn template_notice(
     };
     let message = message_card(
         channel,
-        &format!("{} after a deal enters <b>{}</b>", duration(drip.hours * 60, true), escape_html(&drip.list)),
+        &format!(
+            "{} after a deal enters <b>{}</b>",
+            duration(drip.hours * 60, true),
+            escape_html(&drip.list)
+        ),
         shown.subject.as_deref(),
         &shown.body,
     );
@@ -271,12 +279,18 @@ fn flow_notice(
             if step.delay_minutes == 0 {
                 "Right when the flow starts".to_string()
             } else {
-                format!("{} after the flow starts", duration(step.delay_minutes, true))
+                format!(
+                    "{} after the flow starts",
+                    duration(step.delay_minutes, true)
+                )
             }
         } else if step.delay_minutes == 0 {
             "Right after the previous step".to_string()
         } else {
-            format!("{} after the previous step", duration(step.delay_minutes, true))
+            format!(
+                "{} after the previous step",
+                duration(step.delay_minutes, true)
+            )
         };
         steps.push_str(&message_card(
             step.channel,
@@ -372,9 +386,8 @@ fn duration(minutes: i32, capital: bool) -> String {
     if minutes <= 0 {
         return if capital { "Right away" } else { "right away" }.to_string();
     }
-    let unit = |value: i32, name: &str| {
-        format!("{value} {name}{}", if value == 1 { "" } else { "s" })
-    };
+    let unit =
+        |value: i32, name: &str| format!("{value} {name}{}", if value == 1 { "" } else { "s" });
     let (days, hours, mins) = (minutes / 1440, minutes % 1440 / 60, minutes % 60);
     let parts: Vec<String> = [(days, "day"), (hours, "hour"), (mins, "minute")]
         .into_iter()
@@ -559,10 +572,18 @@ async fn list_label(pool: &MySqlPool, list_id: i32) -> Result<String, sqlx::Erro
 /// A company email template as customers get it; `None` for a personal or
 /// missing one.
 pub async fn email_template(pool: &MySqlPool, company_id: i32, id: i32) -> Snapshot {
-    Snapshot::Template(load_email_template(pool, company_id, id).await.unwrap_or_else(|err| {
-        lambda_http::tracing::warn!(?err, id, "automation notice: could not read the email template");
-        None
-    }))
+    Snapshot::Template(
+        load_email_template(pool, company_id, id)
+            .await
+            .unwrap_or_else(|err| {
+                lambda_http::tracing::warn!(
+                    ?err,
+                    id,
+                    "automation notice: could not read the email template"
+                );
+                None
+            }),
+    )
 }
 
 async fn load_email_template(
@@ -571,16 +592,21 @@ async fn load_email_template(
     id: i32,
 ) -> Result<Option<Template>, sqlx::Error> {
     #[allow(clippy::type_complexity)]
-    let row: Option<(Option<String>, Option<String>, Option<String>, Option<i32>, Option<i32>)> =
-        sqlx::query_as(
-            "SELECT template_name, template_subject, template_body, lead_list_id, hour_delay
+    let row: Option<(
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i32>,
+        Option<i32>,
+    )> = sqlx::query_as(
+        "SELECT template_name, template_subject, template_body, lead_list_id, hour_delay
                FROM email_templates
               WHERE id = ? AND company_id = ? AND user_id IS NULL AND deleted_at IS NULL",
-        )
-        .bind(id)
-        .bind(company_id)
-        .fetch_optional(pool)
-        .await?;
+    )
+    .bind(id)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
     let Some((name, subject, body, list, hours)) = row else {
         return Ok(None);
     };
@@ -596,10 +622,18 @@ async fn load_email_template(
 /// A company SMS template as customers get it; `None` for a personal or
 /// missing one.
 pub async fn sms_template(pool: &MySqlPool, company_id: i32, id: i32) -> Snapshot {
-    Snapshot::Template(load_sms_template(pool, company_id, id).await.unwrap_or_else(|err| {
-        lambda_http::tracing::warn!(?err, id, "automation notice: could not read the SMS template");
-        None
-    }))
+    Snapshot::Template(
+        load_sms_template(pool, company_id, id)
+            .await
+            .unwrap_or_else(|err| {
+                lambda_http::tracing::warn!(
+                    ?err,
+                    id,
+                    "automation notice: could not read the SMS template"
+                );
+                None
+            }),
+    )
 }
 
 async fn load_sms_template(
@@ -790,15 +824,32 @@ mod tests {
     #[test]
     fn templates_without_automation_send_nothing() {
         assert_eq!(notice(None, Some(sms(None, "Hi"))), None);
-        assert_eq!(notice(Some(sms(None, "Hi")), Some(sms(None, "Hello"))), None);
-        assert_eq!(notice(Some(sms(contacted(2), "Hi")), Some(sms(contacted(2), "Hi"))), None);
+        assert_eq!(
+            notice(Some(sms(None, "Hi")), Some(sms(None, "Hello"))),
+            None
+        );
+        assert_eq!(
+            notice(Some(sms(contacted(2), "Hi")), Some(sms(contacted(2), "Hi"))),
+            None
+        );
     }
 
     #[test]
     fn a_new_drip_says_when_and_what() {
-        let notice = notice(None, Some(sms(contacted(26), "Hi {{customer.first_name}}!"))).unwrap();
-        assert_eq!(notice.subject, "Automation change · New automatic text: Welcome");
-        assert!(notice.html.contains("1 day 2 hours after a deal enters <b>Sales › Contacted</b>"));
+        let notice = notice(
+            None,
+            Some(sms(contacted(26), "Hi {{customer.first_name}}!")),
+        )
+        .unwrap();
+        assert_eq!(
+            notice.subject,
+            "Automation change · New automatic text: Welcome"
+        );
+        assert!(
+            notice
+                .html
+                .contains("1 day 2 hours after a deal enters <b>Sales › Contacted</b>")
+        );
         assert!(notice.html.contains(">Customer first name</span>!"));
         assert!(notice.html.contains("9:00 AM and 6:00 PM"));
     }
@@ -817,15 +868,24 @@ mod tests {
         )
         .unwrap();
         assert!(notice.html.contains("What changed"));
-        assert!(notice.html.contains("Now starts when a deal enters <b>Sales › Quoted</b> (was <b>Sales › Contacted</b>)."));
-        assert!(notice.html.contains("Now sends <b>right away</b> after that (was 2 hours)."));
+        assert!(notice.html.contains(
+            "Now starts when a deal enters <b>Sales › Quoted</b> (was <b>Sales › Contacted</b>)."
+        ));
+        assert!(
+            notice
+                .html
+                .contains("Now sends <b>right away</b> after that (was 2 hours).")
+        );
         assert!(notice.html.contains("The message text changed"));
     }
 
     #[test]
     fn turning_a_drip_off_is_announced() {
         let notice = notice(Some(sms(contacted(2), "Hi")), None).unwrap();
-        assert_eq!(notice.subject, "Automation change · Automatic text turned off: Welcome");
+        assert_eq!(
+            notice.subject,
+            "Automation change · Automatic text turned off: Welcome"
+        );
         assert!(notice.html.contains("deleted the text template"));
     }
 
@@ -843,7 +903,10 @@ mod tests {
         };
         let after = Flow {
             name: "No reply".into(),
-            steps: vec![step(Channel::Sms, "Hi", 60), step(Channel::Email, "<p>Still there?</p>", 2880)],
+            steps: vec![
+                step(Channel::Sms, "Hi", 60),
+                step(Channel::Email, "<p>Still there?</p>", 2880),
+            ],
         };
         let notice = compose(
             &Snapshot::Flow(Some(before)),
@@ -852,7 +915,11 @@ mod tests {
             &branding(),
         )
         .unwrap();
-        assert!(notice.html.contains("Step 1 now waits <b>1 hour</b> (was right away)."));
+        assert!(
+            notice
+                .html
+                .contains("Step 1 now waits <b>1 hour</b> (was right away).")
+        );
         assert!(notice.html.contains("Step 2 was added."));
         assert!(notice.html.contains("2 days after the previous step"));
         assert!(notice.html.contains("Still there?"));

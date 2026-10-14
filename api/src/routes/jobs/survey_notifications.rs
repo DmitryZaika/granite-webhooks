@@ -144,10 +144,18 @@ fn origin() -> String {
     }
 }
 
-/// The survey page for the checklist, signed.
-pub fn survey_url(origin: &str, secret: &str, company_id: i32, checklist_id: i32) -> String {
+/// The survey page for the checklist, signed, with the checklist's installer
+/// (`i`) so the form picks them for the customer.
+pub fn survey_url(
+    origin: &str,
+    secret: &str,
+    company_id: i32,
+    checklist_id: i32,
+    installer_id: Option<i32>,
+) -> String {
+    let installer = installer_id.map_or_else(String::new, |id| format!("&i={id}"));
     format!(
-        "{origin}/customer/{company_id}/survey?c={checklist_id}&t={}",
+        "{origin}/customer/{company_id}/survey?c={checklist_id}&t={}{installer}",
         survey_token(secret, checklist_id)
     )
 }
@@ -214,6 +222,7 @@ struct DueChecklist {
     id: i32,
     company_id: i32,
     customer_id: Option<i32>,
+    installer_id: Option<i32>,
     email: Option<String>,
     created_at: DateTime<Utc>,
 }
@@ -349,7 +358,13 @@ async fn notify(
         .fetch_optional(&state.pool)
         .await?;
     let company = company.unwrap_or_else(|| "Our Company".into());
-    let url = survey_url(&origin(), &state.session_secret, row.company_id, row.id);
+    let url = survey_url(
+        &origin(),
+        &state.session_secret,
+        row.company_id,
+        row.id,
+        row.installer_id,
+    );
     let email = row.email.as_deref().map_or("", str::trim);
     let is_reminder = reminder.is_some();
     let text = message_text(&company, &url, is_reminder);
@@ -454,8 +469,7 @@ async fn stage(
     Ok(run)
 }
 
-const COLUMNS: &str =
-    "CAST(c.id AS SIGNED) AS id, c.company_id, c.customer_id, c.email, c.created_at";
+const COLUMNS: &str = "CAST(c.id AS SIGNED) AS id, c.company_id, c.customer_id, c.installer_id, c.email, c.created_at";
 
 /// Every survey stage due at `now` (not checking the send window).
 pub async fn send_due(state: &AppState, now: DateTime<Utc>) -> Result<SurveyRun, sqlx::Error> {

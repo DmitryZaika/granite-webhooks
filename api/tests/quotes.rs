@@ -78,10 +78,9 @@ async fn sold_slab_pictures_leave_unsigned_layouts(pool: MySqlPool) {
             { "id": "s5", "width": 126, "height": 63, "image": null }
         ] } } }
     });
-    let cleared =
-        api::routes::quote_editor::drop_unavailable_slab_pictures(&pool, 100, &mut doc)
-            .await
-            .unwrap();
+    let cleared = api::routes::quote_editor::drop_unavailable_slab_pictures(&pool, 100, &mut doc)
+        .await
+        .unwrap();
     assert_eq!(cleared, 2);
     let images: Vec<Value> = doc["layouts"]["a"]["o"]["slabs"]
         .as_array()

@@ -107,13 +107,12 @@ pub async fn load_rep_voice(
                 AND status = 'sent' AND is_automated = 0 AND text IS NOT NULL
               ORDER BY created_date DESC, id DESC LIMIT ?"
         );
-        let rows: Vec<(String, chrono::NaiveDateTime)> =
-            sqlx::query_as(sqlx::AssertSqlSafe(sql))
-                .bind(company_id)
-                .bind(user_id)
-                .bind(SMS_CANDIDATES)
-                .fetch_all(pool)
-                .await?;
+        let rows: Vec<(String, chrono::NaiveDateTime)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(company_id)
+            .bind(user_id)
+            .bind(SMS_CANDIDATES)
+            .fetch_all(pool)
+            .await?;
         sent.extend(rows);
     }
     let emails: Vec<(String, chrono::NaiveDateTime)> = sqlx::query_as(
@@ -167,7 +166,9 @@ mod tests {
                 "Sounds good - I'll have the quote over by 5. Dema"
             ]
         );
-        let many: Vec<String> = (0..30).map(|i| format!("Message number {i} here")).collect();
+        let many: Vec<String> = (0..30)
+            .map(|i| format!("Message number {i} here"))
+            .collect();
         assert_eq!(pick_voice_examples(&[], &many).len(), MAX_EXAMPLES);
     }
 

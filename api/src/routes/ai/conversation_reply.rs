@@ -12,19 +12,19 @@ use crate::extract::JsonBody;
 use crate::followups::gather::{FollowupRequest, gather_followup_context};
 use crate::followups::greeting::{conversation_recency, greeting_instruction};
 use crate::followups::js::{js_len, js_slice, trim};
-use crate::routes::ai::compose::format_rep_notes_block;
-use crate::followups::rep_voice::{RepVoice, format_voice_block};
-use crate::routes::ai::reply_context;
-use lambda_http::tracing;
-use std::time::Duration;
 use crate::followups::prompt::FollowupTimelineMessage;
+use crate::followups::rep_voice::{RepVoice, format_voice_block};
 use crate::followups::send_window::FollowupChannel;
 use crate::followups::timeline::Direction;
 use crate::re;
+use crate::routes::ai::compose::format_rep_notes_block;
+use crate::routes::ai::reply_context;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
+use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use utoipa::ToSchema;
 
 /// The model when the main one is not available to the key.
@@ -608,7 +608,14 @@ pub async fn conversation_reply(
     let gathered = gather_followup_context(&state.pool, &request, now).await?;
     let include_instructions =
         input.mode != ReplyMode::Custom || input.include_instructions != Some(false);
-    let extras = load_extras(&state, &user, gathered.customer_id, input.deal_id, &gathered).await;
+    let extras = load_extras(
+        &state,
+        &user,
+        gathered.customer_id,
+        input.deal_id,
+        &gathered,
+    )
+    .await;
     let user_prompt = build_user_prompt(
         channel,
         user.name.as_deref().unwrap_or(""),
@@ -858,7 +865,11 @@ mod tests {
         }
         // The rep just texted; an email draft still continues without "Hi".
         let mut texted = lenora();
-        texted.push(message("2026-10-13 14:40", Direction::Outbound, "Just sent the quote"));
+        texted.push(message(
+            "2026-10-13 14:40",
+            Direction::Outbound,
+            "Just sent the quote",
+        ));
         let now = chrono::DateTime::parse_from_rfc3339("2026-10-13T15:00:00Z")
             .unwrap()
             .to_utc();
@@ -920,10 +931,14 @@ mod tests {
             &extras,
             now,
         );
-        assert!(email.contains("QUOTES (this customer's quotes, newest first; times UTC):\nQuote \"Kitchen\""));
+        assert!(email.contains(
+            "QUOTES (this customer's quotes, newest first; times UTC):\nQuote \"Kitchen\""
+        ));
         assert!(email.contains("total $3,100.00"));
         assert!(email.contains("HOW DEMA WRITES"));
-        assert!(email.contains("RECENT MESSAGES BY THE REP") && email.contains("- Hey! Slabs are in"));
+        assert!(
+            email.contains("RECENT MESSAGES BY THE REP") && email.contains("- Hey! Slabs are in")
+        );
         assert!(email.contains("SIGNATURE: No signature is added") && email.contains("\"Dema\""));
         assert!(email.contains("Always mention free sink cutouts"));
         assert!(email.contains("NOW: 2026-10-13 15:00 UTC"));
@@ -949,8 +964,10 @@ mod tests {
         assert!(email.contains("signature is added automatically"));
         assert!(email.contains("QUOTES: (none on file for this customer)"));
         assert!(!email.contains("RECENT MESSAGES BY THE REP"));
-        assert!(prompt(&lenora(), ReplyMode::FastReply, &CustomDraft::default())
-            .contains("SIGNATURE: none — texts never end"));
+        assert!(
+            prompt(&lenora(), ReplyMode::FastReply, &CustomDraft::default())
+                .contains("SIGNATURE: none — texts never end")
+        );
     }
 
     #[test]
@@ -962,7 +979,10 @@ mod tests {
         // and the examples model plain writing: no em dashes in them.
         let goods: Vec<&str> = p.lines().filter(|l| l.starts_with("GOOD: \"")).collect();
         assert!(goods.len() >= 4);
-        assert_eq!(goods.iter().filter(|l| l.starts_with("GOOD: \"Hi")).count(), 1);
+        assert_eq!(
+            goods.iter().filter(|l| l.starts_with("GOOD: \"Hi")).count(),
+            1
+        );
         assert!(goods.iter().all(|l| !l.contains('—')));
         assert!(p.contains("two weeks later (GREETING: NONE"));
         assert!(p.contains("\"Reaching out as we agreed. How is the project going?\""));

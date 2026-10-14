@@ -147,7 +147,10 @@ async fn an_empty_draft_is_an_error(pool: MySqlPool) {
     // The large model and the quick one both write nothing.
     let (server, seen) = server(
         &pool,
-        vec![(200, json!({ "body": "   " })), (200, json!({ "body": "" }))],
+        vec![
+            (200, json!({ "body": "   " })),
+            (200, json!({ "body": "" })),
+        ],
     )
     .await;
     let res = server

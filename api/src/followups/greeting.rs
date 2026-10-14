@@ -100,7 +100,11 @@ mod tests {
     use Direction::{Inbound as I, Outbound as O};
     use FollowupChannel::{Email as E, Sms as S};
 
-    fn message(at: &str, channel: FollowupChannel, direction: Direction) -> FollowupTimelineMessage {
+    fn message(
+        at: &str,
+        channel: FollowupChannel,
+        direction: Direction,
+    ) -> FollowupTimelineMessage {
         FollowupTimelineMessage {
             at: at.into(),
             channel,
@@ -118,7 +122,10 @@ mod tests {
     #[test]
     fn a_new_conversation_greets_by_name() {
         let now = at("2026-10-14T15:00:00Z");
-        assert_eq!(conversation_recency(&[], now), ConversationRecency::NoHistory);
+        assert_eq!(
+            conversation_recency(&[], now),
+            ConversationRecency::NoHistory
+        );
         // An email without a send time is not a dated message.
         assert_eq!(
             conversation_recency(&[message("", E, O)], now),
@@ -131,9 +138,17 @@ mod tests {
     #[test]
     fn a_text_just_sent_means_no_greeting_or_name_on_the_email() {
         // The rep texted her 20 minutes ago and now writes an email.
-        let timeline = [message("2026-09-01 10:00", E, O), message("2026-10-14 14:40", S, O)];
+        let timeline = [
+            message("2026-09-01 10:00", E, O),
+            message("2026-10-14 14:40", S, O),
+        ];
         let recency = conversation_recency(&timeline, at("2026-10-14T15:00:00Z"));
-        assert_eq!(recency, ConversationRecency::Continuing { minutes_since_last: 20 });
+        assert_eq!(
+            recency,
+            ConversationRecency::Continuing {
+                minutes_since_last: 20
+            }
+        );
         let line = greeting_instruction(recency);
         assert!(line.starts_with("GREETING: NONE"));
         assert!(line.contains("20 minutes ago"));
@@ -144,7 +159,10 @@ mod tests {
     #[test]
     fn any_message_within_sixty_days_continues() {
         // Either side and either channel counts; the newest message decides.
-        for last in [message("2026-08-16 09:00", S, I), message("2026-08-16 09:00", E, O)] {
+        for last in [
+            message("2026-08-16 09:00", S, I),
+            message("2026-08-16 09:00", E, O),
+        ] {
             let timeline = [message("2026-01-02 10:00", S, O), last];
             // 59 days later: still the same conversation.
             assert!(conversation_recency(&timeline, at("2026-10-14T09:00:00Z")).is_continuing());
@@ -152,7 +170,9 @@ mod tests {
             assert!(conversation_recency(&timeline, at("2026-10-15T09:00:00Z")).is_continuing());
             assert_eq!(
                 conversation_recency(&timeline, at("2026-10-15T09:01:00Z")),
-                ConversationRecency::Reopening { days_since_last: 60 }
+                ConversationRecency::Reopening {
+                    days_since_last: 60
+                }
             );
         }
     }
@@ -163,15 +183,28 @@ mod tests {
         // another UTC and store date but the same conversation.
         let timeline = [message("2026-10-14 01:30", S, I)];
         let recency = conversation_recency(&timeline, at("2026-10-14T13:00:00Z"));
-        assert_eq!(recency, ConversationRecency::Continuing { minutes_since_last: 690 });
+        assert_eq!(
+            recency,
+            ConversationRecency::Continuing {
+                minutes_since_last: 690
+            }
+        );
         assert!(greeting_instruction(recency).contains("about 11 hours ago"));
     }
 
     #[test]
     fn a_long_silence_greets_by_name_once() {
-        let timeline = [message("2026-07-01 18:00", S, I), message("2026-07-01 18:25", S, O)];
+        let timeline = [
+            message("2026-07-01 18:00", S, I),
+            message("2026-07-01 18:25", S, O),
+        ];
         let recency = conversation_recency(&timeline, at("2026-10-14T15:00:00Z"));
-        assert_eq!(recency, ConversationRecency::Reopening { days_since_last: 104 });
+        assert_eq!(
+            recency,
+            ConversationRecency::Reopening {
+                days_since_last: 104
+            }
+        );
         let line = greeting_instruction(recency);
         assert!(line.starts_with("GREETING: BY NAME") && line.contains("104 days ago"));
         assert!(line.contains("Use their name only that once"));
@@ -182,7 +215,9 @@ mod tests {
         let timeline = [message("2026-10-14 15:05", S, I)];
         assert_eq!(
             conversation_recency(&timeline, at("2026-10-14T15:00:00Z")),
-            ConversationRecency::Continuing { minutes_since_last: 0 }
+            ConversationRecency::Continuing {
+                minutes_since_last: 0
+            }
         );
         assert_eq!(describe_ago(0), "just now");
         assert_eq!(describe_ago(90), "about an hour ago");

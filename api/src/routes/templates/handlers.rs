@@ -4,8 +4,8 @@ use super::schemas::{
     TemplateAttachment, TemplateAttachmentInput, TemplateOrder, TemplateScope,
 };
 use crate::auth::EmployeeUser;
-use crate::automation_notice::{self, Snapshot};
 use crate::auth::session::SessionUser;
+use crate::automation_notice::{self, Snapshot};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::routes::emails::sql::{normalize_address, normalized};

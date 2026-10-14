@@ -951,26 +951,50 @@ mod tests {
         let context = ComposeContext {
             profile: String::new(),
             // The customer texted last night; the rep now starts an email.
-            timeline: vec![message("2026-10-13 01:30", FollowupChannel::Sms, Direction::Inbound)],
+            timeline: vec![message(
+                "2026-10-13 01:30",
+                FollowupChannel::Sms,
+                Direction::Inbound,
+            )],
             rep_phone: None,
             company_name: None,
             company_address: None,
             rep_notes: Vec::new(),
         };
-        let prompt =
-            build_user_prompt(FollowupChannel::Email, "Dema", &context, "", "2026-10-13 15:00");
+        let prompt = build_user_prompt(
+            FollowupChannel::Email,
+            "Dema",
+            &context,
+            "",
+            "2026-10-13 15:00",
+        );
         assert!(prompt.contains("GREETING: NONE"));
         assert!(prompt.ends_with("DRAFT: (empty — suggest how the next message starts)"));
         // Weeks later still no greeting; after 60 days, greet by name. A
         // typed draft gets no rule.
-        let weeks =
-            build_user_prompt(FollowupChannel::Sms, "Dema", &context, "", "2026-11-02 15:00");
+        let weeks = build_user_prompt(
+            FollowupChannel::Sms,
+            "Dema",
+            &context,
+            "",
+            "2026-11-02 15:00",
+        );
         assert!(weeks.contains("GREETING: NONE"));
-        let later =
-            build_user_prompt(FollowupChannel::Sms, "Dema", &context, "", "2027-01-02 15:00");
+        let later = build_user_prompt(
+            FollowupChannel::Sms,
+            "Dema",
+            &context,
+            "",
+            "2027-01-02 15:00",
+        );
         assert!(later.contains("GREETING: BY NAME"));
-        let typing =
-            build_user_prompt(FollowupChannel::Sms, "Dema", &context, "Sure", "2026-10-13 15:00");
+        let typing = build_user_prompt(
+            FollowupChannel::Sms,
+            "Dema",
+            &context,
+            "Sure",
+            "2026-10-13 15:00",
+        );
         assert!(!typing.contains("GREETING:"));
     }
 

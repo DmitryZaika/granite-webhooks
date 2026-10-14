@@ -6,8 +6,8 @@
 //! `api.{cloudtalk,ringcentral}.sms.flows*` routes (`smsFlows.server.ts`).
 
 use crate::auth::EmployeeUser;
-use crate::automation_notice::{self, Snapshot};
 use crate::auth::session::SessionUser;
+use crate::automation_notice::{self, Snapshot};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::routes::templates::handlers::template_body_error;
@@ -795,7 +795,9 @@ mod tests {
         assert_eq!(check_step(&step("Hi {{customer.first_name}}")), Ok(()));
         assert_eq!(check_step(&step("Hi {{ <b>customer.name</b> }}")), Ok(()));
         assert_eq!(
-            check_step(&step("{{customer.last_name}} {{customer.email}} {{customer.phone}} {{user.last_name}}")),
+            check_step(&step(
+                "{{customer.last_name}} {{customer.email}} {{customer.phone}} {{user.last_name}}"
+            )),
             Ok(())
         );
         assert_eq!(

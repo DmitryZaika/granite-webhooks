@@ -144,7 +144,11 @@ fn option_lines(doc: &QuoteDoc, totals: &[OptionTotal], accepted: Option<usize>)
                         format!(
                             " · total {}{}",
                             format_money(v),
-                            if t.missing { " (some prices missing)" } else { "" }
+                            if t.missing {
+                                " (some prices missing)"
+                            } else {
+                                ""
+                            }
                         )
                     })
                 })
@@ -202,9 +206,7 @@ pub fn format_quotes(quotes: &[QuoteRow], focus_deal_id: Option<i64>) -> String 
             .as_deref()
             .and_then(|text| serde_json::from_str(text).ok())
             .unwrap_or_default();
-        let accepted = quote
-            .accepted_option
-            .and_then(|i| usize::try_from(i).ok());
+        let accepted = quote.accepted_option.and_then(|i| usize::try_from(i).ok());
         if let Some(doc) = &doc {
             let areas: Vec<&str> = doc
                 .areas
@@ -249,7 +251,9 @@ pub fn format_quotes(quotes: &[QuoteRow], focus_deal_id: Option<i64>) -> String 
             }
             lines.push(sent);
         } else if quote.current_revision > 0 {
-            lines.push("  Not emailed from the quote page (it may have been shared another way).".into());
+            lines.push(
+                "  Not emailed from the quote page (it may have been shared another way).".into(),
+            );
         }
         if let Some(signed) = &quote.signed_at {
             lines.push(format!("  Signed by the customer {signed} UTC"));
@@ -332,7 +336,10 @@ mod tests {
             emails_sent: 2,
             ..QuoteRow::default()
         };
-        assert!(format_quotes(&[unopened], None).contains("Emailed to the customer 2 times · NOT opened yet"));
+        assert!(
+            format_quotes(&[unopened], None)
+                .contains("Emailed to the customer 2 times · NOT opened yet")
+        );
         assert_eq!(format_quotes(&[], None), "");
     }
 }

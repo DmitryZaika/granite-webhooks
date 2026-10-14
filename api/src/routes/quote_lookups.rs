@@ -203,8 +203,7 @@ fn rank_suggestions(drawings: &[(Value, Value, Option<String>)]) -> QuoteSuggest
             if kind != "misc" && kind != "text" {
                 continue;
             }
-            let Some(description) = item.get("name").and_then(Value::as_str).and_then(clean)
-            else {
+            let Some(description) = item.get("name").and_then(Value::as_str).and_then(clean) else {
                 continue;
             };
             let key = (kind.to_string(), description.to_lowercase());

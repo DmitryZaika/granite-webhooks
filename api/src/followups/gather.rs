@@ -1018,13 +1018,12 @@ pub async fn gather_timed(
     let customer_page_line = load_customer_page_line(pool, request.company_id).await?;
     let style_profile = load_style_profile(pool, request.user_id, request.company_id).await?;
     // Best effort: without it the draft only loses the style examples.
-    let rep_voice =
-        super::rep_voice::load_rep_voice(pool, request.company_id, request.user_id)
-            .await
-            .unwrap_or_else(|err| {
-                lambda_http::tracing::warn!(?err, "follow-up rep messages unavailable");
-                super::rep_voice::RepVoice::default()
-            });
+    let rep_voice = super::rep_voice::load_rep_voice(pool, request.company_id, request.user_id)
+        .await
+        .unwrap_or_else(|err| {
+            lambda_http::tracing::warn!(?err, "follow-up rep messages unavailable");
+            super::rep_voice::RepVoice::default()
+        });
     let (sms_loaded, emails_loaded) = (sms.len(), emails.len());
     mark("db_load");
 
