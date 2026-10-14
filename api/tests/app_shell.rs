@@ -130,7 +130,13 @@ async fn a_company_frame_needs_no_session(pool: MySqlPool) {
         .await
         .json::<serde_json::Value>();
     assert_eq!(frame["name"], "Acme Stone", "{frame}");
-    assert!(frame["stone_types"].as_array().unwrap().iter().any(|t| t["name"] == "Quartz"));
+    assert!(
+        frame["stone_types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "Quartz")
+    );
     assert!(frame["stone_suppliers"].is_array());
     let unknown = server
         .get("/v1/public/companies/999999/frame")
