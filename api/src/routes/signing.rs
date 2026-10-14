@@ -208,7 +208,13 @@ fn secret(state: &AppState) -> SignerResult<&str> {
     state
         .signing_session_secret
         .as_deref()
-        .filter(|_| state.signature_app_origin.starts_with("https://"))
+        .filter(|_| {
+            let origin = &*state.signature_app_origin;
+            // Plain HTTP only for a local signing page (development, E2E).
+            origin.starts_with("https://")
+                || origin.starts_with("http://localhost:")
+                || origin.starts_with("http://127.0.0.1:")
+        })
         .ok_or_else(unavailable)
 }
 

@@ -69,8 +69,14 @@ pub struct CreatedDocument {
     pub signing_url: Option<String>,
 }
 
+/// A path segment: everything but RFC 3986's unreserved characters escaped.
 fn encode(id: &str) -> String {
-    percent_encoding::utf8_percent_encode(id, percent_encoding::NON_ALPHANUMERIC).to_string()
+    const SEGMENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'_')
+        .remove(b'.')
+        .remove(b'~');
+    percent_encoding::utf8_percent_encode(id, SEGMENT).to_string()
 }
 
 fn is_signing_url(value: &str) -> bool {
