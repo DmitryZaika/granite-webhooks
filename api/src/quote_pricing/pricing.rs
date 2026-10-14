@@ -410,7 +410,7 @@ fn drawing_lines(
     let mat = resolve_material(pl, color);
     let product = color.map_or("", |c| c.product.as_str());
     let variant = color.map_or("", |c| c.color.as_str());
-    let r = round_takeoff(t);
+    let r = round_takeoff(t, sq_ft_up(pl));
     let no_product = mat.product.is_none();
     let mat_price = if mat.by_slab {
         None
@@ -1047,6 +1047,11 @@ fn slab_count_for(doc: &QuoteDoc, area_id: &str, option_id: &str) -> Laid {
     }
 }
 
+/// `materialRounding === 'up'`: sq ft rounded up to whole feet.
+fn sq_ft_up(pl: &Value) -> bool {
+    get(Some(pl), "materialRounding").and_then(Value::as_str) == Some("up")
+}
+
 fn sum_totals(lines: &[PriceLine]) -> f64 {
     lines.iter().fold(0.0, |s, l| s + l.total)
 }
@@ -1104,7 +1109,12 @@ pub fn price_quote(doc: &QuoteDoc, pl: &Value, opts: PriceOptions) -> Vec<Option
                         .iter()
                         .filter(|i| i.area_id.as_deref() == Some(area.id.as_str()))
                         .collect();
-                    item_lines(&mut b, pl, &items, Some(round_takeoff(t).fabrication_sq_ft));
+                    item_lines(
+                        &mut b,
+                        pl,
+                        &items,
+                        Some(round_takeoff(t, sq_ft_up(pl)).fabrication_sq_ft),
+                    );
                     #[allow(clippy::cast_precision_loss)]
                     let quantity = area.quantity as f64;
                     AreaPrice {

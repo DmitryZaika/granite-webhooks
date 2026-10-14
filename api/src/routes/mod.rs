@@ -53,6 +53,7 @@ pub mod quickbooks;
 pub mod quote_editor;
 pub mod quote_extras;
 pub mod quote_forms;
+pub mod quote_lookups;
 pub mod quote_portal;
 pub mod quote_presets;
 pub mod quote_price_lists;
@@ -123,6 +124,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(quote_presets::router())
         .merge(quote_extras::router())
         .merge(quote_editor::router())
+        .merge(quote_lookups::router())
         .merge(quote_portal::router())
         .merge(commissions::router())
         .merge(company_frame::router())

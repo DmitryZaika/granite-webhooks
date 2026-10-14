@@ -307,6 +307,8 @@ pub struct FollowupPromptContext {
     pub crm_hold: Option<CrmHoldUntil>,
     pub contact_pressure: Option<FollowupContactPressure>,
     pub style_profile: Option<FollowupStyleProfile>,
+    /// The rep's own recent messages (style examples).
+    pub rep_voice: Vec<String>,
     pub force_generate: bool,
 }
 
@@ -603,6 +605,16 @@ fn profile_block(profile: &str) -> &str {
     }
 }
 
+/// The rep's recent messages after the templates, or nothing.
+fn rep_voice_section(examples: &[String]) -> String {
+    let block = super::rep_voice::format_voice_block(examples);
+    if block.is_empty() {
+        block
+    } else {
+        format!("\n\n{block}")
+    }
+}
+
 /// The user prompt for one flow message.
 pub fn build_followup_user_prompt(ctx: &FollowupPromptContext) -> String {
     let channel_label = if ctx.channel == FollowupChannel::Email {
@@ -615,6 +627,7 @@ pub fn build_followup_user_prompt(ctx: &FollowupPromptContext) -> String {
         Some(PROMPT_TEMPLATE_MAX_PER_GROUP),
         Some(PROMPT_TEMPLATE_MAX_BODY_CHARS),
     );
+    let voice_block = rep_voice_section(&ctx.rep_voice);
     let timeline_block = format_followup_timeline_block(&ctx.timeline);
     let now = ctx.now.unwrap_or_else(chrono::Utc::now);
     let timeline = engine_timeline(&ctx.timeline);
@@ -631,10 +644,19 @@ pub fn build_followup_user_prompt(ctx: &FollowupPromptContext) -> String {
             format!("SEQUENCE STEP: {} — {}", step.goal, step.purpose)
         });
     let parts = store_zoned_parts(now);
+    let recency = super::greeting::conversation_recency(&ctx.timeline, now);
     let greeting_block = format!(
         "STORE LOCAL TIME: {} — {}",
         format_store_clock(parts.hour, parts.minute),
-        greeting_instruction_for_hour(parts.hour)
+        if recency.is_continuing() {
+            super::greeting::greeting_instruction(recency)
+        } else {
+            format!(
+                "{} {}",
+                super::greeting::greeting_instruction(recency),
+                greeting_instruction_for_hour(parts.hour)
+            )
+        }
     );
     let pending_step_block = if ctx.step_position <= 1 {
         "UNFINISHED NEXT STEP: If the conversation shows something the customer already agreed to or asked for that never happened (rescheduling a measurement or estimate, a call back, a price, photos), resume it with one concrete offer. If our last message already asked that exact question and got no answer, offer a different concrete option instead of repeating it."
@@ -656,7 +678,7 @@ pub fn build_followup_user_prompt(ctx: &FollowupPromptContext) -> String {
     );
     let pressure_block = pressure.map_or_else(String::new, format_contact_pressure_block);
     format!(
-        "Write the next {channel_label} follow-up for automated flow step #{}.\n\nThis prompt contains exactly one customer. Use only this customer's structured state and source evidence.\n\nWrite as the salesperson in first person (I/we). Never name the sales rep or introduce yourself (\"<name> here\"). Sound like a real human SMS/email — plain and concrete — never corporate or AI coaching language.{}\n\n{pressure_block}\nTIME SINCE LAST CONTACT: {}\nPRIOR OUTBOUND COUNT: {} (one per calendar day — several messages sent the same day count as one — including any not reprinted in FULL CONVERSATION — this number is authoritative). Build each wait from that count. Do not use delivery-confirmation language.\n{greeting_block}\n{pending_step_block}\n{sequence_block}\n{crm_hold_block}\n{}\n{stones_block}\n\nSITUATION: {}\n\n{}CUSTOMER / PROJECT INFO:\n{}\n\n{TEMPLATE_PROMPT_HEADING}\n{template_block}\n\nFULL CONVERSATION (oldest first):\n{timeline_block}\n\nReturn JSON only.",
+        "Write the next {channel_label} follow-up for automated flow step #{}.\n\nThis prompt contains exactly one customer. Use only this customer's structured state and source evidence.\n\nWrite as the salesperson in first person (I/we). Never name the sales rep or introduce yourself (\"<name> here\"). Sound like a real human SMS/email — plain and concrete — never corporate or AI coaching language.{}\n\n{pressure_block}\nTIME SINCE LAST CONTACT: {}\nPRIOR OUTBOUND COUNT: {} (one per calendar day — several messages sent the same day count as one — including any not reprinted in FULL CONVERSATION — this number is authoritative). Build each wait from that count. Do not use delivery-confirmation language.\n{greeting_block}\n{pending_step_block}\n{sequence_block}\n{crm_hold_block}\n{}\n{stones_block}\n\nSITUATION: {}\n\n{}CUSTOMER / PROJECT INFO:\n{}\n\n{TEMPLATE_PROMPT_HEADING}\n{template_block}{voice_block}\n\nFULL CONVERSATION (oldest first):\n{timeline_block}\n\nReturn JSON only.",
         ctx.step_position,
         style_line(ctx.style_profile.as_ref()),
         contact_gap_instruction(days_since, outbound_count, pressure),
@@ -681,6 +703,8 @@ pub struct CadencePromptContext {
     pub crm_hold: Option<CrmHoldUntil>,
     pub contact_pressure: Option<FollowupContactPressure>,
     pub style_profile: Option<FollowupStyleProfile>,
+    /// The rep's own recent messages (style examples).
+    pub rep_voice: Vec<String>,
     pub force_generate: bool,
     /// The channel of each planned message, in order.
     pub step_channels: Vec<FollowupChannel>,
@@ -705,6 +729,7 @@ pub fn build_cadence_followup_user_prompt_at(ctx: &CadencePromptContext, clock: 
         Some(PROMPT_TEMPLATE_MAX_PER_GROUP),
         Some(PROMPT_TEMPLATE_MAX_BODY_CHARS),
     );
+    let voice_block = rep_voice_section(&ctx.rep_voice);
     let timeline_block = format_followup_timeline_block(&ctx.timeline);
     let timeline = engine_timeline(&ctx.timeline);
     let days_since = days_since_last_outbound(&timeline, clock);
@@ -745,8 +770,14 @@ pub fn build_cadence_followup_user_prompt_at(ctx: &CadencePromptContext, clock: 
         format!("{}\n", format_crm_hold_prompt_line(hold))
     });
     let count = ctx.step_channels.len();
+    let recency = super::greeting::conversation_recency(&ctx.timeline, clock);
+    // Later messages follow message 1, so they continue a conversation.
+    let greeting_line = format!(
+        "\nMESSAGE 1 {}\nMESSAGE 2 AND LATER: GREETING: NONE. No greeting and no customer name; they follow message 1, so the conversation is ongoing.",
+        super::greeting::greeting_instruction(recency)
+    );
     format!(
-        "{force_block}Write {count} {sequence_label} follow-ups for an automated no-response sequence.\n\nThis prompt contains exactly one customer. Use only this customer's structured state and source evidence.\n\nWrite as the salesperson in first person (I/we). Never name the sales rep or introduce yourself (\"<name> here\"). Sound like a real human SMS/email — plain and concrete — never corporate or AI coaching language.{}\nMatch each message to its Channel: SMS stays short; EMAIL needs a specific subject.\nYOU choose what each message is about and how to open it (greeting, soft reconnect, offer, question, value, etc.). There is no required message-type order.\n{}\nFor each message you MUST set delayMinutes (minutes after the previous message; 0 = send as soon as allowed for message 1). You choose the wait from this customer's conversation — there is no fixed maximum gap. Never land a send on Sunday in store local time; if a wait would fall on Sunday, use Monday. Sunday is allowed only when the customer asked to be contacted that Sunday. An administrative instruction has higher priority than this choice, the default cadence, and the Sunday rule. Write copy that fits the wait that instruction sets, or the wait you chose when it sets none. Relative time phrases (\"next month\", \"this spring\") must match that schedule, not today.\n{}\nUse the customer's first name often when it is in CUSTOMER / PROJECT INFO (most messages should include it). Skip it on occasional messages so the sequence does not feel robotic. Never invent a name.\nSTORE LOCAL TIME NOW: {} — use a natural greeting when it fits; do not invent a fake clock time.\n\n{pressure_block}\nTIME SINCE LAST CONTACT: {}\nPRIOR OUTBOUND COUNT: {} (one per calendar day — several messages sent the same day count as one — including any not reprinted in FULL CONVERSATION — this number is authoritative). Build each wait from that count. Never say \"I emailed you\", \"I texted you\", or \"make sure you got it\". Each message needs a new useful reason to exist.\nUse how long since last contact as context when choosing delayMinutes and tone. Later messages assume still no reply after each wait — keep them short; do not merely rephrase earlier ones.\n{crm_hold_line}\n{}\nUNFINISHED NEXT STEP: Prefer facts from unfinished_next_step only if unfinished_possibly_satisfied is no AND unfinished_next_step_kind is customer_request. A salesperson_task is weak context. If deal_product_scope is CABINETS, stay on cabinets — no stone inventory or quartz/granite. Do not invent product scope.\n\n{}CUSTOMER / PROJECT INFO:\n{}\n\n{TEMPLATE_PROMPT_HEADING}\n{template_block}\n\nFULL CONVERSATION (oldest first):\n{timeline_block}\n\nSEQUENCE (oldest / soonest first) — YOU choose the approach for each:\n{step_block}\n\nReturn JSON only with {count} messages in this order, each with delayMinutes.",
+        "{force_block}Write {count} {sequence_label} follow-ups for an automated no-response sequence.\n\nThis prompt contains exactly one customer. Use only this customer's structured state and source evidence.\n\nWrite as the salesperson in first person (I/we). Never name the sales rep or introduce yourself (\"<name> here\"). Sound like a real human SMS/email — plain and concrete — never corporate or AI coaching language.{}\nMatch each message to its Channel: SMS stays short; EMAIL needs a specific subject.\nYOU choose what each message is about and how to open it (soft reconnect, offer, question, value, etc.; greet only as GREETING allows). There is no required message-type order.\n{}\nFor each message you MUST set delayMinutes (minutes after the previous message; 0 = send as soon as allowed for message 1). You choose the wait from this customer's conversation — there is no fixed maximum gap. Never land a send on Sunday in store local time; if a wait would fall on Sunday, use Monday. Sunday is allowed only when the customer asked to be contacted that Sunday. An administrative instruction has higher priority than this choice, the default cadence, and the Sunday rule. Write copy that fits the wait that instruction sets, or the wait you chose when it sets none. Relative time phrases (\"next month\", \"this spring\") must match that schedule, not today.\n{}\nCustomer's name: at most once in a message, and only in a message that greets by name (see GREETING below). Never invent a name.\nSTORE LOCAL TIME NOW: {} (Good morning only before noon, Good evening only after 6pm); do not invent a fake clock time.{greeting_line}\n\n{pressure_block}\nTIME SINCE LAST CONTACT: {}\nPRIOR OUTBOUND COUNT: {} (one per calendar day — several messages sent the same day count as one — including any not reprinted in FULL CONVERSATION — this number is authoritative). Build each wait from that count. Never say \"I emailed you\", \"I texted you\", or \"make sure you got it\". Each message needs a new useful reason to exist.\nUse how long since last contact as context when choosing delayMinutes and tone. Later messages assume still no reply after each wait — keep them short; do not merely rephrase earlier ones.\n{crm_hold_line}\n{}\nUNFINISHED NEXT STEP: Prefer facts from unfinished_next_step only if unfinished_possibly_satisfied is no AND unfinished_next_step_kind is customer_request. A salesperson_task is weak context. If deal_product_scope is CABINETS, stay on cabinets — no stone inventory or quartz/granite. Do not invent product scope.\n\n{}CUSTOMER / PROJECT INFO:\n{}\n\n{TEMPLATE_PROMPT_HEADING}\n{template_block}{voice_block}\n\nFULL CONVERSATION (oldest first):\n{timeline_block}\n\nSEQUENCE (oldest / soonest first) — YOU choose the approach for each:\n{step_block}\n\nReturn JSON only with {count} messages in this order, each with delayMinutes.",
         style_line(ctx.style_profile.as_ref()),
         stones_link_instruction(
             &ctx.timeline,

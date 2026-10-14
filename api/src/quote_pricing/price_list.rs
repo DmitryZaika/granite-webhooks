@@ -581,8 +581,15 @@ pub fn sync_with_inventory(info: &Value, stock: &Stock) -> Value {
         .iter()
         .filter_map(|product| {
             let mk = key(name_of(product));
-            let material = materials.iter().find(|m| m.0 == mk)?;
-            Some(to_product(&obj(product), &material.2, available))
+            let Some(material) = materials.iter().find(|m| m.0 == mk) else {
+                // Materials added in the price list stay, with the colors added to them.
+                return truthy(product.get("custom"))
+                    .then(|| to_product(&obj(product), &[], available));
+            };
+            // In stock now: no longer a material added only in the price list.
+            let mut stocked = obj(product);
+            stocked.remove("custom");
+            Some(to_product(&stocked, &material.2, available))
         })
         .collect();
     let listed: HashSet<String> = products.iter().map(|p| key(name_of(p))).collect();
@@ -708,4 +715,43 @@ pub fn with_live_choices(snapshot: &Value, latest: &Value) -> Value {
     );
     out["arrOtherItems"] = Value::Array(items);
     out
+}
+
+#[cfg(test)]
+mod custom_material_tests {
+    use super::*;
+
+    #[test]
+    fn keeps_materials_added_in_the_list_until_stocked() {
+        let info = json!({
+            "arrProducts": [
+                { "name": "Porcelain", "custom": 1, "arrVariants": [
+                    { "name": "Statuario", "custom": 1, "price": 70 },
+                    { "name": "Old", "price": 50 },
+                ] },
+                { "name": "Granite", "custom": 1, "arrVariants": [] },
+                { "name": "Cabinets", "arrVariants": [] },
+            ],
+        });
+        let stock = Stock {
+            stones: vec![StockStone {
+                name: "Absolute Black".into(),
+                kind: "granite".into(),
+                has_image: true,
+                ..StockStone::default()
+            }],
+            ..Stock::default()
+        };
+        let synced = sync_with_inventory(&info, &stock);
+        let products = arr(Some(&synced), "arrProducts");
+        let names: Vec<&str> = products.iter().map(name_of).collect();
+        assert_eq!(names, ["Porcelain", "Granite"]);
+        // Only its own colors, and never marked sold out or without a photo.
+        assert_eq!(
+            products[0]["arrVariants"],
+            json!([{ "name": "Statuario", "custom": 1, "price": 70 }])
+        );
+        // Stocked now: follows the stones.
+        assert!(products[1].get("custom").is_none());
+    }
 }

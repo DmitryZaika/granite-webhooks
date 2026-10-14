@@ -547,6 +547,38 @@ pub async fn option_total(
     Ok(total.map(|t| js_round(t * 100.0) / 100.0))
 }
 
+/// The option a quote email talks about: the one the customer took, else the
+/// first; none when the quote has no options.
+pub fn email_option_index(quote: &Quote, doc: &QuoteDoc) -> Option<usize> {
+    let count = doc.color_options.len();
+    quote
+        .customer_accepted_option_id
+        .and_then(|i| usize::try_from(i).ok())
+        .filter(|i| *i < count)
+        .or((count > 0).then_some(0))
+}
+
+/// Material and color of one option, once each across areas
+/// ("Quartz Calacatta Laza, Granite Black Pearl"); none when nothing is picked.
+pub fn option_color_text(doc: &QuoteDoc, index: usize) -> Option<String> {
+    let option = doc.color_options.get(index)?;
+    let mut names: Vec<String> = Vec::new();
+    for area in &doc.areas {
+        let Some(picked) = option.by_area.get(&area.id) else {
+            continue;
+        };
+        let name = [picked.product.trim(), picked.color.trim()]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !name.is_empty() && !names.iter().any(|n| lower(n) == lower(&name)) {
+            names.push(name);
+        }
+    }
+    (!names.is_empty()).then(|| names.join(", "))
+}
+
 /// What selling a quote did: its deal and the amount put on it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct QuoteSale {
@@ -788,6 +820,47 @@ mod sold_out_tests {
             sold_out_message(&sold_out_colors(&doc, &list)),
             "Black is sold out and cannot be on a quote. Pick another color."
         );
+    }
+
+    #[test]
+    fn email_option_colors_and_index() {
+        let doc = QuoteDoc::parse(&json!({
+            "version": 2,
+            "areas": [{ "id": "a", "name": "A", "quantity": 1 }, { "id": "b", "name": "B", "quantity": 1 }, { "id": "c", "name": "C", "quantity": 1 }],
+            "colorOptions": [
+                { "id": "o1", "byArea": { "a": { "product": "Quartz", "color": "Calacatta Laza" }, "b": { "product": "quartz", "color": " calacatta laza " }, "c": { "product": "Granite", "color": "Black Pearl" } } },
+                { "id": "o2", "byArea": {} },
+            ],
+        }))
+        .unwrap();
+        assert_eq!(
+            option_color_text(&doc, 0).as_deref(),
+            Some("Quartz Calacatta Laza, Granite Black Pearl")
+        );
+        assert_eq!(option_color_text(&doc, 1), None);
+        assert_eq!(option_color_text(&doc, 5), None);
+
+        let mut quote = Quote {
+            id: 1,
+            company_id: 1,
+            customer_id: 1,
+            deal_id: None,
+            quote_name: None,
+            salesperson_id: None,
+            created_by: None,
+            price_list_id: None,
+            price_list_revision_id: None,
+            tax_pct: 0.0,
+            discount_pct: 0.0,
+            discount_amount: 0.0,
+            draft_drawing_json: None,
+            customer_accepted_option_id: None,
+        };
+        assert_eq!(email_option_index(&quote, &doc), Some(0));
+        quote.customer_accepted_option_id = Some(1);
+        assert_eq!(email_option_index(&quote, &doc), Some(1));
+        quote.customer_accepted_option_id = Some(9);
+        assert_eq!(email_option_index(&quote, &doc), Some(0));
     }
 
     #[test]

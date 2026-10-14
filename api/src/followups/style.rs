@@ -460,7 +460,7 @@ pub fn format_style_preference_prompt_block(profile: Option<&FollowupStyleProfil
     }
     match profile.greeting {
         Some(FollowupTogglePreference::Remove) => push("- Do not start with Hi / Hey / Hello."),
-        Some(FollowupTogglePreference::Add) => push("- Start with a greeting (Hi / Hey / Hello)."),
+        Some(FollowupTogglePreference::Add) => push("- Start with a greeting (Hi / Hey / Hello) when the GREETING rule allows one."),
         None => {}
     }
     match profile.link {

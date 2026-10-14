@@ -715,9 +715,18 @@ pub async fn reset_order(
 
 /// Fill template variables
 ///
-/// Fills `{{user.*}}`, `{{customer.*}}`, `{{company.*}}` and
+/// Fills `{{user.*}}`, `{{customer.*}}`, `{{company.*}}`, `{{deal.*}}` and
 /// `{{current_date}}` for the caller, the deal and the customer (given, or
-/// found by `recipient_email`). Unknown variables are left as they are.
+/// found by `recipient_email`). Keys match case-insensitively:
+/// `user.name`, `user.first_name`, `user.last_name`, `user.email`,
+/// `user.phone_number`; `customer.name`, `customer.first_name`,
+/// `customer.last_name`, `customer.email`, `customer.phone`,
+/// `customer.address`, `customer.inventory_link`; `company.name`,
+/// `company.address`, `company.hours_of_operation`, `company.domain`,
+/// `company.subdomain`, `company.id`; `deal.name` and `deal.amount`
+/// (e.g. `$4,500.00`, only with `deal_id`). `{{quote.*}}` are filled only
+/// when a quote is emailed (`POST /v1/quotes/{id}/emails`). Variables
+/// without a value, and unknown ones, are left as they are.
 #[utoipa::path(
     post,
     path = "/v1/templates/fill",

@@ -1,4 +1,4 @@
-//! The email the company's team gets when an admin changes an automation: a
+//! The email the company's sales reps get when an admin changes an automation: a
 //! drip (a company email or SMS template that sends itself when a deal
 //! enters a list) or a company follow-up flow. It says what changed, what
 //! customers will now receive automatically, and under which conditions.
@@ -10,6 +10,7 @@
 
 use crate::auth::session::SessionUser;
 use crate::routes::emails::signature_mail::{Branding, card_html};
+use crate::routes::users::queries::SALES_REP_POSITION_ID;
 use crate::state::AppState;
 use crate::webhooks_client::OutgoingEmail;
 use common::utils::email_body::{escape_html, html_to_plain_text, is_html_markup};
@@ -530,7 +531,7 @@ fn layout(
           {changes}
           {message}
           {}
-          <tr><td style=\"{FONT}font-size:12px;line-height:1.5;color:#a1a1aa;padding-top:22px;\">You get this because you work at {}. Admins change automations under Automations in the admin menu.</td></tr>",
+          <tr><td style=\"{FONT}font-size:12px;line-height:1.5;color:#a1a1aa;padding-top:22px;\">You get this because you are a sales rep at {}: these messages go out from your email address and text line. Questions about it? Reply to this email to reach the admin who made the change.</td></tr>",
             escape_html(headline),
             section("When it is sent", &bullets(conditions)),
             escape_html(&branding.company_name),
@@ -711,11 +712,14 @@ async fn try_notify(
         return Ok(());
     };
     let recipients: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT TRIM(email) FROM users
-          WHERE company_id = ? AND is_deleted = 0 AND (is_employee = 1 OR is_admin = 1)
-            AND email IS NOT NULL AND TRIM(email) <> ''
+        "SELECT DISTINCT TRIM(u.email) FROM users u
+           JOIN users_positions up
+             ON up.user_id = u.id AND up.company_id = u.company_id AND up.position_id = ?
+          WHERE u.company_id = ? AND u.is_deleted = 0
+            AND u.email IS NOT NULL AND TRIM(u.email) <> ''
           ORDER BY 1",
     )
+    .bind(SALES_REP_POSITION_ID)
     .bind(user.company_id)
     .fetch_all(&state.pool)
     .await

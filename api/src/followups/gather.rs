@@ -92,6 +92,8 @@ pub struct GatheredContext {
     pub contact_pressure: FollowupContactPressure,
     pub generation_decision: FollowupGenerationDecision,
     pub style_profile: Option<FollowupStyleProfile>,
+    /// The rep's own recent messages, for writing in their voice.
+    pub rep_voice: super::rep_voice::RepVoice,
     pub validation_status: ValidationStatus,
     pub validation_repairs: Vec<ValidationRepair>,
     pub sms_loaded: usize,
@@ -1015,6 +1017,14 @@ pub async fn gather_timed(
         crate::routes::followups::instruction::load(pool, request.company_id).await?;
     let customer_page_line = load_customer_page_line(pool, request.company_id).await?;
     let style_profile = load_style_profile(pool, request.user_id, request.company_id).await?;
+    // Best effort: without it the draft only loses the style examples.
+    let rep_voice =
+        super::rep_voice::load_rep_voice(pool, request.company_id, request.user_id)
+            .await
+            .unwrap_or_else(|err| {
+                lambda_http::tracing::warn!(?err, "follow-up rep messages unavailable");
+                super::rep_voice::RepVoice::default()
+            });
     let (sms_loaded, emails_loaded) = (sms.len(), emails.len());
     mark("db_load");
 
@@ -1055,6 +1065,7 @@ pub async fn gather_timed(
         contact_pressure: pressure,
         generation_decision,
         style_profile,
+        rep_voice,
         validation_status: validation.validation_status,
         validation_repairs: validation.validation_repairs,
         sms_loaded,

@@ -5,12 +5,18 @@
 //! its revisions. Port of the Remix `api.aiRecommend.conversationReply`
 //! route and `aiConversationReply.server.ts`.
 
-use crate::ai::{AiError, Caller, Chat, MINI_MODEL};
+use crate::ai::{AiError, Caller, Chat, LARGE_MODEL, MINI_MODEL};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::followups::gather::{FollowupRequest, gather_followup_context};
+use crate::followups::greeting::{conversation_recency, greeting_instruction};
 use crate::followups::js::{js_len, js_slice, trim};
+use crate::routes::ai::compose::format_rep_notes_block;
+use crate::followups::rep_voice::{RepVoice, format_voice_block};
+use crate::routes::ai::reply_context;
+use lambda_http::tracing;
+use std::time::Duration;
 use crate::followups::prompt::FollowupTimelineMessage;
 use crate::followups::send_window::FollowupChannel;
 use crate::followups::timeline::Direction;
@@ -23,15 +29,42 @@ use utoipa::ToSchema;
 
 /// The model when the main one is not available to the key.
 pub const REPLY_FALLBACK_MODEL: &str = "gpt-5.6-luna";
+/// The drafting model: the larger one, since a draft that sounds like the
+/// rep and uses the customer's quote is worth the cost.
+pub const REPLY_MODEL: &str = LARGE_MODEL;
+/// It rejects `none`; `low` keeps the button quick.
+const REPLY_REASONING_EFFORT: &str = "low";
+/// The whole request must answer within the 30 s the API's CDN waits, so the
+/// large model gets most of it and the quick fallback the rest.
+const REPLY_MODEL_TIMEOUT: Duration = Duration::from_secs(18);
+const FALLBACK_TIMEOUT: Duration = Duration::from_secs(9);
 const SMS_MAX_TEXT: usize = 1600;
 
-pub const CONVERSATION_REPLY_SYSTEM_PROMPT: &str = r#"You help a countertop sales rep draft the next SMS/email to a customer.
+pub const CONVERSATION_REPLY_SYSTEM_PROMPT: &str = r#"You help a countertop sales rep draft the next SMS/email to a customer. Write it the way THIS rep writes, using THIS customer's real details.
 
 PRIMARY TASK — write the next message this conversation itself calls for:
-1. Read the actual thread. Use what they already said: timing, wait periods, promised callbacks, the project, and personal situation.
+1. Read the actual thread. SMS and email are one history. Use what they already said: timing, wait periods, promised callbacks, the project, and personal situation.
 2. If the customer just wrote: reply to that message.
 3. If the last message is from the rep: write the next outreach the thread requires now — especially a follow-through you already promised.
-4. Keep the conversation going with one natural question when it helps.
+4. Move it forward with ONE natural question or one concrete next step.
+
+## Greeting and the customer's name: obey the GREETING line in the request
+- GREETING: NONE → the conversation is ongoing (any SMS or email with them in the last 60 days). No greeting ("Hi", "Hey", "Hello", "Good morning", "Dear") and no customer name anywhere in the message, on SMS and email alike. Start straight with the content, like the next text in a running thread.
+- GREETING: BY NAME → a brand-new conversation, or the last message was more than 60 days ago: open with a short greeting and their first name ("Hi Ann,"). Never "Hello <Full Name>" or "Dear".
+- The customer's name appears at most once in a message.
+- Never add a greeting just because the channel is email.
+
+## Be specific — use the facts you have
+- Build the message on concrete facts from QUOTES, CUSTOMER / PROJECT INFO and the thread: the stone/color they picked or are choosing between, the area (kitchen, island, vanity), the edge, the quote and whether they opened it, a measurement or install date, the open next step.
+- Sent quote NOT opened yet → offer to resend it or walk them through it. Opened it (especially more than once) → ask what they think or which option they lean toward. Accepted or signed → the next step (template/measure, deposit, scheduling), not more selling.
+- Never invent prices, dates, availability, discounts, or promises. Mention a price only from QUOTES (never from a draft quote), and only when it helps.
+- With a FOCUS DEAL, prefer that deal's quote and facts.
+
+## Sound like the rep
+- Match HOW THE REP WRITES and RECENT MESSAGES BY THE REP: their length, openers, punctuation, casing, emoji (or none), and how they end messages. Borrow the voice, never the content.
+- Mirror the channel and the thread: SMS or a text-like thread → 1–3 short sentences, texting tone. Email → still short (2–5 sentences), plain words, no corporate filler. If the customer writes in a few words, keep yours short too.
+- Do not sound like AI: no stock lines ("I hope this finds you well", "I hope you're doing well", "Just following up", "Just checking in", "I wanted to reach out", "Feel free to reach out", "Looking forward to hearing from you"), no em dashes, no polished or salesy phrasing. Write what the rep would actually type.
+- Follow the SIGNATURE line in the request.
 
 Promised follow-up is the next message, not a new intro:
 Use "reaching out as we agreed" ONLY when the customer asked you to wait and you agreed ("10-12 days would be best" / "Great, will do").
@@ -78,14 +111,24 @@ For this exact situation, prefer wording very close to the GOOD example.
 Promised later text — ONLY when they asked you to wait and you agreed:
 Customer: "10-12 days would be best"
 Rep: "Great, will do"
-GOOD next message:
-"Hi Lenora — reaching out as we agreed. How is the project going?"
+GOOD next message, two weeks later (GREETING: NONE, the thread is only weeks old):
+"Reaching out as we agreed. How is the project going?"
 BAD next message:
 "Hi Lenora, you reached out about new countertops. Is there a good time for a call?"
 
 No agreement in the thread (quote sent, customer chose an edge, named two slabs, then went quiet):
 BAD: "Hi Ahoura, reaching out as we agreed. How is the kitchen renovation coming along?"
-GOOD: "Hi Ahoura, did you get a chance to look over the quote? Between Viraldi and Idillio, which one are you leaning toward?"
+GOOD: "Did you get a chance to look over the quote? Between Viraldi and Idillio, which one are you leaning toward?"
+
+Ongoing conversation (GREETING: NONE): the rep texted 20 minutes ago "Just sent the island quote", and now drafts the email:
+BAD: "Hi Maria, I hope you're doing well! As promised, please find the quote for your island."
+GOOD: "Here's the island quote in Calacatta Karmelo with the eased edge we talked about. Want me to hold that slab while you look it over?"
+
+Customer opened the quote three times but has not replied (QUOTES shows it):
+GOOD: "Saw you had a chance to look at the quote. Is the Viraldi option still the one you like for the kitchen, or should I price the island in it too?"
+
+Last message 4 months ago (GREETING: BY NAME):
+GOOD: "Hi Ahoura, are you still planning the kitchen this year? I can check if the Viraldi you liked is still in stock."
 
 More GOOD patterns:
 - "Maybe later." → "Got it. Is it mainly the timing that's holding things up, or is there something else?"
@@ -104,9 +147,9 @@ More GOOD patterns:
 - Do not restate long project descriptions when a short curious question works.
 - Sound like a real salesperson texting: short sentences, natural language.
 - Vary openers: "Got it.", "Gotcha.", "Makes sense.", "I see.", "Understood."
-- Write in first person (I/we). No signature unless clearly needed.
+- Write in first person (I/we). Never name the rep in the third person.
 - SMS: 1–3 short sentences. Email: still concise.
-- Email body is the message only. Never prefix it with "Subject:" — the thread already has a subject.
+- Email body is the message only. Never prefix it with "Subject:"; the thread already has a subject.
 
 Output ONLY valid JSON: {"body":"draft message"}"#;
 
@@ -204,6 +247,7 @@ pub fn build_user_prompt(
     deal_id: Option<i64>,
     mode: ReplyMode,
     custom: &CustomDraft,
+    extras: &ReplyExtras,
     now: chrono::DateTime<chrono::Utc>,
 ) -> String {
     let channel_label = if channel == FollowupChannel::Email {
@@ -240,13 +284,40 @@ pub fn build_user_prompt(
         Some(Direction::Inbound) => "NOTE: The last message was from the customer. Draft a direct reply to what they just said.".to_string(),
         None => String::new(),
     };
-    // The server's day is UTC, like the timeline's times.
-    let sent_today =
-        last.is_some_and(|m| m.at.get(..10) == Some(now.format("%Y-%m-%d").to_string().as_str()));
-    let greeting_note = if sent_today {
-        "NOTE: The last message was sent today. Do NOT start with \"Hi\", \"Hello\", or \"Dear\". Jump straight into the reply."
+    let greeting_note = greeting_instruction(conversation_recency(timeline, now));
+    let signature_note = match channel {
+        FollowupChannel::Sms => "SIGNATURE: none — texts never end with the rep's name.".to_string(),
+        FollowupChannel::Email if extras.voice.has_email_signature => "SIGNATURE: The rep's email signature is added automatically below the body. Do not sign off with a name, title, phone, or company.".to_string(),
+        FollowupChannel::Email => format!(
+            "SIGNATURE: No signature is added. End the way the rep's own emails end (often just their first name{}), or with no sign-off. Never \"Best regards, <full name>\" plus a title.",
+            extras
+                .voice
+                .email_name
+                .as_deref()
+                .and_then(|n| n.split_whitespace().next())
+                .map(|first| format!(", \"{first}\""))
+                .unwrap_or_default()
+        ),
+    };
+    let quotes_block = if trim(&extras.quotes).is_empty() {
+        "QUOTES: (none on file for this customer)".to_string()
     } else {
-        ""
+        format!(
+            "QUOTES (this customer's quotes, newest first; times UTC):\n{}",
+            trim(&extras.quotes)
+        )
+    };
+    let notes_block = format_rep_notes_block(user_name, &extras.rep_notes);
+    let voice_block = format_voice_block(&extras.voice.examples);
+    let style_section = [notes_block, voice_block]
+        .into_iter()
+        .filter(|b| !b.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let style_section = if style_section.is_empty() {
+        String::new()
+    } else {
+        format!("\n{style_section}\n")
     };
     let vague_note = match (last.map(|m| m.direction), latest_inbound) {
         (Some(Direction::Inbound), Some(inbound)) if is_short_vague_reply(&inbound.text) => {
@@ -287,14 +358,26 @@ pub fn build_user_prompt(
     };
     let mode_note = mode_note(mode, custom);
     format!(
-        "Draft the next {channel_label} message for sales rep {user_name} to send to this customer.\n{deal_focus}\n{length_note}\n\n{mode_note}\n\n{latest_inbound_note}\n{direction_note}\n{greeting_note}\n{promised_note}\n{vague_note}\n{avoid_note}\n\nCUSTOMER / PROJECT INFO:\n{}\n\nCOMPANY ADMINISTRATIVE INSTRUCTIONS / GUARDRAILS:\n{instructions}\n\nFULL CONVERSATION — SMS and email combined, oldest first:\n{}\n\nReturn JSON with a single \"body\" field containing the draft message only. For email, that field is the body — never a Subject line.",
+        "Draft the next {channel_label} message for sales rep {user_name} to send to this customer.\n{deal_focus}\n{length_note}\n{greeting_note}\n{signature_note}\n\n{mode_note}\n\n{latest_inbound_note}\n{direction_note}\n{promised_note}\n{vague_note}\n{avoid_note}\n{style_section}\nCUSTOMER / PROJECT INFO:\n{}\n\n{quotes_block}\n\nCOMPANY ADMINISTRATIVE INSTRUCTIONS / GUARDRAILS:\n{instructions}\n\nFULL CONVERSATION — SMS and email combined, oldest first (times UTC):\n{}\n\nNOW: {} UTC\n\nUse the concrete facts above (chosen stone/color, quote, open next step). Return JSON with a single \"body\" field containing the draft message only. For email, that field is the body — never a Subject line.",
         if trim(profile).is_empty() {
             "(none)"
         } else {
             trim(profile)
         },
         format_timeline(timeline),
+        now.format("%Y-%m-%d %H:%M"),
     )
+}
+
+/// What the draft is written from besides the thread and profile.
+#[derive(Debug, Clone, Default)]
+pub struct ReplyExtras {
+    /// The customer's quotes ([`reply_context::format_quotes`]).
+    pub quotes: String,
+    /// The rep's learned writing notes.
+    pub rep_notes: Vec<String>,
+    /// The rep's own recent messages and signature habit.
+    pub voice: RepVoice,
 }
 
 /// A custom draft's request, and the revision of an earlier draft.
@@ -309,7 +392,7 @@ pub struct CustomDraft {
 fn mode_note(mode: ReplyMode, custom: &CustomDraft) -> String {
     match mode {
         ReplyMode::FastReply => "REPLY MODE: Fast reply.\nPrefer a short, immediate reply to the latest customer message.\nKeep it tight. Acknowledge what they said, then one natural next step or question if needed.\nDo not write a long check-in or restart the conversation.".into(),
-        ReplyMode::FollowUp => "REPLY MODE: Follow up.\nThe customer has not answered the latest rep message. Continue that specific topic.\nUse facts already in the thread: the quote, the stones they named, the edge they chose, a discount, or a visit they cannot make.\nAsk one question about that open decision.\nDo not invent an agreement to reconnect. Never write \"as we agreed\" or \"reaching out as we agreed\" unless the thread shows they asked you to wait and you agreed.\nDo not ask how the project or renovation is coming along when a concrete next step is already open.".into(),
+        ReplyMode::FollowUp => "REPLY MODE: Follow up.\nThe customer has not answered the latest rep message. Continue that specific topic.\nUse facts already in the thread and in QUOTES: the quote (and whether they opened it), the stones they named, the edge they chose, a discount, or a visit they cannot make.\nAsk one question about that open decision.\nDo not invent an agreement to reconnect. Never write \"as we agreed\" or \"reaching out as we agreed\" unless the thread shows they asked you to wait and you agreed.\nDo not ask how the project or renovation is coming along when a concrete next step is already open.".into(),
         ReplyMode::Custom if !custom.previous_draft.is_empty() && !custom.revision_instruction.is_empty() => {
             let history: Vec<&str> = if custom.instruction_history.is_empty() {
                 if custom.request.is_empty() { Vec::new() } else { vec![custom.request.as_str()] }
@@ -426,11 +509,62 @@ fn checked(
     Ok((channel, phone_digits, email, has_email, custom))
 }
 
+/// The trimmed `body` of the model's JSON; empty when it has none.
+fn reply_body(text: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| {
+            v.get("body")
+                .and_then(|b| b.as_str())
+                .map(|b| trim(b).to_string())
+        })
+        .unwrap_or_default()
+}
+
+/// The customer's quotes and the rep's voice. The quotes are best effort: a
+/// failed lookup leaves them out rather than failing the draft.
+async fn load_extras(
+    state: &AppState,
+    user: &crate::auth::session::SessionUser,
+    customer_id: Option<i32>,
+    deal_id: Option<i64>,
+    gathered: &crate::followups::gather::GatheredContext,
+) -> ReplyExtras {
+    let quotes = match customer_id {
+        Some(customer_id) => {
+            match reply_context::load_quotes(&state.pool, user.company_id, customer_id, deal_id)
+                .await
+            {
+                Ok(quotes) => reply_context::format_quotes(&quotes, deal_id),
+                Err(err) => {
+                    tracing::warn!(error = %err, customer_id, "AI reply: quotes unavailable");
+                    String::new()
+                }
+            }
+        }
+        None => String::new(),
+    };
+    ReplyExtras {
+        quotes,
+        rep_notes: gathered
+            .style_profile
+            .as_ref()
+            .and_then(|p| p.notes.clone())
+            .unwrap_or_default(),
+        voice: gathered.rep_voice.clone(),
+    }
+}
+
 /// Draft the next message
 ///
-/// Drafts the next SMS or email to a customer from the whole conversation:
-/// a fast reply, a follow-up on the open topic, or a custom draft (and
-/// revisions of it).
+/// Drafts the next SMS or email to a customer from the whole conversation
+/// (SMS and email together), the customer's profile, deals and quotes
+/// (colors, totals, sent / opened / signed), the company's AI instructions
+/// and the rep's own recent messages: a fast reply, a follow-up on the open
+/// topic, or a custom draft (and revisions of it). The draft greets the
+/// customer by name only in a new conversation or when the last SMS or email
+/// with them is more than 60 days old; otherwise it has no greeting and no
+/// name. Takes several seconds (a larger model).
 #[utoipa::path(
     post,
     path = "/v1/ai/conversation-reply",
@@ -474,6 +608,7 @@ pub async fn conversation_reply(
     let gathered = gather_followup_context(&state.pool, &request, now).await?;
     let include_instructions =
         input.mode != ReplyMode::Custom || input.include_instructions != Some(false);
+    let extras = load_extras(&state, &user, gathered.customer_id, input.deal_id, &gathered).await;
     let user_prompt = build_user_prompt(
         channel,
         user.name.as_deref().unwrap_or(""),
@@ -487,6 +622,7 @@ pub async fn conversation_reply(
         input.deal_id,
         input.mode,
         &custom,
+        &extras,
         now,
     );
     let caller = Caller {
@@ -494,34 +630,53 @@ pub async fn conversation_reply(
         user_id: Some(user.id),
         company_id: Some(user.company_id),
     };
-    let chat = |model| {
+    let chat = |model, timeout| {
         let mut chat = Chat::new(model)
             .message("system", CONVERSATION_REPLY_SYSTEM_PROMPT)
             .message("user", &user_prompt);
         chat.json = true;
+        chat.timeout = timeout;
+        chat.prompt_cache_key = Some(format!("conversation-reply:{}", user.company_id));
         chat
     };
-    let text = match state.ai.chat(&state.pool, caller, &chat(MINI_MODEL)).await {
-        Err(err) if err.is_model_permission() => {
-            state
-                .ai
-                .chat(&state.pool, caller, &chat(REPLY_FALLBACK_MODEL))
-                .await
+    let mut large = chat(REPLY_MODEL, REPLY_MODEL_TIMEOUT);
+    large.reasoning_effort = Some(REPLY_REASONING_EFFORT);
+    // The large model first; on any failure (no access, overloaded, too slow)
+    // or an empty draft, the quick model so the button still answers.
+    let mut body = match state.ai.chat(&state.pool, caller, &large).await {
+        Ok(text) => reply_body(&text),
+        Err(AiError::NotConfigured) => {
+            return Err(ApiError::Unavailable(AiError::NotConfigured.to_string()));
         }
-        result => result,
+        Err(err) => {
+            tracing::warn!(error = %err, model = REPLY_MODEL, "AI reply falling back to the quick model");
+            String::new()
+        }
+    };
+    if body.is_empty() {
+        let text = match state
+            .ai
+            .chat(&state.pool, caller, &chat(MINI_MODEL, FALLBACK_TIMEOUT))
+            .await
+        {
+            Err(err) if err.is_model_permission() => {
+                state
+                    .ai
+                    .chat(
+                        &state.pool,
+                        caller,
+                        &chat(REPLY_FALLBACK_MODEL, FALLBACK_TIMEOUT),
+                    )
+                    .await
+            }
+            result => result,
+        }
+        .map_err(|err| match err {
+            AiError::NotConfigured => ApiError::Unavailable(err.to_string()),
+            other => ApiError::Upstream(format!("Failed to generate AI reply: {other}")),
+        })?;
+        body = reply_body(&text);
     }
-    .map_err(|err| match err {
-        AiError::NotConfigured => ApiError::Unavailable(err.to_string()),
-        other => ApiError::Upstream(format!("Failed to generate AI reply: {other}")),
-    })?;
-    let mut body = serde_json::from_str::<serde_json::Value>(&text)
-        .ok()
-        .and_then(|v| {
-            v.get("body")
-                .and_then(|b| b.as_str())
-                .map(|b| trim(b).to_string())
-        })
-        .unwrap_or_default();
     if channel == FollowupChannel::Email {
         body =
             trim(&re!(r"^(?:Subject:\s*[^\n\r]*(?:\r?\n)+)+", "iu").replace(&body, "")).to_string();
@@ -617,6 +772,7 @@ mod tests {
             None,
             mode,
             custom,
+            &ReplyExtras::default(),
             now,
         )
     }
@@ -687,24 +843,131 @@ mod tests {
     }
 
     #[test]
-    fn a_message_sent_today_skips_the_greeting() {
-        let timeline = vec![message(
-            "2026-10-13 09:00",
-            Direction::Inbound,
-            "Can you send the price for the island top please?",
-        )];
-        assert!(
-            prompt(&timeline, ReplyMode::FastReply, &CustomDraft::default())
-                .contains("Do NOT start with \"Hi\"")
+    fn a_recent_message_on_any_channel_skips_the_greeting() {
+        // Yesterday evening is a different calendar day, still no greeting.
+        for at in ["2026-10-13 09:00", "2026-10-12 22:30"] {
+            let timeline = vec![message(
+                at,
+                Direction::Inbound,
+                "Can you send the price for the island top please?",
+            )];
+            let text = prompt(&timeline, ReplyMode::FastReply, &CustomDraft::default());
+            assert!(text.contains("GREETING: NONE"), "{at}");
+            assert!(text.contains("Do NOT open with a greeting"));
+            assert!(text.contains("do NOT use the customer's name"));
+        }
+        // The rep just texted; an email draft still continues without "Hi".
+        let mut texted = lenora();
+        texted.push(message("2026-10-13 14:40", Direction::Outbound, "Just sent the quote"));
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-13T15:00:00Z")
+            .unwrap()
+            .to_utc();
+        let email = build_user_prompt(
+            FollowupChannel::Email,
+            "Dema",
+            "Name: Lenora",
+            "",
+            &texted,
+            None,
+            ReplyMode::FollowUp,
+            &CustomDraft::default(),
+            &ReplyExtras::default(),
+            now,
         );
+        assert!(email.contains("GREETING: NONE") && email.contains("20 minutes ago"));
+        // Lenora's last message was 48 days ago: still no greeting or name.
+        assert!(
+            prompt(&lenora(), ReplyMode::FastReply, &CustomDraft::default())
+                .contains("GREETING: NONE")
+        );
+        // Over 60 days, or no history at all: greet by name.
         let old = vec![message(
-            "2026-10-12 09:00",
+            "2026-08-01 09:00",
             Direction::Inbound,
             "Can you send the price for the island top please?",
         )];
+        let text = prompt(&old, ReplyMode::FastReply, &CustomDraft::default());
+        assert!(text.contains("GREETING: BY NAME") && !text.contains("GREETING: NONE"));
         assert!(
-            !prompt(&old, ReplyMode::FastReply, &CustomDraft::default())
-                .contains("Do NOT start with \"Hi\"")
+            prompt(&[], ReplyMode::FastReply, &CustomDraft::default())
+                .contains("GREETING: BY NAME")
         );
+    }
+
+    #[test]
+    fn quotes_voice_and_signature_reach_the_prompt() {
+        let extras = ReplyExtras {
+            quotes: "Quote \"Kitchen\" (#4, status active)\n  Option 1: Kitchen: Quartz Viraldi · total $3,100.00".into(),
+            rep_notes: vec!["Opens with 'Hey'".into()],
+            voice: RepVoice {
+                examples: vec!["Hey! Slabs are in, want to come see them Thursday?".into()],
+                has_email_signature: false,
+                email_name: Some("Dema Petrova".into()),
+            },
+        };
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-13T15:00:00Z")
+            .unwrap()
+            .to_utc();
+        let email = build_user_prompt(
+            FollowupChannel::Email,
+            "Dema",
+            "Name: Lenora",
+            "Always mention free sink cutouts",
+            &lenora(),
+            Some(9),
+            ReplyMode::FollowUp,
+            &CustomDraft::default(),
+            &extras,
+            now,
+        );
+        assert!(email.contains("QUOTES (this customer's quotes, newest first; times UTC):\nQuote \"Kitchen\""));
+        assert!(email.contains("total $3,100.00"));
+        assert!(email.contains("HOW DEMA WRITES"));
+        assert!(email.contains("RECENT MESSAGES BY THE REP") && email.contains("- Hey! Slabs are in"));
+        assert!(email.contains("SIGNATURE: No signature is added") && email.contains("\"Dema\""));
+        assert!(email.contains("Always mention free sink cutouts"));
+        assert!(email.contains("NOW: 2026-10-13 15:00 UTC"));
+        let signed = ReplyExtras {
+            voice: RepVoice {
+                has_email_signature: true,
+                ..RepVoice::default()
+            },
+            ..ReplyExtras::default()
+        };
+        let email = build_user_prompt(
+            FollowupChannel::Email,
+            "Dema",
+            "",
+            "",
+            &[],
+            None,
+            ReplyMode::FastReply,
+            &CustomDraft::default(),
+            &signed,
+            now,
+        );
+        assert!(email.contains("signature is added automatically"));
+        assert!(email.contains("QUOTES: (none on file for this customer)"));
+        assert!(!email.contains("RECENT MESSAGES BY THE REP"));
+        assert!(prompt(&lenora(), ReplyMode::FastReply, &CustomDraft::default())
+            .contains("SIGNATURE: none — texts never end"));
+    }
+
+    #[test]
+    fn the_system_prompt_does_not_anchor_a_greeting() {
+        let p = CONVERSATION_REPLY_SYSTEM_PROMPT;
+        assert!(p.contains("GREETING: NONE") && p.contains("GREETING: BY NAME"));
+        assert!(p.contains("at most once"));
+        // GOOD examples open without a greeting except after a 60+ day gap,
+        // and the examples model plain writing: no em dashes in them.
+        let goods: Vec<&str> = p.lines().filter(|l| l.starts_with("GOOD: \"")).collect();
+        assert!(goods.len() >= 4);
+        assert_eq!(goods.iter().filter(|l| l.starts_with("GOOD: \"Hi")).count(), 1);
+        assert!(goods.iter().all(|l| !l.contains('—')));
+        assert!(p.contains("two weeks later (GREETING: NONE"));
+        assert!(p.contains("\"Reaching out as we agreed. How is the project going?\""));
+        assert!(p.contains("\"Here's the island quote in Calacatta Karmelo"));
+        assert!(reply_body(r#"{"body":"  Sounds good  "}"#) == "Sounds good");
+        assert_eq!(reply_body("not json"), "");
     }
 }

@@ -552,6 +552,63 @@ pub struct QuoteEmailRow {
     pub body_html: Option<String>,
     /// The link was switched off (ISO 8601).
     pub deactivated_at: Option<String>,
+    /// Every time the link was opened, newest first. Views from before
+    /// views were kept one by one are only in `view_count`, so this list
+    /// can be shorter than the count.
+    #[sqlx(skip)]
+    pub views: Vec<QuoteEmailView>,
+}
+
+/// One opening of an emailed quote link.
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+pub struct QuoteEmailView {
+    /// The email whose link was opened.
+    #[serde(skip)]
+    pub quote_email_id: i32,
+    /// When (ISO 8601).
+    pub viewed_at: String,
+    /// The viewer's IP address, when known.
+    pub ip_address: Option<String>,
+    /// The viewer's browser (`User-Agent`), when known.
+    pub user_agent: Option<String>,
+}
+
+/// The quote's emails with every view of their links. Without the views
+/// (e.g. the table is not there yet) the emails still load, counts only.
+async fn with_email_views(
+    pool: &MySqlPool,
+    quote_id: i32,
+    mut emails: Vec<QuoteEmailRow>,
+) -> Vec<QuoteEmailRow> {
+    if emails.is_empty() {
+        return emails;
+    }
+    let views: Vec<QuoteEmailView> = match sqlx::query_as(
+        "SELECT v.quote_email_id, DATE_FORMAT(v.viewed_at, '%Y-%m-%dT%H:%i:%sZ') AS viewed_at,
+                v.ip_address, v.user_agent
+           FROM quote_email_views v JOIN quote_emails e ON e.id = v.quote_email_id
+          WHERE e.quote_id = ? ORDER BY v.viewed_at DESC, v.id DESC",
+    )
+    .bind(quote_id)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(views) => views,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                quote = quote_id,
+                "could not load the quote email views"
+            );
+            return emails;
+        }
+    };
+    for view in views {
+        if let Some(email) = emails.iter_mut().find(|e| e.id == view.quote_email_id) {
+            email.views.push(view);
+        }
+    }
+    emails
 }
 
 /// A contract sent for signature from this quote.
@@ -981,6 +1038,7 @@ pub async fn get_quote(
     .bind(id)
     .fetch_all(&state.pool)
     .await?;
+    let emails = with_email_views(&state.pool, id, emails).await;
     let autosave: Option<(Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT CAST(drawing_json AS CHAR), DATE_FORMAT(saved_at, '%Y-%m-%dT%H:%i:%sZ')
            FROM quote_autosaves WHERE quote_id = ? AND user_id = ?",
@@ -1872,10 +1930,17 @@ pub struct QuoteEmail {
     /// Blind copies.
     #[serde(default)]
     pub bcc: Vec<String>,
-    /// Subject (required); `{{variables}}` are filled in.
+    /// Subject (required); `{{variables}}` are filled in like the body's.
     pub subject: String,
-    /// Plain text; `{{variables}}` are filled in and `[QuoteLink]`/`[PDFLink]`
-    /// become the link (added at the end when missing).
+    /// Plain text. `{{variables}}` are filled in: the `POST /v1/templates/fill`
+    /// ones (`user.*`, `customer.*`, `company.*`, `deal.*` when the quote has a
+    /// deal, `current_date`) plus `{{quote.name}}`, `{{quote.total}}`
+    /// (accepted option, else the first, e.g. `$12,345.00`), `{{quote.color}}`
+    /// (that option's materials and colors), `{{quote.link}}` (the customer's
+    /// link) and `{{quote.expiration}}` (e.g. `November 5, 2026`). A
+    /// `{{quote.*}}` or `{{deal.*}}` with no value yet is refused (400);
+    /// other unknown variables are left as typed. `[QuoteLink]`/`[PDFLink]` become a "View
+    /// your quote" link; one is added at the end when the link is missing.
     pub body: String,
     /// A company form the link shows the quote in.
     #[serde(default)]
@@ -1909,7 +1974,7 @@ fn link_tags(text: &str, with: &str) -> String {
     request_body = QuoteEmail,
     responses(
         (status = 204, description = "Sent"),
-        (status = 400, description = "No recipient or subject", body = ErrorBody),
+        (status = 400, description = "No recipient or subject, or a `{{quote.*}}`/`{{deal.*}}` variable the quote or its deal has no value for yet (the message names it)", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
         (status = 404, description = "No such quote", body = ErrorBody),
@@ -1941,8 +2006,14 @@ pub async fn email_quote(
             "Recipient and subject are required.".into(),
         ));
     }
+    // The link exists before filling so `{{quote.link}}` can use it.
+    let portal = ensure_portal_token(&state.pool, &quote).await?;
+    let email_token = token()?;
+    let subdomain = company_subdomain(&state.pool, user.company_id).await?;
+    let origin = app_origin(&state.app_url, subdomain.as_deref());
+    let link = format!("{origin}/quote-portal/{portal}?e={email_token}");
     if subject.contains("{{") || body.contains("{{") {
-        let data = fetch_template_variable_data(
+        let mut data = fetch_template_variable_data(
             &state.pool,
             user.id,
             quote.deal_id.and_then(|d| i32::try_from(d).ok()),
@@ -1953,8 +2024,47 @@ pub async fn email_quote(
         .map_err(|_| {
             ApiError::Upstream("Could not fill the template variables. Try again.".into())
         })?;
+        let wants = |key: &str| {
+            common::utils::template::placeholder_keys(&subject)
+                .into_iter()
+                .chain(common::utils::template::placeholder_keys(&body))
+                .any(|k| k.eq_ignore_ascii_case(key))
+        };
+        // Pricing the quote is only worth it when the email shows it.
+        let (mut total, mut color) = (None, None);
+        if wants("quote.total") || wants("quote.color") {
+            let priced = pricing_quote(&state, id, user.company_id).await?;
+            let doc = priced.doc();
+            if let Some(option) = quote_pricing::email_option_index(&priced, &doc) {
+                color = quote_pricing::option_color_text(&doc, option);
+                if wants("quote.total") {
+                    total = quote_pricing::option_total(&state.pool, &priced, option).await?;
+                }
+            }
+        }
+        data.quote = Some(common::crud::template::QuoteVariableData {
+            name: quote.quote_name.clone(),
+            total,
+            color,
+            link: Some(link.clone()),
+            expiration: quote.expiration_date.clone(),
+        });
         subject = replace_template_variables(&subject, &data);
         body = replace_template_variables(&body, &data);
+        // A quote or deal fact that is not there yet must not reach the
+        // customer as a raw `{{quote.…}}` / `{{deal.…}}`.
+        if let Some(key) = common::utils::template::placeholder_keys(&subject)
+            .into_iter()
+            .chain(common::utils::template::placeholder_keys(&body))
+            .find(|k| {
+                let k = k.to_ascii_lowercase();
+                k.starts_with("quote.") || k.starts_with("deal.")
+            })
+        {
+            return Err(ApiError::BadRequest(format!(
+                "There is nothing to fill {{{{{key}}}}} with yet. Add it to the quote or its deal (name, colors, prices, amount or expiration date), or remove {{{{{key}}}}} from the email, and send again."
+            )));
+        }
     }
     let form = match input.form_id {
         Some(form) => quote_forms::summaries(&state.pool, user.company_id, false)
@@ -1964,8 +2074,6 @@ pub async fn email_quote(
             .map(|f| f.id.to_string()),
         None => None,
     };
-    let portal = ensure_portal_token(&state.pool, &quote).await?;
-    let email_token = token()?;
     sqlx::query(
         "INSERT INTO quote_emails (quote_id, revision_number, token, recipients, subject, form, sent_by, expires_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1980,11 +2088,15 @@ pub async fn email_quote(
     .bind(quote.expiration_date.as_deref())
     .execute(&state.pool)
     .await?;
-    let subdomain = company_subdomain(&state.pool, user.company_id).await?;
-    let origin = app_origin(&state.app_url, subdomain.as_deref());
-    let link = format!("{origin}/quote-portal/{portal}?e={email_token}");
     let anchor = format!("<a href=\"{link}\">View your quote</a>");
-    let html = link_tags(&escape(&body).replace('\n', "<br/>"), &anchor);
+    // A bare link (from `{{quote.link}}`) is made clickable.
+    let clickable = format!("<a href=\"{link}\">{link}</a>");
+    let html = link_tags(
+        &escape(&body)
+            .replace('\n', "<br/>")
+            .replace(&link, &clickable),
+        &anchor,
+    );
     let html = if html.contains(&link) {
         html
     } else {

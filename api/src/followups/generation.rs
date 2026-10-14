@@ -161,6 +161,7 @@ pub async fn complete_followup(
         crm_hold: gathered.crm_hold_for_prompt(),
         contact_pressure: Some(gathered.contact_pressure.clone()),
         style_profile: gathered.style_profile.clone(),
+        rep_voice: gathered.rep_voice.examples.clone(),
         force_generate: false,
     });
     let reply = writer
@@ -389,6 +390,7 @@ pub async fn complete_cadence(
             },
             contact_pressure: Some(gathered.contact_pressure.clone()),
             style_profile: gathered.style_profile.clone(),
+            rep_voice: gathered.rep_voice.examples.clone(),
             force_generate: request.force_generate,
             step_channels: channels.clone(),
         },
@@ -510,7 +512,11 @@ async fn complete_cadence_new_context(
         style_profile: gathered.style_profile.as_ref(),
     };
     let context = build_cadence_model_context(&source, &writable_steps, now);
-    let prompt = build_refactored_cadence_prompt(AI_FOLLOWUP_PROMPT, &context);
+    let mut prompt = build_refactored_cadence_prompt(AI_FOLLOWUP_PROMPT, &context);
+    let voice = super::rep_voice::format_voice_block(&gathered.rep_voice.examples);
+    if !voice.is_empty() {
+        prompt.user_prompt = format!("{}\n\n{voice}", prompt.user_prompt);
+    }
     let system_prompt = if request.force_generate {
         format!(
             "{}\n\n{FORCE_GENERATE_CADENCE_INSTRUCTION}",
@@ -757,6 +763,7 @@ pub async fn regenerate_cadence_message(
             },
             contact_pressure: Some(gathered.contact_pressure.clone()),
             style_profile: gathered.style_profile.clone(),
+            rep_voice: gathered.rep_voice.examples.clone(),
             force_generate,
             step_channels: vec![step.channel],
         },

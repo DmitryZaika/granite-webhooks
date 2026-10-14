@@ -81,7 +81,9 @@ async fn a_fast_reply_reads_the_whole_conversation(pool: MySqlPool) {
         json!({ "body": "Sure thing, I will send the price today!" })
     );
     let sent = seen.lock().unwrap().clone();
-    assert_eq!(sent[0]["model"], "gpt-6-luna");
+    // The larger model drafts.
+    assert_eq!(sent[0]["model"], "gpt-6.1-sol");
+    assert_eq!(sent[0]["reasoning_effort"], "low");
     assert_eq!(sent[0]["response_format"], json!({ "type": "json_object" }));
     let user = sent[0]["messages"][1]["content"].as_str().unwrap();
     assert!(
@@ -94,6 +96,8 @@ async fn a_fast_reply_reads_the_whole_conversation(pool: MySqlPool) {
     assert!(user.contains("[2026-09-20 15:00] SMS Customer: Hi, we are still thinking about the white quartz. Can you send the price?"));
     assert!(user.contains("[2026-09-10 10:00] EMAIL Customer: Subject: Kitchen quote"));
     assert!(user.contains("COMPANY ADMINISTRATIVE INSTRUCTIONS / GUARDRAILS:\nTone\nBe friendly."));
+    assert!(user.contains("GREETING: ") && user.contains("SIGNATURE: none"));
+    assert!(user.contains("QUOTES"));
     assert!(
         sent[0]["messages"][0]["content"]
             .as_str()
@@ -113,6 +117,7 @@ async fn an_email_draft_drops_a_subject_line_and_falls_back_to_the_reply_model(p
     let (server, seen) = server(
         &pool,
         vec![
+            (503, json!({ "error": { "message": "The server is overloaded" } })),
             (403, json!({ "error": { "message": "The project does not have access to model gpt-6-luna" } })),
             (200, json!({ "body": "Subject: Your quote\n\nHi Alice, here is the price." })),
         ],
@@ -127,15 +132,24 @@ async fn an_email_draft_drops_a_subject_line_and_falls_back_to_the_reply_model(p
     res.assert_status_ok();
     assert_eq!(res.json::<Value>()["body"], "Hi Alice, here is the price.");
     let sent = seen.lock().unwrap().clone();
-    assert_eq!(sent[1]["model"], "gpt-5.6-luna");
-    let user = sent[1]["messages"][1]["content"].as_str().unwrap();
+    // The large model failed, the quick one has no access, its fallback drafts.
+    assert_eq!(sent[0]["model"], "gpt-6.1-sol");
+    assert_eq!(sent[1]["model"], "gpt-6-luna");
+    assert!(sent[1].get("reasoning_effort").is_none());
+    assert_eq!(sent[2]["model"], "gpt-5.6-luna");
+    let user = sent[2]["messages"][1]["content"].as_str().unwrap();
     assert!(user.contains("REPLY MODE: Custom.\nThe sales rep gave this instruction for the draft:\n\"Send the price\""));
     assert!(user.contains("COMPANY ADMINISTRATIVE INSTRUCTIONS / GUARDRAILS:\n(none)"));
 }
 
 #[test_db::test(seed)]
 async fn an_empty_draft_is_an_error(pool: MySqlPool) {
-    let (server, _) = server(&pool, vec![(200, json!({ "body": "   " }))]).await;
+    // The large model and the quick one both write nothing.
+    let (server, seen) = server(
+        &pool,
+        vec![(200, json!({ "body": "   " })), (200, json!({ "body": "" }))],
+    )
+    .await;
     let res = server
         .post("/v1/ai/conversation-reply")
         .with_session(sessions::REP)
@@ -143,6 +157,7 @@ async fn an_empty_draft_is_an_error(pool: MySqlPool) {
         .await;
     res.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(res.json::<Value>()["error"], "Failed to generate AI reply");
+    assert_eq!(seen.lock().unwrap().len(), 2);
 }
 
 #[test_db::test(seed)]

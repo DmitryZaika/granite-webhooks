@@ -13,7 +13,7 @@ use std::fmt::Write;
 use utoipa::ToSchema;
 
 /// The CRM's `TEMPLATE_VARIABLES`: key and label.
-const VARIABLES: [(&str, &str); 10] = [
+const VARIABLES: [(&str, &str); 14] = [
     ("user.first_name", "Employee first name"),
     ("customer.first_name", "Customer First name"),
     ("customer.inventory_page", "Customer inventory page"),
@@ -24,6 +24,10 @@ const VARIABLES: [(&str, &str); 10] = [
     ("current_date", "Current day and month"),
     ("company.hours_of_operation", "Hours of operation"),
     ("customer.address", "Customer address"),
+    ("customer.last_name", "Customer last name"),
+    ("customer.email", "Customer email"),
+    ("customer.phone", "Customer phone number"),
+    ("user.last_name", "Employee last name"),
 ];
 
 fn system_prompt() -> String {

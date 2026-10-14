@@ -15,12 +15,17 @@ use crate::quote_pricing::{
     customer_doc, load_company_quote, mark_quote_sold, option_sold_out_colors, pricing_for_quote,
 };
 use crate::routes::auth::{app_origin, company_subdomain};
+use crate::routes::emails::signature_mail::{
+    Branding, QuoteSignedNotice, SignedArea, quote_signed_html,
+};
 use crate::routes::quote_editor::{QUOTE_ROW_SELECT, QuoteRow, StoneImage};
 use crate::routes::quote_forms;
 use crate::state::AppState;
+use crate::webhooks_client::OutgoingEmail;
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
+use chrono_tz::America::Indiana::Indianapolis;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -60,6 +65,20 @@ async fn link_active(pool: &MySqlPool, quote_id: i32, email: Option<&str>) -> Ap
         return Ok(mine.1.is_none());
     }
     Ok(rows.is_empty() || rows.iter().any(|r| r.1.is_none()))
+}
+
+/// A request header as text, at most `max` characters; `first_entry` keeps
+/// what is before the first comma (`X-Forwarded-For`: the client's address).
+fn header_text(headers: &HeaderMap, name: &str, max: usize, first_entry: bool) -> Option<String> {
+    let value = headers.get(name)?.to_str().ok()?;
+    let value = if first_entry {
+        value.split(',').next().unwrap_or(value)
+    } else {
+        value
+    };
+    Some(value.trim())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.chars().take(max).collect())
 }
 
 /// `?e=`: the email the link came from.
@@ -160,7 +179,9 @@ async fn form_data(
 ///
 /// The quote with its prices, drawing (no supplier costs), color photos
 /// and, when it was emailed with a company form, that form. An emailed
-/// link (`e`) counts as a view. A switched-off link answers `inactive`.
+/// link (`e`) counts as a view, and each view is kept with its time, IP
+/// address and browser (listed on the quote's emails). A switched-off link
+/// answers `inactive`.
 #[utoipa::path(
     get,
     path = "/v1/public/quote-portal/{token}",
@@ -178,6 +199,7 @@ pub async fn portal_quote(
     State(state): State<AppState>,
     Path(token): Path<String>,
     Query(query): Query<EmailToken>,
+    headers: HeaderMap,
 ) -> ApiResult<Json<PortalQuote>> {
     let row = by_token(&state.pool, &token).await?;
     let email = query.e.as_deref().filter(|e| !e.is_empty());
@@ -210,6 +232,21 @@ pub async fn portal_quote(
             .bind(id)
             .execute(&state.pool)
             .await?;
+            // Every view is kept, so the quote page can list them all.
+            if let Err(error) = sqlx::query(
+                "INSERT INTO quote_email_views (quote_email_id, ip_address, user_agent) VALUES (?, ?, ?)",
+            )
+            .bind(id)
+            .bind(
+                header_text(&headers, "x-forwarded-for", 64, true)
+                    .or_else(|| header_text(&headers, "x-real-ip", 64, false)),
+            )
+            .bind(header_text(&headers, "user-agent", 1000, false))
+            .execute(&state.pool)
+            .await
+            {
+                tracing::error!(?error, quote_email = id, "could not record the quote email view");
+            }
             if quote_id == row.id {
                 viewed_form = form.filter(|f| !f.is_empty());
             }
@@ -318,8 +355,11 @@ pub struct Acceptance {
 /// Accept and sign a quote
 ///
 /// Signing is a sale: the quote is sold with the option and its deal won.
-/// Refused once signed, for an option with a sold-out color, or when the
-/// link is switched off.
+/// The quote's sales rep (its salesperson, else its creator, else the
+/// deal's owner) is then emailed the customer, the option, each area's
+/// material, color and edges, and the total, and notified in the app when
+/// the quote has a deal. Refused once signed, for an option with a
+/// sold-out color, or when the link is switched off.
 #[utoipa::path(
     post,
     path = "/v1/public/quote-portal/{token}/acceptance",
@@ -380,21 +420,256 @@ pub async fn accept_quote(
     .execute(&state.pool)
     .await?
     .rows_affected();
-    if signed > 0
-        && let Err(error) = mark_quote_sold(
-            &state.pool,
-            row.id,
-            row.company_id,
-            Some(input.option),
-            None,
+    if signed == 0 {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    let deal_id = match mark_quote_sold(
+        &state.pool,
+        row.id,
+        row.company_id,
+        Some(input.option),
+        None,
+    )
+    .await
+    {
+        Ok(sale) => sale.and_then(|s| s.deal_id),
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                quote = row.id,
+                "could not mark the quote sold after signing"
+            );
+            None
+        }
+    };
+    let total = price_quote(&doc, &price_list, quote.options())
+        .get(index)
+        .map(|o| o.total)
+        .filter(|t| t.is_finite());
+    notify_signed(&state, &row, &doc, index, total, deal_id.or(row.deal_id)).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `$12,345.67`.
+fn money(value: f64) -> String {
+    #[allow(clippy::cast_possible_truncation)]
+    let cents = (value.abs() * 100.0).round() as i64;
+    let digits = (cents / 100).to_string();
+    let mut grouped = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    let sign = if value < 0.0 { "-" } else { "" };
+    format!("{sign}${grouped}.{:02}", cents % 100)
+}
+
+/// What the customer picked for each area in option `index`.
+fn signed_areas(doc: &QuoteDoc, index: usize) -> Vec<SignedArea> {
+    let option = doc.color_options.get(index);
+    doc.areas
+        .iter()
+        .map(|area| {
+            let picked = option.and_then(|o| o.by_area.get(&area.id));
+            SignedArea {
+                name: area.name.clone(),
+                material: picked.map(|p| p.product.clone()).unwrap_or_default(),
+                color: picked.map(|p| p.color.clone()).unwrap_or_default(),
+                edges: picked.map(|p| p.edges.clone()).unwrap_or_default(),
+            }
+        })
+        .collect()
+}
+
+#[derive(sqlx::FromRow)]
+struct SignedRecipient {
+    id: i32,
+    email: Option<String>,
+    name: Option<String>,
+}
+
+/// The quote's sales rep hears that the customer signed: an email with the
+/// option, each area's color and the total, and (when the quote has a deal)
+/// an in-app notification. The rep is the quote's salesperson, else its
+/// creator, else the deal's owner. A failure loses only the notice.
+#[allow(clippy::too_many_lines)]
+async fn notify_signed(
+    state: &AppState,
+    row: &QuoteRow,
+    doc: &QuoteDoc,
+    index: usize,
+    total: Option<f64>,
+    deal_id: Option<i64>,
+) {
+    let found = async {
+        let deal_owner: Option<i32> = match deal_id {
+            Some(deal) => sqlx::query_scalar::<_, Option<i32>>(
+                "SELECT user_id FROM deals WHERE id = ? AND deleted_at IS NULL LIMIT 1",
+            )
+            .bind(deal)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten(),
+            None => None,
+        };
+        let mut recipient: Option<SignedRecipient> = None;
+        for id in [row.salesperson_id, row.created_by, deal_owner]
+            .into_iter()
+            .flatten()
+        {
+            recipient = sqlx::query_as(
+                "SELECT id, email, name FROM users WHERE id = ? AND company_id = ? AND is_deleted = 0 LIMIT 1",
+            )
+            .bind(id)
+            .bind(row.company_id)
+            .fetch_optional(&state.pool)
+            .await?;
+            if recipient.is_some() {
+                break;
+            }
+        }
+        let company: Option<(Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT name, logo_url FROM company WHERE id = ? LIMIT 1")
+                .bind(row.company_id)
+                .fetch_optional(&state.pool)
+                .await?;
+        let subdomain = company_subdomain(&state.pool, row.company_id).await?;
+        ApiResult::Ok((recipient, company.unwrap_or_default(), subdomain))
+    }
+    .await;
+    let (recipient, (company_name, logo_url), subdomain) = match found {
+        Ok((Some(recipient), company, subdomain)) => (recipient, company, subdomain),
+        Ok((None, ..)) => return,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                quote = row.id,
+                "could not notify that the quote was signed"
+            );
+            return;
+        }
+    };
+    let customer = row
+        .customer_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .unwrap_or("The customer");
+    let quote_name = row.display_name();
+    let option_label = format!("Option {}", index + 1);
+    let areas = signed_areas(doc, index);
+    let colors: Vec<&str> = areas
+        .iter()
+        .map(|a| a.color.trim())
+        .filter(|c| !c.is_empty())
+        .fold(Vec::new(), |mut out, c| {
+            if !out.contains(&c) {
+                out.push(c);
+            }
+            out
+        });
+    let color_text = if colors.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", colors.join(", "))
+    };
+    let message = format!("{customer} signed {quote_name}: {option_label}{color_text}");
+
+    if let Some(deal) = deal_id
+        && let Err(error) = sqlx::query(
+            "INSERT INTO notifications (user_id, deal_id, message, notification_type, actor_name, due_at)
+             VALUES (?, ?, ?, 'quote_signed', ?, NOW())",
         )
+        .bind(recipient.id)
+        .bind(deal)
+        .bind(message.chars().take(255).collect::<String>())
+        .bind(customer)
+        .execute(&state.pool)
         .await
     {
+        tracing::error!(?error, quote = row.id, "could not add the quote signed notification");
+    }
+
+    let Some(email) = recipient
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+    else {
+        return;
+    };
+    let sender_name = recipient
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .unwrap_or(email);
+    let branding = Branding {
+        company_name: company_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .unwrap_or(sender_name)
+            .to_string(),
+        logo_url,
+        sender_name: sender_name.to_string(),
+    };
+    let link = format!(
+        "{}/employee/quote/{}",
+        app_origin(&state.app_url, subdomain.as_deref()),
+        row.id
+    );
+    let total = total.map(money);
+    let signed_at = chrono::Utc::now()
+        .with_timezone(&Indianapolis)
+        .format("%b %-d, %Y at %-I:%M %p")
+        .to_string();
+    let html = quote_signed_html(
+        &branding,
+        &QuoteSignedNotice {
+            customer_name: customer,
+            quote_name: &quote_name,
+            option_label: &option_label,
+            areas: &areas,
+            total: total.as_deref(),
+            signed_at: &signed_at,
+            link: Some(&link),
+        },
+    );
+    let outgoing = OutgoingEmail {
+        from_name: None,
+        from_address: "noreply@granite-manager.com".into(),
+        to: vec![email.to_string()],
+        cc: Vec::new(),
+        bcc: Vec::new(),
+        subject: message,
+        body: html,
+        signature: None,
+        reply_to: Vec::new(),
+        in_reply_to: None,
+        references: Vec::new(),
+        attachments: Vec::new(),
+        transactional: true,
+    };
+    if let Err(error) = state.webhooks.send_email(&outgoing).await {
         tracing::error!(
             ?error,
             quote = row.id,
-            "could not mark the quote sold after signing"
+            "could not email that the quote was signed"
         );
     }
-    Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn money_has_cents_and_commas() {
+        assert_eq!(money(1_234_567.891), "$1,234,567.89");
+        assert_eq!(money(5.0), "$5.00");
+        assert_eq!(money(-12.5), "-$12.50");
+    }
 }

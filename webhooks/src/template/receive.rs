@@ -343,7 +343,9 @@ mod tests {
                 hours_of_operation: Some("Mon-Fri 9-5".to_string()),
                 domain: Some("granitedepot.com".to_string()),
                 subdomain: Some("granitedepot".to_string()),
+                ..Default::default()
             }),
+            ..Default::default()
         }
     }
 
@@ -356,8 +358,7 @@ mod tests {
                 email_name: None,
                 phone_number: None,
             },
-            customer: None,
-            company: None,
+            ..Default::default()
         }
     }
 

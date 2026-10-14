@@ -174,6 +174,106 @@ pub fn status_html(
     )
 }
 
+/// One area of a signed quote: what the customer picked for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedArea {
+    pub name: String,
+    pub material: String,
+    pub color: String,
+    pub edges: Vec<String>,
+}
+
+/// What the sales rep hears when a customer signs a quote in the portal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuoteSignedNotice<'a> {
+    pub customer_name: &'a str,
+    pub quote_name: &'a str,
+    /// `Option 2`.
+    pub option_label: &'a str,
+    pub areas: &'a [SignedArea],
+    /// `$12,345.67`, when the option is priced.
+    pub total: Option<&'a str>,
+    /// When it was signed, in store time.
+    pub signed_at: &'a str,
+    /// The quote in the app.
+    pub link: Option<&'a str>,
+}
+
+/// The sales rep's notice that a customer signed a quote.
+///
+/// The branded card with the customer, the option, each area's material,
+/// color and edges, the total, when it was signed and a button to open it.
+pub fn quote_signed_html(branding: &Branding, notice: &QuoteSignedNotice<'_>) -> String {
+    let cell = format!(
+        "{EMAIL_FONT}font-size:14px;color:#3f3f46;padding:8px 10px;border-bottom:1px solid #e4e4e7;vertical-align:top;"
+    );
+    let head = format!(
+        "{EMAIL_FONT}font-size:12px;font-weight:700;color:#71717a;text-transform:uppercase;padding:8px 10px;border-bottom:2px solid #e4e4e7;text-align:left;"
+    );
+    let area_rows = notice.areas.iter().fold(String::new(), |mut out, area| {
+        let dash = |s: &str| {
+            if s.trim().is_empty() {
+                "—".to_string()
+            } else {
+                escape_html(s.trim())
+            }
+        };
+        let _ = write!(
+            out,
+            "<tr><td style=\"{cell}font-weight:600;color:#18181b;\">{}</td><td style=\"{cell}\">{}</td><td style=\"{cell}font-weight:600;color:#18181b;\">{}</td><td style=\"{cell}\">{}</td></tr>",
+            dash(&area.name),
+            dash(&area.material),
+            dash(&area.color),
+            dash(&area.edges.join(", ")),
+        );
+        out
+    });
+    let areas = if area_rows.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<tr><td style=\"padding-bottom:24px;\">
+            <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">
+              <tr><th style=\"{head}\">Area</th><th style=\"{head}\">Material</th><th style=\"{head}\">Color</th><th style=\"{head}\">Edges</th></tr>
+              {area_rows}
+            </table>
+          </td></tr>"
+        )
+    };
+    let detail = |label: &str, value: &str| {
+        format!(
+            "<tr><td style=\"{EMAIL_FONT}font-size:14px;color:#71717a;padding:4px 0;width:120px;\">{label}</td><td style=\"{EMAIL_FONT}font-size:15px;color:#18181b;padding:4px 0;font-weight:600;\">{}</td></tr>",
+            escape_html(value)
+        )
+    };
+    let mut details = detail("Customer", notice.customer_name);
+    details.push_str(&detail("Quote", notice.quote_name));
+    details.push_str(&detail("Option", notice.option_label));
+    if let Some(total) = notice.total {
+        details.push_str(&detail("Total", total));
+    }
+    details.push_str(&detail("Signed", notice.signed_at));
+    let button = notice.link.map_or_else(String::new, |href| {
+        format!(
+            "<tr><td align=\"center\" style=\"padding:4px 0;\">{}</td></tr>",
+            button_html(href, "Open the Quote")
+        )
+    });
+    card_html(
+        branding,
+        &format!(
+            "<tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:24px;color:#18181b;padding-bottom:6px;\">Quote Signed</td></tr>
+          <tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:15px;line-height:1.6;color:#3f3f46;padding-bottom:24px;\">{} accepted {} of {} and signed it.</td></tr>
+          <tr><td style=\"padding-bottom:24px;\"><table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\">{details}</table></td></tr>
+          {areas}
+          {button}",
+            escape_html(notice.customer_name),
+            escape_html(notice.option_label),
+            escape_html(notice.quote_name),
+        ),
+    )
+}
+
 /// The body with the signing links: the branded card, or (without
 /// branding) a link per document after the message.
 pub fn with_signing_links(
@@ -228,6 +328,47 @@ mod tests {
         ));
         assert!(!is_allowed_signing_link("https://evil.example/x"));
         assert!(!is_allowed_signing_link("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn signed_quote_notice_lists_each_area_color() {
+        let branding = Branding {
+            company_name: "Acme".into(),
+            logo_url: None,
+            sender_name: "Rita".into(),
+        };
+        let areas = [
+            SignedArea {
+                name: "Kitchen".into(),
+                material: "Granite".into(),
+                color: "Absolute <Black>".into(),
+                edges: vec!["Bullnose".into(), "Ogee".into()],
+            },
+            SignedArea {
+                name: "Bath".into(),
+                material: String::new(),
+                color: String::new(),
+                edges: Vec::new(),
+            },
+        ];
+        let html = quote_signed_html(
+            &branding,
+            &QuoteSignedNotice {
+                customer_name: "Jane Doe",
+                quote_name: "Smith Kitchen",
+                option_label: "Option 2",
+                areas: &areas,
+                total: Some("$1,234.50"),
+                signed_at: "Oct 14, 2026 at 3:05 PM",
+                link: Some("https://app.test/employee/quote/7"),
+            },
+        );
+        assert!(html.contains("Jane Doe accepted Option 2 of Smith Kitchen"));
+        assert!(html.contains("Absolute &lt;Black&gt;"));
+        assert!(html.contains("Bullnose, Ogee"));
+        assert!(html.contains("$1,234.50"));
+        assert!(html.contains("href=\"https://app.test/employee/quote/7\""));
+        assert!(html.contains("—"));
     }
 
     #[test]

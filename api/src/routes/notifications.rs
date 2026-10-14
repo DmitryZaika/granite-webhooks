@@ -251,6 +251,7 @@ fn type_title(kind: &str) -> Option<&'static str> {
         "signature_viewed" => "Document Opened for Signing",
         "signature_signed" => "Document Signed",
         "signature_declined" => "Document Declined",
+        "quote_signed" => "Quote Signed",
         "delayed_message_sent" => "Scheduled Message Sent",
         "delayed_message_failed" => "Scheduled Message Failed",
         _ => return None,

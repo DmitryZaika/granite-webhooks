@@ -34,7 +34,7 @@ const MAX_SMS_TEXT: usize = 1600;
 const MAX_SUBJECT: usize = 300;
 
 /// Variables a step may use; anything else would go out unfilled.
-const VARIABLE_KEYS: [&str; 16] = [
+const VARIABLE_KEYS: [&str; 20] = [
     "user.first_name",
     "customer.first_name",
     "customer.inventory_page",
@@ -51,6 +51,10 @@ const VARIABLE_KEYS: [&str; 16] = [
     "customer.inventory_link",
     "company.subdomain",
     "company.id",
+    "user.last_name",
+    "customer.last_name",
+    "customer.email",
+    "customer.phone",
 ];
 
 /// How a step is delivered.
@@ -791,7 +795,20 @@ mod tests {
         assert_eq!(check_step(&step("Hi {{customer.first_name}}")), Ok(()));
         assert_eq!(check_step(&step("Hi {{ <b>customer.name</b> }}")), Ok(()));
         assert_eq!(
+            check_step(&step("{{customer.last_name}} {{customer.email}} {{customer.phone}} {{user.last_name}}")),
+            Ok(())
+        );
+        assert_eq!(
             check_step(&step("Hi {{nickname}}")),
+            Err("template_has_custom_variables")
+        );
+        // Flows run without a deal or quote, so these would go out unfilled.
+        assert_eq!(
+            check_step(&step("{{deal.name}}")),
+            Err("template_has_custom_variables")
+        );
+        assert_eq!(
+            check_step(&step("{{quote.total}}")),
             Err("template_has_custom_variables")
         );
         assert_eq!(check_step(&step("Hi {{name")), Err("invalid_template_body"));

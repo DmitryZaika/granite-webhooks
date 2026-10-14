@@ -526,17 +526,25 @@ pub struct RoundedTakeoff {
     pub miter_joint_lin_ft: f64,
 }
 
-pub fn round_takeoff(t: &AreaTakeoff) -> RoundedTakeoff {
+/// Price list `materialRounding`: "up" rounds each sq ft quantity up to a
+/// whole foot; anything else is Moraware's nearest 0.1 ft.
+pub fn round_sq_ft(v: f64, up: bool) -> f64 {
+    if up { (v - 1e-9).ceil().max(0.0) } else { round1(v) }
+}
+
+/// Sq ft follow `sq_ft_up` (see `round_sq_ft`); lin ft stay at 0.1 ft.
+pub fn round_takeoff(t: &AreaTakeoff, sq_ft_up: bool) -> RoundedTakeoff {
+    let sq = |v: f64| round_sq_ft(v, sq_ft_up);
     let rounded = |list: &[HeightQty]| -> Vec<HeightQty> {
         list.iter()
             .map(|x| HeightQty {
                 height: x.height,
-                sq_ft: round1(x.sq_ft),
+                sq_ft: sq(x.sq_ft),
                 lin_ft: round1(x.lin_ft),
             })
             .collect()
     };
-    let counter_sq_ft = round1(t.counter_sq_ft);
+    let counter_sq_ft = sq(t.counter_sq_ft);
     let splash = rounded(&t.splash);
     let waterfall = rounded(&t.waterfall);
     let mitered = rounded(&t.mitered);
@@ -546,7 +554,7 @@ pub fn round_takeoff(t: &AreaTakeoff) -> RoundedTakeoff {
     }
     RoundedTakeoff {
         counter_sq_ft,
-        fabrication_sq_ft: round1(sum),
+        fabrication_sq_ft: sq(sum),
         splash,
         waterfall,
         mitered,
@@ -554,5 +562,41 @@ pub fn round_takeoff(t: &AreaTakeoff) -> RoundedTakeoff {
         appliance_lin_ft: round1(t.appliance_lin_ft),
         mitered_cuts_lin_ft: round1(t.mitered_cuts_lin_ft),
         miter_joint_lin_ft: round1(t.miter_joint_lin_ft),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use super::*;
+
+    fn sample() -> AreaTakeoff {
+        AreaTakeoff {
+            counter_sq_ft: 41.23,
+            splash: vec![HeightQty { height: 4.0, sq_ft: 3.01, lin_ft: 9.04 }],
+            appliance_lin_ft: 2.26,
+            ..AreaTakeoff::default()
+        }
+    }
+
+    #[test]
+    fn sq_ft_to_tenth_by_default() {
+        let r = round_takeoff(&sample(), false);
+        assert_eq!(r.counter_sq_ft, 41.2);
+        assert_eq!(r.splash[0].sq_ft, 3.0);
+        assert_eq!(r.fabrication_sq_ft, 44.2);
+    }
+
+    #[test]
+    fn sq_ft_up_to_whole_feet() {
+        let r = round_takeoff(&sample(), true);
+        assert_eq!(r.counter_sq_ft, 42.0);
+        assert_eq!(r.splash[0].sq_ft, 4.0);
+        assert_eq!(r.fabrication_sq_ft, 46.0);
+        // Lin ft keep 0.1 ft.
+        assert_eq!(r.splash[0].lin_ft, 9.0);
+        assert_eq!(r.appliance_lin_ft, 2.3);
+        // Whole feet stay as they are.
+        assert_eq!(round_sq_ft(40.0, true), 40.0);
     }
 }

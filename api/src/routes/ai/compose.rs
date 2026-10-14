@@ -18,6 +18,7 @@ use crate::extract::JsonBody;
 use crate::followups::gather::{
     FollowupRequest, customer_inventory_page_url, gather_followup_context,
 };
+use crate::followups::greeting::{conversation_recency, greeting_instruction};
 use crate::followups::js::{js_len, js_slice, trim};
 use crate::followups::prompt::FollowupTimelineMessage;
 use crate::followups::send_window::FollowupChannel;
@@ -58,7 +59,8 @@ Rules:
 - Stay consistent with the conversation and the rep's tone. Never invent prices, dates, or facts not in the context.
 - When the rep is about to share the inventory / stones page, use the exact customer page URL from CUSTOMER / PROJECT INFO.
 - When the message needs the rep's name, the rep's phone number or the company address, use them from SALES REP and COMPANY.
-- If the DRAFT is empty, suggest how the rep's next message should start: one short sentence (max ~20 words) that fits where the conversation is now, with no greeting if the last message was today.
+- If the DRAFT is empty, suggest how the rep's next message should start: one short sentence (max ~20 words) that fits where the conversation is now. Follow the GREETING line: with GREETING: NONE (any SMS or email with them in the last 60 days) never start with "Hi", "Hey" or "Hello" and never use the customer's name; start with the content.
+- Use the customer's name at most once in a message. Write plainly like the rep: no "I hope this finds you well", "Just following up", "I wanted to reach out", no em dashes.
 - If the DRAFT is empty and the customer has not written to us yet, suggest the whole message (1–3 short sentences) built from CUSTOMER / PROJECT INFO: who the rep is and the company (unless already said on this channel), what the customer asked for, and one question that moves the project forward.
 - If nothing useful fits, return an empty string.
 Examples (DRAFT → your output):
@@ -211,12 +213,20 @@ pub fn build_user_prompt(
         .map(|p| format!(", phone {p}"))
         .unwrap_or_default();
     let profile = trim(&context.profile);
+    // How the next message opens: only asked for with an empty draft.
+    let greeting = chrono::NaiveDateTime::parse_from_str(now, "%Y-%m-%d %H:%M")
+        .ok()
+        .filter(|_| draft.is_empty() && !context.timeline.is_empty())
+        .map(|at| greeting_instruction(conversation_recency(&context.timeline, at.and_utc())))
+        .map(|line| format!("{line}\n"))
+        .unwrap_or_default();
     let draft_part = if draft.is_empty() {
         if customer_has_not_replied(&context.timeline) {
-            "DRAFT: (empty — the customer has not written to us yet: suggest the whole message)"
-                .to_string()
+            format!(
+                "{greeting}DRAFT: (empty — the customer has not written to us yet: suggest the whole message)"
+            )
         } else {
-            "DRAFT: (empty — suggest how the next message starts)".to_string()
+            format!("{greeting}DRAFT: (empty — suggest how the next message starts)")
         }
     } else {
         format!(
@@ -925,6 +935,43 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         assert_eq!(autocomplete_now(at), "2026-10-09 13:22");
+    }
+
+    #[test]
+    fn an_empty_draft_in_an_ongoing_thread_has_no_greeting() {
+        use crate::followups::timeline::Direction;
+        let message = |at: &str, channel, direction| FollowupTimelineMessage {
+            at: at.into(),
+            channel,
+            direction,
+            text: "Can you send the price?".into(),
+            from_email: None,
+            from_phone: None,
+        };
+        let context = ComposeContext {
+            profile: String::new(),
+            // The customer texted last night; the rep now starts an email.
+            timeline: vec![message("2026-10-13 01:30", FollowupChannel::Sms, Direction::Inbound)],
+            rep_phone: None,
+            company_name: None,
+            company_address: None,
+            rep_notes: Vec::new(),
+        };
+        let prompt =
+            build_user_prompt(FollowupChannel::Email, "Dema", &context, "", "2026-10-13 15:00");
+        assert!(prompt.contains("GREETING: NONE"));
+        assert!(prompt.ends_with("DRAFT: (empty — suggest how the next message starts)"));
+        // Weeks later still no greeting; after 60 days, greet by name. A
+        // typed draft gets no rule.
+        let weeks =
+            build_user_prompt(FollowupChannel::Sms, "Dema", &context, "", "2026-11-02 15:00");
+        assert!(weeks.contains("GREETING: NONE"));
+        let later =
+            build_user_prompt(FollowupChannel::Sms, "Dema", &context, "", "2027-01-02 15:00");
+        assert!(later.contains("GREETING: BY NAME"));
+        let typing =
+            build_user_prompt(FollowupChannel::Sms, "Dema", &context, "Sure", "2026-10-13 15:00");
+        assert!(!typing.contains("GREETING:"));
     }
 
     #[test]

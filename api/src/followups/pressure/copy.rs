@@ -23,12 +23,12 @@ use regex::Regex;
 pub fn followup_tone_errors(body: &str, allow_intro: bool) -> Vec<String> {
     let mut errors = Vec::new();
     if re!(r"(?:^|[,.!?;:—–-]\s*)\p{Lu}[\p{L}'’-]+ here\b|\b(?:[Tt]his is|[Ii]t(?:'|’)s) \p{Lu}[\p{L}'’-]+ here\b", "u").is_match(body) {
-        errors.push("tone: never write \"<name> here\" — open with the greeting".to_string());
+        errors.push("tone: never write \"<name> here\" — get straight to the point".to_string());
     } else if !allow_intro
         && re!(r"\b(?:[Tt]his is|[Ii]t(?:'|’)s) \p{Lu}[\p{L}'’-]+(?: \p{Lu}[\p{L}'’-]+)? (?:from|with|at)\b", "u").is_match(body)
     {
         errors.push(
-            "tone: they already know who is texting — do not introduce yourself (\"This is <name> from <company>\"); open with the greeting"
+            "tone: they already know who is texting — do not introduce yourself (\"This is <name> from <company>\"); get straight to the point"
                 .to_string(),
         );
     }

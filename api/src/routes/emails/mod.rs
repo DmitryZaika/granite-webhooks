@@ -14,6 +14,7 @@
 //! - `GET  /v1/email-attachments/{id}/preview`   → a picture attachment for an `<img>` (HEIC → JPEG)
 //! - `GET  /v1/deals/file-urls`                   → file URLs of a deal or a customer's deals
 //! - `GET  /v1/emails/{id}/images`                 → an email's pictures, for the photo viewer
+//! - `GET  /v1/emails/{id}/reads`                  → every time the recipient opened a sent email
 //! - `POST /v1/emails/drafts`, `GET|PUT|DELETE /v1/emails/drafts/{id}` → the caller's drafts
 //! - `GET  /v1/superuser/sales-emails[/{thread_id}]` → the sales mailbox (super admins)
 //!
@@ -30,6 +31,7 @@ mod drafts;
 mod handlers;
 mod list;
 mod names;
+mod reads;
 mod sales_mailbox;
 pub mod schemas;
 pub mod send;
@@ -62,6 +64,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(attachments::add_to_deal))
         .routes(routes!(attachments::deal_file_urls))
         .routes(routes!(attachments::email_images))
+        .routes(routes!(reads::email_reads))
         .routes(routes!(attachment_preview::preview))
         .routes(routes!(conversation::conversation))
         .routes(routes!(
