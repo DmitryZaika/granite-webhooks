@@ -230,7 +230,8 @@ async fn the_survey_saves_answers_and_stops_reminders_with_a_valid_link(pool: My
         json!({
             "sales_rep_id": 100, "installer_id": 101, "sales_rep_rating": 5,
             "technician_rating": 4, "installation_rating": 5,
-            "installation_comments": " Great ", "checklist_id": 9000, "token": token,
+            "installation_comments": " Great ", "customer_name": " Jane Doe ",
+            "checklist_id": 9000, "token": token,
         })
     };
     let done = |pool: MySqlPool| async move {
@@ -254,13 +255,14 @@ async fn the_survey_saves_answers_and_stops_reminders_with_a_valid_link(pool: My
         .await
         .assert_status(axum::http::StatusCode::CREATED);
     assert_eq!(done(pool.clone()).await, 1);
-    let comment: Option<String> = sqlx::query_scalar(
-        "SELECT installation_comment FROM customer_surveys WHERE company_id = 100 ORDER BY id DESC LIMIT 1",
+    let (comment, name): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT installation_comment, customer_name FROM customer_surveys WHERE company_id = 100 ORDER BY id DESC LIMIT 1",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
     assert_eq!(comment.as_deref(), Some("Great"));
+    assert_eq!(name.as_deref(), Some("Jane Doe"));
 
     let mut bad = answer("");
     bad["installer_id"] = json!(100);

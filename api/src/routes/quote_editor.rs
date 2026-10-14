@@ -771,11 +771,107 @@ async fn stone_icons(
     Ok(icons)
 }
 
+/// A stone is in stock: shown as regular stock, or one of its slabs (or of
+/// the stones it shows slabs from) is not sold, cut or deleted. `s` is the
+/// stone's alias.
+pub const STONE_IN_STOCK_SQL: &str = "(COALESCE(s.regular_stock, 0) = 1 OR EXISTS (
+     SELECT 1 FROM slab_inventory si JOIN stones owner ON owner.id = si.stone_id
+      WHERE si.deleted_at IS NULL AND si.sale_id IS NULL AND si.cut_date IS NULL
+        AND owner.deleted_at IS NULL
+        AND (si.stone_id = s.id
+             OR si.stone_id IN (SELECT l.source_stone_id FROM stone_slab_links l WHERE l.stone_id = s.id))))";
+
+/// Pictures on the slabs of the drawing's layouts (`layouts[area][option].slabs[].image`).
+fn layout_slab_pictures(doc: &mut Value) -> Vec<&mut Value> {
+    let Some(layouts) = doc.get_mut("layouts").and_then(Value::as_object_mut) else {
+        return Vec::new();
+    };
+    layouts
+        .values_mut()
+        .filter_map(Value::as_object_mut)
+        .flat_map(|options| options.values_mut())
+        .filter_map(|layout| layout.get_mut("slabs").and_then(Value::as_array_mut))
+        .flat_map(|slabs| slabs.iter_mut())
+        .filter_map(|slab| slab.get_mut("image"))
+        .filter(|image| image.as_str().is_some_and(|url| !url.trim().is_empty()))
+        .collect()
+}
+
+/// Clears layout slab pictures of the company's inventory that is no longer
+/// available: a slab sold, cut or deleted, or a stone photo of a stone out of
+/// stock. Pictures uploaded for the quote are not inventory and stay. Returns
+/// how many were cleared. Only for quotes not signed yet: a signed quote's
+/// slabs were sold to that customer.
+pub async fn drop_unavailable_slab_pictures(
+    pool: &MySqlPool,
+    company_id: i32,
+    doc: &mut Value,
+) -> Result<usize, sqlx::Error> {
+    let mut urls: Vec<String> = layout_slab_pictures(doc)
+        .iter()
+        .filter_map(|image| image.as_str().map(|url| url.trim().to_string()))
+        .collect();
+    urls.sort();
+    urls.dedup();
+    if urls.is_empty() {
+        return Ok(0);
+    }
+    // Each inventory picture among them, and whether any slab or stone using
+    // it is still available.
+    let mut sql = sqlx::QueryBuilder::new(
+        "SELECT url, MAX(available) FROM (
+           SELECT TRIM(si.url) AS url,
+                  CAST(si.sale_id IS NULL AND si.cut_date IS NULL AND si.deleted_at IS NULL
+                       AND owner.deleted_at IS NULL AS SIGNED) AS available
+             FROM slab_inventory si JOIN stones owner ON owner.id = si.stone_id
+            WHERE owner.company_id = ",
+    );
+    sql.push_bind(company_id).push(" AND TRIM(si.url) IN (");
+    let mut list = sql.separated(", ");
+    for url in &urls {
+        list.push_bind(url.clone());
+    }
+    sql.push(
+        ")
+           UNION ALL
+           SELECT TRIM(s.url) AS url,
+                  CAST(s.deleted_at IS NULL AND ",
+    )
+    .push(STONE_IN_STOCK_SQL)
+    .push(" AS SIGNED) AS available FROM stones s WHERE s.company_id = ")
+    .push_bind(company_id)
+    .push(" AND TRIM(s.url) IN (");
+    let mut list = sql.separated(", ");
+    for url in &urls {
+        list.push_bind(url.clone());
+    }
+    sql.push(")) pictures GROUP BY url");
+    let inventory: HashMap<String, bool> = sql
+        .build_query_as::<(String, i64)>()
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|(url, available)| (url, available == 1))
+        .collect();
+    let mut cleared = 0;
+    for image in layout_slab_pictures(doc) {
+        let url = image.as_str().unwrap_or_default().trim();
+        if inventory.get(url) == Some(&false) {
+            *image = Value::Null;
+            cleared += 1;
+        }
+    }
+    Ok(cleared)
+}
+
 /// `loadPickImages`: one photo per color, a stone with slabs left first.
+/// With `in_stock_only`, stones out of stock are left out (a color with none
+/// in stock gets no photo); a signed quote shows the stone it was sold with.
 pub async fn stone_images(
     pool: &MySqlPool,
     company_id: i32,
     doc: &Value,
+    in_stock_only: bool,
 ) -> ApiResult<Vec<StoneImage>> {
     let picks = picks(doc);
     if picks.is_empty() {
@@ -795,8 +891,12 @@ pub async fn stone_images(
     for name in &names {
         list.push_bind(name.clone());
     }
+    sql.push(")");
+    if in_stock_only {
+        sql.push(" AND ").push(STONE_IN_STOCK_SQL);
+    }
     sql.push(
-        ") ORDER BY EXISTS (
+        " ORDER BY EXISTS (
              SELECT 1 FROM slab_inventory si
               WHERE si.deleted_at IS NULL AND si.sale_id IS NULL AND si.cut_date IS NULL
                 AND (si.stone_id = s.id
@@ -1014,7 +1114,11 @@ pub async fn get_quote(
         None => None,
     };
     let viewing_revision = revision.as_ref().and(query.revision);
-    let doc = revision.unwrap_or_else(|| row.drawing());
+    let mut doc = revision.unwrap_or_else(|| row.drawing());
+    let unsigned = row.signed_at.is_none();
+    if unsigned {
+        drop_unavailable_slab_pictures(&state.pool, user.company_id, &mut doc).await?;
+    }
     let (price_list, latest_price_list) = pricing_for_quote(&state.pool, &pricing).await?;
     let revisions: Vec<QuoteRevision> = sqlx::query_as(
         "SELECT r.id, r.revision_number, DATE_FORMAT(r.created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at,
@@ -1047,15 +1151,18 @@ pub async fn get_quote(
     .bind(user.id)
     .fetch_optional(&state.pool)
     .await?;
-    let autosave = autosave.and_then(|(doc, saved_at)| {
+    let mut autosave = autosave.and_then(|(doc, saved_at)| {
         let doc: Value = serde_json::from_str(doc.as_deref()?).ok()?;
         QuoteDoc::parse(&doc).map(|_| Autosave { doc, saved_at })
     });
+    if let Some(autosave) = autosave.as_mut().filter(|_| unsigned) {
+        drop_unavailable_slab_pictures(&state.pool, user.company_id, &mut autosave.doc).await?;
+    }
     Ok(Json(QuoteDetail {
         contracts: contracts(&state, user.company_id, &row).await?,
         salespeople: sales_reps(&state.pool, user.company_id).await?,
         stone_icons: stone_icons(&state.pool, user.company_id, &doc).await?,
-        stone_images: stone_images(&state.pool, user.company_id, &doc).await?,
+        stone_images: stone_images(&state.pool, user.company_id, &doc, unsigned).await?,
         sender: sending_address(&state.pool, user.company_id, &user.email).await?,
         quote: info_of(&row),
         doc,
@@ -1330,9 +1437,12 @@ pub async fn save_drawing(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
     Path(id): Path<i32>,
-    JsonBody(input): JsonBody<SavedDrawing>,
+    JsonBody(mut input): JsonBody<SavedDrawing>,
 ) -> ApiResult<Json<SavedRevision>> {
     let row = quote_or_404(&state, id, user.company_id).await?;
+    if row.signed_at.is_none() {
+        drop_unavailable_slab_pictures(&state.pool, user.company_id, &mut input.doc).await?;
+    }
     let doc = readable(&input.doc)?;
     let quote = pricing_quote(&state, id, user.company_id).await?;
     let (price_list, _) = pricing_for_quote(&state.pool, &quote).await?;

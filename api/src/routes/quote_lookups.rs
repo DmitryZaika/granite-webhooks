@@ -280,9 +280,10 @@ pub struct StoneImageLookup {
 /// Get a color's stone photo
 ///
 /// The catalog photo of one color as the quote shows it on the customer's
-/// preview: the company's not deleted stone with this name (a stone of the
-/// given product type first, one with free slabs first). Returns
-/// `{"image": null}` when there is none or `color` is empty. The editor uses
+/// preview: the company's in-stock stone with this name (regular stock, or a
+/// slab not sold, cut or deleted; a stone of the given product type first,
+/// one with free slabs first). Returns `{"image": null}` when no stone of
+/// that name is in stock or `color` is empty. The editor uses
 /// it to paint the area's pieces in the Color & Edge preview.
 #[utoipa::path(
     get,
@@ -312,7 +313,7 @@ pub async fn quote_stone_image(
         "areas": [{ "id": "a" }],
         "colorOptions": [{ "byArea": { "a": { "color": color, "product": query.product.trim() } } }],
     });
-    let image = stone_images(&state.pool, user.company_id, &doc)
+    let image = stone_images(&state.pool, user.company_id, &doc, true)
         .await?
         .into_iter()
         .next();

@@ -88,6 +88,10 @@ pub async fn survey_form(
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SurveyInput {
+    /// The customer's name, only if they choose to give it (up to 255
+    /// characters); null or blank keeps the answers anonymous.
+    #[serde(default)]
+    pub customer_name: Option<String>,
     /// The sales rep rated; one of the company's sales reps.
     pub sales_rep_id: i32,
     /// The installer rated; one of the company's installers.
@@ -127,7 +131,8 @@ fn comment(value: Option<&String>) -> Option<&str> {
 
 /// Answer the survey
 ///
-/// Saves the customer's ratings for the company. With a valid link
+/// Saves the customer's ratings for the company, with their name only when
+/// they give one (otherwise anonymous). With a valid link
 /// (`checklist_id` and `token`) the checklist's reminders stop; a missing or
 /// forged token only skips that. No session needed.
 #[utoipa::path(
@@ -139,7 +144,7 @@ fn comment(value: Option<&String>) -> Option<&str> {
     request_body = SurveyInput,
     responses(
         (status = 201, description = "Saved"),
-        (status = 400, description = "A rating outside 1-5, or someone who is not the company's sales rep or installer", body = ErrorBody),
+        (status = 400, description = "A rating outside 1-5, a name over 255 characters, or someone who is not the company's sales rep or installer", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     )
 )]
@@ -157,6 +162,12 @@ pub async fn create_survey(
             return Err(ApiError::BadRequest("Ratings are 1 to 5".into()));
         }
     }
+    let customer_name = comment(input.customer_name.as_ref());
+    if customer_name.is_some_and(|name| name.chars().count() > 255) {
+        return Err(ApiError::BadRequest(
+            "Your name is too long: shorten it to 255 characters or leave it blank".into(),
+        ));
+    }
     let reps = people(&state, company_id, SALES_REP).await?;
     let installers = people(&state, company_id, INSTALLER).await?;
     if !reps.iter().any(|p| p.id == input.sales_rep_id) {
@@ -168,8 +179,8 @@ pub async fn create_survey(
     sqlx::query(
         "INSERT INTO customer_surveys (sales_rep_id, installer_id, sales_rep_rating,
             sales_rep_comment, technician_rating, technician_comment, installation_rating,
-            installation_comment, company_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
+            installation_comment, customer_name, company_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
     )
     .bind(input.sales_rep_id)
     .bind(input.installer_id)
@@ -179,6 +190,7 @@ pub async fn create_survey(
     .bind(comment(input.technician_comments.as_ref()))
     .bind(input.installation_rating)
     .bind(comment(input.installation_comments.as_ref()))
+    .bind(customer_name)
     .bind(company_id)
     .execute(&state.pool)
     .await?;

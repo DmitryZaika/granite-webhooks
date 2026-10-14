@@ -32,6 +32,8 @@ pub struct ResultsQuery {
 pub struct SurveyAnswer {
     /// Survey id.
     pub id: i32,
+    /// The name the customer left; null when they stayed anonymous.
+    pub customer_name: Option<String>,
     /// The sales rep's name.
     pub sales_rep_name: Option<String>,
     /// 1–5.
@@ -123,7 +125,7 @@ pub async fn results(
     let pool = &state.pool;
     let company = user.company_id;
     let items: Vec<SurveyAnswer> = sqlx::query_as(
-        "SELECT cs.id, cs.sales_rep_rating, cs.sales_rep_comment AS sales_rep_comments,
+        "SELECT cs.id, cs.customer_name, cs.sales_rep_rating, cs.sales_rep_comment AS sales_rep_comments,
                 cs.technician_rating, cs.technician_comment AS technician_comments,
                 cs.installation_rating, cs.installation_comment AS installation_comments,
                 cs.created_at, u.name AS sales_rep_name, i.name AS installer_name

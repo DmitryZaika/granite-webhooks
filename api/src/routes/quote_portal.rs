@@ -277,7 +277,15 @@ pub async fn portal_quote(
         .await?
         .ok_or(ApiError::NotFound)?;
     let (price_list, _) = pricing_for_quote(&state.pool, &quote).await?;
-    let stored = row.drawing();
+    let mut stored = row.drawing();
+    if row.signed_at.is_none() {
+        crate::routes::quote_editor::drop_unavailable_slab_pictures(
+            &state.pool,
+            row.company_id,
+            &mut stored,
+        )
+        .await?;
+    }
     let typed = QuoteDoc::from_stored(&stored);
     let doc = if QuoteDoc::parse(&stored).is_some() {
         customer_doc(&stored)
@@ -330,6 +338,7 @@ pub async fn portal_quote(
             &state.pool,
             row.company_id,
             &stored,
+            row.signed_at.is_none(),
         )
         .await?,
         doc,

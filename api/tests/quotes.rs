@@ -35,6 +35,72 @@ async fn a_layout_sees_free_slabs_of_the_stone_and_its_links(pool: MySqlPool) {
     );
 }
 
+#[test_db::test(seed)]
+async fn a_layout_never_offers_what_is_not_in_stock(pool: MySqlPool) {
+    let server = server(pool);
+    let slabs = |query: &str| {
+        let request = server
+            .get(&format!("/v1/quotes/inventory-slabs?{query}"))
+            .with_session(sessions::REP);
+        async move { request.await.json::<Value>() }
+    };
+    // No slabs and not regular stock: no slab and no stone photo to pick.
+    assert_eq!(
+        slabs("name=Sold%20Out%20Marble").await,
+        json!({ "stone_url": null, "slabs": [] })
+    );
+    // Regular stock with no slabs: its photo may be used.
+    assert_eq!(
+        slabs("name=Regular%20Stock%20Quartzite").await["stone_url"],
+        "https://img.example/regular.jpg"
+    );
+    // What is left of the sold CG-1 is offered, marked as a leftover.
+    let gold = slabs("name=Calacatta%20Gold").await;
+    assert_eq!(gold["slabs"][0]["id"], 6011);
+    assert_eq!(gold["slabs"][0]["leftover"], true);
+}
+
+#[test_db::test(seed)]
+async fn sold_slab_pictures_leave_unsigned_layouts(pool: MySqlPool) {
+    sqlx::query(
+        "UPDATE slab_inventory SET url = CONCAT('https://img.example/slab-', id, '.jpg')
+          WHERE id IN (6000, 6003)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut doc = json!({
+        "layouts": { "a": { "o": { "show": true, "slabs": [
+            { "id": "s1", "width": 126, "height": 63, "image": "https://img.example/slab-6000.jpg" },
+            { "id": "s2", "width": 126, "height": 63, "image": "https://img.example/slab-6003.jpg" },
+            { "id": "s3", "width": 126, "height": 63, "image": "https://img.example/sold-out.jpg" },
+            { "id": "s4", "width": 126, "height": 63, "image": "https://files.example/quotes/upload.jpg" },
+            { "id": "s5", "width": 126, "height": 63, "image": null }
+        ] } } }
+    });
+    let cleared =
+        api::routes::quote_editor::drop_unavailable_slab_pictures(&pool, 100, &mut doc)
+            .await
+            .unwrap();
+    assert_eq!(cleared, 2);
+    let images: Vec<Value> = doc["layouts"]["a"]["o"]["slabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|slab| slab["image"].clone())
+        .collect();
+    assert_eq!(
+        images,
+        [
+            json!("https://img.example/slab-6000.jpg"),
+            Value::Null,
+            Value::Null,
+            json!("https://files.example/quotes/upload.jpg"),
+            Value::Null,
+        ]
+    );
+}
+
 /// Two quotes of company 100 (one the rep's, one deleted) and one of company 101.
 async fn seed_quotes(pool: &MySqlPool) {
     sqlx::query(

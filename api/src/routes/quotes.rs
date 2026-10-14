@@ -11,6 +11,7 @@
 
 use crate::auth::{EmployeeUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::routes::quote_editor::STONE_IN_STOCK_SQL;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -199,7 +200,8 @@ pub struct InventorySlab {
     pub length: Option<f64>,
     /// Slab photo.
     pub url: Option<String>,
-    /// A remnant.
+    /// A remnant, or what is left of a partly sold slab (its size and photo
+    /// are the whole slab's).
     pub leftover: bool,
 }
 
@@ -235,7 +237,9 @@ fn picture(url: Option<String>) -> Option<String> {
 ///
 /// Slabs not sold, cut or deleted of the company's stones with this name
 /// (and type), and of the stones they show slabs from, for a quote's slab
-/// layout.
+/// layout. What is left of a partly sold slab is marked `leftover`.
+/// `stone_url` is the photo of such a stone that is in stock (regular
+/// stock or a free slab), null when none is.
 #[utoipa::path(
     get,
     path = "/v1/quotes/inventory-slabs",
@@ -271,10 +275,10 @@ pub async fn inventory_slabs(
         "SELECT CAST(si.id AS SIGNED) AS id, NULLIF(TRIM(si.bundle), '') AS bundle,
                 CASE WHEN si.width > 0 THEN CAST(si.width AS DOUBLE) END AS width,
                 CASE WHEN si.length > 0 THEN CAST(si.length AS DOUBLE) END AS length,
-                si.url, COALESCE(si.is_leftover, 0) = 1 AS leftover
+                si.url, (COALESCE(si.is_leftover, 0) = 1 OR si.parent_id IS NOT NULL) AS leftover
            FROM slab_inventory si JOIN stones owner ON owner.id = si.stone_id
           WHERE owner.company_id = ? AND si.sale_id IS NULL AND si.cut_date IS NULL
-            AND si.deleted_at IS NULL
+            AND si.deleted_at IS NULL AND owner.deleted_at IS NULL
             AND (si.stone_id IN ({stones})
                  OR si.stone_id IN (SELECT l.source_stone_id FROM stone_slab_links l
                                      WHERE l.stone_id IN ({stones})))
@@ -292,7 +296,8 @@ pub async fn inventory_slabs(
     .fetch_all(&state.pool)
     .await?;
     let stone_url: Option<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT s.url FROM stones s WHERE s.id IN ({stones}) ORDER BY s.id LIMIT 1"
+        "SELECT s.url FROM stones s WHERE s.id IN ({stones}) AND {STONE_IN_STOCK_SQL}
+          ORDER BY COALESCE(s.regular_stock, 0) = 0, s.id LIMIT 1"
     )))
     .bind(user.company_id)
     .bind(&name)
