@@ -407,6 +407,9 @@ async fn history_lists_a_deals_or_phones_texts(pool: MySqlPool) {
     assert_eq!(items.len(), 3);
     assert_eq!(items[0]["id"], 9005);
     assert_eq!(items[0]["attachment_count"], 1);
+    assert_eq!(items[0]["attachments"].as_array().unwrap().len(), 1);
+    assert!(items[0]["attachments"][0]["url"].as_str().is_some());
+    assert_eq!(items[1]["attachments"], serde_json::json!([]));
     assert_eq!(items[0]["agent"], "Rita Rep");
     assert_eq!(items[0]["agent_id"], "5001");
 

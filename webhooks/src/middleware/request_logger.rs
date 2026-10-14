@@ -7,6 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use http_body_util::BodyExt;
+use lambda_http::request::RequestContext;
 use lambda_http::tracing;
 
 use crate::libs::constants::internal_error;
@@ -52,6 +53,9 @@ async fn log_request_body(request: Request, uri: &Uri) -> Result<Request, BasicR
 
     // Redact body for SMS routes — they contain customer phone numbers and message text (PII)
     if uri.path() == "/cloudtalk/sms" || uri.path().starts_with("/cloudtalk/sms/") {
+        // Empty rejected posts have no phone number. The Lambda source IP and user agent
+        // are what identify the caller. Do not log the Authorization header.
+        let (source_ip, user_agent) = sms_caller(&parts);
         // Attempt to parse bytes as JSON to extract metadata
         if let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(&bytes) {
             // Map each key to its corresponding data type string
@@ -70,12 +74,19 @@ async fn log_request_body(request: Request, uri: &Uri) -> Result<Request, BasicR
                 })
                 .collect();
 
-            tracing::info!(body_schema = ?body_schema, path = %uri.path());
+            tracing::info!(
+                body_schema = ?body_schema,
+                path = %uri.path(),
+                source_ip = %source_ip,
+                user_agent = %user_agent,
+            );
         } else {
             // Fallback if the body isn't a valid JSON object (e.g., empty or plain text)
             tracing::info!(
                 body_size = bytes.len(),
                 path = %uri.path(),
+                source_ip = %source_ip,
+                user_agent = %user_agent,
                 note = "Body is not a valid JSON object"
             );
         }
@@ -84,6 +95,29 @@ async fn log_request_body(request: Request, uri: &Uri) -> Result<Request, BasicR
     }
 
     Ok(Request::from_parts(parts, Body::from(bytes)))
+}
+
+fn sms_caller(parts: &axum::http::request::Parts) -> (String, String) {
+    if let Some(RequestContext::ApiGatewayV2(context)) = parts.extensions.get::<RequestContext>() {
+        let source_ip = context.http.source_ip.clone().unwrap_or_default();
+        let user_agent = context
+            .http
+            .user_agent
+            .clone()
+            .filter(|agent| !agent.is_empty())
+            .unwrap_or_else(|| header_user_agent(parts));
+        return (source_ip, user_agent);
+    }
+    (String::new(), header_user_agent(parts))
+}
+
+fn header_user_agent(parts: &axum::http::request::Parts) -> String {
+    parts
+        .headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string()
 }
 async fn log_response_body(
     response: Response,
@@ -207,5 +241,27 @@ mod tests {
         let mut returned_req = result.unwrap();
         let body_bytes = returned_req.body_mut().collect().await.unwrap().to_bytes();
         assert_eq!(body_bytes, plain_text_data.as_bytes());
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_log_request_body_sms_route_logs_caller() {
+        let uri: Uri = "/cloudtalk/sms".parse().unwrap();
+        let context: lambda_http::aws_lambda_events::event::apigw::ApiGatewayV2httpRequestContext =
+            serde_json::from_str(
+                r#"{"http":{"method":"POST","sourceIp":"203.0.113.10","userAgent":"CloudTalk-Webhook"}}"#,
+            )
+            .expect("request context");
+        let request = Request::builder()
+            .uri(&uri)
+            .extension(RequestContext::ApiGatewayV2(context))
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let result = log_request_body(request, &uri).await;
+        assert!(result.is_ok());
+        assert!(logs_contain("source_ip=203.0.113.10"));
+        assert!(logs_contain("user_agent=CloudTalk-Webhook"));
+        assert!(logs_contain("body_schema={}"));
     }
 }

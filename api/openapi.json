@@ -40677,7 +40677,8 @@
           "id",
           "recipient",
           "text",
-          "attachment_count"
+          "attachment_count",
+          "attachments"
         ],
         "properties": {
           "id": {
@@ -40733,7 +40734,14 @@
           "attachment_count": {
             "type": "integer",
             "format": "int64",
-            "description": "Photos and files sent with it."
+            "description": "How many photos and files were sent with it."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            },
+            "description": "The photos and files sent with it, in the order they were sent."
           }
         }
       },

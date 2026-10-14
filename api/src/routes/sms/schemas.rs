@@ -134,13 +134,19 @@ pub struct ThreadQuery {
 /// A file sent with a message.
 #[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
 pub struct Attachment {
+    /// The attachment's id.
     pub id: i32,
     #[serde(skip)]
     pub sms_id: i32,
+    /// Public URL of the file, to show or download it.
     pub url: String,
+    /// MIME type, e.g. `image/jpeg`; `image/*` ones are photos.
     pub content_type: String,
+    /// The file's name, `file` when unknown.
     pub filename: String,
+    /// Width of a photo in pixels; null when unknown or not a photo.
     pub width: Option<i32>,
+    /// Height of a photo in pixels; null when unknown or not a photo.
     pub height: Option<i32>,
 }
 

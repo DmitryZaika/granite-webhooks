@@ -4,6 +4,8 @@
 //! routes.
 
 use super::provider::{Param, SmsProvider, fetch_all, marks, phone_variants};
+use super::schemas::Attachment;
+use super::threads::attachments;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
@@ -48,8 +50,10 @@ pub struct HistoryText {
     pub agent_id: Option<String>,
     /// When it was stored.
     pub created_date: Option<DateTime<Utc>>,
-    /// Photos and files sent with it.
+    /// How many photos and files were sent with it.
     pub attachment_count: i64,
+    /// The photos and files sent with it, in the order they were sent.
+    pub attachments: Vec<Attachment>,
 }
 
 /// `GET /v1/sms/{provider}/history`.
@@ -71,7 +75,6 @@ struct Row {
     text: String,
     agent: Option<String>,
     created_date: Option<DateTime<Utc>>,
-    attachment_count: i64,
 }
 
 #[derive(sqlx::FromRow)]
@@ -175,7 +178,6 @@ pub async fn history(
         }));
     }
     let (table, id_column) = (provider.sms_table(), provider.id_column());
-    let (attachments, attachment_column) = provider.attachments();
     let list = marks(variants.len());
     let mut params: Vec<Param> = vec![user.company_id.into()];
     params.extend(variants.iter().map(Param::from));
@@ -189,8 +191,7 @@ pub async fn history(
         pool,
         format!(
             "SELECT s.id, s.{id_column} AS provider_id, CAST(s.sender AS CHAR) AS sender,
-                    CAST(s.recipient AS CHAR) AS recipient, s.text, s.agent, s.created_date,
-                    (SELECT COUNT(*) FROM {attachments} att WHERE att.{attachment_column} = s.id) AS attachment_count
+                    CAST(s.recipient AS CHAR) AS recipient, s.text, s.agent, s.created_date
                FROM {table} s
               WHERE s.company_id = ? AND s.status IN ('received', 'sent')
                 AND (s.sender IN ({list}) OR s.recipient IN ({list}))
@@ -202,9 +203,12 @@ pub async fn history(
     )
     .await?;
     let names = agent_names(pool, provider, user.company_id).await?;
+    let ids: Vec<i32> = rows.iter().map(|row| row.id).collect();
+    let mut files = attachments(pool, provider, &ids).await?;
     let items = rows
         .into_iter()
         .map(|row| {
+            let attachments = files.remove(&row.id).unwrap_or_default();
             let agent_id = row
                 .agent
                 .as_deref()
@@ -222,7 +226,8 @@ pub async fn history(
                 recipient: row.recipient,
                 text: row.text,
                 created_date: row.created_date,
-                attachment_count: row.attachment_count,
+                attachment_count: attachments.len() as i64,
+                attachments,
             }
         })
         .collect();
