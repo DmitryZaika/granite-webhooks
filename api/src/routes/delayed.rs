@@ -333,8 +333,9 @@ async fn deal_for(pool: &MySqlPool, row: &Row) -> Result<Option<i32>, sqlx::Erro
     let Some(customer_id) = row.customer_id else {
         return Ok(None);
     };
-    sqlx::query_scalar(
-        "SELECT d.id FROM deals d
+    // `deals.id` is unsigned: cast it, or decoding fails and the notice is lost.
+    let id: Option<i64> = sqlx::query_scalar(
+        "SELECT CAST(d.id AS SIGNED) FROM deals d
            JOIN customers c ON c.id = d.customer_id
           WHERE d.customer_id = ? AND c.company_id = ? AND d.deleted_at IS NULL
           ORDER BY d.is_won IS NULL DESC, d.id DESC
@@ -343,7 +344,8 @@ async fn deal_for(pool: &MySqlPool, row: &Row) -> Result<Option<i32>, sqlx::Erro
     .bind(customer_id)
     .bind(row.company_id)
     .fetch_optional(pool)
-    .await
+    .await?;
+    Ok(id.and_then(|id| i32::try_from(id).ok()))
 }
 
 /// The bell notice for a sent (or failed) scheduled message, e.g.
