@@ -364,6 +364,25 @@ Remix), optionally `API_ALLOWED_ORIGINS`, and is served on
 `api.granite-manager.com` (CloudFront in front of the function URL) so the
 session cookie is sent.
 
+## Streaming deployment
+
+`granite-api-stream` runs the same binary with `LAMBDA_RESPONSE_STREAMING=1`
+behind a `RESPONSE_STREAM` function URL (15 min timeout, 1 GB). `make deploy api
+prod` updates it with `granite-api`; its environment is `granite-api`'s plus
+that flag, so copy any new variable to both. The browser reaches it at
+`https://stream.granite-manager.com` (`infra/api-domain.yaml`, stack
+`granite-api-stream`, us-east-1; CloudFront waits up to 60 s between bytes).
+`time-triggered` starts the supplier files job on its function URL directly
+(`API_STREAM_URL`), so a long run is not cut by CloudFront.
+
+## Scheduled jobs and webhooks
+
+`time-triggered` (every minute) posts to `<API_URL>/v1/jobs/*` with
+`Authorization: <LAMBDA_KEY>`, the API's `LAMBDA_KEY`. `webhooks` asks the API
+whether a called customer answered (`<API_URL>/v1/followups/call-check`, same
+key); the API sends mail and texts through `webhooks` (`WEBHOOKS_URL`, and
+`WEBHOOKS_KEY` = the webhooks Lambda's `REMIX_KEY`).
+
 ## Dev environment
 
 `granite-api-dev` and `granite-webhooks-dev` never touch production:

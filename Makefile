@@ -15,8 +15,10 @@ ENVS := dev prod
 APP ?= $(firstword $(filter $(APPS),$(MAKECMDGOALS)))
 ENV ?= $(firstword $(filter $(ENVS),$(MAKECMDGOALS)))
 
-# The Lambda of each app in each environment (time-triggered has no dev one).
-FUNCTION_api_prod := granite-api
+# The Lambdas of each app in each environment (time-triggered has no dev one).
+# granite-api-stream is the same binary behind a streaming function URL, for
+# answers that stream or outlast API Gateway's 30 s (LAMBDA_RESPONSE_STREAMING=1).
+FUNCTION_api_prod := granite-api granite-api-stream
 FUNCTION_api_dev := granite-api-dev
 FUNCTION_webhooks_prod := granite-webhooks
 FUNCTION_webhooks_dev := granite-webhooks-dev
@@ -42,11 +44,13 @@ deploy:
 	$(MAKE) build APP=$(APP)
 	@eval "$$(aws configure export-credentials --profile $(AWS_DEPLOY_PROFILE) --format env)" && \
 	unset AWS_PROFILE && \
-	uvx cargo-lambda lambda deploy \
-		--iam-role $(IAM_ROLE) \
-		--region $(REGION) \
-		--binary-name $(APP) \
-		$(FUNCTION)
+	for function in $(FUNCTION); do \
+		uvx cargo-lambda lambda deploy \
+			--iam-role $(IAM_ROLE) \
+			--region $(REGION) \
+			--binary-name $(APP) \
+			$$function || exit 1; \
+	done
 
 # --- Local ---
 WATCH_BASE := uvx cargo-lambda lambda watch --release
