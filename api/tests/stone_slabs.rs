@@ -331,3 +331,19 @@ async fn resize_is_scoped_to_the_company(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 }
+
+// ---- legacy "undefined" slab photo URLs read as null (QA audit 2026-10-14, B-015) --
+
+#[test_db::test(seed)]
+async fn legacy_undefined_slab_urls_read_as_null(pool: MySqlPool) {
+    sqlx::query("UPDATE slab_inventory SET url = 'undefined' WHERE id = 6074")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let stone: i32 = sqlx::query_scalar("SELECT stone_id FROM slab_inventory WHERE id = 6074")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let rows = get(pool.clone(), &format!("/v1/stones/{stone}/slabs")).await;
+    assert_eq!(slab(&rows, 6074)["url"], Value::Null);
+}

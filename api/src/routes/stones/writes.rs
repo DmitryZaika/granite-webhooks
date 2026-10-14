@@ -124,9 +124,7 @@ async fn validate(
     }
     for (name, value) in [("length", input.length), ("width", input.width)] {
         if value.is_some_and(|v| !v.is_finite() || v < 0.0) {
-            return Err(ApiError::BadRequest(format!(
-                "{name} must be a non-negative number"
-            )));
+            return Err(ApiError::BadRequest(format!("Enter a number of 0 or more")));
         }
     }
     if let Some(date) = non_empty(input.delivery_date.as_ref())

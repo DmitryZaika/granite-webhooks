@@ -378,10 +378,7 @@ async fn stone_writes_validate_everything(pool: MySqlPool) {
         (with("type", json!("onyx")), "Select a valid stone type."),
         (with("finishing", json!("matte")), "invalid finishing"),
         (with("level", json!(8)), "level must be 1 to 7"),
-        (
-            with("width", json!(-1)),
-            "width must be a non-negative number",
-        ),
+        (with("width", json!(-1)), "Enter a number of 0 or more"),
         (
             with("delivery_date", json!("11/02/2026")),
             "invalid delivery_date",
@@ -846,4 +843,54 @@ async fn slabs_are_added_renamed_and_deleted(pool: MySqlPool) {
         .with_session(sessions::ADMIN)
         .await
         .assert_status(StatusCode::NOT_FOUND);
+}
+
+// ---- slab numbers are unique per stone (QA audit 2026-10-14, B-027) ----------
+
+#[test_db::test(seed)]
+async fn slab_numbers_are_unique_per_stone(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let res = server
+        .post("/v1/stones")
+        .with_session(sessions::ADMIN)
+        .json(&stone_body(None))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let stone = res.json::<Value>()["id"].as_i64().unwrap();
+
+    let add = |bundle: &str| {
+        server
+            .post(&format!("/v1/stones/{stone}/slabs"))
+            .with_session(sessions::ADMIN)
+            .json(&json!({ "bundle": bundle, "length": 120, "width": 60 }))
+    };
+    add("QA-DUP-1").await.assert_status(StatusCode::CREATED);
+    expect_error(
+        add("QA-DUP-1").await,
+        StatusCode::BAD_REQUEST,
+        "Slab number QA-DUP-1 is already used",
+    )
+    .await;
+    let second = add("QA-DUP-2").await;
+    second.assert_status(StatusCode::CREATED);
+    let second = second.json::<Value>()["id"].as_i64().unwrap();
+
+    // Renaming onto a number another slab of this stone has is refused.
+    expect_error(
+        server
+            .patch(&format!("/v1/slabs/{second}"))
+            .with_session(sessions::ADMIN)
+            .json(&json!({ "bundle": "QA-DUP-1" }))
+            .await,
+        StatusCode::BAD_REQUEST,
+        "Slab number QA-DUP-1 is already used",
+    )
+    .await;
+    // Keeping its own number is fine.
+    server
+        .patch(&format!("/v1/slabs/{second}"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "bundle": "QA-DUP-2" }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 }

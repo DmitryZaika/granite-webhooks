@@ -2,13 +2,17 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   Dev backend around the granite-api-dev Lambda: https://api-dev.granite-manager.com
   (CloudFront in front of its function URL) and a file bucket of its own, so dev
-  never writes to production storage. Deploy in us-east-1 (CloudFront certificates
-  live there). See api/README.md "Dev environment".
+  never writes to production storage. Streamed answers (AI chat, AI Design) go to
+  granite-api-stream-dev on the same host, so the session cookie still reaches them.
+  Deploy in us-east-1 (CloudFront certificates live there). See api/README.md "Dev environment".
 
 Parameters:
   FunctionUrlDomain:
     Type: String
     Description: Host of granite-api-dev's function URL (xxxx.lambda-url.us-east-2.on.aws).
+  StreamFunctionUrlDomain:
+    Type: String
+    Description: Host of granite-api-stream-dev's function URL (xxxx.lambda-url.us-east-2.on.aws).
   DomainName:
     Type: String
     Default: api-dev.granite-manager.com
@@ -104,6 +108,13 @@ Resources:
               OriginProtocolPolicy: https-only
               OriginSSLProtocols: [TLSv1.2]
               OriginReadTimeout: 30
+          # Streams the answer; 60 s between bytes, as production's stream host.
+          - Id: stream
+            DomainName: !Ref StreamFunctionUrlDomain
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+              OriginReadTimeout: 60
         DefaultCacheBehavior:
           TargetOriginId: lambda
           ViewerProtocolPolicy: https-only
@@ -112,6 +123,24 @@ Resources:
           CachedMethods: [GET, HEAD]
           CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed CachingDisabled
           OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed AllViewerExceptHostHeader
+        CacheBehaviors:
+          # No Compress: compression would buffer a streamed answer.
+          - PathPattern: /v1/ai/chat
+            TargetOriginId: stream
+            ViewerProtocolPolicy: https-only
+            Compress: false
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed AllViewerExceptHostHeader
+          - PathPattern: /v1/ai/design
+            TargetOriginId: stream
+            ViewerProtocolPolicy: https-only
+            Compress: false
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed AllViewerExceptHostHeader
 
   Record:
     Type: AWS::Route53::RecordSet

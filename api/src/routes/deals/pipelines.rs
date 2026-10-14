@@ -340,6 +340,19 @@ pub async fn create_stage(
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
     let name = clean_name(&input)?;
     check_group(&state.pool, user.company_id, id, false).await?;
+    let taken: Option<i64> = sqlx::query_scalar(
+        "SELECT CAST(id AS SIGNED) FROM deals_list
+         WHERE group_id = ? AND name = ? AND deleted_at IS NULL LIMIT 1",
+    )
+    .bind(id)
+    .bind(&name)
+    .fetch_optional(&state.pool)
+    .await?;
+    if taken.is_some() {
+        return Err(ApiError::BadRequest(format!(
+            "A list named {name} already exists in this group"
+        )));
+    }
     let next: i32 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(position), -1) + 1 FROM deals_list WHERE group_id = ? AND deleted_at IS NULL",
     )

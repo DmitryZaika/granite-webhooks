@@ -140,6 +140,13 @@ fn check(input: &CustomerInput) -> ApiResult<()> {
     if source.is_empty() || source.chars().count() > 255 {
         return Err(ApiError::BadRequest("Source is required".into()));
     }
+    // Same rule as the form: an address is either empty or at least 3 characters.
+    let address = blank_to_none(input.address.as_deref());
+    if address.is_some_and(|address| address.chars().count() < 3) {
+        return Err(ApiError::BadRequest(
+            "Billing address must be at least 3 characters".into(),
+        ));
+    }
     Ok(())
 }
 

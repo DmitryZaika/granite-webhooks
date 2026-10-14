@@ -93,8 +93,8 @@ impl Message {
     }
 }
 
-/// The DONE marker the browser waits for (`DONE_KEY`).
-pub const DONE: &str = "[DONE]";
+/// The DONE marker the browser waits for (`DONE_KEY` in `app/utils/constants.ts`).
+pub const DONE: &str = "[DONE]035d8eba-9f8c-44c5-a1e0-290d1da033f7[/DONE]";
 
 struct Sender {
     tx: mpsc::Sender<Event>,
@@ -787,4 +787,16 @@ const fn ctx(user: &SessionUser) -> assistant::Ctx {
 /// `query.slice(0, 200)` for logs.
 pub fn short(query: &str) -> String {
     js_slice(trim(query), 0, 200)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DONE;
+
+    /// The browser stops streaming only on this exact string (`DONE_KEY` in
+    /// `app/utils/constants.ts`). Any other marker shows up in the answer text.
+    #[test]
+    fn done_marker_is_the_browser_key() {
+        assert_eq!(DONE, "[DONE]035d8eba-9f8c-44c5-a1e0-290d1da033f7[/DONE]");
+    }
 }

@@ -385,9 +385,16 @@ key); the API sends mail and texts through `webhooks` (`WEBHOOKS_URL`, and
 
 ## Dev environment
 
-`granite-api-dev` and `granite-webhooks-dev` never touch production:
+`granite-api-dev`, `granite-api-stream-dev` and `granite-webhooks-dev` never touch
+production:
 
 - `DATABASE_URL` points at the `duplicate` database, never `main`.
+- `granite-api-stream-dev` is `granite-api-dev`'s environment plus
+  `LAMBDA_RESPONSE_STREAMING=1` behind a `RESPONSE_STREAM` function URL (15 min,
+  1 GB). The dev site has no stream host of its own: `POST /v1/ai/chat` and
+  `POST /v1/ai/design` on `api-dev.granite-manager.com` are routed to it by the
+  CloudFront distribution (60 s between bytes), so the session cookie reaches it.
+  Without that, a long AI answer on dev hits `granite-api-dev`'s 30 s limit.
 - Their secrets (`SESSION_SECRET`, `LAMBDA_KEY`, `REMIX_KEY`/`WEBHOOKS_KEY`,
   `WEBHOOK_SECRET`) are their own.
 - `SESSION_COOKIE_DOMAIN=none`: the dev session cookie is host-only on
@@ -407,7 +414,8 @@ its IAM user, and CloudFront + certificate + DNS for
 ```
 aws cloudformation deploy --region us-east-1 --stack-name granite-api-dev \
   --template-file infra/dev-api.yaml --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides FunctionUrlDomain=<granite-api-dev function URL host>
+  --parameter-overrides FunctionUrlDomain=<granite-api-dev function URL host> \
+  StreamFunctionUrlDomain=<granite-api-stream-dev function URL host>
 ```
 
 The frontend's `make deploy-dev` builds against `api-dev.granite-manager.com`.

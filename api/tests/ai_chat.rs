@@ -115,7 +115,7 @@ fn events(body: &str) -> Vec<(String, String)> {
 fn answer(events: &[(String, String)]) -> String {
     events
         .iter()
-        .filter(|(e, d)| e == "message" && d != "[DONE]")
+        .filter(|(e, d)| e == "message" && d != "[DONE]035d8eba-9f8c-44c5-a1e0-290d1da033f7[/DONE]")
         .map(|(_, d)| d.as_str())
         .collect()
 }
@@ -177,7 +177,10 @@ async fn an_instructions_answer_streams_with_the_instruction_it_used(pool: MySql
     assert_eq!(named(&events, "info"), ["Connecting to AI..."]);
     assert_eq!(named(&events, "status"), [r#"{"state":"answering"}"#]);
     assert_eq!(answer(&events), text);
-    assert_eq!(events.last().unwrap().1, "[DONE]");
+    assert_eq!(
+        events.last().unwrap().1,
+        "[DONE]035d8eba-9f8c-44c5-a1e0-290d1da033f7[/DONE]"
+    );
     let used: Value = serde_json::from_str(named(&events, "instructions")[0]).unwrap();
     assert_eq!(used, json!([{ "id": 9100, "title": "Fabrication Prices" }]));
 

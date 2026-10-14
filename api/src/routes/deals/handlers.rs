@@ -250,6 +250,9 @@ pub async fn create(
     };
     let position = input.position.unwrap_or(1);
     let created_by = audit_name(&user);
+    if input.amount.is_some_and(|amount| amount < 0.0) {
+        return Err(ApiError::BadRequest("amount must be 0 or more".into()));
+    }
 
     let mut tx = state.pool.begin().await?;
     let customer: Option<(i32, Option<i32>)> = sqlx::query_as(
@@ -277,8 +280,10 @@ pub async fn create(
     .await?;
 
     let (deal_id, created, moved) = if let Some((deal_id, previous_list)) = open_deal {
+        // An empty amount or title keeps the stored one: a create must not wipe the open deal.
         sqlx::query(
-            "UPDATE deals SET amount = ?, title = ?, status = ?, list_id = ?, position = ?, is_won = ?
+            "UPDATE deals SET amount = COALESCE(?, amount), title = COALESCE(NULLIF(?, ''), title),
+             status = ?, list_id = ?, position = ?, is_won = ?
              WHERE id = ?",
         )
         .bind(input.amount)
@@ -399,6 +404,9 @@ pub async fn update(
         .await?
         .ok_or(ApiError::NotFound)?;
 
+    if matches!(patch.amount, Some(Some(amount)) if amount < 0.0) {
+        return Err(ApiError::BadRequest("amount must be 0 or more".into()));
+    }
     let mut sets: Vec<&str> = Vec::new();
     let mut query = sqlx::QueryBuilder::<sqlx::MySql>::new("UPDATE deals SET ");
     let mut separated = query.separated(", ");

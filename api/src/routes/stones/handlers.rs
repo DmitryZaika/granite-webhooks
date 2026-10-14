@@ -188,9 +188,7 @@ pub async fn quick_add(
     }
     for size in [input.length, input.width].into_iter().flatten() {
         if !(size.is_finite() && size >= 0.0) {
-            return Err(ApiError::BadRequest(
-                "Size must be a non-negative number".into(),
-            ));
+            return Err(ApiError::BadRequest("Enter a number of 0 or more".into()));
         }
     }
     if !company_has_stone_type(&state.pool, user.company_id, input.kind.trim()).await? {

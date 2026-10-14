@@ -423,3 +423,47 @@ async fn managers_mark_leads_invalid(pool: MySqlPool) {
     .unwrap();
     assert_eq!(audited, 3);
 }
+
+// ---- billing address length (QA audit 2026-10-14, B-002) ------------------------
+
+#[test_db::test(seed)]
+async fn billing_address_under_three_characters_is_rejected(pool: MySqlPool) {
+    let app = server(pool.clone());
+    app.post("/v1/customers")
+        .with_session(sessions::DEALER)
+        .json(&json!({
+            "name": "QA 2026-10-14 Short Address",
+            "address": "ab",
+            "source": "check-in",
+        }))
+        .await
+        .assert_status_bad_request();
+    app.put("/v1/customers/1001")
+        .with_session(sessions::DEALER)
+        .json(&json!({
+            "name": "Bob Unassigned",
+            "address": "ab",
+            "source": "check-in",
+        }))
+        .await
+        .assert_status_bad_request();
+    // Empty means no address; three characters is the minimum.
+    app.put("/v1/customers/1001")
+        .with_session(sessions::DEALER)
+        .json(&json!({
+            "name": "Bob Unassigned",
+            "address": "",
+            "source": "check-in",
+        }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    app.put("/v1/customers/1001")
+        .with_session(sessions::DEALER)
+        .json(&json!({
+            "name": "Bob Unassigned",
+            "address": "abc",
+            "source": "check-in",
+        }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+}

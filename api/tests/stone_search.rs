@@ -143,10 +143,7 @@ async fn quick_add_validates(pool: MySqlPool) {
     for (body, error) in [
         (with("name", json!("  ")), "Name is required"),
         (with("retail_price", json!(0)), "Price is required"),
-        (
-            with("length", json!(-1)),
-            "Size must be a non-negative number",
-        ),
+        (with("length", json!(-1)), "Enter a number of 0 or more"),
         (with("type", json!("onyx")), "Select a valid stone type"),
         (with("leftover", json!(false)), "Bundle number is required"),
         (

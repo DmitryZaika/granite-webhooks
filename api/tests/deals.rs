@@ -1319,3 +1319,65 @@ async fn seeded_photo_and_documents_kept_in_images(pool: MySqlPool) {
         })
     );
 }
+
+// ---- negative amounts and reused open deals (QA audit 2026-10-14) -------------
+
+#[test_db::test(seed)]
+async fn creating_for_a_customer_with_an_open_deal_keeps_its_amount_and_title(pool: MySqlPool) {
+    // Erin (1004) has open deal 8002. A create that leaves amount and title
+    // empty must not wipe them (the deal is only reused and moved).
+    let before = rows(
+        &pool,
+        "SELECT CAST(amount AS CHAR), title FROM deals WHERE id = 8002",
+    )
+    .await;
+    let res = server(pool.clone())
+        .post("/v1/deals")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "customer_id": 1004, "list_id": 100 }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    assert_eq!(res.json::<Value>(), json!({ "id": 8002, "created": false }));
+    assert_eq!(
+        rows(
+            &pool,
+            "SELECT CAST(amount AS CHAR), title FROM deals WHERE id = 8002"
+        )
+        .await,
+        before
+    );
+}
+
+#[test_db::test(seed)]
+async fn negative_amounts_are_rejected_on_create_and_patch(pool: MySqlPool) {
+    let app = server(pool.clone());
+    let before = rows(
+        &pool,
+        "SELECT CAST(amount AS CHAR) FROM deals WHERE id = 8600",
+    )
+    .await;
+    app.post("/v1/deals")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "customer_id": 1000, "list_id": 100, "amount": -5 }))
+        .await
+        .assert_status_bad_request();
+    app.patch("/v1/deals/8600")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "amount": -5 }))
+        .await
+        .assert_status_bad_request();
+    assert_eq!(
+        rows(
+            &pool,
+            "SELECT CAST(amount AS CHAR) FROM deals WHERE id = 8600"
+        )
+        .await,
+        before
+    );
+    // Zero is still a valid amount.
+    app.patch("/v1/deals/8600")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "amount": 0 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+}

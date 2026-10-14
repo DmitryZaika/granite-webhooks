@@ -1,4 +1,6 @@
-use super::queries::{delete_slab, slab_in_company, slabs_by_ids, update_slab};
+use super::queries::{
+    bundle_taken, delete_slab, slab_in_company, slab_stone_id, slabs_by_ids, update_slab,
+};
 use super::schemas::{ListSlabsQuery, SlabSummary, UpdateSlab};
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -63,6 +65,16 @@ pub async fn update(
     }
     if !slab_in_company(&state.pool, user.company_id, id).await? {
         return Err(ApiError::NotFound);
+    }
+    if let Some(bundle) = bundle {
+        let stone_id = slab_stone_id(&state.pool, id)
+            .await?
+            .ok_or(ApiError::NotFound)?;
+        if bundle_taken(&state.pool, stone_id, bundle, Some(id)).await? {
+            return Err(ApiError::BadRequest(format!(
+                "Slab number {bundle} is already used on this stone"
+            )));
+        }
     }
     update_slab(&state.pool, id, size, bundle).await?;
     Ok(StatusCode::NO_CONTENT)

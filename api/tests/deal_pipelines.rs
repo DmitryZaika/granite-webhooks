@@ -220,3 +220,47 @@ async fn the_shared_pipeline_and_other_companies_are_off_limits(pool: MySqlPool)
         .await
         .assert_status(StatusCode::BAD_REQUEST);
 }
+
+// ---- stage names are unique per pipeline (QA audit 2026-10-14, B-034) ----------
+
+#[test_db::test(seed)]
+async fn duplicate_stage_names_in_one_pipeline_are_rejected(pool: MySqlPool) {
+    let server = server(pool);
+    let res = server
+        .post("/v1/deal-pipelines")
+        .with_session(ADMIN)
+        .json(&json!({ "name": "QA Group" }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let group = res.json::<Value>()["id"].as_i64().unwrap();
+    let add = |name: &str| {
+        server
+            .post(&format!("/v1/deal-pipelines/{group}/stages"))
+            .with_session(ADMIN)
+            .json(&json!({ "name": name }))
+    };
+    add("QA List 1").await.assert_status(StatusCode::CREATED);
+    let dup = add("QA List 1").await;
+    dup.assert_status(StatusCode::BAD_REQUEST);
+    assert!(
+        dup.json::<Value>()["error"]
+            .as_str()
+            .unwrap()
+            .contains("already exists"),
+        "{}",
+        dup.text()
+    );
+    // The same name in another pipeline is fine.
+    let other = server
+        .post("/v1/deal-pipelines")
+        .with_session(ADMIN)
+        .json(&json!({ "name": "QA Group 2" }))
+        .await;
+    let other = other.json::<Value>()["id"].as_i64().unwrap();
+    server
+        .post(&format!("/v1/deal-pipelines/{other}/stages"))
+        .with_session(ADMIN)
+        .json(&json!({ "name": "QA List 1" }))
+        .await
+        .assert_status(StatusCode::CREATED);
+}
