@@ -1,0 +1,138 @@
+name: Deploy Lambda
+
+# Builds one app's Rust binary from a branch and uploads it as the code of that
+# app's Lambda(s). Only the code changes: environment variables and other
+# configuration set on the Lambda are kept.
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch (or tag/commit) to build
+        type: string
+        required: true
+        default: main
+      environment:
+        description: Environment
+        type: choice
+        required: true
+        default: dev
+        options:
+          - dev
+          - prod
+      project:
+        description: Project
+        type: choice
+        required: true
+        options:
+          - api
+          - webhooks
+          - time-triggered
+
+concurrency:
+  group: deploy-${{ inputs.project }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-2
+  # Assumed through GitHub OIDC; its trust policy only accepts runs of this
+  # workflow from main, so pick other branches with the `branch` input.
+  AWS_ROLE_ARN: arn:aws:iam::741448943665:role/github-actions-lambda-deploy
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deploy:
+    name: ${{ inputs.project }} → ${{ inputs.environment }} (${{ inputs.branch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      APP: ${{ inputs.project }}
+      DEPLOY_ENV: ${{ inputs.environment }}
+      BRANCH: ${{ inputs.branch }}
+    services:
+      # sqlx's query! macros check every query against this schema at compile
+      # time. .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local.
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: granite
+          MYSQL_DATABASE: granite_local
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pgranite"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 60
+    steps:
+      # The Lambdas of each app in each environment, as in the Makefile
+      # (time-triggered has no dev one).
+      - name: Resolve Lambda functions
+        run: |
+          case "$APP/$DEPLOY_ENV" in
+            api/prod)            functions="granite-api granite-api-stream" ;;
+            api/dev)             functions="granite-api-dev granite-api-stream-dev" ;;
+            webhooks/prod)       functions="granite-webhooks" ;;
+            webhooks/dev)        functions="granite-webhooks-dev" ;;
+            time-triggered/prod) functions="time-triggered" ;;
+            *) echo "::error::$APP has no $DEPLOY_ENV Lambda"; exit 1 ;;
+          esac
+          echo "FUNCTIONS=$functions" >> "$GITHUB_ENV"
+          echo "Deploying $APP to: $functions"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Record commit
+        run: |
+          echo "GIT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          git log -1 --format='Building %h %s (%an, %ad)'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lambda-${{ inputs.project }}
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Apply migrations to the build database
+        run: |
+          for f in migrations/*.sql; do
+            mysql -h 127.0.0.1 -P 3307 -uroot -pgranite granite_local < "$f" \
+              || { echo "::error::Migration $f failed"; exit 1; }
+          done
+
+      - name: Build
+        run: uvx cargo-lambda lambda build --release --x86-64 --output-format zip -p "$APP" --bin "$APP"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy and verify
+        run: |
+          zip="target/lambda/$APP/bootstrap.zip"
+          expected=$(openssl dgst -sha256 -binary "$zip" | base64)
+          echo "Package sha256: $expected ($(du -h "$zip" | cut -f1))"
+          for function in $FUNCTIONS; do
+            echo "::group::$function"
+            aws lambda update-function-code --function-name "$function" \
+              --zip-file "fileb://$zip" --query '{Sha256:CodeSha256,Status:LastUpdateStatus}'
+            aws lambda wait function-updated-v2 --function-name "$function"
+            read -r sha status modified < <(aws lambda get-function-configuration \
+              --function-name "$function" \
+              --query '[CodeSha256,LastUpdateStatus,LastModified]' --output text)
+            echo "$function: sha256=$sha status=$status modified=$modified"
+            echo "::endgroup::"
+            if [ "$sha" != "$expected" ] || [ "$status" != "Successful" ]; then
+              echo "::error::$function was not updated to this build"
+              exit 1
+            fi
+            echo "- \`$function\` ← \`$GIT_SHA\` ($BRANCH), sha256 \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+          done
