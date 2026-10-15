@@ -70,7 +70,7 @@ pub struct AppShell {
     /// The acting company.
     pub company: ShellCompany,
     /// The portal a position locks the user into (`installer`, `check-in`,
-    /// `marketing`, `shop_worker`); null for everyone else.
+    /// `marketing`, `shop_worker`, `template`); null for everyone else.
     pub portal: Option<String>,
     /// That portal's start page.
     pub portal_home: Option<String>,
@@ -88,7 +88,7 @@ pub struct AppShell {
     pub can_manage_billing: bool,
     /// Holds the Shop Manager position in the company.
     pub is_shop_manager: bool,
-    /// Holds Template in the company: their own schedule is in the sidebar.
+    /// Holds Template in the company (their portal is their own schedule).
     pub is_template_maker: bool,
     /// May send documents for signature.
     pub user_signature_access: bool,
@@ -113,7 +113,7 @@ fn portal(user: &SessionUser, super_admin: bool, positions: &[i32]) -> Option<(S
         return None;
     }
     let company = user.company_id;
-    [INSTALLER, CHECK_IN, MARKETING, SHOP_WORKER]
+    [INSTALLER, CHECK_IN, MARKETING, SHOP_WORKER, TEMPLATE_MAKER]
         .into_iter()
         .find(|position| positions.contains(position))
         .map(|position| match position {
@@ -126,7 +126,8 @@ fn portal(user: &SessionUser, super_admin: bool, positions: &[i32]) -> Option<(S
                 "marketing".into(),
                 format!("/external/marketing/{company}/leads"),
             ),
-            _ => ("shop_worker".into(), "/shop/transactions".into()),
+            SHOP_WORKER => ("shop_worker".into(), "/shop/transactions".into()),
+            _ => ("template".into(), format!("/templates/{company}/schedule")),
         })
 }
 

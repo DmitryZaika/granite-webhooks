@@ -4,7 +4,10 @@ AWS_DEPLOY_PROFILE ?= personal
 IAM_ROLE := arn:aws:iam::741448943665:role/cargo-lambda-role-2ed5069c-8882-460d-bdc8-192d9b724756
 
 # Tool commands
-BUILD_BASE := uvx cargo-lambda lambda build --release --x86-64
+# cargo-lambda installed on the PATH when there is one (`cargo install
+# cargo-lambda`: Windows on ARM has no wheel for uvx), else through uvx.
+CARGO_LAMBDA ?= $(if $(shell command -v cargo-lambda 2>/dev/null),cargo-lambda,uvx cargo-lambda)
+BUILD_BASE := $(CARGO_LAMBDA) lambda build --release --x86-64
 
 # --- Build and deploy ---
 #   make build <app>          app: api, webhooks, time-triggered
@@ -50,7 +53,7 @@ deploy:
 	@eval "$$(aws configure export-credentials --profile $(AWS_DEPLOY_PROFILE) --format env)" && \
 	unset AWS_PROFILE && \
 	for function in $(FUNCTION); do \
-		uvx cargo-lambda lambda deploy \
+		$(CARGO_LAMBDA) lambda deploy \
 			--iam-role $(IAM_ROLE) \
 			--region $(REGION) \
 			--binary-name $(APP) \
@@ -66,7 +69,7 @@ deploy-all:
 	$(MAKE) deploy APP=webhooks ENV=prod
 
 # --- Local ---
-WATCH_BASE := uvx cargo-lambda lambda watch --release
+WATCH_BASE := $(CARGO_LAMBDA) lambda watch --release
 
 .PHONY: local-webhooks
 local-webhooks:
@@ -85,7 +88,7 @@ build-time-triggered:
 deploy-time-triggered: build-time-triggered
 	@eval "$$(aws configure export-credentials --profile $(AWS_DEPLOY_PROFILE) --format env)" && \
 	unset AWS_PROFILE && \
-	uvx cargo-lambda lambda deploy \
+	$(CARGO_LAMBDA) lambda deploy \
 		--iam-role $(IAM_ROLE) \
 		--region $(REGION) \
 		--binary-name time-triggered \
@@ -111,17 +114,30 @@ test:
 # (e.g. E2E runs of another worktree): `make api-db-reset LOCAL_DB_NAME=x`.
 LOCAL_DB_NAME ?= granite_local
 LOCAL_DB_URL := mysql://root:granite@127.0.0.1:3307/$(LOCAL_DB_NAME)
+# Without Docker (e.g. Windows), a MySQL 8 already running on 127.0.0.1:3307
+# with root/granite stands in for the container, through its own client.
+HAS_DOCKER := $(shell command -v docker 2>/dev/null)
+# The MySQL client: on the PATH, else where the Windows installer puts it.
+MYSQL_WIN := /c/Program Files/MySQL/MySQL Server 8.0/bin/mysql.exe
+MYSQL ?= $(if $(shell command -v mysql 2>/dev/null),mysql,$(if $(shell test -x "$(MYSQL_WIN)" && echo y),"$(MYSQL_WIN)",mysql))
+LOCAL_MYSQL := $(if $(HAS_DOCKER),docker exec -i granite-local-mysql mysql,$(MYSQL) -h 127.0.0.1 -P 3307) -uroot -pgranite
 
 .PHONY: api-db-up
 api-db-up:
+ifneq ($(HAS_DOCKER),)
 	docker compose -f docker-compose.local.yml up -d --wait
+else
+	@$(LOCAL_MYSQL) -e "SELECT 1" >/dev/null 2>&1 || { \
+		echo "No Docker, and no MySQL on 127.0.0.1:3307. Start a MySQL 8 there with user root, password granite (on Windows: powershell -File ~/.granite-local-mysql/start.ps1)." >&2; \
+		exit 1; }
+endif
 
 # Drop, re-migrate and re-seed the local database.
 .PHONY: api-db-reset
 api-db-reset: api-db-up
-	docker exec granite-local-mysql mysql -uroot -pgranite -e "DROP DATABASE IF EXISTS $(LOCAL_DB_NAME); CREATE DATABASE $(LOCAL_DB_NAME);"
+	$(LOCAL_MYSQL) -e "DROP DATABASE IF EXISTS $(LOCAL_DB_NAME); CREATE DATABASE $(LOCAL_DB_NAME);"
 	DATABASE_URL=$(LOCAL_DB_URL) cargo sqlx migrate run --source migrations
-	docker exec -i granite-local-mysql mysql --default-character-set=utf8mb4 -uroot -pgranite $(LOCAL_DB_NAME) < api/seed/local_seed.sql
+	$(LOCAL_MYSQL) --default-character-set=utf8mb4 $(LOCAL_DB_NAME) < api/seed/local_seed.sql
 
 .PHONY: api-test
 api-test: api-db-up

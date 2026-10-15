@@ -81,6 +81,7 @@ const INSTALLER: i32 = 6;
 const CHECK_IN: i32 = 8;
 const MARKETING: i32 = 7;
 const SHOP_WORKER: i32 = 4;
+const TEMPLATE_MAKER: i32 = 11;
 
 fn sha256_hex(value: &str) -> String {
     Sha256::digest(value.as_bytes())
@@ -164,13 +165,14 @@ fn home_path(user: &SessionUser, positions: &[i32]) -> String {
         return "/employee".into();
     }
     let company = user.company_id;
-    for position in [INSTALLER, CHECK_IN, MARKETING, SHOP_WORKER] {
+    for position in [INSTALLER, CHECK_IN, MARKETING, SHOP_WORKER, TEMPLATE_MAKER] {
         if positions.contains(&position) {
             return match position {
                 INSTALLER => format!("/installers/{company}/checklist"),
                 CHECK_IN => format!("/customer/{company}/check-in"),
                 MARKETING => format!("/external/marketing/{company}/leads"),
-                _ => "/shop/transactions".into(),
+                SHOP_WORKER => "/shop/transactions".into(),
+                _ => format!("/templates/{company}/schedule"),
             };
         }
     }

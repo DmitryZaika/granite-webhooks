@@ -77,6 +77,15 @@ fn name_of(item: &Value) -> String {
         .to_string()
 }
 
+/// `categoryOf` in the app: the trimmed category, `""` when none.
+fn category_of(item: &Value) -> String {
+    item.get("category")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
 async fn insert(
     pool: &MySqlPool,
     company_id: i32,
@@ -185,14 +194,22 @@ pub async fn create_extra(
     {
         return Err(ApiError::Conflict(format!("\"{name}\" already exists.")));
     }
-    let id = insert(
-        &state.pool,
-        user.company_id,
-        user.id,
-        &input.item,
-        catalog.len(),
-    )
-    .await?;
+    // New extras go on top of their category (a new category goes first):
+    // the ones from there down move one place.
+    let category = category_of(&input.item);
+    let position = catalog
+        .iter()
+        .position(|e| category_of(&e.item) == category)
+        .unwrap_or(0);
+    for (index, extra) in catalog.iter().enumerate().skip(position) {
+        sqlx::query("UPDATE quote_extras SET sequence = ? WHERE id = ? AND company_id = ?")
+            .bind(i64::try_from(index + 1).unwrap_or(i64::MAX))
+            .bind(extra.id)
+            .bind(user.company_id)
+            .execute(&state.pool)
+            .await?;
+    }
+    let id = insert(&state.pool, user.company_id, user.id, &input.item, position).await?;
     for list_id in input.off_list_ids {
         let Some((_, Some(mut info))) = find(&state.pool, list_id, user.company_id).await? else {
             continue;

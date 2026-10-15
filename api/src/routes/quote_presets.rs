@@ -5,6 +5,7 @@
 //! - `GET|POST /v1/quote-payment-terms`, `PUT|DELETE /v1/quote-payment-terms/{id}`
 //! - `GET|PUT /v1/quote-settings` → measurement defaults
 //! - `GET|POST /v1/quote-email-templates`, `PUT|DELETE .../{id}` → email defaults
+//! - `PUT /v1/quote-email-templates/order` → save a drag (the templates' sequence)
 //!
 //! Replaces the Remix `admin.quotes.tax-rates`, `.payment-terms`,
 //! `.measurements` and `.email-templates` routes.
@@ -30,6 +31,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_settings, save_settings))
         .routes(routes!(list_email_templates, create_email_template))
         .routes(routes!(update_email_template, delete_email_template))
+        .routes(routes!(reorder_email_templates))
 }
 
 /// A tax rate a quote can apply.
@@ -636,6 +638,67 @@ async fn renumber(
         }
     }
     Ok(())
+}
+
+/// Body of `PUT /v1/quote-email-templates/order`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuoteEmailTemplateOrder {
+    /// The company template ids in their new order.
+    pub ids: Vec<i32>,
+}
+
+/// Reorder the quote email templates
+///
+/// Saves a drag on the templates table: each company template's sequence
+/// becomes its place in `ids` (1 = first, the default). Other ids are
+/// ignored; templates left out go after the given ones, in their old order.
+#[utoipa::path(
+    put,
+    path = "/v1/quote-email-templates/order",
+    operation_id = "reorder_quote_email_templates",
+    tag = "quotes",
+    request_body = QuoteEmailTemplateOrder,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn reorder_email_templates(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    JsonBody(input): JsonBody<QuoteEmailTemplateOrder>,
+) -> ApiResult<StatusCode> {
+    let existing: Vec<i32> = sqlx::query_scalar(
+        "SELECT id FROM quote_email_templates
+          WHERE company_id = ? AND user_id IS NULL AND deleted_at IS NULL
+          ORDER BY sequence, name, id",
+    )
+    .bind(user.company_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut order: Vec<i32> = Vec::with_capacity(existing.len());
+    for id in input.ids.into_iter().chain(existing.iter().copied()) {
+        if existing.contains(&id) && !order.contains(&id) {
+            order.push(id);
+        }
+    }
+    let mut tx = state.pool.begin().await?;
+    for (sequence, id) in (1..).zip(order) {
+        sqlx::query(
+            "UPDATE quote_email_templates SET sequence = ? WHERE id = ? AND company_id = ?",
+        )
+        .bind(sequence)
+        .bind(id)
+        .bind(user.company_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn company_template(state: &AppState, company_id: i32, id: i32) -> Result<(), ApiError> {

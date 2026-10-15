@@ -4,6 +4,7 @@
 //! - `GET    /v1/quote-price-lists`               → the lists and the default for new quotes
 //! - `POST   /v1/quote-price-lists`               → a new, empty list
 //! - `PUT    /v1/quote-price-lists/default`       → star a list for new quotes
+//! - `PUT    /v1/quote-price-lists/order`         → save a drag (the lists' sequence)
 //! - `GET    /v1/quote-price-lists/{id}`          → the editor: the list, matched to inventory, and its history
 //! - `PUT    /v1/quote-price-lists/{id}`          → save name, status and prices (a new revision)
 //! - `PATCH  /v1/quote-price-lists/{id}`          → rename or (de)activate
@@ -39,6 +40,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_price_lists, create_price_list))
         .routes(routes!(set_default_price_list))
+        .routes(routes!(reorder_price_lists))
         .routes(routes!(
             get_price_list,
             save_price_list,
@@ -438,6 +440,58 @@ pub async fn set_default_price_list(
     .bind(user.id)
     .execute(&state.pool)
     .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Body of `PUT /v1/quote-price-lists/order`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PriceListOrder {
+    /// The company's list ids in their new order.
+    pub ids: Vec<i32>,
+}
+
+/// Reorder the price lists
+///
+/// Saves a drag on the lists table: each list's sequence becomes its place
+/// in `ids` (1 = first). Other companies' ids are ignored; lists left out go
+/// after the given ones, in their old order.
+#[utoipa::path(
+    put,
+    path = "/v1/quote-price-lists/order",
+    operation_id = "reorder_quote_price_lists",
+    tag = "quotes",
+    request_body = PriceListOrder,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn reorder_price_lists(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    JsonBody(input): JsonBody<PriceListOrder>,
+) -> ApiResult<StatusCode> {
+    let lists = list_rows(&state.pool, user.company_id).await?;
+    let mut order: Vec<i32> = Vec::with_capacity(lists.len());
+    for id in input.ids.into_iter().chain(lists.iter().map(|l| l.id)) {
+        if lists.iter().any(|l| l.id == id) && !order.contains(&id) {
+            order.push(id);
+        }
+    }
+    let mut tx = state.pool.begin().await?;
+    for (sequence, id) in (1..).zip(order) {
+        sqlx::query("UPDATE price_lists SET sequence = ? WHERE id = ? AND company_id = ?")
+            .bind(sequence)
+            .bind(id)
+            .bind(user.company_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

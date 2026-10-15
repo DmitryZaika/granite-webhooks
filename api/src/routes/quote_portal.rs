@@ -365,10 +365,10 @@ pub struct Acceptance {
 ///
 /// Records the option and the signature and sets the quote's status to
 /// `accepted`; it does not mark the quote sold or win its deal (staff do
-/// that). The quote's sales rep (its salesperson, else its creator, else the
-/// deal's owner) is then emailed the customer, the option, each area's
-/// material, color and edges, and the total, and notified in the app when
-/// the quote has a deal. Refused once signed, for an option with a
+/// that). The quote's creator is then emailed the customer, the option, each
+/// area's material, color and edges, and the total, and notified in the app
+/// when the quote has a deal; the customer is emailed their own copy with a
+/// link back to the quote. Refused once signed, for an option with a
 /// sold-out color, or when the link is switched off.
 #[utoipa::path(
     post,
@@ -438,7 +438,16 @@ pub async fn accept_quote(
         .get(index)
         .map(|o| o.total)
         .filter(|t| t.is_finite());
-    notify_signed(&state, &row, &doc, index, total, row.deal_id).await;
+    notify_signed(
+        &state,
+        &row,
+        &doc,
+        index,
+        total,
+        row.deal_id,
+        input.e.as_deref().filter(|e| !e.is_empty()),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -482,10 +491,49 @@ struct SignedRecipient {
     name: Option<String>,
 }
 
-/// The quote's sales rep hears that the customer signed: an email with the
-/// option, each area's color and the total, and (when the quote has a deal)
-/// an in-app notification. The rep is the quote's salesperson, else its
-/// creator, else the deal's owner. A failure loses only the notice.
+/// Where the customer's copy goes: the addresses the signed link was
+/// emailed to, else the quote's email, else the customer's.
+async fn customer_addresses(
+    pool: &MySqlPool,
+    row: &QuoteRow,
+    email_token: Option<&str>,
+) -> ApiResult<Vec<String>> {
+    let split = |list: &str| -> Vec<String> {
+        list.split([',', ';'])
+            .map(str::trim)
+            .filter(|a| a.contains('@'))
+            .map(str::to_string)
+            .collect()
+    };
+    if let Some(token) = email_token {
+        let recipients: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT recipients FROM quote_emails WHERE quote_id = ? AND token = ? LIMIT 1",
+        )
+        .bind(row.id)
+        .bind(token)
+        .fetch_optional(pool)
+        .await?;
+        let found = split(recipients.flatten().as_deref().unwrap_or_default());
+        if !found.is_empty() {
+            return Ok(found);
+        }
+    }
+    let found = split(row.email.as_deref().unwrap_or_default());
+    if !found.is_empty() {
+        return Ok(found);
+    }
+    let customer: Option<Option<String>> =
+        sqlx::query_scalar("SELECT email FROM customers WHERE id = ? LIMIT 1")
+            .bind(row.customer_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(split(customer.flatten().as_deref().unwrap_or_default()))
+}
+
+/// The customer signed: the quote's creator gets an email with the option,
+/// each area's color and the total, and (when the quote has a deal) an
+/// in-app notification; then the customer gets their own copy. A failure
+/// loses only that notice.
 #[allow(clippy::too_many_lines)]
 async fn notify_signed(
     state: &AppState,
@@ -494,58 +542,39 @@ async fn notify_signed(
     index: usize,
     total: Option<f64>,
     deal_id: Option<i64>,
+    email_token: Option<&str>,
 ) {
     let found = async {
-        let deal_owner: Option<i32> = match deal_id {
-            Some(deal) => sqlx::query_scalar::<_, Option<i32>>(
-                "SELECT user_id FROM deals WHERE id = ? AND deleted_at IS NULL LIMIT 1",
-            )
-            .bind(deal)
-            .fetch_optional(&state.pool)
-            .await?
-            .flatten(),
+        // Any company: the id comes from the quote itself, and a super
+        // admin working in this company belongs to another one.
+        let recipient: Option<SignedRecipient> = match row.created_by {
+            Some(id) => {
+                sqlx::query_as(
+                    "SELECT id, email, name FROM users WHERE id = ? AND is_deleted = 0 LIMIT 1",
+                )
+                .bind(id)
+                .fetch_optional(&state.pool)
+                .await?
+            }
             None => None,
         };
-        let mut recipient: Option<SignedRecipient> = None;
-        for id in [row.salesperson_id, row.created_by, deal_owner]
-            .into_iter()
-            .flatten()
-        {
-            // Any company: the ids come from the quote itself, and a super
-            // admin working in this company belongs to another one.
-            recipient = sqlx::query_as(
-                "SELECT id, email, name FROM users WHERE id = ? AND is_deleted = 0 LIMIT 1",
-            )
-            .bind(id)
-            .fetch_optional(&state.pool)
-            .await?;
-            // Someone without an email can't be told: try the next one.
-            if recipient
-                .as_ref()
-                .and_then(|r| r.email.as_deref())
-                .is_some_and(|e| !e.trim().is_empty())
-            {
-                break;
-            }
-        }
         let company: Option<(Option<String>, Option<String>)> =
             sqlx::query_as("SELECT name, logo_url FROM company WHERE id = ? LIMIT 1")
                 .bind(row.company_id)
                 .fetch_optional(&state.pool)
                 .await?;
         let subdomain = company_subdomain(&state.pool, row.company_id).await?;
-        ApiResult::Ok((recipient, company.unwrap_or_default(), subdomain))
+        let customer_to = customer_addresses(&state.pool, row, email_token).await?;
+        ApiResult::Ok((
+            recipient,
+            company.unwrap_or_default(),
+            subdomain,
+            customer_to,
+        ))
     }
     .await;
-    let (recipient, (company_name, logo_url), subdomain) = match found {
-        Ok((Some(recipient), company, subdomain)) => (recipient, company, subdomain),
-        Ok((None, ..)) => {
-            tracing::warn!(
-                quote = row.id,
-                "nobody to notify that the quote was signed (no salesperson, creator or deal owner)"
-            );
-            return;
-        }
+    let (recipient, (company_name, logo_url), subdomain, customer_to) = match found {
+        Ok(found) => found,
         Err(error) => {
             tracing::error!(
                 ?error,
@@ -580,93 +609,133 @@ async fn notify_signed(
         format!(" ({})", colors.join(", "))
     };
     let message = format!("{customer} signed {quote_name}: {option_label}{color_text}");
-
-    if let Some(deal) = deal_id
-        && let Err(error) = sqlx::query(
-            "INSERT INTO notifications (user_id, deal_id, message, notification_type, actor_name, due_at)
-             VALUES (?, ?, ?, 'quote_signed', ?, NOW())",
-        )
-        .bind(recipient.id)
-        .bind(deal)
-        .bind(message.chars().take(255).collect::<String>())
-        .bind(customer)
-        .execute(&state.pool)
-        .await
-    {
-        tracing::error!(?error, quote = row.id, "could not add the quote signed notification");
+    fn trimmed(value: Option<&str>) -> Option<&str> {
+        value.map(str::trim).filter(|v| !v.is_empty())
     }
-
-    let Some(email) = recipient
-        .email
-        .as_deref()
-        .map(str::trim)
-        .filter(|e| !e.is_empty())
-    else {
-        tracing::warn!(
-            quote = row.id,
-            user = recipient.id,
-            "the quote was signed but its rep has no email"
-        );
-        return;
-    };
-    let sender_name = recipient
-        .name
-        .as_deref()
-        .map(str::trim)
-        .filter(|n| !n.is_empty())
-        .unwrap_or(email);
+    let creator_email = recipient.as_ref().and_then(|r| trimmed(r.email.as_deref()));
+    let creator_name = recipient
+        .as_ref()
+        .and_then(|r| trimmed(r.name.as_deref()))
+        .or(creator_email);
+    let company_name = trimmed(company_name.as_deref())
+        .or(creator_name)
+        .unwrap_or_default()
+        .to_string();
     let branding = Branding {
-        company_name: company_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|n| !n.is_empty())
-            .unwrap_or(sender_name)
-            .to_string(),
+        company_name: company_name.clone(),
         logo_url,
-        sender_name: sender_name.to_string(),
+        sender_name: creator_name.unwrap_or(&company_name).to_string(),
     };
-    let link = format!(
-        "{}/employee/quote/{}",
-        app_origin(&state.app_url, subdomain.as_deref()),
-        row.id
-    );
+    let origin = app_origin(&state.app_url, subdomain.as_deref());
     let total = total.map(money);
     let signed_at = chrono::Utc::now()
         .with_timezone(&Indianapolis)
         .format("%b %-d, %Y at %-I:%M %p")
         .to_string();
-    let html = quote_signed_html(
-        &branding,
-        &QuoteSignedNotice {
-            customer_name: customer,
-            quote_name: &quote_name,
-            option_label: &option_label,
-            areas: &areas,
-            total: total.as_deref(),
-            signed_at: &signed_at,
-            link: Some(&link),
-        },
-    );
-    let outgoing = OutgoingEmail {
-        from_name: None,
-        from_address: "noreply@granite-manager.com".into(),
-        to: vec![email.to_string()],
-        cc: Vec::new(),
-        bcc: Vec::new(),
-        subject: message,
-        body: html,
-        signature: None,
-        reply_to: Vec::new(),
-        in_reply_to: None,
-        references: Vec::new(),
-        attachments: Vec::new(),
-        transactional: true,
+    let html = |link: &str, for_customer: bool| {
+        quote_signed_html(
+            &branding,
+            &QuoteSignedNotice {
+                customer_name: customer,
+                quote_name: &quote_name,
+                option_label: &option_label,
+                areas: &areas,
+                total: total.as_deref(),
+                signed_at: &signed_at,
+                link: Some(link),
+                for_customer,
+            },
+        )
     };
+    let email =
+        |to: Vec<String>, from_name: Option<String>, reply_to, subject, body| OutgoingEmail {
+            from_name,
+            from_address: "noreply@granite-manager.com".into(),
+            to,
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            subject,
+            body,
+            signature: None,
+            reply_to,
+            in_reply_to: None,
+            references: Vec::new(),
+            attachments: Vec::new(),
+            transactional: true,
+        };
+
+    // The quote's creator.
+    match &recipient {
+        Some(creator) => {
+            if let Some(deal) = deal_id
+                && let Err(error) = sqlx::query(
+                    "INSERT INTO notifications (user_id, deal_id, message, notification_type, actor_name, due_at)
+                     VALUES (?, ?, ?, 'quote_signed', ?, NOW())",
+                )
+                .bind(creator.id)
+                .bind(deal)
+                .bind(message.chars().take(255).collect::<String>())
+                .bind(customer)
+                .execute(&state.pool)
+                .await
+            {
+                tracing::error!(?error, quote = row.id, "could not add the quote signed notification");
+            }
+            match creator_email {
+                Some(address) => {
+                    let link = format!("{origin}/employee/quote/{}", row.id);
+                    let outgoing = email(
+                        vec![address.to_string()],
+                        None,
+                        Vec::new(),
+                        message.clone(),
+                        html(&link, false),
+                    );
+                    if let Err(error) = state.webhooks.send_email(&outgoing).await {
+                        tracing::error!(
+                            ?error,
+                            quote = row.id,
+                            "could not email the creator that the quote was signed"
+                        );
+                    }
+                }
+                None => tracing::warn!(
+                    quote = row.id,
+                    user = creator.id,
+                    "the quote was signed but its creator has no email"
+                ),
+            }
+        }
+        None => tracing::warn!(
+            quote = row.id,
+            "the quote was signed but has no creator to notify"
+        ),
+    }
+
+    // Then the customer's own copy; replies go to the creator.
+    let Some(token) = trimmed(row.portal_token.as_deref()) else {
+        return;
+    };
+    if customer_to.is_empty() {
+        tracing::warn!(
+            quote = row.id,
+            "the quote was signed but the customer has no email for their copy"
+        );
+        return;
+    }
+    let link = format!("{origin}/quote-portal/{token}");
+    let outgoing = email(
+        customer_to,
+        Some(company_name.clone()).filter(|n| !n.is_empty()),
+        creator_email.map(str::to_string).into_iter().collect(),
+        format!("Your signed quote: {quote_name}"),
+        html(&link, true),
+    );
     if let Err(error) = state.webhooks.send_email(&outgoing).await {
         tracing::error!(
             ?error,
             quote = row.id,
-            "could not email that the quote was signed"
+            "could not email the customer their signed quote"
         );
     }
 }

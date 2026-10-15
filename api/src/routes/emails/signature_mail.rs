@@ -183,7 +183,8 @@ pub struct SignedArea {
     pub edges: Vec<String>,
 }
 
-/// What the sales rep hears when a customer signs a quote in the portal.
+/// What the quote's creator hears when a customer signs a quote in the
+/// portal, and the customer's own copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuoteSignedNotice<'a> {
     pub customer_name: &'a str,
@@ -195,11 +196,13 @@ pub struct QuoteSignedNotice<'a> {
     pub total: Option<&'a str>,
     /// When it was signed, in store time.
     pub signed_at: &'a str,
-    /// The quote in the app.
+    /// The quote in the app, or (for the customer) their quote link.
     pub link: Option<&'a str>,
+    /// The customer's copy: addressed to them, with a button to their quote.
+    pub for_customer: bool,
 }
 
-/// The sales rep's notice that a customer signed a quote.
+/// The notice that a customer signed a quote.
 ///
 /// The branded card with the customer, the option, each area's material,
 /// color and edges, the total, when it was signed and a button to open it.
@@ -256,20 +259,36 @@ pub fn quote_signed_html(branding: &Branding, notice: &QuoteSignedNotice<'_>) ->
     let button = notice.link.map_or_else(String::new, |href| {
         format!(
             "<tr><td align=\"center\" style=\"padding:4px 0;\">{}</td></tr>",
-            button_html(href, "Open the Quote")
+            button_html(
+                href,
+                if notice.for_customer {
+                    "View Your Quote"
+                } else {
+                    "Open the Quote"
+                },
+            )
         )
     });
+    let (customer, option, quote) = (
+        escape_html(notice.customer_name),
+        escape_html(notice.option_label),
+        escape_html(notice.quote_name),
+    );
+    let intro = if notice.for_customer {
+        format!(
+            "Thank you, {customer}. You accepted {option} of {quote} and signed it. Here is what you picked."
+        )
+    } else {
+        format!("{customer} accepted {option} of {quote} and signed it.")
+    };
     card_html(
         branding,
         &format!(
             "<tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:24px;color:#18181b;padding-bottom:6px;\">Quote Signed</td></tr>
-          <tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:15px;line-height:1.6;color:#3f3f46;padding-bottom:24px;\">{} accepted {} of {} and signed it.</td></tr>
+          <tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:15px;line-height:1.6;color:#3f3f46;padding-bottom:24px;\">{intro}</td></tr>
           <tr><td style=\"padding-bottom:24px;\"><table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\">{details}</table></td></tr>
           {areas}
-          {button}",
-            escape_html(notice.customer_name),
-            escape_html(notice.option_label),
-            escape_html(notice.quote_name),
+          {button}"
         ),
     )
 }
@@ -361,6 +380,7 @@ mod tests {
                 total: Some("$1,234.50"),
                 signed_at: "Oct 14, 2026 at 3:05 PM",
                 link: Some("https://app.test/employee/quote/7"),
+                for_customer: false,
             },
         );
         assert!(html.contains("Jane Doe accepted Option 2 of Smith Kitchen"));
@@ -368,7 +388,25 @@ mod tests {
         assert!(html.contains("Bullnose, Ogee"));
         assert!(html.contains("$1,234.50"));
         assert!(html.contains("href=\"https://app.test/employee/quote/7\""));
+        assert!(html.contains("Open the Quote"));
         assert!(html.contains("—"));
+        let copy = quote_signed_html(
+            &branding,
+            &QuoteSignedNotice {
+                customer_name: "Jane Doe",
+                quote_name: "Smith Kitchen",
+                option_label: "Option 2",
+                areas: &areas,
+                total: Some("$1,234.50"),
+                signed_at: "Oct 14, 2026 at 3:05 PM",
+                link: Some("https://app.test/quote-portal/abc"),
+                for_customer: true,
+            },
+        );
+        assert!(copy.contains("Thank you, Jane Doe. You accepted Option 2 of Smith Kitchen"));
+        assert!(copy.contains("View Your Quote"));
+        assert!(copy.contains("href=\"https://app.test/quote-portal/abc\""));
+        assert!(copy.contains("Absolute &lt;Black&gt;"));
     }
 
     #[test]

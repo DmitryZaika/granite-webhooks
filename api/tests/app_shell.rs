@@ -75,6 +75,24 @@ async fn installers_are_locked_into_their_portal(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn template_makers_are_locked_into_their_schedule(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 11, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool);
+    let shell: Value = server
+        .get("/v1/app/shell")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(shell["portal"], "template");
+    assert_eq!(shell["portal_home"], "/templates/100/schedule");
+}
+
+#[test_db::test(seed)]
 async fn supplier_lists_can_be_limited_to_used_ones(pool: MySqlPool) {
     let server = server(pool);
     let all: Value = server
