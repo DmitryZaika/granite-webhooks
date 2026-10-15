@@ -28,6 +28,7 @@ const INSTALLER: i32 = 6;
 const CHECK_IN: i32 = 8;
 const MARKETING: i32 = 7;
 const SHOP_WORKER: i32 = 4;
+const TEMPLATE_MAKER: i32 = 11;
 
 /// The company requests act in, for the header.
 #[derive(Debug, Serialize, ToSchema)]
@@ -87,6 +88,8 @@ pub struct AppShell {
     pub can_manage_billing: bool,
     /// Holds the Shop Manager position in the company.
     pub is_shop_manager: bool,
+    /// Holds Template in the company: their own schedule is in the sidebar.
+    pub is_template_maker: bool,
     /// May send documents for signature.
     pub user_signature_access: bool,
     /// The acting company's switches.
@@ -221,6 +224,7 @@ pub async fn shell(
         can_manage_company: user.is_superuser || here(MANAGER),
         can_manage_billing: here(MANAGER),
         is_shop_manager: here(SHOP_MANAGER),
+        is_template_maker: here(TEMPLATE_MAKER),
         user_signature_access: user.is_signature_available,
         company_features: ShellFeatures {
             quickbooks: features.quickbooks_enabled,

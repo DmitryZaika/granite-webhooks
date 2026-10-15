@@ -3,12 +3,13 @@
 //! - `GET /v1/schedule/events` → the events of a date range
 //! - `GET /v1/schedule/people` → installers and template makers with their colors
 //! - `PUT /v1/schedule/people/{user_id}/color` → an admin picks a person's color
+//! - `GET /v1/me/schedule` → an installer's or template maker's own events
 //!
 //! Replaces the Remix `employee.schedule.$period` and `admin.schedule`
 //! loaders and actions. Repeating events come back once, with their `rrule`:
 //! the page expands them over the range.
 
-use crate::auth::{AdminUser, EmployeeUser};
+use crate::auth::{AdminUser, CurrentUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::state::AppState;
@@ -128,11 +129,35 @@ pub async fn events(
     EmployeeUser(user): EmployeeUser,
     MultiQuery(query): MultiQuery<EventsQuery>,
 ) -> ApiResult<Json<ScheduleEvents>> {
+    load_events(&state, user.company_id, &query, Scope::Board(user.id))
+        .await
+        .map(Json)
+}
+
+/// Which events of the company a range read returns.
+enum Scope {
+    /// The whole board, less the calendars hidden from this viewer.
+    Board(i32),
+    /// Only the events assigned to this person, whatever calendar they are on.
+    AssignedTo(i32),
+}
+
+/// The company's events of a range (see [`events`]), with their invoices.
+async fn load_events(
+    state: &AppState,
+    company_id: i32,
+    query: &EventsQuery,
+    scope: Scope,
+) -> ApiResult<ScheduleEvents> {
     if query.end < query.start {
         return Err(ApiError::BadRequest(
             "The range ends before it starts".into(),
         ));
     }
+    let (viewer, assigned) = match scope {
+        Scope::Board(viewer) => (Some(viewer), None),
+        Scope::AssignedTo(person) => (None, Some(person)),
+    };
     let start = query.start.naive_utc();
     let end = query.end.naive_utc();
     let mut events: Vec<ScheduleEvent> = sqlx::query_as(
@@ -151,10 +176,11 @@ pub async fn events(
             AND c.company_id = u.company_id
             AND c.deleted_at IS NULL
           WHERE u.company_id = ? AND e.deleted_date IS NULL
-            AND (e.calendar_id IS NULL OR NOT EXISTS (
+            AND (? IS NULL OR e.calendar_id IS NULL OR NOT EXISTS (
                   SELECT 1 FROM calendar_hidden_users h
                    WHERE h.calendar_id = e.calendar_id AND h.company_id = u.company_id
                      AND h.user_id = ?))
+            AND (? IS NULL OR e.assigned_user_id = ?)
             AND (
               (NULLIF(TRIM(e.rrule), '') IS NULL
                 AND e.start_date <= ? AND e.end_date >= ?)
@@ -164,8 +190,11 @@ pub async fn events(
             )
           ORDER BY e.start_date, e.id",
     )
-    .bind(user.company_id)
-    .bind(user.id)
+    .bind(company_id)
+    .bind(viewer)
+    .bind(viewer)
+    .bind(assigned)
+    .bind(assigned)
     .bind(end)
     .bind(start)
     .bind(end)
@@ -173,14 +202,14 @@ pub async fn events(
     .fetch_all(&state.pool)
     .await?;
     let features =
-        crate::routes::company::queries::company_features(&state.pool, user.company_id).await?;
+        crate::routes::company::queries::company_features(&state.pool, company_id).await?;
     let quickbooks_connected = features.quickbooks_enabled && features.quickbooks_connected;
     if quickbooks_connected && !events.is_empty() {
         let mut sql = sqlx::QueryBuilder::<sqlx::MySql>::new(
             "SELECT event_id, qbo_invoice_id, qbo_invoice_number FROM event_qbo_invoices
               WHERE company_id = ",
         );
-        sql.push_bind(user.company_id).push(" AND event_id IN (");
+        sql.push_bind(company_id).push(" AND event_id IN (");
         let mut ids = sql.separated(", ");
         for event in &events {
             ids.push_bind(event.id);
@@ -196,10 +225,81 @@ pub async fn events(
             event.qbo_invoice = invoices.get(&event.id).cloned();
         }
     }
-    Ok(Json(ScheduleEvents {
+    Ok(ScheduleEvents {
         events,
         quickbooks_connected,
-    }))
+    })
+}
+
+/// Query of `GET /v1/me/schedule`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct MyScheduleQuery {
+    /// Range start (ISO 8601).
+    pub start: DateTime<Utc>,
+    /// Range end (ISO 8601).
+    pub end: DateTime<Utc>,
+    /// Admins and superusers only: whose schedule, an installer or template
+    /// maker of the company. The caller's own when left out.
+    pub user_id: Option<i32>,
+}
+
+/// A personal schedule
+///
+/// The events assigned to the caller (an installer's or template maker's own
+/// day), on any calendar, with the customer named by a numeric title. An
+/// admin or superuser may read an installer's or template maker's schedule
+/// with `user_id`.
+#[utoipa::path(
+    get,
+    path = "/v1/me/schedule",
+    operation_id = "get_my_schedule",
+    tag = "schedule",
+    params(MyScheduleQuery),
+    responses(
+        (status = 200, description = "Events", body = ScheduleEvents),
+        (status = 400, description = "Missing or invalid range, or not an installer or template maker of the company", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Another person's schedule, and the caller is not an admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn my_schedule(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    MultiQuery(query): MultiQuery<MyScheduleQuery>,
+) -> ApiResult<Json<ScheduleEvents>> {
+    let person = query.user_id.unwrap_or(user.id);
+    if person != user.id {
+        if !(user.is_admin || user.is_superuser) {
+            return Err(ApiError::Forbidden);
+        }
+        let found: Option<i32> = sqlx::query_scalar(
+            "SELECT u.id FROM users u JOIN users_positions up ON up.user_id = u.id
+              WHERE u.id = ? AND up.company_id = ? AND up.position_id IN (?, ?)
+                AND u.is_deleted = 0
+              LIMIT 1",
+        )
+        .bind(person)
+        .bind(user.company_id)
+        .bind(INSTALLER)
+        .bind(TEMPLATE)
+        .fetch_optional(&state.pool)
+        .await?;
+        if found.is_none() {
+            return Err(ApiError::BadRequest(
+                "That person is not an installer or template for this company.".into(),
+            ));
+        }
+    }
+    let range = EventsQuery {
+        start: query.start,
+        end: query.end,
+    };
+    load_events(&state, user.company_id, &range, Scope::AssignedTo(person))
+        .await
+        .map(Json)
 }
 
 /// An installer or template maker.
