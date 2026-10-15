@@ -63,8 +63,7 @@ jobs:
           --health-timeout 2s
           --health-retries 60
     steps:
-      # The Lambdas of each app in each environment, as in the Makefile
-      # (time-triggered has no dev one).
+      # The Lambdas of each app in each environment, as in the Makefile.
       - name: Resolve Lambda functions
         run: |
           case "$APP/$DEPLOY_ENV" in
@@ -73,6 +72,7 @@ jobs:
             webhooks/prod)       functions="granite-webhooks" ;;
             webhooks/dev)        functions="granite-webhooks-dev" ;;
             time-triggered/prod) functions="time-triggered" ;;
+            time-triggered/dev)  functions="time-triggered-dev" ;;
             *) echo "::error::$APP has no $DEPLOY_ENV Lambda"; exit 1 ;;
           esac
           echo "FUNCTIONS=$functions" >> "$GITHUB_ENV"

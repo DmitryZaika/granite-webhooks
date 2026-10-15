@@ -16,7 +16,7 @@ ENVS := dev prod
 APP ?= $(firstword $(filter $(APPS),$(MAKECMDGOALS)))
 ENV ?= $(firstword $(filter $(ENVS),$(MAKECMDGOALS)))
 
-# The Lambdas of each app in each environment (time-triggered has no dev one).
+# The Lambdas of each app in each environment.
 # granite-api-stream is the same binary behind a streaming function URL, for
 # answers that stream or outlast API Gateway's 30 s (LAMBDA_RESPONSE_STREAMING=1).
 # granite-api-stream-dev is its dev twin on the duplicate database.
@@ -25,6 +25,9 @@ FUNCTION_api_dev := granite-api-dev granite-api-stream-dev
 FUNCTION_webhooks_prod := granite-webhooks
 FUNCTION_webhooks_dev := granite-webhooks-dev
 FUNCTION_time-triggered_prod := time-triggered
+# On the duplicate database and the dev API. Its schedule (process-time-based-dev)
+# is disabled: it sends real email to the recipients copied from production.
+FUNCTION_time-triggered_dev := time-triggered-dev
 FUNCTION = $(FUNCTION_$(APP)_$(ENV))
 
 # The app and environment words are goals too; they do nothing themselves.
