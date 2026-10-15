@@ -26,12 +26,16 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 /// `positions.id` of the marketing team.
 const MARKETING_POSITION: i32 = 7;
 
-/// The caller works on marketing for `company_id`; 403 otherwise.
+/// The caller works on marketing for `company_id`, or is a superuser (who
+/// views the app as Marketing with their own access); 403 otherwise.
 async fn require_marketer(
     state: &AppState,
     user: &SessionUser,
     company_id: i32,
 ) -> Result<(), ApiError> {
+    if user.is_superuser {
+        return Ok(());
+    }
     let found: Option<i32> = sqlx::query_scalar(
         "SELECT 1 FROM users_positions WHERE user_id = ? AND position_id = ? AND company_id = ? LIMIT 1",
     )

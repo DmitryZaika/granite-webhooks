@@ -41,6 +41,25 @@ async fn only_the_company_marketing_team_gets_in(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_superuser_viewing_as_marketing_gets_in(pool: MySqlPool) {
+    let server = server(pool.clone());
+    server
+        .get("/v1/marketing/100/leads")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    sqlx::query("UPDATE users SET is_superuser = 1 WHERE id = 102")
+        .execute(&pool)
+        .await
+        .unwrap();
+    server
+        .get("/v1/marketing/100/leads")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status_ok();
+}
+
+#[test_db::test(seed)]
 async fn referral_sources_are_managed_per_company(pool: MySqlPool) {
     make_marketer(&pool).await;
     let server = server(pool);
