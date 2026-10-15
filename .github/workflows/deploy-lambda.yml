@@ -1,7 +1,7 @@
 name: Deploy Lambda
 
-# Builds one app's Rust binary from the branch picked in "Use workflow from" and uploads it as the code of that
-# app's Lambda(s). Only the code changes: environment variables and other
+# Builds one app's Rust binary from the branch picked in "Use workflow from"
+# and uploads it as the code of that app's Lambda(s). Only the code changes: environment variables and other
 # configuration set on the Lambda are kept.
 on:
   workflow_dispatch:
