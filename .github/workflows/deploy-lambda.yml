@@ -1,16 +1,11 @@
 name: Deploy Lambda
 
-# Builds one app's Rust binary from a branch and uploads it as the code of that
+# Builds one app's Rust binary from the branch picked in "Use workflow from" and uploads it as the code of that
 # app's Lambda(s). Only the code changes: environment variables and other
 # configuration set on the Lambda are kept.
 on:
   workflow_dispatch:
     inputs:
-      branch:
-        description: Branch (or tag/commit) to build
-        type: string
-        required: true
-        default: main
       environment:
         description: Environment
         type: choice
@@ -38,20 +33,20 @@ permissions:
 
 env:
   AWS_REGION: us-east-2
-  # Assumed through GitHub OIDC; its trust policy only accepts runs of this
-  # workflow from main, so pick other branches with the `branch` input.
+  # Assumed through GitHub OIDC; its trust policy accepts runs from any branch
+  # of this repository (never forks).
   AWS_ROLE_ARN: arn:aws:iam::741448943665:role/github-actions-lambda-deploy
   CARGO_TERM_COLOR: always
 
 jobs:
   deploy:
-    name: ${{ inputs.project }} → ${{ inputs.environment }} (${{ inputs.branch }})
+    name: ${{ inputs.project }} → ${{ inputs.environment }} (${{ github.ref_name }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       APP: ${{ inputs.project }}
       DEPLOY_ENV: ${{ inputs.environment }}
-      BRANCH: ${{ inputs.branch }}
+      BRANCH: ${{ github.ref_name }}
     services:
       # sqlx's query! macros check every query against this schema at compile
       # time. .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local.
@@ -84,8 +79,6 @@ jobs:
           echo "Deploying $APP to: $functions"
 
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.branch }}
 
       - name: Record commit
         run: |
