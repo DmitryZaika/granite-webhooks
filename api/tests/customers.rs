@@ -20,10 +20,7 @@ fn row(rows: &Value, id: i64) -> &Value {
 
 // ---- GET /v1/customers ----------------------------------------------------
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn default_view_lists_valid_live_customers_of_own_company(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/customers")
@@ -42,15 +39,13 @@ async fn default_view_lists_valid_live_customers_of_own_company(pool: MySqlPool)
             1009,
             1010,
             1011,
+            8695,
             990_000_021
         ]
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn customer_row_has_the_remix_shape(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/customers")
@@ -81,10 +76,7 @@ async fn customer_row_has_the_remix_shape(pool: MySqlPool) {
     assert!(row(&rows, 1000).get("revenue_generated").is_none());
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn joins_null_out_deleted_reps_and_foreign_primary_emails(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/customers")
@@ -102,10 +94,7 @@ async fn joins_null_out_deleted_reps_and_foreign_primary_emails(pool: MySqlPool)
     assert_eq!(row(&rows, 1004)["created_date"], "2026-03-10T23:59:59.000Z");
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn show_invalid_includes_invalid_leads(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/customers")
@@ -127,16 +116,14 @@ async fn show_invalid_includes_invalid_leads(pool: MySqlPool) {
             1009,
             1010,
             1011,
+            8695,
             990_000_021
         ]
     );
     assert_eq!(row(&rows, 1002)["invalid_lead"], "spam");
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn show_invalid_only_accepts_1(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/customers")
@@ -147,10 +134,7 @@ async fn show_invalid_only_accepts_1(pool: MySqlPool) {
     assert!(!ids(&rows).contains(&1002));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sales_rep_filter(pool: MySqlPool) {
     let server = server(pool);
     let rows: Value = server
@@ -159,7 +143,7 @@ async fn sales_rep_filter(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .json();
-    assert_eq!(sorted(ids(&rows)), vec![1000, 1008, 1011]);
+    assert_eq!(sorted(ids(&rows)), vec![1000, 1008, 1011, 8695]);
 
     let rows: Value = server
         .get("/v1/customers")
@@ -168,7 +152,7 @@ async fn sales_rep_filter(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .json();
-    assert_eq!(sorted(ids(&rows)), vec![1000, 1002, 1008, 1011]);
+    assert_eq!(sorted(ids(&rows)), vec![1000, 1002, 1008, 1011, 8695]);
 
     // Empty value means "no filter", like the Remix `if (salesRepFilter)`.
     let rows: Value = server
@@ -177,13 +161,10 @@ async fn sales_rep_filter(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .json();
-    assert_eq!(ids(&rows).len(), 10);
+    assert_eq!(ids(&rows).len(), 11);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn non_numeric_sales_rep_is_400(pool: MySqlPool) {
     let res = server(pool)
         .get("/v1/customers")
@@ -194,10 +175,7 @@ async fn non_numeric_sales_rep_is_400(pool: MySqlPool) {
     res.assert_json(&json!({ "error": "invalid sales_rep: abc" }));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn unknown_view_falls_back_to_customers(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/customers")
@@ -205,13 +183,10 @@ async fn unknown_view_falls_back_to_customers(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .json();
-    assert_eq!(ids(&rows).len(), 10);
+    assert_eq!(ids(&rows).len(), 11);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn companies_view_has_totals_and_ignores_invalid_filter(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/customers")
@@ -248,10 +223,7 @@ async fn companies_view_has_totals_and_ignores_invalid_filter(pool: MySqlPool) {
     assert_eq!(hank["projects_count"], 0);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn companies_view_with_sales_rep(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/customers")
@@ -263,10 +235,7 @@ async fn companies_view_with_sales_rep(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![1004]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn tenants_are_isolated(pool: MySqlPool) {
     let server = server(pool);
     let rows: Value = server
@@ -286,10 +255,7 @@ async fn tenants_are_isolated(pool: MySqlPool) {
     assert_eq!(rows[0]["revenue_generated"], "9999.99");
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn list_requires_a_session(pool: MySqlPool) {
     server(pool)
         .get("/v1/customers")
@@ -299,10 +265,7 @@ async fn list_requires_a_session(pool: MySqlPool) {
 
 // ---- POST /v1/customers/emails/batch ---------------------------------------
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn emails_batch_orders_primary_first_then_by_creation(pool: MySqlPool) {
     let res = server(pool)
         .post("/v1/customers/emails/batch")
@@ -318,10 +281,7 @@ async fn emails_batch_orders_primary_first_then_by_creation(pool: MySqlPool) {
     }));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn emails_batch_never_returns_other_companies(pool: MySqlPool) {
     server(pool)
         .post("/v1/customers/emails/batch")
@@ -331,10 +291,7 @@ async fn emails_batch_never_returns_other_companies(pool: MySqlPool) {
         .assert_json(&json!({ "1004": ["erin@builders.example"] }));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn emails_batch_edge_cases(pool: MySqlPool) {
     let server = server(pool);
     server
@@ -378,10 +335,7 @@ async fn emails_batch_edge_cases(pool: MySqlPool) {
         .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn emails_batch_requires_a_session(pool: MySqlPool) {
     server(pool)
         .post("/v1/customers/emails/batch")

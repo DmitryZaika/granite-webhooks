@@ -6,6 +6,7 @@
 //! - `POST /v1/stones/quick` → add a stone with its first slabs
 //! - `GET /v1/stones/{id}` → one stone with its color ids
 //! - `GET /v1/stones/{id}/slabs` → its slabs (own + linked) with sale details
+//! - `PATCH /v1/stones/{id}/samples` → samples on hand and how many to keep
 //!
 //! Replaces the loader of the Remix `employee.stones.tsx` route
 //! (`stoneQueryBuilder` in `app/utils/queries.server.ts`).
@@ -26,7 +27,9 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::quick_add))
         .routes(routes!(handlers::get, writes::update, writes::delete))
         .routes(routes!(handlers::slabs, media::add_slab))
+        .routes(routes!(writes::update_samples))
         .routes(routes!(media::names))
+        .routes(routes!(media::image_proxy))
         .routes(routes!(media::links))
         .routes(routes!(media::images, media::add_images))
         .routes(routes!(media::delete_image))

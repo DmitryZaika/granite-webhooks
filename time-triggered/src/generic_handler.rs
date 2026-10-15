@@ -4,9 +4,7 @@ use common::crud::notifications::{
     get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
     unmark_deadline_reminder_telegram_sent,
 };
-use common::crud::outbound_email::{
-    OutboundScheduledEmail, record_outbound_scheduled_email,
-};
+use common::crud::outbound_email::{record_outbound_scheduled_email, OutboundScheduledEmail};
 use common::crud::scheduled_emails::{
     cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
     get_ready_scheduled_emails, mark_scheduled_email_as_sent,
@@ -110,11 +108,12 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
     Ok(sent_count)
 }
 
-async fn post_app_process_route(path: &str, label: &str) -> Result<usize, Error> {
-    let app_url = match std::env::var("APP_URL") {
+/// Runs a scheduled job of the API (`POST <API_URL>/v1/jobs/<job>`).
+async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
+    let api_url = match std::env::var("API_URL") {
         Ok(value) => value,
         Err(error) => {
-            tracing::warn!(?error, "APP_URL is not set; skipping {label}");
+            tracing::warn!(?error, "API_URL is not set; skipping {label}");
             return Ok(0);
         }
     };
@@ -125,20 +124,13 @@ async fn post_app_process_route(path: &str, label: &str) -> Result<usize, Error>
             return Ok(0);
         }
     };
-
-    let url = format!(
-        "{}/{}",
-        app_url.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    );
-    let client = Client::new();
-    let response = client
+    let url = format!("{}/v1/jobs/{job}", api_url.trim_end_matches('/'));
+    let response = Client::new()
         .post(url)
         .header("Authorization", lambda_key)
         .send()
         .await
         .map_err(|error| Error::from(error.to_string()))?;
-
     if !response.status().is_success() {
         tracing::warn!(
             status = response.status().as_u16(),
@@ -146,7 +138,6 @@ async fn post_app_process_route(path: &str, label: &str) -> Result<usize, Error>
         );
         return Ok(0);
     }
-
     let body = response
         .json::<serde_json::Value>()
         .await
@@ -159,31 +150,61 @@ async fn post_app_process_route(path: &str, label: &str) -> Result<usize, Error>
 }
 
 async fn process_estimate_appointment_reminders() -> Result<usize, Error> {
-    post_app_process_route("api/estimate-reminders/process", "estimate reminders").await
+    post_api_job("appointment-reminders", "estimate reminders").await
 }
 
 async fn process_maintenance_due_reminders() -> Result<usize, Error> {
-    post_app_process_route(
-        "api/maintenance-reminders/process",
-        "maintenance due reminders",
-    )
-    .await
+    post_api_job("maintenance-reminders", "maintenance due reminders").await
 }
 
 async fn process_sms_followups() -> Result<usize, Error> {
-    post_app_process_route("api/sms-followups/process", "sms follow-ups").await
+    post_api_job("sms-followups", "sms follow-ups").await
 }
 
 async fn process_call_points() -> Result<usize, Error> {
-    post_app_process_route("api/call-points/process", "call points").await
+    post_api_job("call-points", "call points").await
+}
+
+async fn process_signature_reminders() -> Result<usize, Error> {
+    post_api_job("signature-reminders", "e-signature reminders").await
 }
 
 async fn process_checklist_surveys() -> Result<usize, Error> {
-    post_app_process_route(
-        "api/survey-notifications/process",
-        "checklist survey notifications",
-    )
-    .await
+    post_api_job("survey-notifications", "checklist survey notifications").await
+}
+
+/// Starts the supplier price file job without waiting for it: a big PDF takes
+/// minutes, and the API Lambda keeps working after this request gives up.
+/// Sent to the long-running deployment (`API_STREAM_URL`) when there is one.
+async fn start_supplier_files_job() {
+    let Some(api_url) = std::env::var("API_STREAM_URL")
+        .ok()
+        .or_else(|| std::env::var("API_URL").ok())
+    else {
+        tracing::warn!("API_URL is not set; skipping supplier files");
+        return;
+    };
+    let Ok(lambda_key) = std::env::var("LAMBDA_KEY") else {
+        tracing::warn!("LAMBDA_KEY is not set; skipping supplier files");
+        return;
+    };
+    let url = format!("{}/v1/jobs/supplier-files", api_url.trim_end_matches('/'));
+    let sent = Client::new()
+        .post(url)
+        .header("Authorization", lambda_key)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await;
+    match sent {
+        Ok(response) if !response.status().is_success() => tracing::warn!(
+            status = response.status().as_u16(),
+            "Failed to start supplier files"
+        ),
+        Err(error) if !error.is_timeout() => {
+            tracing::warn!(?error, "Failed to start supplier files");
+        }
+        _ => {}
+    }
 }
 
 pub fn scheduled_email_recipient(email: Option<&str>) -> Option<&str> {
@@ -195,12 +216,8 @@ async fn send_and_record_scheduled_email(
     email: &ScheduledEmail,
 ) -> Result<(), Error> {
     let Some(cleaned_email) = scheduled_email_recipient(email.email.as_deref()) else {
-        mark_scheduled_email_failed_with_reason(
-            pool,
-            email.id,
-            "Customer has no email address",
-        )
-        .await?;
+        mark_scheduled_email_failed_with_reason(pool, email.id, "Customer has no email address")
+            .await?;
         tracing::warn!(
             customer_id = email.customer_id,
             scheduled_email_id = email.id,
@@ -314,6 +331,7 @@ pub(crate) async fn function_handler(
     let maintenance_reminder_count = process_maintenance_due_reminders().await?;
     let sms_followup_count = process_sms_followups().await?;
     let checklist_survey_count = process_checklist_surveys().await?;
+    start_supplier_files_job().await;
     let call_points_count = match process_call_points().await {
         Ok(count) => count,
         Err(error) => {
@@ -321,15 +339,26 @@ pub(crate) async fn function_handler(
             0
         }
     };
+    let signature_reminder_count = match process_signature_reminders().await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                "Failed to process e-signature reminders; continuing"
+            );
+            0
+        }
+    };
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, and {} call points",
+        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, and {} e-signature reminders",
         processed_email_count,
         reminder_count,
         estimate_reminder_count,
         maintenance_reminder_count,
         sms_followup_count,
         checklist_survey_count,
-        call_points_count
+        call_points_count,
+        signature_reminder_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);
@@ -357,11 +386,13 @@ mod tests {
             .find("async fn send_due_activity_deadline_reminders")
             .expect("reminder function");
         let fn_end = source
-            .find("async fn post_app_process_route")
+            .find("/// Runs a scheduled job of the API")
             .expect("next function");
         let body = &source[fn_start..fn_end];
         assert!(
-            body.contains("Telegram notifications token is not set; skipping activity deadline reminders"),
+            body.contains(
+                "Telegram notifications token is not set; skipping activity deadline reminders"
+            ),
             "Missing Telegram token must skip reminders instead of failing the tick"
         );
         assert!(
@@ -369,7 +400,8 @@ mod tests {
             "Missing Telegram token must not convert into a handler error"
         );
         assert!(
-            source.contains("Failed to send activity deadline reminders; continuing scheduled work"),
+            source
+                .contains("Failed to send activity deadline reminders; continuing scheduled work"),
             "Reminder failures must not abort SMS follow-ups"
         );
     }
@@ -427,7 +459,7 @@ mod tests {
         assert!(source.contains("checklist surveys"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_generic_handler(pool: MySqlPool) {
         // Mocking the data we saw in the logs
         let incoming = EventBridgeEvent {

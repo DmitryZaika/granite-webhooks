@@ -24,10 +24,7 @@ fn row(rows: &Value, id: i64) -> &Value {
         .unwrap_or_else(|| panic!("sink {id} missing"))
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn lists_in_stock_sinks_sorted_by_name(pool: MySqlPool) {
     let rows = list(pool, "").await;
     // Bar Prep Sink, Composite Black (not displayed, still listed), Dual Bowl 16,
@@ -35,10 +32,7 @@ async fn lists_in_stock_sinks_sorted_by_name(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![3107, 3102, 3105, 3101, 3100]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sink_has_every_field(pool: MySqlPool) {
     let rows = list(pool, "?include_sold_out=true").await;
     // 4 units: 2 free, 1 on a slab, 1 deleted.
@@ -70,10 +64,7 @@ async fn sink_has_every_field(pool: MySqlPool) {
     assert_eq!(ceramic["available"], 0);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn filters(pool: MySqlPool) {
     let server = server(pool);
     let cases: &[(&str, &[i64])] = &[
@@ -104,10 +95,7 @@ async fn filters(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn never_returns_deleted_or_foreign_sinks(pool: MySqlPool) {
     let rows = list(pool, "?include_sold_out=true").await;
     let ids = ids(&rows);
@@ -115,10 +103,7 @@ async fn never_returns_deleted_or_foreign_sinks(pool: MySqlPool) {
     assert!(!ids.contains(&3106));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn malformed_filters_are_400(pool: MySqlPool) {
     server(pool)
         .get("/v1/sinks?supplier_id=abc")
@@ -127,10 +112,7 @@ async fn malformed_filters_are_400(pool: MySqlPool) {
         .assert_status(StatusCode::BAD_REQUEST);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn tenants_are_isolated(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/sinks?include_sold_out=true")
@@ -140,10 +122,7 @@ async fn tenants_are_isolated(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![3106]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn requires_an_employee_or_admin(pool: MySqlPool) {
     let server = server(pool);
     server.get("/v1/sinks").await.assert_status_unauthorized();
@@ -159,10 +138,7 @@ async fn requires_an_employee_or_admin(pool: MySqlPool) {
         .assert_status_ok();
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn available_only_lists_models_with_free_units(pool: MySqlPool) {
     // Farmhouse 33 is regular stock without units: not installable now. It
     // wins over include_sold_out.

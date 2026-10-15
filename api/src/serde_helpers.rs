@@ -12,3 +12,13 @@ pub fn js_date<S: Serializer>(
         None => serializer.serialize_none(),
     }
 }
+
+/// For PATCH bodies: a field left out is `None`, a field sent as `null` is
+/// `Some(None)`, a value is `Some(Some(value))`. Use with `#[serde(default)]`.
+pub fn double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(deserializer).map(Some)
+}

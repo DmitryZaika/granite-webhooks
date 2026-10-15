@@ -69,10 +69,7 @@ async fn expect_error(res: axum_test::TestResponse, status: StatusCode, starts_w
 
 // ---- POST /v1/uploads
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn uploads_are_presigned_into_the_folder(pool: MySqlPool) {
     let (server, _) = server_with_storage(pool);
     let res = server
@@ -102,7 +99,7 @@ async fn uploads_are_presigned_into_the_folder(pool: MySqlPool) {
     server
         .post("/v1/uploads")
         .with_session(sessions::ADMIN)
-        .json(&json!({ "folder": "documents", "file_name": "a.png", "content_type": "image/png" }))
+        .json(&json!({ "folder": "secrets", "file_name": "a.png", "content_type": "image/png" }))
         .await
         .assert_status(StatusCode::BAD_REQUEST);
     server
@@ -113,10 +110,7 @@ async fn uploads_are_presigned_into_the_folder(pool: MySqlPool) {
         .assert_status(StatusCode::FORBIDDEN);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn uploads_need_configured_storage(pool: MySqlPool) {
     expect_error(
         server(pool)
@@ -132,10 +126,33 @@ async fn uploads_need_configured_storage(pool: MySqlPool) {
 
 // ---- Catalog
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
+async fn the_supplier_directory_lists_contacts_and_files(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "UPDATE suppliers SET manager = 'Ann', phone = '317-555-0300' WHERE id = 300;
+         INSERT INTO supplier_files (id, name, url, supplier_id)
+           VALUES (9500, 'Prices.pdf', 'https://files.example/prices.pdf', 300),
+                  (9501, 'Other.pdf', 'https://files.example/other.pdf', 302);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool);
+    let directory: Value = server
+        .get("/v1/suppliers/directory")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(common::ids(&directory), [300, 301]);
+    assert_eq!(directory[0]["manager"], "Ann");
+    assert_eq!(
+        directory[0]["files"],
+        json!([{ "id": 9500, "name": "Prices.pdf", "url": "https://files.example/prices.pdf" }])
+    );
+    assert_eq!(directory[1]["files"], json!([]));
+}
+
+#[test_db::test(seed)]
 async fn suppliers_colors_and_types_of_the_company(pool: MySqlPool) {
     let server = server(pool);
     let get = |path: &'static str| server.get(path).with_session(sessions::REP);
@@ -170,10 +187,7 @@ async fn suppliers_colors_and_types_of_the_company(pool: MySqlPool) {
         .assert_status_unauthorized();
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn stone_types_are_created_renamed_and_deleted(pool: MySqlPool) {
     let server = server(pool.clone());
     let created = server
@@ -283,10 +297,7 @@ async fn stone_types_are_created_renamed_and_deleted(pool: MySqlPool) {
 
 // ---- Stones
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn creates_a_stone_with_its_image_and_colors(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool);
     let url = upload(&server, &storage, "stones").await;
@@ -319,10 +330,25 @@ async fn creates_a_stone_with_its_image_and_colors(pool: MySqlPool) {
     assert_eq!(stone["color_ids"], json!([3, 13]));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
+async fn a_stone_added_without_an_image_gets_the_placeholder(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let res = server
+        .post("/v1/stones")
+        .with_session(sessions::ADMIN)
+        .json(&stone_body(None))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    let url: Option<String> = sqlx::query_scalar("SELECT url FROM stones WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(url.as_deref(), Some("/placeholders/stone-placeholder.svg"));
+}
+
+#[test_db::test(seed)]
 async fn stone_writes_validate_everything(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool.clone());
     let url = upload(&server, &storage, "stones").await;
@@ -333,7 +359,6 @@ async fn stone_writes_validate_everything(pool: MySqlPool) {
         body
     };
     let cases = [
-        (stone_body(None), "An image is required"),
         (
             with("image_url", json!("https://img.example/x.jpg")),
             "not an uploaded stones file",
@@ -353,10 +378,7 @@ async fn stone_writes_validate_everything(pool: MySqlPool) {
         (with("type", json!("onyx")), "Select a valid stone type."),
         (with("finishing", json!("matte")), "invalid finishing"),
         (with("level", json!(8)), "level must be 1 to 7"),
-        (
-            with("width", json!(-1)),
-            "width must be a non-negative number",
-        ),
+        (with("width", json!(-1)), "Enter a number of 0 or more"),
         (
             with("delivery_date", json!("11/02/2026")),
             "invalid delivery_date",
@@ -390,12 +412,9 @@ async fn stone_writes_validate_everything(pool: MySqlPool) {
         .assert_status(StatusCode::FORBIDDEN);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn editing_keeps_or_replaces_the_image(pool: MySqlPool) {
-    let (server, storage) = server_with_storage(pool);
+    let (server, storage) = server_with_storage(pool.clone());
     let first = upload(&server, &storage, "stones").await;
     let id = server
         .post("/v1/stones")
@@ -448,6 +467,21 @@ async fn editing_keeps_or_replaces_the_image(pool: MySqlPool) {
         "{keys:?}"
     );
 
+    // A photo another stone also uses stays when it is replaced.
+    sqlx::query("UPDATE stones SET url = ? WHERE id = 3001")
+        .bind(&second)
+        .execute(&pool)
+        .await
+        .unwrap();
+    body["image_url"] = json!(upload(&server, &storage, "stones").await);
+    server
+        .put(&format!("/v1/stones/{id}"))
+        .with_session(sessions::ADMIN)
+        .json(&body)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(storage.memory_keys().contains(&key(&second)));
+
     // Seed stones keep images outside the bucket untouched.
     let mut seed = stone_body(None);
     seed["name"] = json!("Absolute Black");
@@ -467,10 +501,7 @@ async fn editing_keeps_or_replaces_the_image(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn deleting_a_stone_with_slabs_needs_confirmation(pool: MySqlPool) {
     let server = server(pool.clone());
     expect_error(
@@ -522,10 +553,7 @@ async fn deleting_a_stone_with_slabs_needs_confirmation(pool: MySqlPool) {
 
 // ---- Installed photos
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn photos_are_listed_added_linked_and_deleted(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool.clone());
     let list = |id: i64| {
@@ -596,10 +624,7 @@ async fn photos_are_listed_added_linked_and_deleted(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn photo_routes_are_scoped_and_validated(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool);
     server
@@ -653,10 +678,7 @@ async fn photo_routes_are_scoped_and_validated(pool: MySqlPool) {
         .assert_status(StatusCode::NOT_FOUND);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn stone_names_for_linking(pool: MySqlPool) {
     let server = server(pool);
     let names = |query: &'static str| {
@@ -679,10 +701,7 @@ async fn stone_names_for_linking(pool: MySqlPool) {
 
 // ---- Slab links and slabs
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn slab_links_add_the_source_slabs(pool: MySqlPool) {
     let server = server(pool);
     server
@@ -741,10 +760,7 @@ async fn slab_links_add_the_source_slabs(pool: MySqlPool) {
     assert!(!common::ids(&slabs).contains(&6040));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn slabs_are_added_renamed_and_deleted(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool.clone());
     // No size: the stone's (Zebra Quartz is 118 x 56).
@@ -827,4 +843,54 @@ async fn slabs_are_added_renamed_and_deleted(pool: MySqlPool) {
         .with_session(sessions::ADMIN)
         .await
         .assert_status(StatusCode::NOT_FOUND);
+}
+
+// ---- slab numbers are unique per stone (QA audit 2026-10-14, B-027) ----------
+
+#[test_db::test(seed)]
+async fn slab_numbers_are_unique_per_stone(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let res = server
+        .post("/v1/stones")
+        .with_session(sessions::ADMIN)
+        .json(&stone_body(None))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let stone = res.json::<Value>()["id"].as_i64().unwrap();
+
+    let add = |bundle: &str| {
+        server
+            .post(&format!("/v1/stones/{stone}/slabs"))
+            .with_session(sessions::ADMIN)
+            .json(&json!({ "bundle": bundle, "length": 120, "width": 60 }))
+    };
+    add("QA-DUP-1").await.assert_status(StatusCode::CREATED);
+    expect_error(
+        add("QA-DUP-1").await,
+        StatusCode::BAD_REQUEST,
+        "Slab number QA-DUP-1 is already used",
+    )
+    .await;
+    let second = add("QA-DUP-2").await;
+    second.assert_status(StatusCode::CREATED);
+    let second = second.json::<Value>()["id"].as_i64().unwrap();
+
+    // Renaming onto a number another slab of this stone has is refused.
+    expect_error(
+        server
+            .patch(&format!("/v1/slabs/{second}"))
+            .with_session(sessions::ADMIN)
+            .json(&json!({ "bundle": "QA-DUP-1" }))
+            .await,
+        StatusCode::BAD_REQUEST,
+        "Slab number QA-DUP-1 is already used",
+    )
+    .await;
+    // Keeping its own number is fine.
+    server
+        .patch(&format!("/v1/slabs/{second}"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "bundle": "QA-DUP-2" }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 }

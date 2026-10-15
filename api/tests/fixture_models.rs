@@ -57,10 +57,7 @@ async fn units(pool: &MySqlPool, model: i64) -> (i64, i64) {
     .unwrap()
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sink_model_has_every_field_and_unit_counts(pool: MySqlPool) {
     let res = server(pool)
         .get("/v1/sinks/3100")
@@ -78,10 +75,7 @@ async fn sink_model_has_every_field_and_unit_counts(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn faucet_model_has_no_size(pool: MySqlPool) {
     let faucet: Value = server(pool)
         .get("/v1/faucets/3200")
@@ -94,10 +88,7 @@ async fn faucet_model_has_no_size(pool: MySqlPool) {
     assert_eq!(faucet["retail_price"], "129.99");
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn models_are_scoped_to_the_company(pool: MySqlPool) {
     let server = server(pool);
     for path in [
@@ -125,10 +116,7 @@ async fn models_are_scoped_to_the_company(pool: MySqlPool) {
         .assert_status(StatusCode::NOT_FOUND);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn editing_units_adds_and_removes_only_free_ones(pool: MySqlPool) {
     let server = server(pool.clone());
     let put = |body: Value| {
@@ -176,10 +164,7 @@ async fn editing_units_adds_and_removes_only_free_ones(pool: MySqlPool) {
     assert_eq!(model["url"], "https://img.example/undermount.jpg");
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn creates_models_with_image_and_units(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool.clone());
     let url = upload(&server, &storage, "sinks").await;
@@ -218,12 +203,9 @@ async fn creates_models_with_image_and_units(pool: MySqlPool) {
     res.assert_status(StatusCode::CREATED);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn model_writes_validate(pool: MySqlPool) {
-    let (server, storage) = server_with_storage(pool);
+    let (server, storage) = server_with_storage(pool.clone());
     let url = upload(&server, &storage, "sinks").await;
     let stone_url = upload(&server, &storage, "stones").await;
     let with = |key: &str, value: Value| {
@@ -232,7 +214,6 @@ async fn model_writes_validate(pool: MySqlPool) {
         body
     };
     for (body, error) in [
-        (sink(None, None), "An image is required"),
         (sink(None, Some(&stone_url)), "not an uploaded sinks file"),
         (with("name", json!(" ")), "Name is required"),
         (with("type", json!("bar sink")), "invalid type"),
@@ -268,12 +249,31 @@ async fn model_writes_validate(pool: MySqlPool) {
         .json(&json!({ "name": "X", "type": "composite", "image_url": url }))
         .await;
     res.assert_status(StatusCode::BAD_REQUEST);
+    let res = server
+        .post("/v1/faucets")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "X", "type": "single handle" }))
+        .await;
+    res.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(res.json::<Value>()["error"], "An image is required");
+
+    // A sink without an image gets the placeholder.
+    let res = server
+        .post("/v1/sinks")
+        .with_session(sessions::ADMIN)
+        .json(&sink(None, None))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    let url: String = sqlx::query_scalar("SELECT url FROM sink_type WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(url, "/placeholders/sink-placeholder.svg");
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn deleting_a_model_keeps_installed_units(pool: MySqlPool) {
     let server = server(pool.clone());
     server
@@ -300,10 +300,7 @@ async fn deleting_a_model_keeps_installed_units(pool: MySqlPool) {
     assert!(!ids(&list).contains(&3100));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn model_photos(pool: MySqlPool) {
     let (server, storage) = server_with_storage(pool);
     let list = || {
@@ -346,10 +343,7 @@ async fn model_photos(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn hidden_stones_are_for_admins(pool: MySqlPool) {
     let server = server(pool);
     let admin: Value = server
@@ -364,4 +358,109 @@ async fn hidden_stones_are_for_admins(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .assert_status(StatusCode::FORBIDDEN);
+}
+
+#[test_db::test(seed)]
+async fn sink_types_are_per_company_and_rename_their_models(pool: MySqlPool) {
+    let (server, storage) = server_with_storage(pool.clone());
+    let list = |session| {
+        let server = &server;
+        async move {
+            server
+                .get("/v1/sink-types")
+                .with_session(session)
+                .await
+                .json::<Value>()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        list(sessions::REP).await,
+        [
+            "ceramic",
+            "composite",
+            "farm house",
+            "stainless 16 gauge",
+            "stainless 18 gauge"
+        ]
+    );
+    assert_eq!(list(sessions::OTHER_COMPANY_REP).await, ["composite"]);
+
+    // A new type can be given to a sink model; an unknown one cannot.
+    let res = server
+        .post("/v1/sink-types")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": " Trough " }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    server
+        .post("/v1/sink-types")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "TROUGH" }))
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    server
+        .post("/v1/sink-types")
+        .with_session(sessions::REP)
+        .json(&json!({ "name": "Vessel" }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let url = upload(&server, &storage, "sinks").await;
+    let mut body = sink(None, Some(&url));
+    body["type"] = json!("trough");
+    let created = server
+        .post("/v1/sinks")
+        .with_session(sessions::ADMIN)
+        .json(&body)
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let model = created.json::<Value>()["id"].as_i64().unwrap();
+
+    // Renaming renames the models of that type.
+    server
+        .patch(&format!("/v1/sink-types/{id}"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Deep Trough" }))
+        .await
+        .assert_status_ok();
+    let kind: String = sqlx::query_scalar("SELECT type FROM sink_type WHERE id = ?")
+        .bind(model)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(kind, "Deep Trough");
+
+    // A type in use cannot be deleted.
+    let blocked = server
+        .delete(&format!("/v1/sink-types/{id}"))
+        .with_session(sessions::ADMIN)
+        .await;
+    blocked.assert_status(StatusCode::CONFLICT);
+    assert_eq!(
+        blocked.json::<Value>(),
+        json!({
+            "error": "This type is used by undeleted sinks and cannot be deleted.",
+            "sinks": [{ "id": model, "name": "Undermount 3219" }]
+        })
+    );
+    server
+        .delete(&format!("/v1/sinks/{model}"))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .delete(&format!("/v1/sink-types/{id}"))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .delete("/v1/sink-types/105")
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 }

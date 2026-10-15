@@ -1,6 +1,6 @@
 use super::queries::list_faucets;
 use super::schemas::{Faucet, ListFaucetsQuery};
-use crate::auth::{AdminUser, EmployeeUser};
+use crate::auth::{AdminUser, EmployeeUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::routes::fixtures::{
@@ -179,7 +179,7 @@ pub async fn delete(
     responses(
         (status = 200, description = "Photos", body = Vec<FixturePhoto>),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, admin or of the shop", body = ErrorBody),
         (status = 404, description = "No such model in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -187,7 +187,7 @@ pub async fn delete(
 )]
 pub async fn images(
     State(state): State<AppState>,
-    EmployeeUser(user): EmployeeUser,
+    ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<Json<Vec<FixturePhoto>>> {
     Ok(Json(

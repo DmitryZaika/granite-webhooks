@@ -5,8 +5,8 @@ use sqlx::MySqlPool;
 
 use crate::crud::deals::maybe_move_deal_on_outbound_call;
 
+/// Body of the API's `POST /v1/followups/call-check`.
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SmsFollowupCallCheckBody {
     pub company_id: i32,
     pub phone_digits: u64,
@@ -18,14 +18,13 @@ pub struct SmsFollowupCallCheckBody {
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct SmsFollowupCallCheckResponse {
     #[serde(default)]
     customer_responded: bool,
 }
 
-/// Fire-and-forget POST to the Remix app. Returns immediately; failures are logged.
-/// When the app's transcript shows the customer answered, the deal moves to Contacted.
+/// Fire-and-forget POST to the API. Returns immediately; failures are logged.
+/// When the call's transcript shows the customer answered, the deal moves to Contacted.
 pub fn spawn_sms_followup_call_check(pool: MySqlPool, body: SmsFollowupCallCheckBody) {
     tokio::spawn(async move {
         let company_id = body.company_id;
@@ -45,12 +44,9 @@ pub fn spawn_sms_followup_call_check(pool: MySqlPool, body: SmsFollowupCallCheck
 async fn post_sms_followup_call_check(
     body: SmsFollowupCallCheckBody,
 ) -> Result<SmsFollowupCallCheckResponse, String> {
-    let app_url = std::env::var("APP_URL").map_err(|error| error.to_string())?;
+    let api_url = std::env::var("API_URL").map_err(|error| error.to_string())?;
     let lambda_key = std::env::var("LAMBDA_KEY").map_err(|error| error.to_string())?;
-    let url = format!(
-        "{}/api/sms-followups/call-check",
-        app_url.trim_end_matches('/')
-    );
+    let url = format!("{}/v1/followups/call-check", api_url.trim_end_matches('/'));
     let response = Client::new()
         .post(url)
         .header("Authorization", lambda_key)

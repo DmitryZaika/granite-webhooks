@@ -79,3 +79,89 @@ mod tests {
         assert!(make_icon(b"").is_none());
     }
 }
+
+/// The image without its blank border (`sharp(...).rotate().trim()`).
+///
+/// Rows and columns whose every pixel is within 12 of the top-left pixel
+/// are cut off, after turning the image upright. PNG and JPEG only; `None`
+/// when there is nothing to cut or the bytes are not one of those.
+pub fn trim_border(bytes: &[u8]) -> Option<Vec<u8>> {
+    const THRESHOLD: u8 = 12;
+    let reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let format = reader.format()?;
+    if !matches!(format, ImageFormat::Png | ImageFormat::Jpeg) {
+        return None;
+    }
+    let mut decoder = reader.into_decoder().ok()?;
+    let orientation = decoder.orientation().ok();
+    let mut image = DynamicImage::from_decoder(decoder).ok()?;
+    if let Some(orientation) = orientation {
+        image.apply_orientation(orientation);
+    }
+    let pixels = image.to_rgba8();
+    let (width, height) = pixels.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let background = *pixels.get_pixel(0, 0);
+    let differs = |x: u32, y: u32| {
+        let pixel = pixels.get_pixel(x, y);
+        pixel
+            .0
+            .iter()
+            .zip(background.0.iter())
+            .any(|(a, b)| a.abs_diff(*b) > THRESHOLD)
+    };
+    let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
+    for y in 0..height {
+        for x in 0..width {
+            if differs(x, y) {
+                left = left.min(x);
+                right = right.max(x);
+                top = top.min(y);
+                bottom = bottom.max(y);
+            }
+        }
+    }
+    if left > right || top > bottom {
+        return None;
+    }
+    if left == 0 && top == 0 && right == width - 1 && bottom == height - 1 {
+        return None;
+    }
+    let trimmed = image.crop_imm(left, top, right - left + 1, bottom - top + 1);
+    let trimmed = match format {
+        ImageFormat::Jpeg => DynamicImage::ImageRgb8(trimmed.to_rgb8()),
+        _ => trimmed,
+    };
+    let mut out = Cursor::new(Vec::new());
+    trimmed.write_to(&mut out, format).ok()?;
+    Some(out.into_inner())
+}
+
+#[cfg(test)]
+mod trim_tests {
+    use super::*;
+    use image::{Rgba, RgbaImage};
+
+    #[test]
+    fn a_blank_border_is_cut_off() {
+        let mut canvas = RgbaImage::from_pixel(40, 30, Rgba([255, 255, 255, 255]));
+        for x in 10..20 {
+            for y in 5..15 {
+                canvas.put_pixel(x, y, Rgba([0, 0, 0, 255]));
+            }
+        }
+        let mut png = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(canvas)
+            .write_to(&mut png, ImageFormat::Png)
+            .unwrap();
+        let trimmed = trim_border(png.get_ref()).unwrap();
+        let image = image::load_from_memory(&trimmed).unwrap();
+        assert_eq!((image.width(), image.height()), (10, 10));
+        // Nothing left to cut.
+        assert!(trim_border(&trimmed).is_none());
+    }
+}

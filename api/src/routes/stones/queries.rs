@@ -268,7 +268,7 @@ pub async fn list_stone_slabs(
 ) -> Result<Vec<StoneSlab>, sqlx::Error> {
     let rows = sqlx::query_as::<_, SlabRow>(
         "SELECT
-            CAST(slab.id AS SIGNED) AS id, slab.bundle, slab.url, slab.length, slab.width,
+            CAST(slab.id AS SIGNED) AS id, slab.bundle, NULLIF(slab.url, 'undefined') AS url, slab.length, slab.width,
             CAST(slab.parent_id AS SIGNED) AS parent_id,
             COALESCE(slab.is_leftover, 0) AS is_leftover,
             (SELECT COUNT(*) FROM slab_inventory child

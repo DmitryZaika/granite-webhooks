@@ -11,6 +11,42 @@ pub struct Supplier {
     pub name: String,
 }
 
+/// A file (price list, catalog) of a supplier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
+pub struct SupplierFile {
+    /// File id.
+    pub id: i64,
+    /// The supplier.
+    #[serde(skip)]
+    pub supplier_id: i32,
+    /// File name.
+    pub name: String,
+    /// Where it is stored.
+    pub url: String,
+}
+
+/// A supplier with its contact details and files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
+pub struct SupplierEntry {
+    /// Supplier id.
+    pub id: i32,
+    /// Name.
+    pub supplier_name: Option<String>,
+    /// Contact person.
+    pub manager: Option<String>,
+    /// Phone.
+    pub phone: Option<String>,
+    /// Email.
+    pub email: Option<String>,
+    /// Notes.
+    pub notes: Option<String>,
+    /// Website.
+    pub website: Option<String>,
+    /// Its files, oldest first.
+    #[sqlx(skip)]
+    pub files: Vec<SupplierFile>,
+}
+
 /// A stone color tag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
 pub struct Color {
@@ -48,7 +84,16 @@ pub struct StoneTypeInUse {
     pub stones: Vec<StoneUsingType>,
 }
 
-/// A stone that uses a type.
+/// 409 body of `DELETE /v1/sink-types/{id}`: the type is still used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct SinkTypeInUse {
+    /// "This type is used by undeleted sinks and cannot be deleted."
+    pub error: String,
+    /// Live sink models of that type, by name; delete or retype them first.
+    pub sinks: Vec<StoneUsingType>,
+}
+
+/// A stone (or sink model) that uses a type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
 pub struct StoneUsingType {
     /// Stone id.

@@ -173,7 +173,7 @@ mod tests {
         assert!(generated.contains('-'));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn records_automated_send_as_employee_message(pool: MySqlPool) {
         let user_id = sqlx::query("INSERT INTO users (email, name, company_id) VALUES (?, ?, 1)")
             .bind("dema@granitedepotindy.com")
@@ -183,14 +183,13 @@ mod tests {
             .unwrap()
             .last_insert_id() as i32;
 
-        let customer_id = sqlx::query(
-            "INSERT INTO customers (name, company_id, source) VALUES (?, 1, 'leads')",
-        )
-        .bind("Brian")
-        .execute(&pool)
-        .await
-        .unwrap()
-        .last_insert_id() as i32;
+        let customer_id =
+            sqlx::query("INSERT INTO customers (name, company_id, source) VALUES (?, 1, 'leads')")
+                .bind("Brian")
+                .execute(&pool)
+                .await
+                .unwrap()
+                .last_insert_id() as i32;
 
         sqlx::query("INSERT INTO customers_emails (customer_id, email) VALUES (?, ?)")
             .bind(customer_id)
@@ -205,15 +204,14 @@ mod tests {
             .await
             .unwrap()
             .last_insert_id() as i32;
-        let list_id = sqlx::query(
-            "INSERT INTO deals_list (name, group_id, position) VALUES (?, ?, 0)",
-        )
-        .bind("Not Contacted Yet")
-        .bind(group_id)
-        .execute(&pool)
-        .await
-        .unwrap()
-        .last_insert_id() as i32;
+        let list_id =
+            sqlx::query("INSERT INTO deals_list (name, group_id, position) VALUES (?, ?, 0)")
+                .bind("Not Contacted Yet")
+                .bind(group_id)
+                .execute(&pool)
+                .await
+                .unwrap()
+                .last_insert_id() as i32;
         let deal_id = sqlx::query(
             "INSERT INTO deals (customer_id, status, list_id, position, user_id) VALUES (?, 'Not Contacted Yet', ?, 0, ?)",
         )
@@ -312,13 +310,12 @@ mod tests {
         .unwrap();
         assert_eq!(types, vec!["from".to_string(), "to".to_string()]);
 
-        let stored_message_id: Option<String> = sqlx::query_scalar(
-            "SELECT message_id FROM scheduled_emails WHERE id = ?",
-        )
-        .bind(scheduled_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let stored_message_id: Option<String> =
+            sqlx::query_scalar("SELECT message_id FROM scheduled_emails WHERE id = ?")
+                .bind(scheduled_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(
             stored_message_id.as_deref(),
             Some("0100018f-drip-test-000000@email.amazonses.com")

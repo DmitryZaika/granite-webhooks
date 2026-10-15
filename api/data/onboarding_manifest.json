@@ -1,0 +1,162 @@
+{
+  "module_ids": [
+    "stones",
+    "customers",
+    "deals",
+    "emails",
+    "cloudtalk",
+    "suppliers",
+    "instructions",
+    "teach-mode",
+    "special-order",
+    "checklists",
+    "transactions",
+    "chat",
+    "ai-design",
+    "todo",
+    "notifications",
+    "my-account",
+    "shop-transactions",
+    "shop-samples",
+    "shop-maintenance",
+    "shop-chat",
+    "shop-my-account",
+    "admin-statistics",
+    "admin-stones",
+    "admin-deals",
+    "admin-emails",
+    "admin-suppliers",
+    "admin-images",
+    "admin-instructions",
+    "admin-teach-mode",
+    "admin-transactions",
+    "admin-surveys",
+    "admin-user-activity",
+    "manager-users",
+    "manager-company"
+  ],
+  "tasks": [
+    {
+      "id": "dashboard-overview",
+      "version": 2,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "employee-dashboard-title",
+        "employee-dashboard-edit"
+      ]
+    },
+    {
+      "id": "dashboard-arrange",
+      "version": 2,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "employee-dashboard-widgets-edit",
+        "employee-dashboard-add-widget"
+      ]
+    },
+    {
+      "id": "dashboard-add-widgets",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "employee-dashboard-add-widget-dialog"
+      ]
+    },
+    {
+      "id": "dashboard-goal",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "employee-dashboard-goal"
+      ]
+    },
+    {
+      "id": "followup-open",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 2,
+      "base_keys": [
+        "deals-card-project",
+        "deal-automated-followup"
+      ]
+    },
+    {
+      "id": "followup-draft",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "followup-ai-generate"
+      ]
+    },
+    {
+      "id": "followup-texting-line",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "my-account-texting-line"
+      ]
+    },
+    {
+      "id": "improve-message",
+      "version": 1,
+      "points": 5,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "compose-send"
+      ]
+    },
+    {
+      "id": "setup-email-name",
+      "version": 1,
+      "points": 10,
+      "checklist": true,
+      "required_steps": 0,
+      "base_keys": []
+    },
+    {
+      "id": "setup-email-signature",
+      "version": 1,
+      "points": 10,
+      "checklist": true,
+      "required_steps": 0,
+      "base_keys": []
+    },
+    {
+      "id": "setup-telegram",
+      "version": 1,
+      "points": 10,
+      "checklist": true,
+      "required_steps": 0,
+      "base_keys": []
+    }
+  ],
+  "retired_task_ids": [
+    "deal-automated-followup",
+    "deal-followup-preview",
+    "deal-followup-setup",
+    "email-ai-reply",
+    "employee-dashboard",
+    "employee-dashboard-add-widget",
+    "employee-dashboard-edit-mode",
+    "sms-ai-reply"
+  ],
+  "creditable_task_ids": [
+    "setup-email-name",
+    "setup-email-signature",
+    "setup-telegram"
+  ]
+}

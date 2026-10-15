@@ -1,7 +1,6 @@
-use crate::libs::sms_derived::{SmsDirection, SmsProvider, SmsRowInput, SmsStatus, insert_sms};
 use crate::ringcentral::schemas::{RingcentralSMS, phone_last10};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
+use common::sms::derived::{SmsDirection, SmsProvider, SmsRowInput, SmsStatus, insert_sms};
 use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
 use std::error::Error;
@@ -185,122 +184,43 @@ pub async fn load_customer_with_mapping(
     Ok(customer)
 }
 
-#[derive(sqlx::FromRow)]
-struct RingCentralCompanyCreds {
-    ringcentral_client_id: Option<String>,
-    ringcentral_client_secret: Option<String>,
-    ringcentral_jwt: Option<String>,
-}
-
+/// The company connected `RingCentral` (OAuth, refresh token alive) or pasted
+/// JWT credentials.
 pub async fn company_has_ring_central(
     pool: &MySqlPool,
     company_id: i32,
 ) -> Result<bool, sqlx::Error> {
-    let row = sqlx::query_as::<_, RingCentralCompanyCreds>(
+    let found: Option<i64> = sqlx::query_scalar(
         r"
-        SELECT ringcentral_client_id, ringcentral_client_secret, ringcentral_jwt
-        FROM company
+        SELECT 1 FROM company
         WHERE id = ?
+          AND ((ringcentral_access_token IS NOT NULL
+                AND ringcentral_refresh_token IS NOT NULL
+                AND ringcentral_refresh_expires > UNIX_TIMESTAMP())
+               OR (COALESCE(ringcentral_client_id, '') <> ''
+                   AND COALESCE(ringcentral_client_secret, '') <> ''
+                   AND COALESCE(ringcentral_jwt, '') <> ''))
         ",
     )
     .bind(company_id)
     .fetch_optional(pool)
     .await?;
-
-    let has_creds = if let Some(r) = row {
-        let key_ok = r
-            .ringcentral_client_id
-            .as_deref()
-            .is_some_and(|s| !s.is_empty());
-        let secret_ok = r
-            .ringcentral_client_secret
-            .as_deref()
-            .is_some_and(|s| !s.is_empty());
-        let jwt_ok = r.ringcentral_jwt.as_deref().is_some_and(|s| !s.is_empty());
-        key_ok && secret_ok && jwt_ok
-    } else {
-        false
-    };
-
-    Ok(has_creds)
+    Ok(found.is_some())
 }
 
-#[derive(sqlx::FromRow)]
-struct RingCentralTokenCreds {
-    ringcentral_client_id: Option<String>,
-    ringcentral_client_secret: Option<String>,
-    ringcentral_jwt: Option<String>,
-    ringcentral_server_url: Option<String>,
-}
-
+/// A token for the company's `RingCentral` API: its OAuth connection, else its
+/// JWT credentials. Returns the token and the server URL.
 pub async fn get_access_token(
     pool: &MySqlPool,
     company_id: u64,
 ) -> Result<(String, String), Box<dyn Error + Send + Sync>> {
-    let row = sqlx::query_as::<_, RingCentralTokenCreds>(
-        r"
-        SELECT ringcentral_client_id, ringcentral_client_secret, ringcentral_jwt,
-               ringcentral_server_url
-        FROM company
-        WHERE id = ?
-        ",
+    let token = common::telephony::ringcentral_auth::access_token(
+        pool,
+        &reqwest::Client::new(),
+        i32::try_from(company_id)?,
     )
-    .bind(i64::try_from(company_id)?)
-    .fetch_optional(pool)
     .await?;
-
-    let Some(r) = row else {
-        return Err("RingCentral API credentials not found".into());
-    };
-    let client_id = r
-        .ringcentral_client_id
-        .filter(|s| !s.is_empty())
-        .ok_or("RingCentral API credentials not found")?;
-    let client_secret = r
-        .ringcentral_client_secret
-        .filter(|s| !s.is_empty())
-        .ok_or("RingCentral API credentials not found")?;
-    let jwt = r
-        .ringcentral_jwt
-        .filter(|s| !s.is_empty())
-        .ok_or("RingCentral API credentials not found")?;
-    let server_url = r
-        .ringcentral_server_url
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://platform.ringcentral.com".to_string());
-
-    let basic = STANDARD.encode(format!("{client_id}:{client_secret}"));
-    let body = format!(
-        "grant_type={}&assertion={}",
-        urlencoding::encode("urn:ietf:params:oauth:grant-type:jwt-bearer"),
-        urlencoding::encode(&jwt),
-    );
-    let client = reqwest::Client::new();
-    let response = client
-        .post(format!(
-            "{}/restapi/oauth/token",
-            server_url.trim_end_matches('/')
-        ))
-        .header("Authorization", format!("Basic {basic}"))
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(body)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("RingCentral token error {status}: {body}").into());
-    }
-
-    let json: serde_json::Value = response.json().await?;
-    let token = json
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .ok_or("RingCentral token response missing access_token")?
-        .to_string();
-
-    Ok((token, server_url))
+    Ok((token.token, token.server_url))
 }
 
 pub async fn upsert_ringcentral_mapping(
@@ -482,7 +402,7 @@ mod tests {
     }
 
     // Regression: column list and bind list must match for both inserts.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_inbound_insert_succeeds_and_stores_derived_columns(pool: MySqlPool) {
         // A real customer message: untagged, from the customer to the line.
         let payload = serde_json::json!({
@@ -516,7 +436,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_outbound_insert_succeeds_and_stores_derived_columns(pool: MySqlPool) {
         let sms = echo_fixture(3_300_000_002, "outbound body");
         insert_outbound_sms(&pool, &sms, 42)
@@ -537,7 +457,7 @@ mod tests {
         assert!(rows[0].created_date.is_some());
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sms_attachments_cascade_delete(pool: MySqlPool) {
         let parent = sqlx::query(
             "INSERT INTO ringcentral_sms \
@@ -646,7 +566,7 @@ mod tests {
 
     // (b) Image-only fallback: empty caption means the fallback body is the bare "Photo 1:
     // <url>" line (buildAttachmentLinkSmsBody's empty-caption branch); with an attachment, must merge.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_merges_image_only_fallback_echo(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -664,7 +584,7 @@ mod tests {
 
     // (c) Caption fallback: body is "<caption>\nPhoto 1: <url>" (buildAttachmentLinkSmsBody's
     // non-empty-caption image branch); with an attachment present, must merge.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_merges_caption_fallback_echo(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "cap", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -681,7 +601,7 @@ mod tests {
     }
 
     // (c2) PDF/file caption fallback: body is "<caption>\nFile 1: <name>\n<url>".
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_merges_file_caption_fallback_echo(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "cap", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -698,7 +618,7 @@ mod tests {
     }
 
     // (c3) File-only (empty caption): body starts with "File 1:".
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_merges_file_only_fallback_echo(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -716,7 +636,7 @@ mod tests {
 
     // (d) An unrelated echo to the same recipient must never be absorbed by an image-only
     // row just because its text is empty; that was the BLOCKER data-loss bug this redesign fixes.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_does_not_merge_unrelated_echo_into_image_only_row(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -738,7 +658,7 @@ mod tests {
 
     // (e) Prefix collision: a plain-text send of "Hi" must not absorb an
     // unrelated echo that merely starts with "Hi" ("Hi there!").
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_does_not_merge_prefix_collision(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "Hi", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -756,7 +676,7 @@ mod tests {
 
     // (f) A text-only send (no attachment rows) must never tier-2 merge, even against an
     // echo with the exact fallback shape; tier 2 exists solely for attachment-link fallbacks.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_never_merges_row_without_attachment(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "", "sent").await;
         // Deliberately no insert_attachment_for(&pool, row_id) call.
@@ -774,7 +694,7 @@ mod tests {
 
     // (g1) A literal '%' inside the caption must be treated as an ordinary
     // character (equality, not LIKE), so its real fallback echo still merges.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_merges_fallback_with_percent_in_caption(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "save 50% now", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -787,7 +707,7 @@ mod tests {
 
     // (g2) An unrelated echo starting with "save 50" must not merge, even though the old
     // `LIKE CONCAT(text, '%')` tier-2 let the caption's own '%' act as a SQL wildcard.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_tier2_does_not_merge_unrelated_echo_with_percent_caption(pool: MySqlPool) {
         let row_id = insert_pending_outbound(&pool, "save 50% now", "sent").await;
         insert_attachment_for(&pool, row_id).await;
@@ -804,7 +724,7 @@ mod tests {
 
     // FIFO: echoes arrive in send order, so the oldest unclaimed candidate
     // row must absorb first, not the newest.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_merge_picks_oldest_unclaimed_row_first(pool: MySqlPool) {
         let older_id = insert_pending_outbound(&pool, "hello", "pending").await;
         let newer_id = insert_pending_outbound(&pool, "hello", "pending").await;

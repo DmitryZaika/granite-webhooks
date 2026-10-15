@@ -1,0 +1,114 @@
+[
+ {
+  "type": "function",
+  "function": {
+   "name": "lookup_customer",
+   "description": "Find a customer by name, phone number, or email. Returns name, company, phone numbers, emails, street address, postal code, ids, and a short deal summary.\n\nPass only the customer name, phone number, or email (for example \"Dena\"), never the whole sentence. If exactly one customer returns, use it directly. If several candidates return, list the top matches with one short distinguishing detail each and ask the user which one they mean. The returned customer id can be passed to other skills (deals, email). Address and postal code come from the customer record and are often empty; report them as missing only when the field is actually null.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Customer name, phone number, or email to search for."
+     }
+    },
+    "required": [
+     "query"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "get_customer_deals",
+   "description": "List the deals of one customer with stage, amount, title, outcome, and each deal recent activities and notes. Requires a customer id.\n\nGet the customer id from lookup_customer first. Deals are ordered newest first. is_won: 1 means won, 0 means lost, null means still open (the stage name shows where it sits in the pipeline).\n\nEach deal carries up to 5 activities (tasks) and 5 notes. Activities are ordered open first, then by nearest deadline: is_completed 1 means done, 0 means still open, and deadline is local time (null means no due date). Use them for \"what is next / overdue\" questions. Notes are ordered pinned first, then newest; they are free text written by the rep and are the place where stone choice, square footage, and invoice context usually live. Both lists are truncated, so never present them as a complete history — if the user needs every activity or note on one deal, say so rather than implying the list is exhaustive.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "customer_id": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "description": "The customer id returned by lookup_customer."
+     }
+    },
+    "required": [
+     "customer_id"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "search_deal_notes",
+   "description": "Search deal notes across all customers by text, scoped to the current user by default. Use for \"which customers have a note about X\".\n\nThis is the cross-customer note search: it answers \"which customers / which deals have a note mentioning X\" without needing a customer id. Use get_customer_deals instead when the user already named one customer.\n\nSCOPE — this is the important argument, so choose it deliberately:\n- \"my_deals\" (the default): notes on deals assigned to the person asking. This is what \"my notes\" almost always means in practice, and it is the only scope that is reliable, because every deal has an assigned rep.\n- \"written_by_me\": notes whose author name matches the person asking. Use ONLY when the user explicitly asks who wrote the note (\"notes I wrote myself\"). It is lossy — about a quarter of notes were saved without an author at all and are invisible to this scope, and authorship is stored as a display name, so a teammate with the same name is indistinguishable. When you use it, say in your answer that notes with no recorded author were skipped.\n- \"everyone\": the whole workspace. Use when the user asks about the team, another rep, or \"all notes\".\n\nThe search text is a plain substring match (case-insensitive), not a keyword engine: \"price drop\" only matches notes containing that exact phrase. Users describe the same thing in different words, so for a concept rather than a quoted phrase, call this skill once per likely wording (\"price drop\", \"lower the price\", \"discount\", \"reduce price\") and merge the results instead of reporting one narrow search as the whole answer. Omit the search text to list the most recent notes in scope.\n\nSay which scope and which search terms you actually used, and never present the results as every matching note when total_matched is larger than the number of rows returned.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "search": {
+      "description": "Substring to look for in the note text, case-insensitive. Omit to list the most recent notes in scope.",
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 200
+     },
+     "scope": {
+      "default": "my_deals",
+      "description": "Whose notes to search. Defaults to notes on the deals assigned to the person asking.",
+      "type": "string",
+      "enum": [
+       "my_deals",
+       "written_by_me",
+       "everyone"
+      ]
+     },
+     "limit": {
+      "default": 25,
+      "description": "Maximum notes to return (default 25).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+     }
+    }
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "draft_email",
+   "description": "Prepare an email draft for a customer and give the user a one-click link to open it. Does NOT send anything.\n\nWrite the full subject and body yourself from facts gathered with other skills (customer info from lookup_customer, prices, deal details). Get the recipient address from lookup_customer — never invent one. Nothing is sent: the user gets a link that opens the draft in their email client. After calling this skill, show the user the drafted subject and body in your answer and mention the link.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "to_email": {
+      "type": "string",
+      "format": "email",
+      "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+      "description": "Recipient address, taken from a customer lookup result."
+     },
+     "subject": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Email subject line."
+     },
+     "body": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 5000,
+      "description": "Full plain-text email body, ready to send."
+     }
+    },
+    "required": [
+     "to_email",
+     "subject",
+     "body"
+    ]
+   }
+  }
+ }
+]

@@ -5,20 +5,14 @@ use axum::http::StatusCode;
 use common::{WithSession, cookie, cookie_for, server, sessions};
 use sqlx::MySqlPool;
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn missing_cookie_is_401(pool: MySqlPool) {
     let res = server(pool).get("/v1/me").await;
     res.assert_status(StatusCode::UNAUTHORIZED);
     res.assert_json(&serde_json::json!({ "error": "unauthorized" }));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn cookie_signed_with_another_secret_is_401(pool: MySqlPool) {
     let data = SessionData {
         session_id: Some(sessions::REP.into()),
@@ -32,10 +26,7 @@ async fn cookie_signed_with_another_secret_is_401(pool: MySqlPool) {
         .assert_status(StatusCode::UNAUTHORIZED);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn dead_sessions_are_401(pool: MySqlPool) {
     let server = server(pool);
     for session in [
@@ -55,10 +46,7 @@ async fn dead_sessions_are_401(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn session_cookie_among_other_cookies(pool: MySqlPool) {
     let header = format!("theme=dark; {}; _ga=GA1.1", cookie(sessions::REP));
     server(pool)
@@ -68,10 +56,7 @@ async fn session_cookie_among_other_cookies(pool: MySqlPool) {
         .assert_status_ok();
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn non_employee_can_read_me_but_not_customers(pool: MySqlPool) {
     let server = server(pool);
     server
@@ -93,10 +78,7 @@ async fn non_employee_can_read_me_but_not_customers(pool: MySqlPool) {
         .assert_status(StatusCode::FORBIDDEN);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn admin_without_employee_flag_is_an_employee(pool: MySqlPool) {
     server(pool)
         .get("/v1/customers")
@@ -105,10 +87,7 @@ async fn admin_without_employee_flag_is_an_employee(pool: MySqlPool) {
         .assert_status_ok();
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn super_admin_acts_in_active_company(pool: MySqlPool) {
     let server = server(pool);
 
@@ -151,10 +130,7 @@ async fn super_admin_acts_in_active_company(pool: MySqlPool) {
     assert_eq!(me["company_id"], 101);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn regular_user_cannot_switch_company(pool: MySqlPool) {
     let switched = cookie_for(SessionData {
         session_id: Some(sessions::REP.into()),
@@ -168,10 +144,7 @@ async fn regular_user_cannot_switch_company(pool: MySqlPool) {
     assert!(!common::ids(&customers).contains(&2000));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn cors_allows_credentials_for_known_origins_only(pool: MySqlPool) {
     let server = server(pool);
     let allowed = server

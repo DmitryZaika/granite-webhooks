@@ -302,6 +302,17 @@ pub async fn sync_cloudtalk(
     sync_customer_to_cloud_talk(&pool, &client, customer_id).await
 }
 
+/// `DELETE /cloudtalk/sync/{company_id}/{customer_id}`: drop the contact of a
+/// deleted customer.
+pub async fn unsync_cloudtalk(
+    _: crate::axum_helpers::guards::RemixBackend,
+    State(pool): State<MySqlPool>,
+    Path((_company_id, customer_id)): Path<(i32, i32)>,
+) -> BasicResponse {
+    let client = Client::new();
+    crate::cloudtalk::api::delete_customer_from_cloud_talk(&pool, &client, customer_id).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_cloudtalk_sms;
@@ -336,7 +347,7 @@ mod tests {
         .unwrap()
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_basic_sms(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
@@ -356,7 +367,7 @@ mod tests {
         assert_eq!(smss[0].company_id, Some(42));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_unscoped_sms_resolves_company_from_agent(pool: MySqlPool) {
         // users.company_id has a foreign key to company, so the company must exist.
         sqlx::query("INSERT INTO company (id, name) VALUES (42, 'CloudTalk Agent Co')")
@@ -385,7 +396,7 @@ mod tests {
         assert_eq!(smss[0].company_id, Some(42));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_unscoped_sms_unknown_company_returns_retryable_error(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
         let response = app
@@ -398,7 +409,7 @@ mod tests {
         assert_eq!(get_sms_received(&pool).await.len(), 0);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_inbound_sms_batch_array_inserts_all(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
         let batch = serde_json::json!([
@@ -435,7 +446,7 @@ mod tests {
         serde_json::from_slice(MESSAGE_WITH_ID).expect("Failed to parse JSON")
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_echo_dedupe_via_cloudtalk_id(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
@@ -457,7 +468,7 @@ mod tests {
         assert_eq!(smss.len(), 1, "duplicate cloudtalk_id should be ignored");
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sms_received_malformed_json(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
@@ -474,7 +485,7 @@ mod tests {
         assert_eq!(smss.len(), 0, "malformed payload must not insert a row");
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sms_received_null_text_is_stored(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
         let body: serde_json::Value = serde_json::from_slice(INBOUND_NULL_TEXT).expect("parse");
@@ -492,7 +503,7 @@ mod tests {
         assert_eq!(smss[0].sender, Some(6468956758));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sms_rejected_without_bearer_token(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
         let response = app.post("/cloudtalk/sms/42").json(&sms_json()).await;
@@ -505,7 +516,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sms_sent_inserts_outbound(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
@@ -529,7 +540,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sms_sent_merges_crm_outbound_row(pool: MySqlPool) {
         sqlx::query!(
             "INSERT INTO cloudtalk_sms \
@@ -568,7 +579,7 @@ mod tests {
     // Tier-2 merge must absorb the echo, not duplicate the row.
     const MESSAGE_FALLBACK_ECHO: &[u8] = b"{\"id\":2200000099,\"sender\":\"+16468956758[sender]\",\"recipient\":\"+13173161456[recipient]\",\"text\":\"[text]cap\\nPhoto 1: https://x/y.jpg\",\"agent\":\"540273\"}";
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sms_sent_merges_crm_row_with_differing_text(pool: MySqlPool) {
         let parent = sqlx::query!(
             "INSERT INTO cloudtalk_sms \
@@ -618,7 +629,7 @@ mod tests {
 
     const MESSAGE_SENT_NULL_TEXT: &[u8] = b"{\"id\":2200000123,\"sender\":\"+16468956758\",\"recipient\":\"+13173161456\",\"text\":null,\"agent\":\"540273\",\"media\":null,\"attachments\":null,\"media_urls\":null}";
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sms_sent_null_text_merges_crm_row(pool: MySqlPool) {
         sqlx::query!(
             "INSERT INTO cloudtalk_sms \
@@ -672,7 +683,7 @@ mod tests {
         assert!(!logs_contain("6468956758"), "payload must never be logged");
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_sms_sent_null_recipient_returns_bad_request(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
         let body: serde_json::Value =
@@ -689,7 +700,7 @@ mod tests {
         assert_eq!(smss.len(), 0, "unparseable payload must not insert a row");
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_sms_moves_deal_from_first_list(pool: MySqlPool) {
         let company = sqlx::query!(r#"INSERT INTO company (name) VALUES ('Sms Move Co')"#)
             .execute(&pool)
@@ -746,7 +757,7 @@ mod tests {
         assert_eq!(list_id, second_list_id);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_call_moves_deal_from_first_list(pool: MySqlPool) {
         let company = sqlx::query!(r#"INSERT INTO company (name) VALUES ('Call Move Co')"#)
             .execute(&pool)

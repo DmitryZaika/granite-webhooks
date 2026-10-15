@@ -604,7 +604,7 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn moves_from_first_list_to_next(pool: MySqlPool) {
         let board = setup_board(&pool, Some("3173161456")).await;
 
@@ -644,7 +644,7 @@ mod tests {
         assert!(second_exited.is_none());
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn does_not_move_won_deal(pool: MySqlPool) {
         let board = setup_board(&pool, Some("3173161456")).await;
         sqlx::query!(r#"UPDATE deals SET is_won = 1 WHERE id = ?"#, board.deal_id)
@@ -668,7 +668,7 @@ mod tests {
         assert_eq!(is_won, Some(1));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn does_not_move_when_already_on_second_list(pool: MySqlPool) {
         let board = setup_board(&pool, Some("3173161456")).await;
         sqlx::query!(
@@ -690,7 +690,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn does_not_move_when_no_next_list(pool: MySqlPool) {
         let company_id = insert_company(&pool).await;
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
@@ -720,7 +720,7 @@ mod tests {
         assert_eq!(deal_list_id(&pool, deal_id).await, only_list_id);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn cancels_pending_drip_emails_on_move(pool: MySqlPool) {
         let board = setup_board(&pool, Some("3173161456")).await;
         let template = sqlx::query!(
@@ -761,7 +761,7 @@ mod tests {
         assert_eq!(row.1.as_deref(), Some("Deal moved lists"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn finds_customer_by_email_and_phone(pool: MySqlPool) {
         let board = setup_board(&pool, Some("(317) 316-1456")).await;
 
@@ -776,7 +776,7 @@ mod tests {
         assert_eq!(by_phone, Some(board.customer_id));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn finds_customer_by_cloudtalk_contact_phone(pool: MySqlPool) {
         let board = setup_board(&pool, None).await;
         sqlx::query!(
@@ -794,7 +794,7 @@ mod tests {
         assert_eq!(by_phone, Some(board.customer_id));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_email_moves_from_thread_deal_id(pool: MySqlPool) {
         let board = setup_board(&pool, Some("3173161456")).await;
         let thread_id = Uuid::new_v4().to_string();
@@ -827,7 +827,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_email_moves_from_sender_when_no_thread_deal(pool: MySqlPool) {
         let board = setup_board(&pool, Some("3173161456")).await;
         let parsed = parsed_email(
@@ -845,7 +845,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_sms_moves_uncontacted_deal(pool: MySqlPool) {
         let board = setup_board(&pool, Some("646-895-6758")).await;
         let moved = move_deal_on_inbound_sms(&pool, board.company_id, 6_468_956_758)
@@ -858,7 +858,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_email_cancels_sms_flow_for_customer(pool: MySqlPool) {
         let board = setup_board(&pool, Some("3173161456")).await;
         sqlx::query!(
@@ -892,7 +892,7 @@ mod tests {
         assert_eq!(row.0, "stopped_by_reply");
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_email_from_unknown_sender_does_not_cancel_flow(pool: MySqlPool) {
         let board = setup_board(&pool, Some("3173161456")).await;
         sqlx::query!(
@@ -926,7 +926,7 @@ mod tests {
         assert_eq!(row.0, "active");
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_call_moves_uncontacted_deal(pool: MySqlPool) {
         let board = setup_board(&pool, Some("555-771-1113")).await;
         maybe_move_deal_on_inbound_call(&pool, board.company_id, 5_557_711_113).await;
@@ -976,12 +976,12 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn cloudtalk_inbound_call_webhook_moves_deal(pool: MySqlPool) {
         assert_call_webhooks_move_deal(pool, "cloudtalk").await;
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn ringcentral_inbound_call_webhook_moves_deal(pool: MySqlPool) {
         assert_call_webhooks_move_deal(pool, "ringcentral").await;
     }

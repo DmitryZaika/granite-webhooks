@@ -14,10 +14,7 @@ async fn get(pool: MySqlPool, path: &str) -> Value {
     res.json()
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn lists_displayed_stones_with_a_whole_slab_or_regular_stock(pool: MySqlPool) {
     let rows = get(pool.clone(), "/v1/public/companies/100/stones").await;
     // No Calacatta (remnants only), Sold Out Marble, hidden or deleted stones.
@@ -42,10 +39,7 @@ async fn lists_displayed_stones_with_a_whole_slab_or_regular_stock(pool: MySqlPo
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn slab_price_only_for_stones_priced_by_slab(pool: MySqlPool) {
     sqlx::query("INSERT INTO slab_inventory (id, stone_id, bundle) VALUES (6090, 3001, 'CG-2')")
         .execute(&pool)
@@ -62,10 +56,7 @@ async fn slab_price_only_for_stones_priced_by_slab(pool: MySqlPool) {
     assert_eq!(calacatta["slab_price_per_sqft"], 55);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn filters_and_search(pool: MySqlPool) {
     for (path, expected) in [
         ("/v1/public/companies/100/stones?type=quartz", vec![3008]),
@@ -96,10 +87,7 @@ async fn filters_and_search(pool: MySqlPool) {
         .assert_status(StatusCode::BAD_REQUEST);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn stone_slabs_and_photos(pool: MySqlPool) {
     let stone = get(pool.clone(), "/v1/public/companies/100/stones/3002").await;
     // Sold out stones still open.
@@ -136,10 +124,7 @@ async fn stone_slabs_and_photos(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn sinks_faucets_colors_and_subdomains(pool: MySqlPool) {
     let sinks = get(pool.clone(), "/v1/public/companies/100/sinks").await;
     // Displayed, in stock or regular stock; hidden Composite Black and
@@ -177,4 +162,120 @@ async fn sinks_faucets_colors_and_subdomains(pool: MySqlPool) {
         .get("/v1/public/companies/by-subdomain/nope")
         .await
         .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[test_db::test(seed)]
+async fn a_vcard_is_built_from_the_query(pool: MySqlPool) {
+    let server = server(pool);
+    let res = server
+        .get("/v1/public/vcard")
+        .add_query_param("name", "Alice Lead")
+        .add_query_param("phone", "317-555-0100")
+        .add_query_param("company", "null")
+        .add_query_param("filename", "Alice Lead")
+        .await;
+    res.assert_status_ok();
+    assert_eq!(
+        res.header("content-disposition"),
+        "attachment; filename=\"Alice_Lead.vcf\""
+    );
+    assert_eq!(
+        res.text(),
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Lead\r\nN:Alice Lead;;;;\r\nTEL:317-555-0100\r\nEND:VCARD\r\n"
+    );
+    server
+        .get("/v1/public/vcard")
+        .add_query_param("name", " ")
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[test_db::test(seed)]
+async fn the_company_chooser_lists_names_and_logos(pool: MySqlPool) {
+    sqlx::query("UPDATE company SET logo_url = 'https://img.example/acme.png' WHERE id = 100")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let body = get(pool, "/v1/public/companies?ids=101&ids=100&ids=999").await;
+    assert_eq!(body[0]["id"], 100);
+    assert_eq!(body[0]["logo_url"], "https://img.example/acme.png");
+    assert_eq!(body[1]["id"], 101);
+    assert_eq!(body.as_array().unwrap().len(), 2);
+}
+
+#[test_db::test(seed)]
+async fn the_survey_saves_answers_and_stops_reminders_with_a_valid_link(pool: MySqlPool) {
+    // User 101 installs for company 100.
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 6, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = common::server(pool.clone());
+    let form: Value = server.get("/v1/public/companies/100/survey").await.json();
+    assert_eq!(form["company_name"], "Acme Stone");
+    let ids = |key: &str| {
+        form[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_i64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert!(ids("sales_reps").contains(&100));
+    assert_eq!(ids("installers"), [101]);
+
+    let answer = |token: &str| {
+        json!({
+            "sales_rep_id": 100, "installer_id": 101, "sales_rep_rating": 5,
+            "technician_rating": 4, "installation_rating": 5,
+            "installation_comments": " Great ", "customer_name": " Jane Doe ",
+            "checklist_id": 9000, "token": token,
+        })
+    };
+    let done = |pool: MySqlPool| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM emails WHERE message_id = 'checklist-survey-done-9000'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    server
+        .post("/v1/public/companies/100/surveys")
+        .json(&answer("forged"))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+    assert_eq!(done(pool.clone()).await, 0);
+    let token = api::routes::jobs::survey_notifications::survey_token(common::SECRET, 9000);
+    server
+        .post("/v1/public/companies/100/surveys")
+        .json(&answer(&token))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+    assert_eq!(done(pool.clone()).await, 1);
+    let (comment, name): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT installation_comment, customer_name FROM customer_surveys WHERE company_id = 100 ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(comment.as_deref(), Some("Great"));
+    assert_eq!(name.as_deref(), Some("Jane Doe"));
+
+    let mut bad = answer("");
+    bad["installer_id"] = json!(100);
+    server
+        .post("/v1/public/companies/100/surveys")
+        .json(&bad)
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
+    let mut bad = answer("");
+    bad["sales_rep_rating"] = json!(6);
+    server
+        .post("/v1/public/companies/100/surveys")
+        .json(&bad)
+        .await
+        .assert_status(axum::http::StatusCode::BAD_REQUEST);
 }

@@ -127,7 +127,7 @@ mod local_tests {
         .unwrap()
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_basic_facebook(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
@@ -144,7 +144,7 @@ mod local_tests {
         assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_basic_wordpress(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
 
@@ -160,7 +160,7 @@ mod local_tests {
         assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_basic_new_lead_form(pool: MySqlPool) {
         let app = new_test_app(pool.clone());
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -176,7 +176,7 @@ mod local_tests {
         assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_new_lead_form_persists_form_name(pool: MySqlPool) {
         let data = json!({
             "name": "Form Lead",
@@ -211,7 +211,7 @@ mod local_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_new_lead_form_allows_missing_referral_source_and_form_name(pool: MySqlPool) {
         let data = json!({ "name": "No Source Lead", "phone": "+13179995973" });
         let lead: NewLeadForm = serde_json::from_value(data).unwrap();
@@ -235,7 +235,7 @@ mod local_tests {
         assert_eq!(row.form_name, None);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn send_multiple_managers(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -259,7 +259,7 @@ mod local_tests {
         assert_eq!(manager_chat_ids, vec![456, 789]);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn duplicate_send_multiple_lead_notifies_manager(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -299,7 +299,7 @@ mod local_tests {
         assert_eq!(manager_chat_ids, vec![456, 789]);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn duplicate_lead_notifies_manager(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -336,7 +336,7 @@ mod local_tests {
         assert_eq!(last_message.0, 123);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn duplicate_lead_moves_deal_to_not_contacted_yet(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -388,7 +388,7 @@ mod local_tests {
         assert_eq!(deal_after.lost_reason, None);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn duplicate_lead_resets_activity_due_dates(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -481,7 +481,7 @@ mod local_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn duplicate_lead_moves_existing_deal_without_copying(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -540,7 +540,7 @@ mod local_tests {
         assert_eq!(deals_after[0].created_at, Some(original_created_at));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn deleted_customer_does_not_create_deal(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -587,7 +587,7 @@ mod local_tests {
         assert_eq!(active_customers, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn duplicate_lead_notifies_manager_also_sales(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -625,7 +625,7 @@ mod local_tests {
         }));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn duplicate_lead_no_deal_existing_customer(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "13179995973" });
@@ -669,7 +669,7 @@ mod local_tests {
         assert_eq!(second_message.0, 123);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn duplicate_lead_notifies_manager_no_deal_no_existing(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "phone": "+13179995973" });
@@ -700,7 +700,7 @@ mod local_tests {
         assert!(!second_message.1.ends_with("Choose a salesperson."));
         assert_eq!(second_message.0, 456);
     }
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn wordpress_duplicate_lead_notifies_manager_no_deal_no_existing(pool: MySqlPool) {
         let company_id = 1;
         let data = json!({ "name": "Test", "Phone": "+13179995973" });
@@ -732,7 +732,7 @@ mod local_tests {
         assert_eq!(second_message.0, 456);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn repeat_lead_with_unassigned_deal_asks_managers(pool: MySqlPool) {
         let company_id = 1;
         let lead: NewLeadForm =
@@ -762,7 +762,7 @@ mod local_tests {
         assert!(last.1.ends_with("Choose a salesperson."));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     #[traced_test]
     async fn new_lead_alerts_when_telegram_fails(pool: MySqlPool) {
         let mut bot = MockTelegram::new();
@@ -777,7 +777,7 @@ mod local_tests {
         assert!(logs_contain("Lead not delivered in Telegram (company #1)"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     #[traced_test]
     async fn new_lead_alerts_when_no_manager(pool: MySqlPool) {
         let bot = MockTelegram::new();

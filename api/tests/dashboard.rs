@@ -31,10 +31,7 @@ fn event(
 
 // ---- GET/PUT /v1/me/dashboard/widgets ---------------------------------------
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn a_saved_layout_reads_back_in_order(pool: MySqlPool) {
     let server = server(pool.clone());
     let empty: Value = server.get(WIDGETS).with_session(sessions::REP).await.json();
@@ -94,10 +91,7 @@ async fn a_saved_layout_reads_back_in_order(pool: MySqlPool) {
     assert_eq!(read, json!({ "widget_ids": [] }));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn layouts_are_per_user_and_company(pool: MySqlPool) {
     let server = server(pool.clone());
     server
@@ -140,10 +134,7 @@ async fn layouts_are_per_user_and_company(pool: MySqlPool) {
     assert_eq!(in_101, json!({ "widget_ids": ["onboarding"] }));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn retired_widget_rows_are_skipped(pool: MySqlPool) {
     sqlx::query(
         "INSERT INTO user_dashboard_widgets (user_id, company_id, widget_id, position)
@@ -160,10 +151,7 @@ async fn retired_widget_rows_are_skipped(pool: MySqlPool) {
     assert_eq!(read, json!({ "widget_ids": ["my-sales"] }));
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn layouts_reject_unknown_widgets(pool: MySqlPool) {
     let server = server(pool.clone());
     for body in [
@@ -184,10 +172,7 @@ async fn layouts_reject_unknown_widgets(pool: MySqlPool) {
 
 // ---- POST /v1/me/dashboard/widget-events ------------------------------------
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn widget_events_are_recorded(pool: MySqlPool) {
     let server = server(pool.clone());
     server
@@ -218,10 +203,7 @@ async fn widget_events_are_recorded(pool: MySqlPool) {
     assert_eq!(events(&pool).await.len(), 1);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn dashboard_routes_need_an_employee(pool: MySqlPool) {
     let server = server(pool);
     let event = json!({ "widget_id": "my-sales", "action": "click", "target": "x" });

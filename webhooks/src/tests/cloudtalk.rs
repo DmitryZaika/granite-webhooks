@@ -60,7 +60,7 @@ mod flow_enrollment_tests {
         .c
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn cancel_flow_enrollments_on_reply_stops_active_and_paused(pool: MySqlPool) {
         insert_enrollment(&pool, 1, 5551234567, "active").await;
         insert_enrollment(&pool, 1, 5551234567, "paused").await;
@@ -80,7 +80,7 @@ mod flow_enrollment_tests {
         assert_eq!(status_of(&pool, 2, 5551234567, "active").await, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn cancel_flow_enrollments_for_customer_stops_by_id_and_phone(pool: MySqlPool) {
         let company = sqlx::query!(r#"INSERT INTO company (name) VALUES ('Call Co')"#)
             .execute(&pool)
@@ -126,7 +126,7 @@ mod flow_enrollment_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_call_webhook_cancels_matching_enrollments(pool: MySqlPool) {
         insert_enrollment(&pool, 42, 5_551_234_567, "active").await;
         insert_enrollment(&pool, 42, 5_551_234_567, "paused").await;
@@ -151,7 +151,7 @@ mod flow_enrollment_tests {
         assert_eq!(status_of(&pool, 42, 5_559_999_999, "active").await, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn outbound_call_webhook_does_not_cancel_enrollments(pool: MySqlPool) {
         insert_enrollment(&pool, 42, 5_551_234_567, "active").await;
 
@@ -168,7 +168,7 @@ mod flow_enrollment_tests {
         assert_eq!(status_of(&pool, 42, 5_551_234_567, "active").await, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn outbound_call_over_60s_does_not_cancel_immediately(pool: MySqlPool) {
         // Cancellation happens after background transcription in the app — webhook only enqueues.
         insert_enrollment(&pool, 42, 5_551_234_567, "active").await;
@@ -192,7 +192,7 @@ mod flow_enrollment_tests {
         assert_eq!(status_of(&pool, 42, 5_551_234_567, "active").await, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_sms_webhook_cancels_matching_enrollments(pool: MySqlPool) {
         // INBOUND_SMS sender +16468956758 -> last-10 digits 6468956758.
         insert_enrollment(&pool, 42, 6468956758, "active").await;
@@ -222,7 +222,7 @@ mod flow_enrollment_tests {
 
     const INBOUND_SMS_WITH_ID: i64 = 2200000200;
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn redelivered_inbound_sms_does_not_cancel_enrollment_started_after_original(
         pool: MySqlPool,
     ) {
@@ -259,7 +259,7 @@ mod flow_enrollment_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn second_inbound_sms_with_distinct_id_cancels_enrollment_started_between(
         pool: MySqlPool,
     ) {

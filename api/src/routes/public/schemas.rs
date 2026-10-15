@@ -12,6 +12,26 @@ pub struct PublicCompany {
     pub id: i32,
 }
 
+/// Query of `GET /v1/public/companies`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PublicCompaniesQuery {
+    /// Company ids (repeat the parameter); at most 20.
+    #[serde(default)]
+    pub ids: Vec<i32>,
+}
+
+/// A company's name and logo for a showroom chooser.
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
+pub struct PublicCompanyCard {
+    /// Company id.
+    pub id: i32,
+    /// Name.
+    pub name: Option<String>,
+    /// Logo URL; null when it has none.
+    pub logo_url: Option<String>,
+}
+
 /// Filters of `GET /v1/public/companies/{company_id}/stones`; list filters
 /// take the parameter repeated and match any value.
 #[derive(Debug, Default, Deserialize, IntoParams)]

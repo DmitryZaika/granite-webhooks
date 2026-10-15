@@ -264,3 +264,56 @@ pub async fn sync_customer_to_ring_central(
     upsert_contact(pool, client, &mapping, &payload, clean_company_id).await;
     OK_RESPONSE
 }
+
+/// Removes a deleted customer from the company's `RingCentral` contacts and
+/// forgets the mapping. A contact already gone there (404) only drops the
+/// mapping.
+pub async fn delete_customer_from_ring_central(
+    pool: &MySqlPool,
+    client: &Client,
+    customer_id: i32,
+) -> BasicResponse {
+    let mapping: Result<Option<(i32, i64, Option<i32>)>, sqlx::Error> = sqlx::query_as(
+        "SELECT rc.id, rc.ringcentral_id, c.company_id FROM ringcentral_contacts rc
+         JOIN customers c ON c.id = rc.customer_id WHERE rc.customer_id = ? LIMIT 1",
+    )
+    .bind(customer_id)
+    .fetch_optional(pool)
+    .await;
+    let (mapping_id, ringcentral_id, company_id) = match mapping {
+        Ok(Some((id, ringcentral_id, Some(company_id)))) => (id, ringcentral_id, company_id),
+        Ok(_) => return OK_RESPONSE,
+        Err(error) => {
+            tracing::error!(?error, customer_id, "Failed to load RingCentral mapping");
+            return internal_error("Failed to load RingCentral mapping");
+        }
+    };
+    match company_has_ring_central(pool, company_id).await {
+        Ok(true) => {}
+        Ok(false) => return OK_RESPONSE,
+        Err(error) => {
+            tracing::error!(?error, company_id, "Failed to check RingCentral");
+            return internal_error("Failed to check RingCentral");
+        }
+    }
+    let Ok(company) = u64::try_from(company_id) else {
+        return internal_error("Invalid company id");
+    };
+    let path = format!("account/~/extension/~/address-book/contact/{ringcentral_id}");
+    if let Err(error) =
+        ringcentral_request(pool, client, company, Method::DELETE, &path, None).await
+        && !error.to_string().contains(" 404")
+    {
+        tracing::error!(?error, customer_id, "Failed to delete RingCentral contact");
+        return internal_error("Failed to delete RingCentral contact");
+    }
+    if let Err(error) = sqlx::query("DELETE FROM ringcentral_contacts WHERE id = ?")
+        .bind(mapping_id)
+        .execute(pool)
+        .await
+    {
+        tracing::error!(?error, customer_id, "Failed to delete RingCentral mapping");
+        return internal_error("Failed to delete RingCentral mapping");
+    }
+    OK_RESPONSE
+}

@@ -1,5 +1,6 @@
 mod common;
 
+use api::storage;
 use axum::http::StatusCode;
 use common::{WithSession, ids, server, sessions};
 use serde_json::{Value, json};
@@ -24,10 +25,7 @@ fn row(rows: &Value, id: i64) -> &Value {
         .unwrap_or_else(|| panic!("stone {id} missing"))
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn lists_displayed_in_stock_stones_sorted_by_name(pool: MySqlPool) {
     let rows = list(pool, "").await;
     // Absolute Black, Calacatta Gold, Linked Black Remnants, No Image Granite,
@@ -35,10 +33,7 @@ async fn lists_displayed_in_stock_stones_sorted_by_name(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![3000, 3001, 3007, 3006, 3009, 3003, 3008]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn stone_has_every_field(pool: MySqlPool) {
     let rows = list(pool, "").await;
     assert_eq!(
@@ -70,10 +65,7 @@ async fn stone_has_every_field(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn slab_counts_split_remnants_links_and_regular_stock(pool: MySqlPool) {
     let rows = list(pool, "").await;
     // Whole slab sold, the remnant cut from it free.
@@ -96,10 +88,7 @@ async fn slab_counts_split_remnants_links_and_regular_stock(pool: MySqlPool) {
     assert_eq!(row(&rows, 3006)["url"], Value::Null);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn include_sold_out_adds_stones_without_free_slabs(pool: MySqlPool) {
     let rows = list(pool, "?include_sold_out=true").await;
     assert_eq!(
@@ -113,10 +102,7 @@ async fn include_sold_out_adds_stones_without_free_slabs(pool: MySqlPool) {
     assert_eq!(sold_out["slabs"]["available"], 0);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn never_returns_hidden_deleted_or_foreign_stones(pool: MySqlPool) {
     let rows = list(pool, "?include_sold_out=true").await;
     let ids = ids(&rows);
@@ -125,10 +111,7 @@ async fn never_returns_hidden_deleted_or_foreign_stones(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn filters(pool: MySqlPool) {
     let server = server(pool);
     let cases: &[(&str, &[i64])] = &[
@@ -162,10 +145,7 @@ async fn filters(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn malformed_filters_are_400(pool: MySqlPool) {
     let server = server(pool);
     for query in ["?supplier_id=abc", "?level=high", "?include_sold_out=yes"] {
@@ -182,10 +162,7 @@ async fn malformed_filters_are_400(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn tenants_are_isolated(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/stones?include_sold_out=true")
@@ -195,10 +172,7 @@ async fn tenants_are_isolated(pool: MySqlPool) {
     assert_eq!(ids(&rows), vec![4000]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn requires_an_employee_or_admin(pool: MySqlPool) {
     let server = server(pool);
     server.get("/v1/stones").await.assert_status_unauthorized();
@@ -212,4 +186,97 @@ async fn requires_an_employee_or_admin(pool: MySqlPool) {
         .with_session(sessions::ADMIN)
         .await
         .assert_status_ok();
+}
+
+#[test_db::test(seed)]
+async fn shop_staff_count_samples(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let patch = |id: i32, body: Value| {
+        let request = server
+            .patch(&format!("/v1/stones/{id}/samples"))
+            .with_session(sessions::VIEWER)
+            .json(&body);
+        async move { request.await }
+    };
+    patch(3000, json!({ "amount": 3 }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (104, 4, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    patch(3000, json!({ "amount": 3 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    patch(3000, json!({ "importance": 2 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let saved: (Option<i32>, Option<i32>) =
+        sqlx::query_as("SELECT samples_amount, samples_importance FROM stones WHERE id = 3000")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(saved, (Some(3), Some(2)));
+    // Saving the same value again is still fine.
+    patch(3000, json!({ "importance": 2 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    for bad in [
+        json!({ "amount": -1 }),
+        json!({ "importance": 5 }),
+        json!({}),
+    ] {
+        patch(3000, bad)
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+    patch(4000, json!({ "amount": 1 }))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    // The shop's stones list works too.
+    server
+        .get("/v1/stones")
+        .with_session(sessions::VIEWER)
+        .await
+        .assert_status_ok();
+}
+
+#[test_db::test(seed)]
+async fn admins_proxy_bucket_images(pool: MySqlPool) {
+    let (server, storage) = common::server_with_storage(pool);
+    storage
+        .put("stones/a b.png", common::png(4, 4), "image/png")
+        .await
+        .unwrap();
+    storage
+        .put("stones/notes.pdf", b"%PDF".to_vec(), "application/pdf")
+        .await
+        .unwrap();
+    let get = |url: String, session: &'static str| {
+        let request = server
+            .get("/v1/stones/image-proxy")
+            .add_query_param("url", url)
+            .with_session(session);
+        async move { request.await }
+    };
+    let base = storage::MEMORY_PUBLIC_BASE;
+    let res = get(format!("{base}/stones/a%20b.png"), sessions::ADMIN).await;
+    res.assert_status_ok();
+    assert_eq!(res.header("content-type"), "image/png");
+    assert_eq!(res.as_bytes().as_ref(), common::png(4, 4).as_slice());
+
+    get(format!("{base}/stones/a%20b.png"), sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    get(format!("{base}/stones/notes.pdf"), sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    get("https://evil.test/x.png".into(), sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    get(format!("{base}/stones/missing.png"), sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 }

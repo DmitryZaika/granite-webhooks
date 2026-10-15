@@ -217,7 +217,11 @@ pub fn format_email_notification(
     }
 }
 
-pub fn format_sms_notification(sender_phone: &str, message: &str, phone_digits: &str) -> CrmTelegramMessage {
+pub fn format_sms_notification(
+    sender_phone: &str,
+    message: &str,
+    phone_digits: &str,
+) -> CrmTelegramMessage {
     CrmTelegramMessage {
         text: format!("{SMS_ICON} New CloudTalk SMS from {sender_phone}\n\n{message}"),
         button_label: "💬 Open SMS",
@@ -292,8 +296,7 @@ mod tests {
     #[test]
     fn email_notification_keeps_name_and_subject_to_line_limits() {
         let long_name = "Alexandra Catherine Montgomery-Williams";
-        let long_subject =
-            "Granite Depot of Indianapolis - Your kitchen countertop quote and fabrication timeline";
+        let long_subject = "Granite Depot of Indianapolis - Your kitchen countertop quote and fabrication timeline";
         let msg = format_email_notification(
             Some(long_name),
             Some(long_subject),
@@ -320,7 +323,10 @@ mod tests {
     #[test]
     fn sms_notification_hides_raw_url_behind_button() {
         let msg = format_sms_notification("+15551234567", "Hello", "15551234567");
-        assert!(msg.text.starts_with("💬 New CloudTalk SMS from +15551234567"));
+        assert!(
+            msg.text
+                .starts_with("💬 New CloudTalk SMS from +15551234567")
+        );
         assert!(msg.text.contains("Hello"));
         assert!(!msg.text.contains("/employee/cloudtalk"));
         assert_eq!(msg.button_label, "💬 Open SMS");

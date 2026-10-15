@@ -161,7 +161,7 @@ mod tests {
         pairs
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn identifies_only_sales_manager_messages(pool: MySqlPool) {
         let company_id = 1;
         let customer_id = insert_customer(&pool, company_id, "+13179990001").await;
@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(all.len(), 4);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn excludes_soft_deleted_manager_messages(pool: MySqlPool) {
         let company_id = 1;
         let customer_id = insert_customer(&pool, company_id, "+13179990002").await;
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(sorted_pairs(&managers), vec![(456, 10)]);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn manager_identification_is_customer_scoped(pool: MySqlPool) {
         let company_id = 1;
         let customer_id = insert_customer(&pool, company_id, "+13179990003").await;
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(sorted_pairs(&managers), vec![(456, 10)]);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn manager_identification_requires_matching_company(pool: MySqlPool) {
         let company_id = 1;
         let other_company_id = i32::try_from(

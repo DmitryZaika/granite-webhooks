@@ -1,30 +1,66 @@
 # Variables
 REGION := us-east-2
+AWS_DEPLOY_PROFILE ?= personal
 IAM_ROLE := arn:aws:iam::741448943665:role/cargo-lambda-role-2ed5069c-8882-460d-bdc8-192d9b724756
 
 # Tool commands
 BUILD_BASE := uvx cargo-lambda lambda build --release --x86-64
 
+# --- Build and deploy ---
+#   make build <app>          app: api, webhooks, time-triggered
+#   make deploy <app> <env>   env: dev, prod
+#   make deploy-all           api and webhooks, each to dev and prod
+# Each app is a crate whose binary has the same name.
+APPS := api webhooks time-triggered
+ENVS := dev prod
+APP ?= $(firstword $(filter $(APPS),$(MAKECMDGOALS)))
+ENV ?= $(firstword $(filter $(ENVS),$(MAKECMDGOALS)))
+
+# The Lambdas of each app in each environment (time-triggered has no dev one).
+# granite-api-stream is the same binary behind a streaming function URL, for
+# answers that stream or outlast API Gateway's 30 s (LAMBDA_RESPONSE_STREAMING=1).
+# granite-api-stream-dev is its dev twin on the duplicate database.
+FUNCTION_api_prod := granite-api granite-api-stream
+FUNCTION_api_dev := granite-api-dev granite-api-stream-dev
+FUNCTION_webhooks_prod := granite-webhooks
+FUNCTION_webhooks_dev := granite-webhooks-dev
+FUNCTION_time-triggered_prod := time-triggered
+FUNCTION = $(FUNCTION_$(APP)_$(ENV))
+
+# The app and environment words are goals too; they do nothing themselves.
+.PHONY: $(APPS) $(ENVS)
+$(APPS) $(ENVS):
+	@:
+
+.PHONY: build
+build:
+	@test -n "$(APP)" || { echo "Usage: make build <$(APPS)>" >&2; exit 1; }
+	GIT_SHA=$$(git rev-parse --short HEAD) $(BUILD_BASE) -p $(APP) --bin $(APP)
+
 # Deploy exports credentials because cargo-lambda does not support AWS login_session profiles.
-
-# --- Webhooks ---
-.PHONY: build-webhooks
-build-webhooks:
-	GIT_SHA=$$(git rev-parse --short HEAD) $(BUILD_BASE) -p webhooks --bin webhooks
-
-.PHONY: deploy-webhooks
-deploy-webhooks: build-webhooks
-	@eval "$$(aws configure export-credentials --format env)" && \
+# It updates the code only: environment variables set on the Lambda are kept.
+.PHONY: deploy
+deploy:
+	@test -n "$(APP)" -a -n "$(ENV)" || { echo "Usage: make deploy <$(APPS)> <$(ENVS)>" >&2; exit 1; }
+	@test -n "$(FUNCTION)" || { echo "$(APP) has no $(ENV) Lambda" >&2; exit 1; }
+	$(MAKE) build APP=$(APP)
+	@eval "$$(aws configure export-credentials --profile $(AWS_DEPLOY_PROFILE) --format env)" && \
 	unset AWS_PROFILE && \
-	uvx cargo-lambda lambda deploy \
-		--iam-role $(IAM_ROLE) \
-		--region $(REGION) \
-		--binary-name webhooks \
-		granite-webhooks
+	for function in $(FUNCTION); do \
+		uvx cargo-lambda lambda deploy \
+			--iam-role $(IAM_ROLE) \
+			--region $(REGION) \
+			--binary-name $(APP) \
+			$$function || exit 1; \
+	done
 
-# Build the webhooks binary, then deploy it.
-.PHONY: start
-start: deploy-webhooks
+# api and webhooks, each built and deployed to dev and prod.
+.PHONY: deploy-all
+deploy-all:
+	$(MAKE) deploy APP=api ENV=dev
+	$(MAKE) deploy APP=api ENV=prod
+	$(MAKE) deploy APP=webhooks ENV=dev
+	$(MAKE) deploy APP=webhooks ENV=prod
 
 # --- Local ---
 WATCH_BASE := uvx cargo-lambda lambda watch --release
@@ -44,7 +80,7 @@ build-time-triggered:
 
 .PHONY: deploy-time-triggered
 deploy-time-triggered: build-time-triggered
-	@eval "$$(aws configure export-credentials --format env)" && \
+	@eval "$$(aws configure export-credentials --profile $(AWS_DEPLOY_PROFILE) --format env)" && \
 	unset AWS_PROFILE && \
 	uvx cargo-lambda lambda deploy \
 		--iam-role $(IAM_ROLE) \
@@ -98,17 +134,3 @@ api-openapi:
 api-local: api-db-up
 	test -f api/.env.local || cp api/.env.local.example api/.env.local
 	$(WATCH_BASE) -p api --bin api -P 9100 --env-file api/.env.local
-
-.PHONY: build-api
-build-api:
-	$(BUILD_BASE) -p api --bin api
-
-.PHONY: deploy-api
-deploy-api: build-api
-	@eval "$$(aws configure export-credentials --format env)" && \
-	unset AWS_PROFILE && \
-	uvx cargo-lambda lambda deploy \
-		--iam-role $(IAM_ROLE) \
-		--region $(REGION) \
-		--binary-name api \
-		granite-api

@@ -134,17 +134,24 @@ pub async fn find_customer(
     pool: &MySqlPool,
     company_id: i32,
     customer_id: i32,
+    include_deleted: bool,
 ) -> Result<Option<CustomerDetail>, sqlx::Error> {
     let customer = sqlx::query_as::<_, CustomerDetail>(
         "SELECT c.id, c.name, c.address, c.phone, c.phone_2, ce.email, c.company_name,
-            c.source, c.referral_source, c.your_message, c.sales_rep, u.name AS sales_rep_name
+            c.source, c.referral_source, c.your_message, c.sales_rep, u.name AS sales_rep_name,
+            c.city, c.state, c.postal_code, CAST(c.customer_temperature AS CHAR) AS customer_temperature,
+            c.notes, c.qbo_id, c.attached_file, c.created_date, c.invalid_lead,
+            c.remodal_type, c.project_size, c.contact_time, c.remove_and_dispose, c.improve_offer,
+            c.sink, c.when_start, c.details, c.compaign_name, c.adset_name, c.ad_name,
+            c.backsplash, c.kitchen_stove
          FROM customers c
          LEFT JOIN customers_emails ce ON ce.id = c.email_id AND ce.customer_id = c.id
          LEFT JOIN users u ON u.id = c.sales_rep AND u.is_deleted = 0
-         WHERE c.id = ? AND c.company_id = ? AND c.deleted_at IS NULL",
+         WHERE c.id = ? AND c.company_id = ? AND (c.deleted_at IS NULL OR ?)",
     )
     .bind(customer_id)
     .bind(company_id)
+    .bind(include_deleted)
     .fetch_optional(pool)
     .await?;
     let Some(mut customer) = customer else {
@@ -219,7 +226,7 @@ pub async fn search_customers(
             matches_name_fuzzy(row.company_name.as_deref().unwrap_or_default(), term)
                 || company_contains(row)
         }),
-        CustomerSearchBy::Phone | CustomerSearchBy::Email => {}
+        CustomerSearchBy::Phone | CustomerSearchBy::Email | CustomerSearchBy::Address => {}
     }
     rows.truncate(SEARCH_RESULTS);
 
@@ -317,6 +324,10 @@ fn push_search_filter(
             sql.push(" THEN 1 ELSE 2 END, c.name ASC");
             15
         }
+        CustomerSearchBy::Address => {
+            push_address_filter(sql, term, &prefix, user_id);
+            15
+        }
         CustomerSearchBy::Email => {
             let has_email = |sql: &mut QueryBuilder<MySql>, pattern: String| {
                 sql.push(
@@ -340,6 +351,23 @@ fn push_search_filter(
             15
         }
     }
+}
+
+/// Every word of `term` in the address; addresses starting with it first.
+fn push_address_filter(sql: &mut QueryBuilder<MySql>, term: &str, prefix: &str, user_id: i32) {
+    let words: Vec<&str> = term.split_whitespace().take(6).collect();
+    sql.push(" AND c.address IS NOT NULL");
+    if words.is_empty() {
+        sql.push(" AND 1 = 0");
+    }
+    for word in &words {
+        sql.push(" AND c.address LIKE ")
+            .push_bind(format!("%{word}%"));
+    }
+    push_owner_rank(sql, user_id);
+    sql.push(" CASE WHEN c.address LIKE ")
+        .push_bind(prefix.to_string())
+        .push(" THEN 0 ELSE 1 END, c.name ASC");
 }
 
 /// Either phone column, digits only, matches either pattern.

@@ -3,8 +3,8 @@ use super::queries::{
     search_stones as search, stone_photos, stone_slabs,
 };
 use super::schemas::{
-    PublicCompany, PublicFixture, PublicFixturesQuery, PublicPhoto, PublicSearchQuery, PublicSlab,
-    PublicStone, PublicStonesQuery,
+    PublicCompaniesQuery, PublicCompany, PublicCompanyCard, PublicFixture, PublicFixturesQuery,
+    PublicPhoto, PublicSearchQuery, PublicSlab, PublicStone, PublicStonesQuery,
 };
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
@@ -13,6 +13,40 @@ use crate::routes::fixtures::{FAUCETS, SINKS};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
+
+/// List showroom companies
+///
+/// The name and logo of each live company among `ids`, by id, for the
+/// customer portal's company chooser. No session needed.
+#[utoipa::path(
+    get,
+    path = "/v1/public/companies",
+    operation_id = "list_public_companies",
+    tag = "public",
+    params(PublicCompaniesQuery),
+    responses(
+        (status = 200, description = "The companies", body = Vec<PublicCompanyCard>),
+        (status = 500, description = "Database error", body = ErrorBody),
+    )
+)]
+pub async fn companies(
+    State(state): State<AppState>,
+    MultiQuery(query): MultiQuery<PublicCompaniesQuery>,
+) -> ApiResult<Json<Vec<PublicCompanyCard>>> {
+    let ids: Vec<i32> = query.ids.into_iter().take(20).collect();
+    if ids.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    let marks = vec!["?"; ids.len()].join(",");
+    let mut sql = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT id, name, NULLIF(NULLIF(TRIM(logo_url), ''), 'undefined') AS logo_url
+           FROM company WHERE id IN ({marks}) AND deleted_at IS NULL ORDER BY id"
+    )));
+    for id in &ids {
+        sql = sql.bind(id);
+    }
+    Ok(Json(sql.fetch_all(&state.pool).await?))
+}
 
 /// Find a company by its subdomain
 ///

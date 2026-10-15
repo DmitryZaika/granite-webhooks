@@ -14,10 +14,7 @@ async fn search(pool: MySqlPool, query: &str) -> Value {
     res.json()
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn search_ranks_and_filters(pool: MySqlPool) {
     for (query, expected) in [
         // "Black" as a whole word ranks before a name ending with it.
@@ -41,10 +38,7 @@ async fn search_ranks_and_filters(pool: MySqlPool) {
     }
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn search_rows_have_the_list_shape(pool: MySqlPool) {
     let rows = search(pool.clone(), "?name=zebra").await;
     let list: Value = server(pool)
@@ -61,10 +55,7 @@ async fn search_rows_have_the_list_shape(pool: MySqlPool) {
     assert_eq!(&rows[0], zebra);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn search_needs_a_session_and_valid_params(pool: MySqlPool) {
     let server = server(pool);
     server
@@ -80,10 +71,7 @@ async fn search_needs_a_session_and_valid_params(pool: MySqlPool) {
 
 // ---- POST /v1/stones/quick
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn quick_add_creates_a_stone_with_a_leftover(pool: MySqlPool) {
     let res = server(pool.clone())
         .post("/v1/stones/quick")
@@ -122,10 +110,7 @@ async fn quick_add_creates_a_stone_with_a_leftover(pool: MySqlPool) {
     );
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn quick_add_with_bundles(pool: MySqlPool) {
     let body: Value = server(pool.clone())
         .post("/v1/stones/quick")
@@ -146,10 +131,7 @@ async fn quick_add_with_bundles(pool: MySqlPool) {
     assert_eq!(bundles, vec![("V-1".into(), false), ("V-2".into(), false)]);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn quick_add_validates(pool: MySqlPool) {
     let server = server(pool.clone());
     let base = json!({ "name": "X", "type": "granite", "retail_price": 10, "leftover": true });
@@ -161,10 +143,7 @@ async fn quick_add_validates(pool: MySqlPool) {
     for (body, error) in [
         (with("name", json!("  ")), "Name is required"),
         (with("retail_price", json!(0)), "Price is required"),
-        (
-            with("length", json!(-1)),
-            "Size must be a non-negative number",
-        ),
+        (with("length", json!(-1)), "Enter a number of 0 or more"),
         (with("type", json!("onyx")), "Select a valid stone type"),
         (with("leftover", json!(false)), "Bundle number is required"),
         (
@@ -196,10 +175,7 @@ async fn quick_add_validates(pool: MySqlPool) {
 
 // ---- GET /v1/slabs
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn slabs_by_id_with_their_stone(pool: MySqlPool) {
     let server = server(pool);
     let res = server
@@ -229,10 +205,7 @@ async fn slabs_by_id_with_their_stone(pool: MySqlPool) {
         .assert_status(StatusCode::BAD_REQUEST);
 }
 
-#[sqlx::test(
-    migrations = "../migrations",
-    fixtures(path = "../seed", scripts("local_seed"))
-)]
+#[test_db::test(seed)]
 async fn stone_slabs_count_remnants(pool: MySqlPool) {
     let rows: Value = server(pool)
         .get("/v1/stones/3010/slabs")

@@ -246,6 +246,15 @@ INSERT INTO stone_types (id, name, company_id) VALUES
   (103, 'quartzite', 100),
   (104, 'granite',   101);
 
+-- ---- Sink types (sink forms). Ids 100+.
+INSERT INTO sink_types (id, name, company_id) VALUES
+  (100, 'stainless 18 gauge', 100),
+  (101, 'stainless 16 gauge', 100),
+  (102, 'composite',          100),
+  (103, 'ceramic',            100),
+  (104, 'farm house',         100),
+  (105, 'composite',          101);
+
 -- ---- Installed (project) photos of stones (admin stone images tab). Ids 100+.
 INSERT INTO installed_stones (id, url, stone_id) VALUES
   (100, 'https://img.example/installed-black-1.jpg', 3000),
@@ -378,3 +387,143 @@ INSERT INTO checklists (id, customer_id, installer_id, company_id, customer_name
   (9004, NULL, 100, 100, 'Onboarding Sample Checklist Customer', '456 Install Avenue, Indianapolis, IN 46202', NULL, 1, 1, 1, 1, 1, 1, 1, NULL, 'data:image/png;base64,c2ln', '2026-05-09 14:00:00'),
   (9005, NULL, 100, NULL, 'No Company',    '9 Nowhere',                   NULL,                 1, 1, 1, 1, 1, 1, 1, NULL,                     'data:image/png;base64,c2ln', '2026-05-13 14:00:00'),
   (9006, 2000, 106, 101, 'Other Co Customer', '1 Other St',               NULL,                 1, 1, 1, 1, 1, 1, 1, 'Other company',        'data:image/png;base64,c2ln', '2026-05-13 14:00:00');
+
+-- ---- Deals board (GET /v1/deals, /v1/deal-groups, activities, notes). Ids 8600+.
+-- Dina (107) owns these deals so Rita's sales stats stay as they are. She is
+-- an employee without positions (not a sales rep, not on the leaderboard).
+-- Groups: 100 'Sales' (default), 104 'Remodel', 105 hidden. Stages 100/101 in
+-- 100 (102 deleted), 104/105 in 104, 106 in hidden 105.
+-- Open deals in group 100: 8600 (stage 100, pos 0), 8601 (100, pos 1), 8602
+-- (101); won 8603, lost 8604 (stage 101); 8605 deleted; 8606 deleted customer
+-- 1003; 8607 in group 104; 8608 is Rita's (not Dina's board).
+-- 8600 has an overdue + a future activity, a note with two comments and a
+-- deleted comment, photos, an email; 8601 has one undated activity, a deleted
+-- and a completed one; 8602 has a deleted note.
+INSERT INTO users (id, email, password, name, is_employee, is_admin, is_superuser, is_deleted, company_id) VALUES
+  (107, 'dealer@acme.test', '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Dina Dealer', 1, 0, 0, 0, 100);
+
+INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VALUES
+  ('aaaaaaaa-0000-4000-8000-000000000107', 107, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);
+
+-- Nina (8695) is a lead of Rita's that only Dina's deals use.
+INSERT INTO customers (id, name, phone, company_id, source, sales_rep, created_date, customer_temperature) VALUES
+  (8695, 'Nina Lead', '317-555-0195', 100, 'leads', 100, '2026-03-30 08:00:00', 'hot');
+INSERT INTO customers_emails (id, customer_id, email, created_at, created_by) VALUES
+  (8696, 8695, 'nina@example.com', '2026-03-30 08:00:00', 100),
+  (8697, 8695, 'nina.work@example.com', '2026-03-30 09:00:00', 100);
+
+INSERT INTO groups_list (id, name, company_id, is_default, is_displayed) VALUES
+  (104, 'Remodel', 100, 0, 1),
+  (105, 'Hidden',  100, 0, 0);
+
+INSERT INTO deals_list (id, name, position, group_id, deleted_at) VALUES
+  (104, 'Measure', 0, 104, NULL),
+  (105, 'Install', 1, 104, NULL),
+  (106, 'Parked',  0, 105, NULL);
+
+INSERT INTO deals (id, customer_id, amount, title, status, list_id, position, user_id, is_won, lost_reason, due_date, created_at, updated_at, deleted_at, created_by) VALUES
+  (8600, 8695, 1500.25, 'Dina kitchen',   'New',     100, 0, 107, NULL, NULL,        '2026-09-30', '2026-04-01 10:00:00', '2026-04-01 10:00:00', NULL, 'Dina Dealer'),
+  (8601, 1004, NULL,    NULL,             'New',     100, 1, 107, NULL, NULL,        NULL,         '2026-04-02 10:00:00', '2026-04-02 10:00:00', NULL, NULL),
+  (8602, 1010, 300.00,  'Dina vanity',    'Quoted',  101, 0, 107, NULL, NULL,        NULL,         '2026-04-03 10:00:00', '2026-04-03 10:00:00', NULL, NULL),
+  (8603, 1008, 999.00,  'Dina won',       'Quoted',  101, 1, 107, 1,    NULL,        NULL,         '2026-04-04 10:00:00', '2026-04-04 10:00:00', NULL, NULL),
+  (8604, 1011, 50.00,   'Dina lost',      'Quoted',  101, 2, 107, 0,    'Too pricey',NULL,         '2026-04-05 10:00:00', '2026-04-05 10:00:00', NULL, NULL),
+  (8605, 8695, 10.00,   'Dina deleted',   'New',     100, 2, 107, NULL, NULL,        NULL,         '2026-04-06 10:00:00', '2026-04-06 10:00:00', '2026-04-07 00:00:00', NULL),
+  (8606, 1003, 20.00,   'Dina gone cust', 'New',     100, 3, 107, NULL, NULL,        NULL,         '2026-04-07 10:00:00', '2026-04-07 10:00:00', NULL, NULL),
+  (8607, 8695, 30.00,   'Dina remodel',   'Measure', 104, 0, 107, NULL, NULL,        NULL,         '2026-04-08 10:00:00', '2026-04-08 10:00:00', NULL, NULL);
+
+INSERT INTO deal_stage_history (id, deal_id, list_id, entered_at, exited_at) VALUES
+  (8610, 8602, 100, '2026-04-03 10:00:00', '2026-04-03 12:00:00'),
+  (8611, 8602, 101, '2026-04-03 12:00:00', NULL),
+  (8612, 8603, 101, '2026-04-04 10:00:00', '2026-04-10 09:00:00');
+
+INSERT INTO deal_activities (id, deal_id, company_id, name, deadline, priority, is_completed, completed_at, created_at, deleted_at, created_by) VALUES
+  (8620, 8600, 100, 'Call back',     '2026-01-05 09:30:00', 'high',   0, NULL,                  '2026-04-01 11:00:00', NULL,                  'Dina Dealer'),
+  (8621, 8600, 100, 'Send quote',    '2099-01-01 00:00:00', 'low',    0, NULL,                  '2026-04-01 12:00:00', NULL,                  'Dina Dealer'),
+  (8622, 8601, 100, 'Measure',       NULL,                  'medium', 0, NULL,                  '2026-04-02 11:00:00', NULL,                  'Dina Dealer'),
+  (8623, 8601, 100, 'Old task',      '2026-01-01 10:00:00', 'medium', 1, '2026-01-02 10:00:00', '2026-04-02 12:00:00', NULL,                  'Dina Dealer'),
+  (8624, 8601, 100, 'Deleted task',  '2026-01-01 10:00:00', 'medium', 0, NULL,                  '2026-04-02 13:00:00', '2026-04-03 00:00:00', 'Dina Dealer'),
+  (8625, 8603, 100, 'Call back',     '2026-01-06 09:00:00', 'medium', 0, NULL,                  '2026-04-04 11:00:00', NULL,                  'Dina Dealer');
+
+INSERT INTO deal_notes (id, deal_id, company_id, content, is_pinned, created_at, created_by, deleted_at) VALUES
+  (8630, 8600, 100, 'Prefers white quartz', 1, '2026-04-01 13:00:00', 'Dina Dealer', NULL),
+  (8631, 8600, 100, 'Second note',          0, '2026-04-01 14:00:00', 'Dina Dealer', NULL),
+  (8632, 8602, 100, 'Deleted note',         0, '2026-04-03 13:00:00', 'Dina Dealer', '2026-04-04 00:00:00');
+
+INSERT INTO deal_note_comments (id, note_id, company_id, content, created_at, created_by, deleted_at) VALUES
+  (8640, 8630, 100, 'Agreed',          '2026-04-01 15:00:00', 'Ada Admin', NULL),
+  (8641, 8630, 100, 'Deleted comment', '2026-04-01 16:00:00', NULL,        '2026-04-02 00:00:00'),
+  (8642, 8630, 100, 'Anonymous',       '2026-04-01 17:00:00', NULL,        NULL);
+
+INSERT INTO deals_images (id, deal_id, image_url, created_at) VALUES
+  (8650, 8600, 'https://example.test/deal-8600.jpg', '2026-04-01 10:00:00');
+
+INSERT INTO emails (id, subject, body, sent_at, message_id, sender_user_id, company_id, is_draft, deal_id) VALUES
+  (8660, 'Your quote', 'b', '2026-04-01 10:00:00', '<seed-8660@acme.test>', 107, 100, 0, 8600);
+
+-- Drip templates of stage 101 for company 100 (lead customers only).
+INSERT INTO email_templates (id, template_name, template_subject, template_body, company_id, user_id, lead_list_id, hour_delay, show_template) VALUES
+  (8670, 'Quoted drip', 'Your quote', 'Hi', 100, NULL, 101, 2, 1);
+INSERT INTO cloudtalk_sms_templates (id, company_id, user_id, name, body, lead_list_id, hour_delay, position) VALUES
+  (8671, 100, NULL, 'Quoted sms', 'Hi', 101, 1, 0);
+
+-- ---- Sales questionnaires (/v1/questionnaires, /v1/deals/{id}/questionnaires). Ids 8720+.
+-- 8720 shared by company 100, 8721 Dina's own, 8722 Rita's own (not Dina's),
+-- 8723 company 101's, 8724 deleted. Question 8732 is deleted. Deal 8600 has
+-- an answer to 8730.
+INSERT INTO sales_questionnaires (id, name, company_id, user_id, created_at, deleted_at) VALUES
+  (8720, 'Remodel Discovery', 100, NULL, '2026-04-01 10:00:00', NULL),
+  (8721, 'Dina checklist',    100, 107,  '2026-04-02 10:00:00', NULL),
+  (8722, 'Rita checklist',    100, 100,  '2026-04-03 10:00:00', NULL),
+  (8723, 'Other company',     101, NULL, '2026-04-04 10:00:00', NULL),
+  (8724, 'Deleted',           100, 107,  '2026-04-05 10:00:00', '2026-04-06 00:00:00');
+INSERT INTO sales_questionnaire_questions (id, questionnaire_id, question, deleted_at) VALUES
+  (8730, 8720, 'What type of remodel?', NULL),
+  (8731, 8720, 'Budget?',               NULL),
+  (8732, 8720, 'Old question',          '2026-04-02 00:00:00'),
+  (8733, 8721, 'Sink style?',           NULL),
+  (8734, 8722, 'Rita only?',            NULL),
+  (8735, 8723, 'Other?',                NULL);
+INSERT INTO sales_questionnaire_responses (deal_id, question_id, answer, answered_by) VALUES
+  (8600, 8730, 'Kitchen', 107);
+
+-- ---- Mailbox (/v1/emails). Ids 8800+, all in April 2026 (never "this month").
+-- Olga (106, rep@other.test) of company 101, which has a mail domain.
+-- T1 ...0001: customer buyer@other-customer.test (customer 2000) wrote twice
+--   (8800 read, 8802 unread, with an attachment), Olga replied (8801, opened
+--   by the customer). On deal 8009.
+-- T2 ...0002: Pat Prospect (no customer) wrote, read; the name is only in the
+--   participant row.
+-- T3 ...0003: Olga wrote to the customer only (Sent), opened 1 s after the
+--   send (an image proxy: not a real open).
+-- T4 ...0004: trashed inbound mail.
+-- T5 ...0005: Olga's draft.
+-- T6 ...0006: company 100 mail to rep@acme.test (never Olga's).
+INSERT INTO customers_emails (id, customer_id, email, created_at, created_by) VALUES
+  (8790, 2000, 'buyer@other-customer.test', '2026-04-01 08:00:00', 106);
+
+INSERT INTO emails (id, subject, body, html_body, sent_at, deleted_at, message_id, thread_id, sender_user_id, receiver_user_id, sender_email, receiver_email, deal_id, employee_read_at, company_id, is_draft) VALUES
+  (8800, 'Kitchen quote',     'Can you quote my kitchen?', NULL, '2026-04-10 10:00:00', NULL, '<m8800@other-customer.test>', 'aaaaaaaa-1111-4000-8000-000000000001', NULL, 106, 'buyer@other-customer.test', 'rep@other.test', 8009, '2026-04-10 10:30:00', 101, 0),
+  (8801, 'Re: Kitchen quote', 'Sure, attached.',           '<p>Sure, attached.</p>', '2026-04-10 11:00:00', NULL, '<m8801@other.test>', 'aaaaaaaa-1111-4000-8000-000000000001', 106, NULL, 'Olga Other <rep@other.test>', 'buyer@other-customer.test', 8009, NULL, 101, 0),
+  (8802, 'Re: Kitchen quote', 'Thanks! See my sketch.',    NULL, '2026-04-11 09:00:00', NULL, '<m8802@other-customer.test>', 'aaaaaaaa-1111-4000-8000-000000000001', NULL, 106, 'buyer@other-customer.test', 'rep@other.test', NULL, NULL, 101, 0),
+  (8803, 'Granite question',  'Do you carry Black Pearl?', NULL, '2026-04-05 12:00:00', NULL, '<m8803@prospect.test>', 'aaaaaaaa-1111-4000-8000-000000000002', NULL, NULL, 'pat@prospect.test', 'rep@other.test', NULL, '2026-04-05 13:00:00', 101, 0),
+  (8804, 'Following up',      'Just checking in.',         NULL, '2026-04-06 12:00:00', NULL, '<m8804@other.test>', 'aaaaaaaa-1111-4000-8000-000000000003', 106, NULL, 'rep@other.test', 'buyer@other-customer.test', NULL, NULL, 101, 0),
+  (8805, 'Spam',              'Buy now',                   NULL, '2026-04-07 12:00:00', '2026-04-08 12:00:00', '<m8805@spam.test>', 'aaaaaaaa-1111-4000-8000-000000000004', NULL, NULL, 'spam@spam.test', 'rep@other.test', NULL, NULL, 101, 0),
+  (8806, 'Draft quote',       'Work in progress',          NULL, '2026-04-09 12:00:00', NULL, NULL, 'aaaaaaaa-1111-4000-8000-000000000005', 106, NULL, 'rep@other.test', 'buyer@other-customer.test', NULL, NULL, 101, 1),
+  (8807, 'Acme only',         'Not for Olga',              NULL, '2026-04-08 12:00:00', NULL, '<m8807@x.test>', 'aaaaaaaa-1111-4000-8000-000000000006', NULL, 100, 'someone@x.test', 'rep@acme.test', NULL, NULL, 100, 0);
+
+INSERT INTO email_participants (email_id, email, display_name, user_id, customer_id, type, position) VALUES
+  (8800, 'buyer@other-customer.test', 'Bea Buyer', NULL, 2000, 'from', 0),
+  (8800, 'rep@other.test', NULL, 106, NULL, 'to', 0),
+  (8801, 'rep@other.test', 'Olga Other', 106, NULL, 'from', 0),
+  (8801, 'buyer@other-customer.test', NULL, NULL, 2000, 'to', 0),
+  (8801, 'boss@other-customer.test', 'Boss', NULL, NULL, 'cc', 0),
+  (8801, 'secret@other.test', NULL, NULL, NULL, 'bcc', 0),
+  (8803, 'pat@prospect.test', 'Pat Prospect', NULL, NULL, 'from', 0),
+  (8803, 'rep@other.test', NULL, 106, NULL, 'to', 0);
+
+INSERT INTO email_attachments (id, email_id, content_type, content_subtype, filename, url) VALUES
+  (8810, 8802, 'image', 'png', 'sketch.png', 'https://example.test/sketch.png');
+
+INSERT INTO email_reads (message_id, read_at) VALUES
+  ('<m8801@other.test>', '2026-04-10 15:00:00'),
+  ('<m8804@other.test>', '2026-04-06 12:00:01');

@@ -80,3 +80,35 @@ pub async fn slabs_by_ids(
     query.push(" ORDER BY slab.id");
     query.build_query_as::<SlabSummary>().fetch_all(pool).await
 }
+
+/// Whether another live slab of the stone already has this number (`bundle`).
+/// `except` is the slab being renamed, if any.
+pub async fn bundle_taken<'e, E>(
+    executor: E,
+    stone_id: i32,
+    bundle: &str,
+    except: Option<i64>,
+) -> Result<bool, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::MySql>,
+{
+    let taken: Option<i64> = sqlx::query_scalar(
+        "SELECT CAST(id AS SIGNED) FROM slab_inventory
+         WHERE stone_id = ? AND bundle = ? AND deleted_at IS NULL AND id <> ?
+         LIMIT 1",
+    )
+    .bind(stone_id)
+    .bind(bundle)
+    .bind(except.unwrap_or(0))
+    .fetch_optional(executor)
+    .await?;
+    Ok(taken.is_some())
+}
+
+/// The stone a live slab belongs to, if the slab exists.
+pub async fn slab_stone_id(pool: &MySqlPool, slab_id: i64) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar("SELECT stone_id FROM slab_inventory WHERE id = ? AND deleted_at IS NULL")
+        .bind(slab_id)
+        .fetch_optional(pool)
+        .await
+}

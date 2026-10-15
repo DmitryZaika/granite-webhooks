@@ -1,11 +1,12 @@
 //! Uploads: presigned URLs to put images in the bucket.
 //!
 //! - `POST /v1/uploads` → a URL to `PUT` one file to, and its public URL
+//! - `GET /v1/uploads/file` → a stored image or document's bytes
 //!
 //! Records take the public URL afterwards (stone image, installed photos,
 //! slab photo); [`attach`] checks it and stores the thumbnail.
 
-mod handlers;
+pub mod handlers;
 pub mod schemas;
 
 use crate::error::ApiError;
@@ -15,7 +16,9 @@ use crate::thumbnails::make_icon;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(handlers::create))
+    OpenApiRouter::new()
+        .routes(routes!(handlers::create))
+        .routes(routes!(handlers::file))
 }
 
 /// Accepts `url` for a record when it is a file uploaded to `folder/` of the
