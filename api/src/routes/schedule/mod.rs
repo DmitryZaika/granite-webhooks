@@ -32,6 +32,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(day_map))
         .routes(routes!(optimize_route))
         .routes(routes!(board::events))
+        .routes(routes!(board::my_schedule))
         .routes(routes!(board::people))
         .routes(routes!(board::set_color))
 }
