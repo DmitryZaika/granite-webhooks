@@ -25784,6 +25784,66 @@
         ]
       }
     },
+    "/v1/quote-email-templates/order": {
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Reorder the quote email templates",
+        "description": "Saves a drag on the templates table: each company template's sequence\nbecomes its place in `ids` (1 = first, the default). Other ids are\nignored; templates left out go after the given ones, in their old order.",
+        "operationId": "reorder_quote_email_templates",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteEmailTemplateOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/quote-extras": {
       "get": {
         "tags": [
@@ -26057,7 +26117,7 @@
           "quotes"
         ],
         "summary": "Save the drawing",
-        "description": "A new immutable revision (with each option's total) that becomes the\nquote's drawing; the caller's unsaved drawing is dropped. A quote not\nsigned yet cannot keep a sold-out color.",
+        "description": "A new immutable revision (with each option's total) that becomes the\nquote's drawing; the caller's unsaved drawing is dropped. A sold-out color\nsaves too (the customer cannot accept that option until it is changed).",
         "operationId": "save_quote_drawing",
         "parameters": [
           {
@@ -26093,7 +26153,7 @@
             }
           },
           "400": {
-            "description": "Not a drawing, or a sold-out color",
+            "description": "Not a drawing",
             "content": {
               "application/json": {
                 "schema": {
@@ -27562,7 +27622,7 @@
           "quotes"
         ],
         "summary": "Accept and sign a quote",
-        "description": "Signing is a sale: the quote is sold with the option and its deal won.\nThe quote's sales rep (its salesperson, else its creator, else the\ndeal's owner) is then emailed the customer, the option, each area's\nmaterial, color and edges, and the total, and notified in the app when\nthe quote has a deal. Refused once signed, for an option with a\nsold-out color, or when the link is switched off.",
+        "description": "Records the option and the signature and sets the quote's status to\n`accepted`; it does not mark the quote sold or win its deal (staff do\nthat). The quote's creator is then emailed the customer, the option, each\narea's material, color and edges, and the total, and notified in the app\nwhen the quote has a deal; the customer is emailed their own copy with a\nlink back to the quote. Refused once signed, for an option with a\nsold-out color, or when the link is switched off.",
         "operationId": "accept_quote_portal",
         "parameters": [
           {
@@ -29177,6 +29237,66 @@
           },
           "404": {
             "description": "No such list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quote-price-lists/order": {
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Reorder the price lists",
+        "description": "Saves a drag on the lists table: each list's sequence becomes its place\nin `ids` (1 = first). Other companies' ids are ignored; lists left out go\nafter the given ones, in their old order.",
+        "operationId": "reorder_quote_price_lists",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PriceListOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -33904,6 +34024,105 @@
           },
           "403": {
             "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/me/schedule": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "A personal schedule",
+        "description": "The events assigned to the caller (an installer's or template maker's own\nday), on any calendar, with the customer named by a numeric title. An\nadmin or superuser may read an installer's or template maker's schedule\nwith `user_id`.",
+        "operationId": "get_my_schedule",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "description": "Range start (ISO 8601).",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "Range end (ISO 8601).",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "description": "Admins and superusers only: whose schedule, an installer or template\nmaker of the company. The caller's own when left out.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleEvents"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid range, or not an installer or template maker of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Another person's schedule, and the caller is not an admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -45389,6 +45608,7 @@
           "can_manage_company",
           "can_manage_billing",
           "is_shop_manager",
+          "is_template_maker",
           "user_signature_access",
           "company_features",
           "feature_capabilities"
@@ -45426,7 +45646,7 @@
               "string",
               "null"
             ],
-            "description": "The portal a position locks the user into (`installer`, `check-in`,\n`marketing`, `shop_worker`); null for everyone else."
+            "description": "The portal a position locks the user into (`installer`, `check-in`,\n`marketing`, `shop_worker`, `template`); null for everyone else."
           },
           "portal_home": {
             "type": [
@@ -45462,6 +45682,10 @@
           "is_shop_manager": {
             "type": "boolean",
             "description": "Holds the Shop Manager position in the company."
+          },
+          "is_template_maker": {
+            "type": "boolean",
+            "description": "Holds Template in the company (their portal is their own schedule)."
           },
           "user_signature_access": {
             "type": "boolean",
@@ -59903,6 +60127,24 @@
         },
         "additionalProperties": false
       },
+      "PriceListOrder": {
+        "type": "object",
+        "description": "Body of `PUT /v1/quote-price-lists/order`.",
+        "required": [
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The company's list ids in their new order."
+          }
+        },
+        "additionalProperties": false
+      },
       "PriceListProblems": {
         "type": "object",
         "description": "Why the prices were not saved.",
@@ -61579,6 +61821,24 @@
             ],
             "format": "int32",
             "description": "Position among the company's templates (1 = first)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuoteEmailTemplateOrder": {
+        "type": "object",
+        "description": "Body of `PUT /v1/quote-email-templates/order`.",
+        "required": [
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The company template ids in their new order."
           }
         },
         "additionalProperties": false

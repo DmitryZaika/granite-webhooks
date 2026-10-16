@@ -229,6 +229,24 @@ async fn the_editor_saves_revisions_and_unsaved_work(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_sold_out_color_still_saves(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    let id = create(
+        &server,
+        json!({ "customer_id": 1000, "quote_name": "Kitchen" }),
+    )
+    .await;
+    let res = server
+        .put(&format!("/v1/quotes/{id}/drawing"))
+        .with_session(sessions::REP)
+        .json(&json!({ "doc": doc("Black") }))
+        .await;
+    res.assert_status_ok();
+    assert_eq!(res.json::<Value>()["revision"], 1);
+}
+
+#[test_db::test(seed)]
 async fn the_page_changes_info_settings_and_prices(pool: MySqlPool) {
     let (server, _) = server(&pool).await;
     price_list(&server, &pool).await;

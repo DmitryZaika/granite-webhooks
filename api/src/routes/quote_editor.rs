@@ -27,7 +27,7 @@ use crate::extract::JsonBody;
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::{
     self, load_company_quote, mark_quote_sold, pricing_for_quote, quote_for_contract_file,
-    sold_out_colors, sold_out_message, with_current_sink_models,
+    with_current_sink_models,
 };
 use crate::routes::auth::{app_origin, company_subdomain};
 use crate::routes::created::CreatedId;
@@ -1414,8 +1414,8 @@ fn readable(doc: &Value) -> ApiResult<QuoteDoc> {
 /// Save the drawing
 ///
 /// A new immutable revision (with each option's total) that becomes the
-/// quote's drawing; the caller's unsaved drawing is dropped. A quote not
-/// signed yet cannot keep a sold-out color.
+/// quote's drawing; the caller's unsaved drawing is dropped. A sold-out color
+/// saves too (the customer cannot accept that option until it is changed).
 #[utoipa::path(
     put,
     path = "/v1/quotes/{id}/drawing",
@@ -1425,7 +1425,7 @@ fn readable(doc: &Value) -> ApiResult<QuoteDoc> {
     request_body = SavedDrawing,
     responses(
         (status = 200, description = "Saved", body = SavedRevision),
-        (status = 400, description = "Not a drawing, or a sold-out color", body = ErrorBody),
+        (status = 400, description = "Not a drawing", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
         (status = 404, description = "No such quote", body = ErrorBody),
@@ -1445,13 +1445,9 @@ pub async fn save_drawing(
     }
     let doc = readable(&input.doc)?;
     let quote = pricing_quote(&state, id, user.company_id).await?;
+    // A sold-out color does not stop a save: the editor marks it, and the
+    // customer cannot accept that option until it is changed.
     let (price_list, _) = pricing_for_quote(&state.pool, &quote).await?;
-    if row.signed_at.is_none() {
-        let sold_out = sold_out_colors(&doc, &price_list);
-        if !sold_out.is_empty() {
-            return Err(ApiError::BadRequest(sold_out_message(&sold_out)));
-        }
-    }
     let totals: Vec<Value> =
         quote_pricing::pricing::price_quote(&doc, &price_list, quote.options())
             .into_iter()
