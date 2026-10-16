@@ -4,26 +4,43 @@
 //! unknown and no map is drawn.
 
 use base64::Engine;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use utoipa::ToSchema;
 
 const ROUTE_MATRIX_URL: &str = "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix";
 const MAPS_API_URL: &str = "https://maps.googleapis.com/maps/api";
 const PLACES_API_URL: &str = "https://places.googleapis.com/v1";
+const ROUTES_URL: &str = "https://routes.googleapis.com/directions/v2:computeRoutes";
 /// Most stops drawn on a day map.
 const MAX_MAP_STOPS: usize = 20;
 const HOME_ICON: &str = "https://maps.gstatic.com/mapfiles/ms2/micons/homegardenbusiness.png";
 
 /// A geocoded point.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, ToSchema)]
 pub struct Point {
+    /// Latitude.
     pub lat: f64,
+    /// Longitude.
     pub lng: f64,
 }
 const METERS_PER_MILE: f64 = 1609.344;
+
+/// A day's stops on the map; see [`Maps::day_map`].
+#[derive(Debug, Default)]
+pub struct DayRoute {
+    /// Where the home address is.
+    pub home: Option<Point>,
+    /// Where each stop is, in the order asked; `None` where Google cannot find it.
+    pub stops: Vec<Option<Point>>,
+    /// The driving route from home through the stops, as an encoded polyline.
+    pub line: Option<String>,
+    /// PNG as a `data:` URL.
+    pub image: Option<String>,
+}
 
 #[derive(Clone)]
 pub struct Maps {
@@ -31,6 +48,8 @@ pub struct Maps {
     url: Arc<str>,
     api_base: Arc<str>,
     places_base: Arc<str>,
+    /// Directions endpoint, for the driving line on a day map.
+    routes_url: Arc<str>,
     http: reqwest::Client,
     /// Miles already asked for, so reopening a quote does not ask Google again.
     cache: Arc<Mutex<HashMap<String, Option<f64>>>>,
@@ -57,6 +76,13 @@ impl Maps {
         self
     }
 
+    /// Sends directions calls to `url` (a stub in tests).
+    #[must_use]
+    pub fn with_routes_url(mut self, url: &str) -> Self {
+        self.routes_url = Arc::from(url);
+        self
+    }
+
     pub fn from_env() -> Self {
         Self::new(
             std::env::var("GOOGLE_MAPS_API_KEY").ok().as_deref(),
@@ -76,6 +102,7 @@ impl Maps {
             url: Arc::from(url),
             api_base: Arc::from(api_base.trim_end_matches('/')),
             places_base: Arc::from(PLACES_API_URL),
+            routes_url: Arc::from(ROUTES_URL),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
@@ -189,32 +216,42 @@ impl Maps {
         point
     }
 
-    /// A PNG map (as a `data:` URL) of the home address and up to 20 stops
-    /// joined in order; `None` when nothing could be placed.
-    pub async fn day_map(&self, home: Option<&str>, stops: &[String]) -> Option<String> {
-        let key = self.key.as_ref()?;
-        let addresses: Vec<&str> = stops
-            .iter()
-            .map(|stop| stop.trim())
-            .filter(|stop| !stop.is_empty())
-            .take(MAX_MAP_STOPS)
-            .collect();
-        if addresses.is_empty() {
-            return None;
+    /// The home address and up to 20 stops placed on the map, the driving
+    /// route through them in order, and a PNG of it all.
+    pub async fn day_map(&self, home: Option<&str>, stops: &[String]) -> DayRoute {
+        let mut route = DayRoute::default();
+        let Some(key) = self.key.as_ref() else {
+            return route;
+        };
+        let addresses: Vec<&str> = stops.iter().take(MAX_MAP_STOPS).map(|s| s.trim()).collect();
+        if addresses.iter().all(|address| address.is_empty()) {
+            return route;
         }
-        let home_point = match home.map(str::trim).filter(|home| !home.is_empty()) {
+        route.home = match home.map(str::trim).filter(|home| !home.is_empty()) {
             Some(home) => self.geocode(home).await,
             None => None,
         };
-        let mut stop_points = Vec::new();
         for address in addresses {
-            if let Some(point) = self.geocode(address).await {
-                stop_points.push(point);
-            }
+            route.stops.push(self.geocode(address).await);
         }
-        if home_point.is_none() && stop_points.is_empty() {
-            return None;
+        let points: Vec<Point> = route
+            .home
+            .iter()
+            .chain(route.stops.iter().flatten())
+            .copied()
+            .collect();
+        if points.is_empty() {
+            return route;
         }
+        if points.len() >= 2 {
+            route.line = self.driving_line(key, &points).await;
+        }
+        route.image = self.static_map(key, &route, &points).await;
+        route
+    }
+
+    /// A PNG (as a `data:` URL) of the route.
+    async fn static_map(&self, key: &str, route: &DayRoute, points: &[Point]) -> Option<String> {
         let at = |point: &Point| format!("{},{}", point.lat, point.lng);
         let mut query: Vec<(&str, String)> = vec![
             ("size", "640x360".into()),
@@ -222,10 +259,11 @@ impl Maps {
             ("maptype", "roadmap".into()),
             ("key", key.to_string()),
         ];
-        if let Some(home) = &home_point {
+        if let Some(home) = &route.home {
             query.push(("markers", format!("icon:{HOME_ICON}|{}", at(home))));
         }
-        for (index, point) in stop_points.iter().enumerate() {
+        for (index, point) in route.stops.iter().enumerate() {
+            let Some(point) = point else { continue };
             let label = if index < 9 {
                 format!("label:{}|", index + 1)
             } else {
@@ -233,12 +271,13 @@ impl Maps {
             };
             query.push(("markers", format!("color:0x2563eb|{label}{}", at(point))));
         }
-        let path: Vec<String> = home_point.iter().chain(&stop_points).map(at).collect();
-        if path.len() >= 2 {
-            query.push((
-                "path",
-                format!("color:0x2563ebff|weight:5|{}", path.join("|")),
-            ));
+        if points.len() >= 2 {
+            // Along the roads; a straight line between stops when Google has no route.
+            let line = route.line.as_ref().map_or_else(
+                || points.iter().map(at).collect::<Vec<_>>().join("|"),
+                |encoded| format!("enc:{encoded}"),
+            );
+            query.push(("path", format!("color:0x2563ebff|weight:5|{line}")));
         }
         let pairs: Vec<(&str, &str)> = query
             .iter()
@@ -265,6 +304,36 @@ impl Maps {
             "data:image/png;base64,{}",
             base64::engine::general_purpose::STANDARD.encode(bytes)
         ))
+    }
+
+    /// The driving route through `points` in order, as an encoded polyline.
+    async fn driving_line(&self, key: &str, points: &[Point]) -> Option<String> {
+        let (first, rest) = points.split_first()?;
+        let (last, middle) = rest.split_last()?;
+        let waypoint = |point: &Point| json!({ "location": { "latLng": { "latitude": point.lat, "longitude": point.lng } } });
+        let body: Value = self
+            .http
+            .post(&*self.routes_url)
+            .header("X-Goog-Api-Key", key)
+            .header("X-Goog-FieldMask", "routes.polyline.encodedPolyline")
+            .json(&json!({
+                "origin": waypoint(first),
+                "destination": waypoint(last),
+                "intermediates": middle.iter().map(waypoint).collect::<Vec<_>>(),
+                "travelMode": "DRIVE",
+            }))
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        body["routes"][0]["polyline"]["encodedPolyline"]
+            .as_str()
+            .filter(|line| !line.is_empty())
+            .map(String::from)
     }
 
     /// Driving seconds between the home address (point 0) and the stops

@@ -12,6 +12,7 @@ pub mod route;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::maps::Point;
 use crate::routes::events::history::{History, record};
 use crate::routes::events::reminders;
 use crate::state::AppState;
@@ -69,6 +70,13 @@ pub struct DayMap {
     pub image: Option<String>,
     /// The company address the route starts from.
     pub home_address: Option<String>,
+    /// Where the company address is.
+    pub home: Option<Point>,
+    /// Where each asked stop is, in order; null where it cannot be found.
+    pub stops: Vec<Option<Point>>,
+    /// The driving route from the company through the stops (Google encoded
+    /// polyline); null when there is none.
+    pub route: Option<String>,
 }
 
 /// Map a day's stops
@@ -95,13 +103,16 @@ pub async fn day_map(
     MultiQuery(query): MultiQuery<DayMapQuery>,
 ) -> ApiResult<Json<DayMap>> {
     let home_address = company_address(&state.pool, user.company_id).await?;
-    let image = state
+    let day = state
         .maps
         .day_map(home_address.as_deref(), &query.address)
         .await;
     Ok(Json(DayMap {
-        image,
+        image: day.image,
         home_address,
+        home: day.home,
+        stops: day.stops,
+        route: day.line,
     }))
 }
 

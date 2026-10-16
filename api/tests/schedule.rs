@@ -3,6 +3,7 @@ mod common;
 use api::app;
 use api::maps::Maps;
 use api::state::AppState;
+use axum::extract::RawQuery;
 use axum::http::{StatusCode, header};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -51,8 +52,16 @@ async fn google() -> String {
             get(|| async { Json(json!({ "status": "OK", "results": [{ "geometry": { "location": { "lat": 39.9, "lng": -86.1 } } }] })) }),
         )
         .route(
+            "/routes",
+            post(|| async { Json(json!({ "routes": [{ "polyline": { "encodedPolyline": "_p~iF~ps|U" } }] })) }),
+        )
+        .route(
             "/staticmap",
-            get(|| async { ([(header::CONTENT_TYPE, "image/png")], vec![137u8, 80, 78, 71]) }),
+            // An image only when the line follows the roads.
+            get(|RawQuery(query): RawQuery| async move {
+                assert!(query.unwrap_or_default().contains("enc%3A%5Fp%7EiF%7Eps%7CU"));
+                ([(header::CONTENT_TYPE, "image/png")], vec![137u8, 80, 78, 71])
+            }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -62,11 +71,10 @@ async fn google() -> String {
 
 async fn server(pool: MySqlPool) -> TestServer {
     let base = google().await;
-    let state = AppState::new(pool, SECRET, ALLOWED_ORIGIN).with_maps(Maps::new(
-        Some("key"),
-        &format!("{base}/matrix"),
-        &base,
-    ));
+    let state = AppState::new(pool, SECRET, ALLOWED_ORIGIN).with_maps(
+        Maps::new(Some("key"), &format!("{base}/matrix"), &base)
+            .with_routes_url(&format!("{base}/routes")),
+    );
     TestServer::new(app(state))
 }
 
@@ -149,4 +157,7 @@ async fn a_day_map_is_drawn(pool: MySqlPool) {
         .json();
     assert_eq!(body["home_address"], "Home");
     assert_eq!(body["image"], "data:image/png;base64,iVBORw==");
+    assert_eq!(body["home"], json!({ "lat": 39.9, "lng": -86.1 }));
+    assert_eq!(body["stops"].as_array().unwrap().len(), 2);
+    assert_eq!(body["route"], "_p~iF~ps|U");
 }

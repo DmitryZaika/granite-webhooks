@@ -50663,6 +50663,9 @@
       "DayMap": {
         "type": "object",
         "description": "`GET /v1/schedule/day-map`.",
+        "required": [
+          "stops"
+        ],
         "properties": {
           "image": {
             "type": [
@@ -50677,6 +50680,38 @@
               "null"
             ],
             "description": "The company address the route starts from."
+          },
+          "home": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Point",
+                "description": "Where the company address is."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stops": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Point"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Where each asked stop is, in order; null where it cannot be found."
+          },
+          "route": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The driving route from the company through the stops (Google encoded\npolyline); null when there is none."
           }
         }
       },
@@ -59599,6 +59634,26 @@
           "price_id": {
             "type": "string",
             "description": "A plan's `price_id` from `GET /v1/billing`."
+          }
+        }
+      },
+      "Point": {
+        "type": "object",
+        "description": "A geocoded point.",
+        "required": [
+          "lat",
+          "lng"
+        ],
+        "properties": {
+          "lat": {
+            "type": "number",
+            "format": "double",
+            "description": "Latitude."
+          },
+          "lng": {
+            "type": "number",
+            "format": "double",
+            "description": "Longitude."
           }
         }
       },
