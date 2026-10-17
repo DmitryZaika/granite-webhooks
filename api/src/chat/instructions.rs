@@ -177,12 +177,35 @@ fn split_non_word(text: &str) -> Vec<&str> {
     re!(r"\W+").split(text).collect()
 }
 
+/// "15,499" → "15499", so a number matches however it is written.
+fn join_digit_groups(text: &str) -> String {
+    let mut text = text.to_string();
+    loop {
+        let joined = re!(r"(\d),(\d{3})\b").replace_all(&text, "$1$2").into_owned();
+        if joined == text {
+            return text;
+        }
+        text = joined;
+    }
+}
+
 fn query_terms(query: &str) -> Vec<String> {
-    split_non_word(&query.to_lowercase())
+    split_non_word(&join_digit_groups(&query.to_lowercase()))
         .into_iter()
         .filter(|t| js_len(t) >= 3 && !is_stop_word(t))
         .map(str::to_string)
         .collect()
+}
+
+fn is_number(term: &str) -> bool {
+    term.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The query names a number (a price, a size) this instruction has.
+fn has_query_number(text: &Text, terms: &[String]) -> bool {
+    terms
+        .iter()
+        .any(|t| is_number(t) && count_words(t, &text.body) > 0)
 }
 
 /// Lowercased title and plain body of one instruction, worked out once.
@@ -201,7 +224,7 @@ impl Text {
                 .as_deref()
                 .unwrap_or_default()
                 .to_lowercase(),
-            body: plain.to_lowercase(),
+            body: join_digit_groups(&plain.to_lowercase()),
             plain_len: js_len(&plain),
         }
     }
@@ -529,6 +552,14 @@ pub fn select_for_context(instructions: &[Instruction], query: &str) -> Vec<Inst
     let fillers: Vec<(usize, usize, usize)> = ranked.iter().copied().filter(|r| r.1 == 0).collect();
 
     let mut picked = Picked::default();
+    // An instruction with the exact number asked about ("$15,499") is the
+    // answer however long it is, so it goes in first.
+    let with_number: Vec<_> = relevant
+        .iter()
+        .copied()
+        .filter(|r| has_query_number(&texts[r.0], &terms))
+        .collect();
+    picked.take(instructions, &with_number, false, budget);
     let share = if relevant.len() > 1 {
         12_000.max(budget / relevant.len())
     } else {
@@ -932,4 +963,39 @@ pub fn matching_answer(
     }
     let (index, coverage) = best?;
     (coverage >= 0.75).then(|| matched(&instructions[index]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn instruction(id: i32, title: &str, body: &str) -> Instruction {
+        Instruction {
+            id,
+            title: Some(title.into()),
+            rich_text: format!("<p>{body}</p>"),
+        }
+    }
+
+    #[test]
+    fn a_price_is_found_with_or_without_its_comma() {
+        let filler = "special order notes ".repeat(600);
+        let mut all: Vec<Instruction> = (1..=10)
+            .map(|id| instruction(id, &format!("Handbook {id}"), &filler))
+            .collect();
+        let packages = format!(
+            "{} Two Full Remodel packages: $11,999 and $15,499.",
+            "quote rules ".repeat(3000)
+        );
+        all.push(instruction(96, "Handbook - 3: Quotes", &packages));
+
+        for query in [
+            "tell me everything about special $15499",
+            "tell me everything about special $15,499",
+        ] {
+            let selected = select_for_context(&all, query);
+            assert_eq!(selected[0].id, 96, "{query}");
+        }
+        assert_eq!(join_digit_groups("$1,234,567 and 12,34"), "$1234567 and 12,34");
+    }
 }

@@ -133,6 +133,46 @@ async fn unread_badge_needs_a_mail_domain(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn unread_counts_leave_out_threads_not_in_the_inbox(pool: MySqlPool) {
+    // A customer wrote to the office address about Olga's deal: not in her Inbox.
+    sqlx::query(
+        "INSERT INTO emails (id, subject, body, sent_at, message_id, thread_id, sender_user_id,
+                             receiver_user_id, sender_email, receiver_email, deal_id,
+                             employee_read_at, company_id, is_draft)
+         VALUES (8899, 'Invoice', 'Got it?', '2026-04-12 09:00:00', '<m8899@other-customer.test>',
+                 'aaaaaaaa-1111-4000-8000-000000000099', NULL, NULL, 'buyer@other-customer.test',
+                 'office@other.test', 8009, NULL, 101, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(!email_ids(&get(&pool, "/v1/emails/threads", OLGA).await).contains(&8899));
+    assert_eq!(
+        get(&pool, "/v1/emails/folder-counts", OLGA).await["inbox_unread"],
+        1
+    );
+    assert_eq!(get(&pool, "/v1/emails/unread", OLGA).await["count"], 1);
+}
+
+#[test_db::test(seed)]
+async fn a_bccd_copy_is_in_the_receivers_inbox(pool: MySqlPool) {
+    // QuickBooks mailed the customer and BCC'd Olga: no header names her.
+    sqlx::query(
+        "INSERT INTO emails (id, subject, body, sent_at, message_id, thread_id, sender_user_id,
+                             receiver_user_id, sender_email, receiver_email, deal_id,
+                             employee_read_at, company_id, is_draft)
+         VALUES (8898, 'Invoice 3312', 'Amount due', '2026-04-12 09:00:00', '<m8898@intuit.test>',
+                 'aaaaaaaa-1111-4000-8000-000000000098', NULL, 106, 'quickbooks@intuit.test',
+                 'billing@other-customer.test', NULL, NULL, 101, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(email_ids(&get(&pool, "/v1/emails/threads", OLGA).await)[0], 8898);
+    assert_eq!(get(&pool, "/v1/emails/unread", OLGA).await["count"], 2);
+}
+
+#[test_db::test(seed)]
 async fn a_thread_with_its_customer_messages_and_participants(pool: MySqlPool) {
     let thread = get(&pool, &format!("/v1/emails/threads/{T1}"), OLGA).await;
     assert_eq!(thread["deal_id"], 8009);

@@ -14,6 +14,7 @@
 //! - `/v1/deals/{id}/files`, `/documents/{id}`, `/files/{source}/{id}` → photos and documents
 //! - `GET    /v1/deals/{id}/document-events`      → quotes emailed/printed, contracts sent/signed
 //! - `GET    /v1/deal-activities/suggestions`     → the caller's frequent activity names
+//! - `POST   /v1/deal-activities/suggestions/hidden` → never suggest a name to the caller again
 //! - `/v1/deal-pipelines[/{id}[/stages|/stage-order]]`, `DELETE /v1/deal-stages/{id}` → admin pipeline setup
 //! - `/v1/deals/{id}/notes[/{note_id}[/comments[/{comment_id}]]]` → notes and comments
 //!
@@ -50,6 +51,7 @@ pub fn router() -> OpenApiRouter<AppState> {
             handlers::delete_activity
         ))
         .routes(routes!(handlers::activity_suggestions))
+        .routes(routes!(handlers::hide_activity_suggestion))
         .routes(routes!(handlers::list_notes, handlers::create_note))
         .routes(routes!(handlers::update_note, handlers::delete_note))
         .routes(routes!(handlers::create_comment))

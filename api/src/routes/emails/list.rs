@@ -7,7 +7,8 @@ use super::schemas::{
 };
 use super::sql::{
     Arg, Mailbox, Sql, client_read_at, company_scope, customer_name_by_email, list_search,
-    normalize_search_term, normalized, receiver_condition, sender_condition, unread_incoming,
+    normalize_search_term, normalized, receiver_condition, sender_condition, thread_in_inbox,
+    unread_incoming,
 };
 use sqlx::MySqlPool;
 
@@ -217,9 +218,11 @@ pub async fn folder_counts(
 ) -> Result<FolderCounts, sqlx::Error> {
     let scope = company_scope("e", mailbox.company_id);
     let unread = unread_incoming("e", mailbox);
+    let in_inbox = thread_in_inbox("e", mailbox);
     let mut args: Vec<Arg> = vec![mailbox.company_id.into()];
     args.extend(scope.args.clone());
     args.extend(unread.args);
+    args.extend(in_inbox.args);
     let inbox_unread: i64 = Sql::new(
         format!(
             "SELECT COUNT(DISTINCT e.thread_id) FROM emails e
@@ -230,9 +233,10 @@ pub async fn folder_counts(
                   AND td.deal_id IS NOT NULL AND (td.company_id = ? OR td.company_id IS NULL))
              ) AND d.deleted_at IS NULL
              WHERE e.deleted_at IS NULL AND e.is_draft = 0 AND e.thread_id IS NOT NULL
-               AND e.employee_read_at IS NULL AND {scope} AND {unread}",
+               AND e.employee_read_at IS NULL AND {scope} AND {unread} AND {in_inbox}",
             scope = scope.sql,
-            unread = unread.sql
+            unread = unread.sql,
+            in_inbox = in_inbox.sql
         ),
         args,
     )

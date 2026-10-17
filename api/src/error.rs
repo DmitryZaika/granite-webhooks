@@ -45,8 +45,21 @@ pub enum ApiError {
     Unavailable(String),
 }
 
+/// What actually failed, kept on the response for the 5xx reporting in
+/// `lib.rs` (the body only says e.g. `database error`).
+#[derive(Clone, Debug)]
+pub struct ErrorDetail {
+    /// `ApiError` or `Panic`: the exception type in `PostHog`.
+    pub kind: &'static str,
+    pub message: String,
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let detail = ErrorDetail {
+            kind: "ApiError",
+            message: format!("{self:?}"),
+        };
         let status = match &self {
             Self::Unauthorized | Self::Unauthenticated(_) => StatusCode::UNAUTHORIZED,
             Self::Forbidden | Self::Denied(_) => StatusCode::FORBIDDEN,
@@ -72,7 +85,9 @@ impl IntoResponse for ApiError {
         let body = ErrorBody {
             error: self.to_string(),
         };
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        response.extensions_mut().insert(detail);
+        response
     }
 }
 
@@ -85,3 +100,17 @@ pub struct ErrorBody {
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_response_keeps_what_failed_for_reporting() {
+        let response = ApiError::Internal("quote half saved".into()).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let detail = response.extensions().get::<ErrorDetail>().expect("detail");
+        assert_eq!(detail.kind, "ApiError");
+        assert_eq!(detail.message, r#"Internal("quote half saved")"#);
+    }
+}

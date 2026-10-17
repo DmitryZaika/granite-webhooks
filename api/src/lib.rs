@@ -99,6 +99,46 @@ async fn check_origin(State(state): State<AppState>, request: Request, next: Nex
     next.run(request).await
 }
 
+/// Every 5xx the API answers goes to `PostHog`'s Error Tracking with what
+/// failed. The relay is left out: its failures are `PostHog`'s own.
+async fn report_server_errors(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let response = next.run(request).await;
+    if response.status().is_server_error() && !path.starts_with("/ingest/") {
+        posthog::capture_server_error(
+            &state.telephony_http,
+            method.as_str(),
+            &path,
+            response.status().as_u16(),
+            response.extensions().get::<error::ErrorDetail>(),
+        )
+        .await;
+    }
+    response
+}
+
+/// A handler that panicked answers 500 like any internal error, and the
+/// panic message is kept for `report_server_errors`.
+fn panic_response(panic: Box<dyn std::any::Any + Send + 'static>) -> Response {
+    let message = panic
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic.downcast_ref::<&str>().map(|text| (*text).to_owned()))
+        .unwrap_or_else(|| "panic with no message".into());
+    lambda_http::tracing::error!(%message, "handler panicked");
+    let mut response = error::ApiError::Internal("internal error".into()).into_response();
+    response.extensions_mut().insert(error::ErrorDetail {
+        kind: "Panic",
+        message,
+    });
+    response
+}
+
 pub fn app(state: AppState) -> Router {
     let cors = state.cors_layer();
     let (routes, spec) = openapi::router_with_spec();
@@ -114,7 +154,38 @@ pub fn app(state: AppState) -> Router {
             axum::routing::any(analytics_proxy::relay),
         )
         .merge(routes)
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+            panic_response,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            report_server_errors,
+        ))
         .layer(middleware::from_fn_with_state(state.clone(), check_origin))
         .layer(cors)
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panic_answers_500_and_keeps_its_message() {
+        let response = panic_response(Box::new("quote has no slabs"));
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let detail = response
+            .extensions()
+            .get::<error::ErrorDetail>()
+            .expect("detail");
+        assert_eq!(detail.kind, "Panic");
+        assert_eq!(detail.message, "quote has no slabs");
+
+        let response = panic_response(Box::new(String::from("index out of bounds")));
+        let detail = response
+            .extensions()
+            .get::<error::ErrorDetail>()
+            .expect("detail");
+        assert_eq!(detail.message, "index out of bounds");
+    }
 }

@@ -441,18 +441,26 @@ pub async fn find_activity(
 pub async fn activity_suggestions(
     pool: &MySqlPool,
     company_id: i32,
+    user_id: i32,
     user_name: &str,
 ) -> Result<Vec<ActivitySuggestion>, sqlx::Error> {
+    // Names the caller removed from the list are never suggested again.
     sqlx::query_as(
-        "SELECT TRIM(name) AS name, COUNT(*) AS uses
-         FROM deal_activities
-         WHERE company_id = ? AND created_by = ? AND deleted_at IS NULL AND TRIM(name) <> ''
-         GROUP BY TRIM(name)
-         ORDER BY uses DESC, MAX(created_at) DESC, name
+        "SELECT TRIM(a.name) AS name, COUNT(*) AS uses
+         FROM deal_activities a
+         WHERE a.company_id = ? AND a.created_by = ? AND a.deleted_at IS NULL
+           AND TRIM(a.name) <> ''
+           AND NOT EXISTS (
+             SELECT 1 FROM deal_activity_suggestion_hides h
+             WHERE h.company_id = a.company_id AND h.user_id = ? AND h.name = TRIM(a.name)
+           )
+         GROUP BY TRIM(a.name)
+         ORDER BY uses DESC, MAX(a.created_at) DESC, name
          LIMIT 50",
     )
     .bind(company_id)
     .bind(user_name)
+    .bind(user_id)
     .fetch_all(pool)
     .await
 }

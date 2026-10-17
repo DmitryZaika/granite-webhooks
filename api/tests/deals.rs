@@ -937,6 +937,45 @@ async fn activity_suggestions_most_used_first(pool: MySqlPool) {
     );
 }
 
+#[test_db::test(seed)]
+async fn hidden_activity_suggestions_never_come_back(pool: MySqlPool) {
+    let app = server(pool.clone());
+    let names = |list: Value| -> Vec<String> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // Dina hides "Call back" (stray spaces trimmed; hiding it twice is fine).
+    for _ in 0..2 {
+        app.post("/v1/deal-activities/suggestions/hidden")
+            .with_session(sessions::DEALER)
+            .json(&json!({ "name": " Call back " }))
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    let list = names(get(&pool, "/v1/deal-activities/suggestions", sessions::DEALER).await);
+    assert_eq!(list.len(), 3);
+    assert!(!list.contains(&"Call back".to_string()));
+    // Using the name again does not bring it back.
+    sqlx::query(
+        "INSERT INTO deal_activities (deal_id, company_id, name, created_by)
+         VALUES (8600, 100, 'Call back', 'Dina Dealer')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let list = names(get(&pool, "/v1/deal-activities/suggestions", sessions::DEALER).await);
+    assert!(!list.contains(&"Call back".to_string()));
+    // No name: nothing to hide.
+    app.post("/v1/deal-activities/suggestions/hidden")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "name": "  " }))
+        .await
+        .assert_status_bad_request();
+}
+
 // ---- notes ---------------------------------------------------------------------------
 
 #[test_db::test(seed)]

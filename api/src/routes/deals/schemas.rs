@@ -393,6 +393,13 @@ pub struct ActivitySuggestion {
     pub uses: i64,
 }
 
+/// Body of `POST /v1/deal-activities/suggestions/hidden`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SuggestionHide {
+    /// The suggested name to stop suggesting (up to 255 characters).
+    pub name: String,
+}
+
 /// A comment under a note.
 #[derive(Debug, Clone, Serialize, FromRow, ToSchema)]
 pub struct NoteComment {

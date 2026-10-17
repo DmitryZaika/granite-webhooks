@@ -3,35 +3,31 @@
 //! One rule for every AI-written SMS and email (the AI Reply button, inline
 //! autocomplete, follow-ups): greet by name only when we have never written
 //! with this customer, or the newest message with them — SMS or email,
-//! theirs or ours — is more than [`GREET_AFTER_DAYS`] days old. Otherwise
-//! the conversation is still going: no greeting and no name, the message
-//! starts with its content. Either way the name appears at most once.
-//!
-//! The gap is counted in hours from now, so it does not depend on a
-//! calendar day's time zone.
+//! theirs or ours — is from an earlier store-local (Indianapolis) day.
+//! Otherwise the conversation is still going today: no greeting and no
+//! name, the message starts with its content. Either way the name appears
+//! at most once.
 
 use super::crm_hold::parse_followup_timeline_at;
 use super::dates::Instant;
 use super::prompt::FollowupTimelineMessage;
+use super::store_time::store_zoned_parts;
 use chrono::Duration;
-
-/// A gap longer than this many days reopens the conversation with a greeting.
-pub const GREET_AFTER_DAYS: i64 = 60;
 
 /// How recent the conversation with this customer is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConversationRecency {
     /// No dated SMS or email with them yet: greet by name.
     NoHistory,
-    /// Still going: no greeting, no name.
+    /// Still going today: no greeting, no name.
     Continuing {
         /// Since the newest message, either way, on any channel.
         minutes_since_last: i64,
     },
-    /// Picked up after more than [`GREET_AFTER_DAYS`] days: greet by name.
+    /// Newest message is from an earlier store day: greet by name.
     Reopening {
-        /// Whole days since the newest message.
-        days_since_last: i64,
+        /// Since the newest message, either way, on any channel.
+        minutes_since_last: i64,
     },
 }
 
@@ -56,9 +52,11 @@ pub fn conversation_recency(
     };
     // A message stamped a little ahead of the server clock is "just now".
     let since = (now - last).max(Duration::zero());
-    if since > Duration::days(GREET_AFTER_DAYS) {
+    let (last_day, today) = (store_zoned_parts(last), store_zoned_parts(now));
+    let same_day = (last_day.year, last_day.month, last_day.day) == (today.year, today.month, today.day);
+    if last < now && !same_day {
         ConversationRecency::Reopening {
-            days_since_last: since.num_days(),
+            minutes_since_last: since.num_minutes(),
         }
     } else {
         ConversationRecency::Continuing {
@@ -82,11 +80,12 @@ pub fn describe_ago(minutes: i64) -> String {
 pub fn greeting_instruction(recency: ConversationRecency) -> String {
     match recency {
         ConversationRecency::Continuing { minutes_since_last } => format!(
-            "GREETING: NONE. This conversation is ongoing: the last message with this customer (SMS or email, either side) was {}. Do NOT open with a greeting (\"Hi\", \"Hey\", \"Hello\", \"Good morning\", \"Dear\") and do NOT use the customer's name anywhere in the message. Start straight with the content, like the next text in a running thread. This applies to email too, even when the earlier messages were texts.",
+            "GREETING: NONE. This conversation is ongoing today: the last message with this customer (SMS or email, either side) was {}. Do NOT open with a greeting (\"Hi\", \"Hey\", \"Hello\", \"Good morning\", \"Dear\") and do NOT use the customer's name anywhere in the message. Start straight with the content, like the next text in a running thread. This applies to email too, even when the earlier messages were texts.",
             describe_ago(minutes_since_last)
         ),
-        ConversationRecency::Reopening { days_since_last } => format!(
-            "GREETING: BY NAME. The last message with this customer was {days_since_last} days ago, so open with a short greeting and their first name (\"Hi Ann,\"), then get straight to the point. Use their name only that once. Never \"Hello <Full Name>\" or \"Dear\"."
+        ConversationRecency::Reopening { minutes_since_last } => format!(
+            "GREETING: BY NAME. The last message with this customer was {}, on an earlier day, so open with a short greeting and their first name (\"Hi Ann,\"), then get straight to the point. Use their name only that once. Never \"Hello <Full Name>\" or \"Dear\".",
+            describe_ago(minutes_since_last)
         ),
         ConversationRecency::NoHistory => "GREETING: BY NAME. No earlier SMS or email with this customer, so open with a short greeting and their first name (\"Hi Ann,\"). Use their name only that once.".into(),
     }
@@ -157,56 +156,50 @@ mod tests {
     }
 
     #[test]
-    fn any_message_within_sixty_days_continues() {
+    fn only_a_message_from_today_continues() {
         // Either side and either channel counts; the newest message decides.
+        // The store day is Indianapolis (UTC-4 in October).
         for last in [
-            message("2026-08-16 09:00", S, I),
-            message("2026-08-16 09:00", E, O),
+            message("2026-10-14 13:00", S, I),
+            message("2026-10-14 13:00", E, O),
         ] {
             let timeline = [message("2026-01-02 10:00", S, O), last];
-            // 59 days later: still the same conversation.
-            assert!(conversation_recency(&timeline, at("2026-10-14T09:00:00Z")).is_continuing());
-            // Exactly 60 days is not more than 60.
-            assert!(conversation_recency(&timeline, at("2026-10-15T09:00:00Z")).is_continuing());
+            // 11:59 PM the same store day: still today.
+            assert!(conversation_recency(&timeline, at("2026-10-15T03:59:00Z")).is_continuing());
+            // Just after store midnight: a new day, greet.
             assert_eq!(
-                conversation_recency(&timeline, at("2026-10-15T09:01:00Z")),
+                conversation_recency(&timeline, at("2026-10-15T04:01:00Z")),
                 ConversationRecency::Reopening {
-                    days_since_last: 60
+                    minutes_since_last: 901
                 }
             );
         }
     }
 
     #[test]
-    fn last_evening_is_not_a_new_day_greeting() {
-        // 9:30 PM in Indiana is 01:30 UTC the next day: the morning after is
-        // another UTC and store date but the same conversation.
+    fn last_evening_is_a_new_day_greeting() {
+        // 9:30 PM in Indiana is 01:30 UTC the next day; the next morning greets.
         let timeline = [message("2026-10-14 01:30", S, I)];
         let recency = conversation_recency(&timeline, at("2026-10-14T13:00:00Z"));
         assert_eq!(
             recency,
-            ConversationRecency::Continuing {
+            ConversationRecency::Reopening {
                 minutes_since_last: 690
             }
         );
-        assert!(greeting_instruction(recency).contains("about 11 hours ago"));
+        let line = greeting_instruction(recency);
+        assert!(line.starts_with("GREETING: BY NAME") && line.contains("about 11 hours ago"));
     }
 
     #[test]
-    fn a_long_silence_greets_by_name_once() {
+    fn a_few_days_later_greets_by_name_once() {
         let timeline = [
-            message("2026-07-01 18:00", S, I),
-            message("2026-07-01 18:25", S, O),
+            message("2026-10-11 18:00", S, I),
+            message("2026-10-11 18:25", S, O),
         ];
         let recency = conversation_recency(&timeline, at("2026-10-14T15:00:00Z"));
-        assert_eq!(
-            recency,
-            ConversationRecency::Reopening {
-                days_since_last: 104
-            }
-        );
         let line = greeting_instruction(recency);
-        assert!(line.starts_with("GREETING: BY NAME") && line.contains("104 days ago"));
+        assert!(line.starts_with("GREETING: BY NAME") && line.contains("2 days ago"));
         assert!(line.contains("Use their name only that once"));
     }
 

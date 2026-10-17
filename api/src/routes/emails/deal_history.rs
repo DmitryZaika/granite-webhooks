@@ -73,6 +73,12 @@ const SELECT: &str =
   FROM emails e
   LEFT JOIN users u_sender ON u_sender.id = e.sender_user_id";
 
+/// Messages the customer is a participant of. Only those messages, not their
+/// whole threads: a thread that also holds another customer's mail (a reused
+/// thread id, a mis-threaded reply) would otherwise show all of it.
+pub(crate) const CUSTOMER_PARTICIPANT_EMAILS: &str =
+    "e.id IN (SELECT ep.email_id FROM email_participants ep WHERE ep.customer_id = ?)";
+
 pub(crate) fn history_sql(filter: &str, args: Vec<Arg>) -> Sql {
     Sql::new(
         format!(
@@ -103,9 +109,7 @@ async fn deal_thread_emails(
     .fetch_all(pool)
     .await?;
     let by_customer: Vec<HistoryEmail> = history_sql(
-        "e.thread_id IN (SELECT DISTINCT e2.thread_id FROM emails e2
-           JOIN email_participants ep ON ep.email_id = e2.id
-           WHERE ep.customer_id = ? AND e2.thread_id IS NOT NULL AND e2.deleted_at IS NULL)",
+        CUSTOMER_PARTICIPANT_EMAILS,
         vec![company_id.into(), customer_id.into()],
     )
     .query_as()

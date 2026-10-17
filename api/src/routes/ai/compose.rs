@@ -59,7 +59,8 @@ Rules:
 - Stay consistent with the conversation and the rep's tone. Never invent prices, dates, or facts not in the context.
 - When the rep is about to share the inventory / stones page, use the exact customer page URL from CUSTOMER / PROJECT INFO.
 - When the message needs the rep's name, the rep's phone number or the company address, use them from SALES REP and COMPANY.
-- If the DRAFT is empty, suggest how the rep's next message should start: one short sentence (max ~20 words) that fits where the conversation is now. Follow the GREETING line: with GREETING: NONE (any SMS or email with them in the last 60 days) never start with "Hi", "Hey" or "Hello" and never use the customer's name; start with the content.
+- If the DRAFT is empty, suggest how the rep's next message should start: one short sentence (max ~20 words) that fits where the conversation is now. Follow the GREETING line: with GREETING: NONE (an SMS or email with them earlier today) never start with "Hi", "Hey" or "Hello" and never use the customer's name; start with the content.
+- Never repeat or rephrase something the rep already said in the CONVERSATION. If the rep's last message is still unanswered, don't ask its question again: add something new (a different angle, an offer, a next step) or return an empty string.
 - Use the customer's name at most once in a message. Write plainly like the rep: no "I hope this finds you well", "Just following up", "I wanted to reach out", no em dashes.
 - If the DRAFT is empty and the customer has not written to us yet, suggest the whole message (1–3 short sentences) built from CUSTOMER / PROJECT INFO: who the rep is and the company (unless already said on this channel), what the customer asked for, and one question that moves the project forward.
 - If nothing useful fits, return an empty string.
@@ -950,9 +951,9 @@ mod tests {
         };
         let context = ComposeContext {
             profile: String::new(),
-            // The customer texted last night; the rep now starts an email.
+            // The customer texted this morning; the rep now starts an email.
             timeline: vec![message(
-                "2026-10-13 01:30",
+                "2026-10-13 13:30",
                 FollowupChannel::Sms,
                 Direction::Inbound,
             )],
@@ -970,22 +971,13 @@ mod tests {
         );
         assert!(prompt.contains("GREETING: NONE"));
         assert!(prompt.ends_with("DRAFT: (empty — suggest how the next message starts)"));
-        // Weeks later still no greeting; after 60 days, greet by name. A
-        // typed draft gets no rule.
-        let weeks = build_user_prompt(
-            FollowupChannel::Sms,
-            "Dema",
-            &context,
-            "",
-            "2026-11-02 15:00",
-        );
-        assert!(weeks.contains("GREETING: NONE"));
+        // The next day, greet by name. A typed draft gets no rule.
         let later = build_user_prompt(
             FollowupChannel::Sms,
             "Dema",
             &context,
             "",
-            "2027-01-02 15:00",
+            "2026-10-14 15:00",
         );
         assert!(later.contains("GREETING: BY NAME"));
         let typing = build_user_prompt(

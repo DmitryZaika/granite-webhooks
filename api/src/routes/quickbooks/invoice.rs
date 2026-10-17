@@ -63,6 +63,34 @@ fn one_line_address(value: &Value) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
+/// The bill-to lines after a "Project Address:" line, on one line.
+fn bill_to_project_address(value: &Value) -> Option<String> {
+    let lines: Vec<String> = ["Line1", "Line2", "Line3", "Line4", "Line5"]
+        .iter()
+        .filter_map(|key| text(&value[*key]))
+        .collect();
+    let at = lines
+        .iter()
+        .position(|line| line.trim().to_lowercase().starts_with("project address"))?;
+    let inline = lines[at]
+        .trim()
+        .get("project address".len()..)
+        .unwrap_or("")
+        .trim_start_matches(':')
+        .to_string();
+    let parts: Vec<String> = std::iter::once(inline)
+        .chain(lines[at + 1..].iter().cloned())
+        .chain(
+            ["City", "CountrySubDivisionCode", "PostalCode"]
+                .iter()
+                .filter_map(|key| text(&value[*key])),
+        )
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 /// One `Invoice` row of a query.
 pub fn summary(value: &Value) -> Option<InvoiceSummary> {
     Some(InvoiceSummary {
@@ -73,7 +101,8 @@ pub fn summary(value: &Value) -> Option<InvoiceSummary> {
         total_amt: number(&value["TotalAmt"]),
         balance: number(&value["Balance"]),
         currency: text(&value["CurrencyRef"]["value"]),
-        project_address: one_line_address(&value["ShipAddr"]),
+        project_address: one_line_address(&value["ShipAddr"])
+            .or_else(|| bill_to_project_address(&value["BillAddr"])),
         last_updated: text(&value["MetaData"]["LastUpdatedTime"]),
     })
 }

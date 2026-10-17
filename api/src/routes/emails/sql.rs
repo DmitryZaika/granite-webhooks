@@ -149,13 +149,15 @@ pub fn company_scope(alias: &str, company_id: i32) -> Sql {
 }
 
 /// The inbox addressee test (list, trash): the receiver columns or a to/cc
-/// participant row of this user.
+/// participant row of this user. `receiver_user_id` covers BCC'd copies, whose
+/// headers never name the user.
 pub fn receiver_condition(alias: &str, mailbox: &Mailbox) -> Sql {
     let receiver = normalized(&format!("{alias}.receiver_email"));
     Sql::new(
         format!(
             "(
-      {receiver} = ?
+      {alias}.receiver_user_id = ?
+      OR {receiver} = ?
       OR ({alias}.receiver_email NOT LIKE '%<%' AND LOWER(TRIM({alias}.receiver_email)) = ?)
       OR {alias}.receiver_email LIKE ?
       OR {alias}.id IN (
@@ -165,12 +167,31 @@ pub fn receiver_condition(alias: &str, mailbox: &Mailbox) -> Sql {
     )"
         ),
         vec![
+            mailbox.user_id.into(),
             mailbox.email.clone().into(),
             mailbox.email.clone().into(),
             mailbox.like().into(),
             mailbox.user_id.into(),
             mailbox.email.clone().into(),
         ],
+    )
+}
+
+/// The thread is in this user's Inbox list: one of its messages is addressed
+/// to them. Unread counts need it, or mail on their deal sent to another
+/// address counts without ever showing in their Inbox.
+pub fn thread_in_inbox(alias: &str, mailbox: &Mailbox) -> Sql {
+    let scope = company_scope("ib", mailbox.company_id);
+    let receiver = receiver_condition("ib", mailbox);
+    let mut args = scope.args;
+    args.extend(receiver.args);
+    Sql::new(
+        format!(
+            "EXISTS (SELECT 1 FROM emails ib WHERE ib.thread_id = {alias}.thread_id
+      AND ib.deleted_at IS NULL AND ib.is_draft = 0 AND {} AND {})",
+            scope.sql, receiver.sql
+        ),
+        args,
     )
 }
 

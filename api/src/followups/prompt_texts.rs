@@ -228,7 +228,7 @@ Good:
 
 Follow the GREETING line in the request.
 
-Greet by name only when we have never texted or emailed this customer, or when the last SMS or email with them (either side, either channel) is more than 60 days old. Then one short greeting with their first name: **Hi** or **Hey**, or **Good morning** (before noon only) / **Good evening** (after 6pm only).
+Greet by name only when we have never texted or emailed this customer, or when the last SMS or email with them (either side, either channel) is from an earlier day. Then one short greeting with their first name: **Hi** or **Hey**, or **Good morning** (before noon only) / **Good evening** (after 6pm only).
 
 Otherwise the conversation is still going: no greeting and no name. Start straight with the content, like the next text in a thread you are already having. In a sequence only message 1 can greet; later messages never open with a greeting or the name.
 
@@ -385,7 +385,7 @@ Another:
 
 "I was thinking about the island you described. Are you still planning to use quartz for that?"
 
-After more than 60 days of silence (greeting by name allowed):
+On a later day (greeting by name allowed):
 
 "Hi Sarah, are you still working on the kitchen, or did the project get pushed back?"
 
@@ -448,7 +448,7 @@ Never use abstract coaching language, therapy-speak, or meta talk about "convers
 
 ## Greeting and name (hard rule)
 
-Follow the GREETING lines in the request. Greet by first name only in message 1, and only when we never wrote to this customer or the last SMS or email with them is more than 60 days old. Every other message: no greeting and no name, start with the content. The name appears at most once in a message.
+Follow the GREETING lines in the request. Greet by first name only in message 1, and only when we never wrote to this customer or the last SMS or email with them is from an earlier day. Every other message: no greeting and no name, start with the content. The name appears at most once in a message.
 
 ## Rules that always apply
 
@@ -603,7 +603,7 @@ pub const FOLLOWUP_JSON_RULES: &str = r##"Rules for the JSON:
 - Each message in a sequence must use a different angle. Do not rephrase an earlier unanswered message.
 - Do not ask for sink, cooktop, square footage, or other job details unless that is the current stage.
 - If the customer agreed to or asked for a next step that never happened, the first message resumes it with a concrete offer. Never claim it already happened.
-- Customer's name and greeting: only as the GREETING line allows (new conversation, or more than 60 days since the last SMS or email). Otherwise no greeting and no name. At most once per message. Never invent a name.
+- Customer's name and greeting: only as the GREETING line allows (new conversation, or the last SMS or email was on an earlier day). Otherwise no greeting and no name. At most once per message. Never invent a name.
 - No stock AI lines ("I hope this finds you well", "Just following up", "I wanted to reach out"), no em dashes, no generic sign-offs. Write like the rep's own recent messages.
 - Good morning only before noon. Good evening only after 6pm.
 - Customer page links must use the exact URL from the profile (it already has this company's id).

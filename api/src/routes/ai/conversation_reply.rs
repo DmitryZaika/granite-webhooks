@@ -49,8 +49,8 @@ PRIMARY TASK — write the next message this conversation itself calls for:
 4. Move it forward with ONE natural question or one concrete next step.
 
 ## Greeting and the customer's name: obey the GREETING line in the request
-- GREETING: NONE → the conversation is ongoing (any SMS or email with them in the last 60 days). No greeting ("Hi", "Hey", "Hello", "Good morning", "Dear") and no customer name anywhere in the message, on SMS and email alike. Start straight with the content, like the next text in a running thread.
-- GREETING: BY NAME → a brand-new conversation, or the last message was more than 60 days ago: open with a short greeting and their first name ("Hi Ann,"). Never "Hello <Full Name>" or "Dear".
+- GREETING: NONE → the conversation is ongoing (an SMS or email with them earlier today). No greeting ("Hi", "Hey", "Hello", "Good morning", "Dear") and no customer name anywhere in the message, on SMS and email alike. Start straight with the content, like the next text in a running thread.
+- GREETING: BY NAME → a brand-new conversation, or the last message was on an earlier day: open with a short greeting and their first name ("Hi Ann,"). Never "Hello <Full Name>" or "Dear".
 - The customer's name appears at most once in a message.
 - Never add a greeting just because the channel is email.
 
@@ -563,7 +563,7 @@ async fn load_extras(
 /// and the rep's own recent messages: a fast reply, a follow-up on the open
 /// topic, or a custom draft (and revisions of it). The draft greets the
 /// customer by name only in a new conversation or when the last SMS or email
-/// with them is more than 60 days old; otherwise it has no greeting and no
+/// with them is from an earlier day; otherwise it has no greeting and no
 /// name. Takes several seconds (a larger model).
 #[utoipa::path(
     post,
@@ -850,9 +850,9 @@ mod tests {
     }
 
     #[test]
-    fn a_recent_message_on_any_channel_skips_the_greeting() {
-        // Yesterday evening is a different calendar day, still no greeting.
-        for at in ["2026-10-13 09:00", "2026-10-12 22:30"] {
+    fn a_message_from_today_on_any_channel_skips_the_greeting() {
+        // Earlier today (5:00 AM in Indianapolis): no greeting.
+        for at in ["2026-10-13 09:00"] {
             let timeline = vec![message(
                 at,
                 Direction::Inbound,
@@ -886,14 +886,15 @@ mod tests {
             now,
         );
         assert!(email.contains("GREETING: NONE") && email.contains("20 minutes ago"));
-        // Lenora's last message was 48 days ago: still no greeting or name.
+        // Lenora's last message was 48 days ago: greet by name.
         assert!(
             prompt(&lenora(), ReplyMode::FastReply, &CustomDraft::default())
-                .contains("GREETING: NONE")
+                .contains("GREETING: BY NAME")
         );
-        // Over 60 days, or no history at all: greet by name.
+        // Yesterday evening (6:30 PM in Indianapolis), or no history at all:
+        // greet by name.
         let old = vec![message(
-            "2026-08-01 09:00",
+            "2026-10-12 22:30",
             Direction::Inbound,
             "Can you send the price for the island top please?",
         )];

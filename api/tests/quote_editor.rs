@@ -392,6 +392,55 @@ async fn quotes_are_sold_copied_and_printed(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_copy_on_another_list_gets_that_lists_extras(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    // A second list: Cabinets on every new quote, no Haul away.
+    let res = server
+        .post("/v1/quote-price-lists")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Cabinets" }))
+        .await;
+    let cabinets = res.json::<Value>()["id"].as_i64().unwrap();
+    let info = json!({
+        "units": "in", "currency": "$", "expirationDays": 14, "lineItemPriceRounding": 2,
+        "arrProducts": [], "arrSinkModels": [],
+        "arrOtherItems": [{ "name": "Cabinets", "alwaysIncludeOnQuote": 1, "arrOptions": [{ "name": "Shaker", "flatPrice": 0 }] }],
+    });
+    sqlx::query(
+        "UPDATE price_list_revisions r JOIN price_lists pl ON pl.current_revision_id = r.id
+            SET r.info_json = ? WHERE pl.id = ?",
+    )
+    .bind(info.to_string())
+    .bind(cabinets)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Starts on Retail with Haul away.
+    let id = create(&server, json!({ "customer_id": 1000 })).await;
+    let res = server
+        .post(&format!("/v1/quotes/{id}/copies"))
+        .with_session(sessions::REP)
+        .json(&json!({ "quote_name": "Copy", "copy_drawing": true, "price_list_id": cabinets }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let copy = res.json::<Value>()["id"].as_i64().unwrap();
+    let copied = server
+        .get(&format!("/v1/quotes/{copy}"))
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>();
+    assert_eq!(copied["quote"]["price_list_name"], "Cabinets");
+    let names: Vec<&str> = copied["doc"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Cabinets"]);
+}
+
+#[test_db::test(seed)]
 async fn emailing_sends_the_link_and_moves_the_deal(pool: MySqlPool) {
     let (server, sent) = server(&pool).await;
     price_list(&server, &pool).await;

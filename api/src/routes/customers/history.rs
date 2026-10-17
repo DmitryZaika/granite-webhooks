@@ -7,7 +7,7 @@
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::routes::emails::deal_history::{
-    HistoryEmail, address_emails, history_sql, merge, record_missing_sends, with_thread_attachments,
+    CUSTOMER_PARTICIPANT_EMAILS, HistoryEmail, address_emails, history_sql, merge, record_missing_sends, with_thread_attachments,
 };
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
@@ -390,7 +390,8 @@ async fn lifecycle(pool: &MySqlPool, customer_id: i32) -> Result<Vec<LifecycleRo
 }
 
 /// `getCustomerHistoryEmailsWithReads`: mail with the customer's addresses,
-/// then the threads the customer took part in.
+/// then the messages the customer took part in (not their whole threads: one
+/// message in someone else's thread must not pull that customer's mail in).
 pub async fn customer_emails(
     pool: &MySqlPool,
     company_id: i32,
@@ -410,9 +411,7 @@ pub async fn customer_emails(
         .collect();
     let by_address = address_emails(pool, company_id, &addresses).await?;
     let by_participant: Vec<HistoryEmail> = history_sql(
-        "e.thread_id IN (SELECT DISTINCT e2.thread_id FROM emails e2
-           JOIN email_participants ep ON ep.email_id = e2.id
-           WHERE ep.customer_id = ? AND e2.thread_id IS NOT NULL AND e2.deleted_at IS NULL)",
+        CUSTOMER_PARTICIPANT_EMAILS,
         vec![company_id.into(), customer_id.into()],
     )
     .query_as()

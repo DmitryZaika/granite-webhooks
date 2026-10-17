@@ -3,7 +3,7 @@ use super::schemas::{
     Activity, ActivityInput, ActivityPatch, ActivitySuggestion, BoardDeal, BoardQuery, BoardScope,
     ByCustomerQuery, ContentInput, CustomerDeal, DealCreate, DealCreated, DealDetail, DealGroup,
     DealList, DealPatch, DealStatus, GroupsQuery, ListsQuery, Note, NotePatch, OutcomeBody,
-    Recipient, RecipientsQuery, ReorderBody, StageVisit,
+    Recipient, RecipientsQuery, ReorderBody, StageVisit, SuggestionHide,
 };
 use super::service::{self, Notification};
 use crate::auth::EmployeeUser;
@@ -1092,8 +1092,53 @@ pub async fn activity_suggestions(
         return Ok(Json(Vec::new()));
     };
     Ok(Json(
-        queries::activity_suggestions(&state.pool, user.company_id, name).await?,
+        queries::activity_suggestions(&state.pool, user.company_id, user.id, name).await?,
     ))
+}
+
+/// Stop suggesting an activity name to the caller
+///
+/// Removes it from the caller's suggestions for good, however often they use
+/// it after. Hiding a hidden name again is a no-op.
+#[utoipa::path(
+    post,
+    path = "/v1/deal-activities/suggestions/hidden",
+    operation_id = "hide_activity_suggestion",
+    tag = "deals",
+    request_body = SuggestionHide,
+    responses(
+        (status = 204, description = "Hidden"),
+        (status = 400, description = "Empty or too long name, malformed body", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn hide_activity_suggestion(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    JsonBody(input): JsonBody<SuggestionHide>,
+) -> ApiResult<StatusCode> {
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("Name is required".to_string()));
+    }
+    if name.chars().count() > 255 {
+        return Err(ApiError::BadRequest(
+            "Name must be 255 characters or less".to_string(),
+        ));
+    }
+    sqlx::query(
+        "INSERT IGNORE INTO deal_activity_suggestion_hides (company_id, user_id, name)
+         VALUES (?, ?, ?)",
+    )
+    .bind(user.company_id)
+    .bind(user.id)
+    .bind(name)
+    .execute(&state.pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn note_text(content: &str, max: usize, what: &str) -> ApiResult<String> {

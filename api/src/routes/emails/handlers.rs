@@ -5,7 +5,8 @@ use super::schemas::{
     SuggestScope, SuggestionRow, ThreadDetail, ThreadIds, ThreadQuery, UnreadCount,
 };
 use super::sql::{
-    Arg, Mailbox, Sql, company_scope, own_threads, received_message, unread_incoming,
+    Arg, Mailbox, Sql, company_scope, own_threads, received_message, thread_in_inbox,
+    unread_incoming,
 };
 use super::thread::{readable, thread_detail};
 use crate::auth::EmployeeUser;
@@ -153,9 +154,11 @@ pub async fn unread(
     let mailbox = mailbox(&user);
     let scope = company_scope("e", user.company_id);
     let incoming = unread_incoming("e", &mailbox);
+    let in_inbox = thread_in_inbox("e", &mailbox);
     let mut args: Vec<Arg> = vec![user.company_id.into()];
     args.extend(scope.args);
     args.extend(incoming.args);
+    args.extend(in_inbox.args);
     let (count, latest): (i64, Option<i64>) = Sql::new(
         format!(
             "SELECT COUNT(DISTINCT e.thread_id), CAST(MAX(e.id) AS SIGNED) FROM emails e
@@ -166,8 +169,8 @@ pub async fn unread(
                   AND (td.company_id = ? OR td.company_id IS NULL))
              ) AND d.deleted_at IS NULL
              WHERE e.deleted_at IS NULL AND e.is_draft = 0 AND e.thread_id IS NOT NULL
-               AND e.employee_read_at IS NULL AND {} AND {}",
-            scope.sql, incoming.sql
+               AND e.employee_read_at IS NULL AND {} AND {} AND {}",
+            scope.sql, incoming.sql, in_inbox.sql
         ),
         args,
     )

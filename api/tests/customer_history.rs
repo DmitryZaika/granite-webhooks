@@ -91,3 +91,32 @@ async fn the_mailbox_customer_has_email_history(pool: MySqlPool) {
         .collect();
     assert!(subjects.contains(&"Re: Kitchen quote"), "{subjects:?}");
 }
+
+#[test_db::test(seed)]
+async fn another_customers_mail_in_a_shared_thread_is_not_shown(pool: MySqlPool) {
+    // One thread holds a message to Nina (8695) and one to somebody else.
+    sqlx::query(
+        "INSERT INTO emails (id, subject, body, sent_at, message_id, thread_id, sender_user_id,
+           sender_email, receiver_email, company_id, is_draft) VALUES
+         (98001, 'Invoice for Lindy', 'b', '2026-04-02 10:00:00', '<m98001@acme.test>',
+          'bbbbbbbb-2222-4000-8000-000000000001', 100, 'rep@acme.test', 'lindy@elsewhere.test', 100, 0),
+         (98002, 'Quote for Nina', 'b', '2026-04-02 11:00:00', '<m98002@acme.test>',
+          'bbbbbbbb-2222-4000-8000-000000000001', 100, 'rep@acme.test', 'nina@example.com', 100, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO email_participants (email_id, type, email, customer_id, position) VALUES
+         (98001, 'to', 'lindy@elsewhere.test', NULL, 0),
+         (98002, 'to', 'nina@example.com', 8695, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let body: Value = history(&pool, sessions::REP, 8695).await.json();
+    let emails = ids(&body["emails"]);
+    assert!(emails.contains(&98002), "{emails:?}");
+    assert!(!emails.contains(&98001), "{emails:?}");
+}

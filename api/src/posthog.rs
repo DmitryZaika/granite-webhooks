@@ -27,3 +27,32 @@ pub async fn capture(http: &reqwest::Client, event: &str, distinct_id: &str, pro
         lambda_http::tracing::warn!(error = %err.without_url(), event, "PostHog event not sent");
     }
 }
+
+/// A request the API answered with a 5xx, as an `$exception` in Error
+/// Tracking next to the browser's. `detail` is what failed, when known.
+pub async fn capture_server_error(
+    http: &reqwest::Client,
+    method: &str,
+    path: &str,
+    status: u16,
+    detail: Option<&crate::error::ErrorDetail>,
+) {
+    let (kind, message) = detail.map_or_else(
+        || ("HttpError", format!("{method} {path} answered {status}")),
+        |detail| (detail.kind, detail.message.clone()),
+    );
+    let properties = json!({
+        "$exception_list": [{
+            "type": kind,
+            "value": message,
+            "mechanism": { "handled": true, "synthetic": false },
+        }],
+        // One shared id for the server: no person profile for it.
+        "$process_person_profile": false,
+        "error_source": "api",
+        "api_method": method,
+        "api_path": path,
+        "api_status": status,
+    });
+    capture(http, "$exception", "granite-api", properties).await;
+}

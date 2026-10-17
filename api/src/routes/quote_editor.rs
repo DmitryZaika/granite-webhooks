@@ -238,6 +238,63 @@ fn new_id(prefix: &str) -> String {
     quote_pricing::edit::new_id(prefix)
 }
 
+/// The lines a quote gets for the extras its list (`offered`, with the shared
+/// extras applied) marks "always include".
+fn always_included_items(offered: &Value) -> Vec<Value> {
+    quote_pricing::js::arr(Some(offered), "arrOtherItems")
+        .iter()
+        .filter(|o| quote_pricing::js::on(o.get("alwaysIncludeOnQuote")))
+        .map(|o| {
+            json!({
+                "id": new_id("item"),
+                "kind": "priceList",
+                "areaId": null,
+                "name": o.get("name").cloned().unwrap_or(Value::Null),
+                "option": null,
+                "catalogId": o.get("catalogId").cloned().unwrap_or(Value::Null),
+                "optionId": null,
+                "quantity": 1,
+                "amount": if quote_pricing::js::arr(Some(o), "arrRanges").is_empty() { Value::Null } else { json!(0) },
+                "price": null,
+                "hideOnQuote": false,
+                "allowDiscount": true,
+                "taxable": true,
+            })
+        })
+        .collect()
+}
+
+/// The same extra: its shared extra's id, or its name (trimmed, any case).
+fn same_extra(a: &Value, b: &Value) -> bool {
+    let id = |v: &Value| v.get("catalogId").and_then(Value::as_i64);
+    let name = |v: &Value| {
+        v.get("name")
+            .and_then(Value::as_str)
+            .map(|n| n.trim().to_lowercase())
+    };
+    (id(a).is_some() && id(a) == id(b)) || (name(a).is_some() && name(a) == name(b))
+}
+
+/// A drawing moved to another list (`offered`): its extras that list doesn't
+/// offer at all come off (they can't be priced there), and the list's "always
+/// include" extras it lacks go on. Typed lines stay. As `withAlwaysIncludedItems`
+/// in the editor.
+fn for_price_list(doc: &mut Value, offered: &Value) {
+    let Some(items) = doc.get_mut("items").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let offers = quote_pricing::js::arr(Some(offered), "arrOtherItems");
+    items.retain(|i| {
+        i.get("kind").and_then(Value::as_str) != Some("priceList")
+            || offers.iter().any(|o| same_extra(o, i))
+    });
+    for item in always_included_items(offered) {
+        if !items.iter().any(|i| same_extra(i, &item)) {
+            items.push(item);
+        }
+    }
+}
+
 /// Create a quote
 ///
 /// An empty drawing (the company's counter depth and rounding) with the
@@ -306,28 +363,8 @@ pub async fn create_quote(
         .map(|info| quote_pricing::price_list::apply_catalog(info, &catalog));
     let items: Vec<Value> = offered
         .as_ref()
-        .map(|info| quote_pricing::js::arr(Some(info), "arrOtherItems").to_vec())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|o| quote_pricing::js::on(o.get("alwaysIncludeOnQuote")))
-        .map(|o| {
-            json!({
-                "id": new_id("item"),
-                "kind": "priceList",
-                "areaId": null,
-                "name": o.get("name").cloned().unwrap_or(Value::Null),
-                "option": null,
-                "catalogId": o.get("catalogId").cloned().unwrap_or(Value::Null),
-                "optionId": null,
-                "quantity": 1,
-                "amount": if quote_pricing::js::arr(Some(&o), "arrRanges").is_empty() { Value::Null } else { json!(0) },
-                "price": null,
-                "hideOnQuote": false,
-                "allowDiscount": true,
-                "taxable": true,
-            })
-        })
-        .collect();
+        .map(always_included_items)
+        .unwrap_or_default();
     let doc = json!({
         "version": 2,
         "defaultDepth": settings.default_depth,
@@ -1844,13 +1881,13 @@ pub async fn copy_quote(
     if name.is_empty() {
         return Err(ApiError::BadRequest("Quote name is required.".into()));
     }
-    let list = match input.price_list_id.filter(|l| *l > 0) {
+    let found = match input.price_list_id.filter(|l| *l > 0) {
         Some(list) => find_price_list(&state.pool, list, user.company_id)
             .await?
-            .map(|(row, _)| row)
-            .filter(|row| row.current_revision_id.is_some()),
+            .filter(|(row, _)| row.current_revision_id.is_some()),
         None => None,
     };
+    let list = found.as_ref().map(|(row, _)| row);
     let rep = match input.salesperson_id {
         Some(rep) => sales_reps(&state.pool, user.company_id)
             .await?
@@ -1881,8 +1918,8 @@ pub async fn copy_quote(
     .bind(rep.as_ref().and_then(|r| r.name.clone()).or_else(|| quote.sales_rep.clone()))
     .bind(rep.as_ref().map(|r| r.id).or(quote.salesperson_id))
     .bind(user.id)
-    .bind(list.as_ref().map(|l| l.id).or(quote.price_list_id))
-    .bind(list.as_ref().and_then(|l| l.current_revision_id).or(quote.price_list_revision_id))
+    .bind(list.map(|l| l.id).or(quote.price_list_id))
+    .bind(list.and_then(|l| l.current_revision_id).or(quote.price_list_revision_id))
     .bind(input.copy_drawing)
     .bind(copy)
     .bind(copy)
@@ -1893,6 +1930,27 @@ pub async fn copy_quote(
     .execute(&state.pool)
     .await?
     .last_insert_id();
+    // Copied onto another list: its extras follow that list, as when the
+    // editor switches lists (the copy kept the old list's extras).
+    let mut doc = quote.drawing();
+    if let Some((row, Some(info))) = found.as_ref()
+        && input.copy_drawing
+        && Some(row.id) != quote.price_list_id
+        && doc.get("items").is_some_and(Value::is_array)
+    {
+        let catalog: Vec<(i64, Value)> = load_catalog(&state.pool, user.company_id)
+            .await?
+            .into_iter()
+            .map(|e| (e.id, e.item))
+            .collect();
+        let offered = quote_pricing::price_list::apply_catalog(info, &catalog);
+        for_price_list(&mut doc, &offered);
+        sqlx::query("UPDATE quotes SET draft_drawing_json = ? WHERE id = ?")
+            .bind(doc.to_string())
+            .bind(new_id)
+            .execute(&state.pool)
+            .await?;
+    }
     Ok((
         StatusCode::CREATED,
         Json(CreatedId {

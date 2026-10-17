@@ -365,11 +365,11 @@ pub struct Acceptance {
 ///
 /// Records the option and the signature and sets the quote's status to
 /// `accepted`; it does not mark the quote sold or win its deal (staff do
-/// that). The quote's creator is then emailed the customer, the option, each
-/// area's material, color and edges, and the total, and notified in the app
-/// when the quote has a deal; the customer is emailed their own copy with a
-/// link back to the quote. Refused once signed, for an option with a
-/// sold-out color, or when the link is switched off.
+/// that). The quote's sales rep (else its creator) is then emailed the
+/// customer, the option, each area's material, color and edges, and the
+/// total, and notified in the app when the quote has a deal; the customer is
+/// emailed their own copy with a link back to the quote. Refused once signed,
+/// for an option with a sold-out color, or when the link is switched off.
 #[utoipa::path(
     post,
     path = "/v1/public/quote-portal/{token}/acceptance",
@@ -530,10 +530,10 @@ async fn customer_addresses(
     Ok(split(customer.flatten().as_deref().unwrap_or_default()))
 }
 
-/// The customer signed: the quote's creator gets an email with the option,
-/// each area's color and the total, and (when the quote has a deal) an
-/// in-app notification; then the customer gets their own copy. A failure
-/// loses only that notice.
+/// The customer signed: the quote's sales rep (else its creator) gets an
+/// email with the option, each area's color and the total, and (when the
+/// quote has a deal) an in-app notification; then the customer gets their own
+/// copy. A failure loses only that notice.
 #[allow(clippy::too_many_lines)]
 async fn notify_signed(
     state: &AppState,
@@ -547,7 +547,7 @@ async fn notify_signed(
     let found = async {
         // Any company: the id comes from the quote itself, and a super
         // admin working in this company belongs to another one.
-        let recipient: Option<SignedRecipient> = match row.created_by {
+        let recipient: Option<SignedRecipient> = match row.salesperson_id.or(row.created_by) {
             Some(id) => {
                 sqlx::query_as(
                     "SELECT id, email, name FROM users WHERE id = ? AND is_deleted = 0 LIMIT 1",
@@ -664,7 +664,7 @@ async fn notify_signed(
             transactional: true,
         };
 
-    // The quote's creator.
+    // The quote's sales rep, else its creator.
     match &recipient {
         Some(creator) => {
             if let Some(deal) = deal_id

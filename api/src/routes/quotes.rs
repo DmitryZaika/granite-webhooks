@@ -1,6 +1,6 @@
 //! Quote tools.
 //!
-//! - `GET /v1/quotes` → the company's quotes for the quotes list
+//! - `GET /v1/quotes` → the company's quotes for the quotes list (or one customer's)
 //! - `DELETE /v1/quotes/{id}` → soft-deletes a quote
 //! - `GET /v1/quotes/inventory-slabs` → a stone's free slabs for the layout
 //! - `POST /v1/quotes/print-previews` → where to put a printed quote PDF to open it
@@ -71,6 +71,14 @@ pub struct QuoteListRow {
     pub mine: bool,
 }
 
+/// Query of `GET /v1/quotes`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct QuoteListQuery {
+    /// Only this customer's quotes; every quote when absent.
+    pub customer_id: Option<i64>,
+}
+
 /// `GET /v1/quotes`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct QuoteList {
@@ -82,13 +90,15 @@ pub struct QuoteList {
 
 /// List the company's quotes
 ///
-/// Every quote of the caller's company that is not deleted, newest first,
-/// with its customer, price list and when its email was last viewed.
+/// Every quote of the caller's company that is not deleted (only one
+/// customer's with `customer_id`), newest first, with its customer, price
+/// list and when its email was last viewed.
 #[utoipa::path(
     get,
     path = "/v1/quotes",
     operation_id = "list_quotes",
     tag = "quotes",
+    params(QuoteListQuery),
     responses(
         (status = 200, description = "Quotes", body = QuoteList),
         (status = 401, description = "No valid session", body = ErrorBody),
@@ -100,6 +110,7 @@ pub struct QuoteList {
 pub async fn list_quotes(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
+    Query(query): Query<QuoteListQuery>,
 ) -> ApiResult<Json<QuoteList>> {
     let quotes: Vec<QuoteListRow> = sqlx::query_as(
         "SELECT q.id, q.quote_name, c.name AS customer_name, q.quote_type, q.status,
@@ -113,12 +124,15 @@ pub async fn list_quotes(
            LEFT JOIN price_lists pl ON pl.id = q.price_list_id
            LEFT JOIN quote_emails e ON e.quote_id = q.id
           WHERE q.company_id = ? AND q.deleted_at IS NULL
+            AND (? IS NULL OR q.customer_id = ?)
           GROUP BY q.id
           ORDER BY q.created_date DESC, q.id DESC",
     )
     .bind(user.id)
     .bind(user.id)
     .bind(user.company_id)
+    .bind(query.customer_id)
+    .bind(query.customer_id)
     .fetch_all(&state.pool)
     .await?;
     let sales_rep: Option<i32> = sqlx::query_scalar(
