@@ -204,7 +204,7 @@ pub async fn search_customers(
             .push(")");
     }
     let limit = push_search_filter(&mut sql, query.by, term, user_id);
-    sql.push(", c.id ASC LIMIT ").push_bind(limit);
+    sql.push(", c.id DESC LIMIT ").push_bind(limit);
 
     let mut rows = sql
         .build_query_as::<CustomerSearchRow>()
@@ -310,7 +310,7 @@ fn push_search_filter(
                 .push_bind(like.clone())
                 .push(" OR c.phone_2 LIKE ")
                 .push_bind(like.clone())
-                .push(" THEN 1 ELSE 2 END, c.name ASC");
+                .push(" THEN 1 ELSE 2 END");
             15
         }
         CustomerSearchBy::Phone => {
@@ -321,7 +321,7 @@ fn push_search_filter(
             push_phone_match(sql, format!("{digits}%"), format!("{last10}%"));
             sql.push(" THEN 0 WHEN ");
             push_phone_match(sql, format!("%{digits}%"), format!("%{last10}%"));
-            sql.push(" THEN 1 ELSE 2 END, c.name ASC");
+            sql.push(" THEN 1 ELSE 2 END");
             15
         }
         CustomerSearchBy::Address => {
@@ -347,7 +347,7 @@ fn push_search_filter(
             has_email(sql, prefix.clone());
             sql.push(" THEN 0 WHEN ");
             has_email(sql, like.clone());
-            sql.push(" THEN 1 ELSE 2 END, c.name ASC");
+            sql.push(" THEN 1 ELSE 2 END");
             15
         }
     }
@@ -367,7 +367,7 @@ fn push_address_filter(sql: &mut QueryBuilder<MySql>, term: &str, prefix: &str, 
     push_owner_rank(sql, user_id);
     sql.push(" CASE WHEN c.address LIKE ")
         .push_bind(prefix.to_string())
-        .push(" THEN 0 ELSE 1 END, c.name ASC");
+        .push(" THEN 0 ELSE 1 END");
 }
 
 /// Either phone column, digits only, matches either pattern.
@@ -402,5 +402,5 @@ fn push_rank(sql: &mut QueryBuilder<MySql>, user_id: i32, column: &str, prefix: 
         .push_bind(prefix.to_string())
         .push(format!(" THEN 0 WHEN {column}"))
         .push_bind(like.to_string())
-        .push(" THEN 1 ELSE 2 END, c.name ASC");
+        .push(" THEN 1 ELSE 2 END");
 }
