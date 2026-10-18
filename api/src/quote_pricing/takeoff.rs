@@ -216,6 +216,13 @@ fn add_counter(t: &mut AreaTakeoff, counter: &Counter) {
         let Some(&a) = points.get(k) else { continue };
         let straight = dist(a, points[(k + 1) % m]);
         let path_len = outline.edges.get(k).map_or(straight, |e| e.length);
+        // Like Moraware, a splash (or waterfall, apron) stops where a corner
+        // cut at the edge's end begins: the edge between its corner pieces.
+        let strip_len = outline
+            .edges
+            .get(k)
+            .and_then(|e| Some(dist(e.segments.first()?.from(), e.segments.last()?.to())))
+            .unwrap_or(straight);
         let mine: Vec<_> = lines.iter().filter(|x| x.0.edge_index == Some(k)).collect();
         if mine.iter().any(|x| x.1.own) {
             add_line_groups(t, mine.iter().map(|x| (x.1.clone(), x.0.length)).collect());
@@ -227,7 +234,7 @@ fn add_counter(t: &mut AreaTakeoff, counter: &Counter) {
                 miter_height: edge.miter_height,
                 splash_bumps: &edge.splash_bumps,
             };
-            add_edge_type(t, &kind, straight, path_len);
+            add_edge_type(t, &kind, strip_len, path_len);
         }
         if edge.full_radius > 0.0 {
             t.full_radius_count += 1.0;

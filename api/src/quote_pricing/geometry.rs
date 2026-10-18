@@ -120,13 +120,28 @@ pub fn base_shape(counter: &Counter) -> Vec<Pt> {
         let d = dirs[i];
         let run = &runs[i];
         let side_left = measured_side_left(counter, i);
-        let start = if side_left {
+        let nn = left_normal(d);
+        // Like Moraware, a run reaches from the outer corner of the joint
+        // before it to the outer corner of the joint after it; between turns
+        // of opposite directions (an S) those corners are on opposite sides.
+        let prev_left = if i == 0 {
+            side_left
+        } else {
+            measured_side_left(counter, i - 1)
+        };
+        let start = if prev_left {
             left[left.len() - 1]
         } else {
             right[right.len() - 1]
         };
-        let end = add(start, d, run.length);
-        let nn = left_normal(d);
+        let across = if prev_left == side_left {
+            0.0
+        } else if side_left {
+            run.depth
+        } else {
+            -run.depth
+        };
+        let end = add(add(start, d, run.length), nn, across);
         if i == n - 1 {
             if side_left {
                 left.push(end);
@@ -215,13 +230,13 @@ impl Segment {
         Self::Line { from, to }
     }
 
-    const fn from(&self) -> Pt {
+    pub(crate) const fn from(&self) -> Pt {
         match self {
             Self::Line { from, .. } | Self::Arc { from, .. } => *from,
         }
     }
 
-    const fn to(&self) -> Pt {
+    pub(crate) const fn to(&self) -> Pt {
         match self {
             Self::Line { to, .. } | Self::Arc { to, .. } => *to,
         }
