@@ -13661,6 +13661,76 @@
         ]
       }
     },
+    "/v1/deal-activities/suggestions/hidden": {
+      "post": {
+        "tags": [
+          "deals"
+        ],
+        "summary": "Stop suggesting an activity name to the caller",
+        "description": "Removes it from the caller's suggestions for good, however often they use\nit after. Hiding a hidden name again is a no-op.",
+        "operationId": "hide_activity_suggestion",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuggestionHide"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Hidden"
+          },
+          "400": {
+            "description": "Empty or too long name, malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/deals/{id}/notes": {
       "get": {
         "tags": [
@@ -27420,6 +27490,270 @@
         ]
       }
     },
+    "/v1/quotes/{id}/files": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List a quote's files",
+        "description": "Newest first. Private files come with a link valid for an hour.",
+        "operationId": "list_quote_files",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QuoteFile"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live quote in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Attach uploaded files to a quote",
+        "description": "Each URL must be a file uploaded to the `quote-files` folder.",
+        "operationId": "attach_quote_files",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewQuoteFiles"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Attached"
+          },
+          "400": {
+            "description": "No files, a blank name, or a URL that is not an uploaded quote file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live quote in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Uploads are not configured on this server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/files/{file_id}": {
+      "delete": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Delete a quote file",
+        "description": "Removes the row and the stored file.",
+        "operationId": "delete_quote_file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "description": "File id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such file on a live quote of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/quotes/suggestions": {
       "get": {
         "tags": [
@@ -27622,7 +27956,7 @@
           "quotes"
         ],
         "summary": "Accept and sign a quote",
-        "description": "Records the option and the signature and sets the quote's status to\n`accepted`; it does not mark the quote sold or win its deal (staff do\nthat). The quote's creator is then emailed the customer, the option, each\narea's material, color and edges, and the total, and notified in the app\nwhen the quote has a deal; the customer is emailed their own copy with a\nlink back to the quote. Refused once signed, for an option with a\nsold-out color, or when the link is switched off.",
+        "description": "Records the option and the signature and sets the quote's status to\n`accepted`; it does not mark the quote sold or win its deal (staff do\nthat). The quote's sales rep (else its creator) is then emailed the\ncustomer, the option, each area's material, color and edges, and the\ntotal, and notified in the app when the quote has a deal; the customer is\nemailed their own copy with a link back to the quote. Refused once signed,\nfor an option with a sold-out color, or when the link is switched off.",
         "operationId": "accept_quote_portal",
         "parameters": [
           {
@@ -34840,8 +35174,20 @@
           "quotes"
         ],
         "summary": "List the company's quotes",
-        "description": "Every quote of the caller's company that is not deleted, newest first,\nwith its customer, price list and when its email was last viewed.",
+        "description": "Every quote of the caller's company that is not deleted (only one\ncustomer's with `customer_id`), newest first, with its customer, price\nlist and when its email was last viewed.",
         "operationId": "list_quotes",
+        "parameters": [
+          {
+            "name": "customer_id",
+            "in": "query",
+            "description": "Only this customer's quotes; every quote when absent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Quotes",
@@ -37997,7 +38343,7 @@
           "ai"
         ],
         "summary": "Draft the next message",
-        "description": "Drafts the next SMS or email to a customer from the whole conversation\n(SMS and email together), the customer's profile, deals and quotes\n(colors, totals, sent / opened / signed), the company's AI instructions\nand the rep's own recent messages: a fast reply, a follow-up on the open\ntopic, or a custom draft (and revisions of it). The draft greets the\ncustomer by name only in a new conversation or when the last SMS or email\nwith them is more than 60 days old; otherwise it has no greeting and no\nname. Takes several seconds (a larger model).",
+        "description": "Drafts the next SMS or email to a customer from the whole conversation\n(SMS and email together), the customer's profile, deals and quotes\n(colors, totals, sent / opened / signed), the company's AI instructions\nand the rep's own recent messages: a fast reply, a follow-up on the open\ntopic, or a custom draft (and revisions of it). The draft greets the\ncustomer by name only in a new conversation or when the last SMS or email\nwith them is from an earlier day; otherwise it has no greeting and no\nname. Takes several seconds (a larger model).",
         "operationId": "draft_conversation_reply",
         "requestBody": {
           "content": {
@@ -57883,6 +58229,40 @@
         },
         "additionalProperties": false
       },
+      "NewQuoteFile": {
+        "type": "object",
+        "description": "One uploaded file to attach.",
+        "required": [
+          "url",
+          "name"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Public URL from `POST /v1/uploads` (folder `quote-files`)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Original file name."
+          }
+        }
+      },
+      "NewQuoteFiles": {
+        "type": "object",
+        "description": "Body of `POST /v1/quotes/{id}/files`.",
+        "required": [
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewQuoteFile"
+            },
+            "description": "Files already uploaded with `POST /v1/uploads`."
+          }
+        }
+      },
       "NewQuoteForm": {
         "type": "object",
         "description": "A new form.",
@@ -61922,6 +62302,45 @@
               "null"
             ],
             "description": "The viewer's browser (`User-Agent`), when known."
+          }
+        }
+      },
+      "QuoteFile": {
+        "type": "object",
+        "description": "A file attached to a quote.",
+        "required": [
+          "id",
+          "url",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Row id."
+          },
+          "url": {
+            "type": "string",
+            "description": "URL the browser can open (presigned for private files)."
+          },
+          "name": {
+            "type": "string",
+            "description": "File name shown in the list."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who attached it."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was attached."
           }
         }
       },
@@ -67491,6 +67910,19 @@
           }
         }
       },
+      "SuggestionHide": {
+        "type": "object",
+        "description": "Body of `POST /v1/deal-activities/suggestions/hidden`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The suggested name to stop suggesting (up to 255 characters)."
+          }
+        }
+      },
       "SuggestionRow": {
         "type": "object",
         "description": "The newest matching message of a conversation.",
@@ -69610,7 +70042,8 @@
           "sms-uploads",
           "supplier-files",
           "company-logos",
-          "quote-forms"
+          "quote-forms",
+          "quote-files"
         ]
       },
       "UploadRequest": {

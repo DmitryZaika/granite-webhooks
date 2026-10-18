@@ -21,7 +21,7 @@
 //! Replaces the Remix `employee.deals*` loaders/actions and `api.deal*` routes.
 
 mod documents;
-mod files;
+pub(crate) mod files;
 mod handlers;
 mod pipelines;
 pub mod queries;

@@ -29,7 +29,7 @@ fn is_document(name: &str) -> bool {
     extension(name).is_some_and(|ext| DOCUMENT_EXTENSIONS.contains(&ext.as_str()))
 }
 
-fn document_content_type(url: &str) -> Option<&'static str> {
+pub(crate) fn document_content_type(url: &str) -> Option<&'static str> {
     Some(match extension(url)?.as_str() {
         "pdf" => "application/pdf",
         "txt" => "text/plain",

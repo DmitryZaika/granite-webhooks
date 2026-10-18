@@ -608,10 +608,30 @@ fn dedupe(pts: Vec<Pt>) -> Vec<Pt> {
 }
 
 /// Square inches billed for material: the uncut blank (see the CRM).
+///
+/// A counter with an angled (not 90°) joint is billed like Moraware: every
+/// run's full length × depth, less the overlap only at its 90° joints.
 pub fn material_area_sq_in(counter: &Counter) -> f64 {
     let points = base_shape(counter);
     let m = points.len();
-    let mut area = polygon_area(&points);
+    let turns: Vec<i64> = counter
+        .runs
+        .iter()
+        .skip(1)
+        .map(|r| norm_turn(r.turn).abs())
+        .collect();
+    let mut area = if turns.iter().any(|t| t % 4 != 0) {
+        counter.runs.iter().enumerate().fold(0.0, |s, (i, r)| {
+            let overlap = if i > 0 && turns[i - 1] == 4 {
+                counter.runs[i - 1].depth * r.depth
+            } else {
+                0.0
+            };
+            s + r.length * r.depth - overlap
+        })
+    } else {
+        polygon_area(&points)
+    };
     for k in 0..m {
         let Some(edge) = counter.edges.get(k) else {
             continue;

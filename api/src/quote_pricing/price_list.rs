@@ -509,8 +509,17 @@ fn apply_extras_catalog(info: &mut Value, catalog: &[(i64, Value)]) {
     info["arrOtherItems"] = Value::Array(items);
 }
 
+/// A list that prices exactly as it is stored (`exactPrices`, e.g. a copy of
+/// a Moraware price list): no inventory colors, prices or extras merged in.
+fn exact_prices(info: &Value) -> bool {
+    truthy(info.get("exactPrices"))
+}
+
 /// `syncPriceListWithStock(info, { ...stock, extras })`.
 pub fn sync_with_stock(info: &Value, stock: &Stock) -> Value {
+    if exact_prices(info) {
+        return info.clone();
+    }
     let mut synced = sync_with_inventory(info, stock);
     apply_extras_catalog(&mut synced, &stock.extras);
     synced
@@ -519,6 +528,9 @@ pub fn sync_with_stock(info: &Value, stock: &Stock) -> Value {
 /// `syncPriceListWithStock(info, stock)` without the extras catalog: the
 /// list as its editor sees and saves it.
 pub fn sync_with_inventory(info: &Value, stock: &Stock) -> Value {
+    if exact_prices(info) {
+        return info.clone();
+    }
     // (key, name, colors by key), in the order first seen.
     let mut materials: Vec<Material> = Vec::new();
     for stone in &stock.stones {
@@ -720,6 +732,26 @@ pub fn with_live_choices(snapshot: &Value, latest: &Value) -> Value {
 #[cfg(test)]
 mod custom_material_tests {
     use super::*;
+
+    #[test]
+    fn exact_price_lists_take_nothing_from_stock_or_the_catalog() {
+        let info = json!({
+            "exactPrices": 1,
+            "arrProducts": [{ "name": "Quartz", "arrVariants": [{ "name": "Carrara Hilos", "price": 67 }] }],
+            "arrOtherItems": [{ "name": "Laminate T/O" }],
+        });
+        let stock = Stock {
+            stones: vec![StockStone {
+                name: "Carrara Hilos".into(),
+                kind: "quartz".into(),
+                retail_price: Some(75.0),
+                ..StockStone::default()
+            }],
+            ..Stock::default()
+        };
+        assert_eq!(sync_with_stock(&info, &stock), info);
+        assert_eq!(sync_with_inventory(&info, &stock), info);
+    }
 
     #[test]
     fn keeps_materials_added_in_the_list_until_stocked() {
