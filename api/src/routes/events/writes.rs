@@ -6,6 +6,7 @@ use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::routes::schedule::notifications;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -78,6 +79,10 @@ pub struct EventInput {
     /// Create only: attachments of `copy_from_event_id` to copy.
     #[serde(default)]
     pub copy_attachment_ids: Vec<i32>,
+    /// Its calendar's notification rules turned off for this event;
+    /// leave out to keep them.
+    #[serde(default)]
+    pub skipped_notification_rule_ids: Option<Vec<i32>>,
 }
 
 /// `POST /v1/events`.
@@ -435,6 +440,9 @@ pub async fn create(
     if let Some(invoice) = &input.qbo_invoice {
         save_invoice(pool, user.company_id, event_id, Some(user.id), invoice).await?;
     }
+    if let Some(skipped) = &input.skipped_notification_rule_ids {
+        notifications::save_event_skips(pool, user.company_id, event_id, skipped).await?;
+    }
     Ok((StatusCode::CREATED, Json(CreatedEvent { id })))
 }
 
@@ -522,6 +530,9 @@ pub async fn update(
     .await?;
     if let Some(invoice) = &input.qbo_invoice {
         save_invoice(pool, user.company_id, id, None, invoice).await?;
+    }
+    if let Some(skipped) = &input.skipped_notification_rule_ids {
+        notifications::save_event_skips(pool, user.company_id, id, skipped).await?;
     }
     let by = user.name.as_deref();
     let moved = event.start != existing.start_date

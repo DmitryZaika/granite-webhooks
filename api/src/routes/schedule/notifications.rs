@@ -4,12 +4,14 @@
 //!
 //! - `GET /v1/schedule/notifications` → the rules, and whether texting is set up
 //! - `POST /v1/schedule/notifications`, `PUT`/`DELETE /v1/schedule/notifications/{id}`
+//! - `GET /v1/schedule/notifications/active` → the event form's defaults; an
+//!   event can turn a rule off (`event_notification_skips`)
 //!
 //! The appointment-reminders job sends the due ones (`send_due`). An event's
 //! customer is the one its title names (a bare customer id), else its sale's.
 //! A calendar with an active rule no longer gets the built-in reminders.
 
-use crate::auth::AdminUser;
+use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::routes::company::queries::company_features;
@@ -20,14 +22,14 @@ use crate::routes::sms::provider::{SmsProvider, phone10};
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingEmail, OutgoingSms};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use chrono_tz::America::Indiana::Indianapolis;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 /// Longest text a rule may send.
 const MAX_SMS: usize = 1600;
@@ -459,6 +461,108 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `GET /v1/schedule/notifications/active`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ActiveQuery {
+    /// An event of the company whose turned-off rules to include.
+    #[serde(default)]
+    pub event_id: Option<i32>,
+}
+
+/// `GET /v1/schedule/notifications/active`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ActiveRules {
+    /// The active rules of every calendar, oldest first.
+    pub rules: Vec<NotificationRule>,
+    /// Rules turned off for `event_id`.
+    pub skipped_rule_ids: Vec<i32>,
+}
+
+/// List the active notification rules for the event form
+///
+/// The defaults an event of each calendar gets, and which of them are
+/// turned off for `event_id`. Text rules are left out while texting is not
+/// set up.
+#[utoipa::path(
+    get,
+    path = "/v1/schedule/notifications/active",
+    operation_id = "list_active_schedule_notifications",
+    tag = "schedule",
+    params(ActiveQuery),
+    responses(
+        (status = 200, description = "The rules", body = ActiveRules),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn active(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Query(query): Query<ActiveQuery>,
+) -> ApiResult<Json<ActiveRules>> {
+    let pool = &state.pool;
+    let sms_enabled = sms_enabled(pool, user.company_id).await?;
+    let rows: Vec<RuleRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {RULE_COLUMNS} FROM schedule_notification_rules r
+           JOIN calendars cal ON cal.id = r.calendar_id AND cal.deleted_at IS NULL
+          WHERE r.company_id = ? AND r.deleted_at IS NULL AND r.is_active = 1
+            AND (? OR r.channel <> 'sms')
+          ORDER BY r.id"
+    )))
+    .bind(user.company_id)
+    .bind(sms_enabled)
+    .fetch_all(pool)
+    .await?;
+    let skipped_rule_ids = match query.event_id {
+        Some(event_id) => {
+            sqlx::query_scalar(
+                "SELECT k.rule_id FROM event_notification_skips k
+                   JOIN schedule_notification_rules r ON r.id = k.rule_id AND r.company_id = ?
+                  WHERE k.event_id = ? ORDER BY k.rule_id",
+            )
+            .bind(user.company_id)
+            .bind(event_id)
+            .fetch_all(pool)
+            .await?
+        }
+        None => Vec::new(),
+    };
+    Ok(Json(ActiveRules {
+        rules: rows.into_iter().map(NotificationRule::from).collect(),
+        skipped_rule_ids,
+    }))
+}
+
+/// Replaces the rules turned off for an event; ids not of the company's
+/// rules are ignored.
+pub async fn save_event_skips(
+    pool: &MySqlPool,
+    company_id: i32,
+    event_id: i32,
+    rule_ids: &[i32],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM event_notification_skips WHERE event_id = ?")
+        .bind(event_id)
+        .execute(&mut *tx)
+        .await?;
+    for rule_id in rule_ids {
+        sqlx::query(
+            "INSERT IGNORE INTO event_notification_skips (event_id, rule_id)
+             SELECT ?, id FROM schedule_notification_rules WHERE id = ? AND company_id = ?",
+        )
+        .bind(event_id)
+        .bind(rule_id)
+        .bind(company_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await
+}
+
 /// When an appointment starts: all-day ones at store midnight of their day.
 fn effective_start(start: NaiveDateTime, all_day: bool) -> DateTime<Utc> {
     if all_day {
@@ -808,6 +912,8 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
               WHERE r.id = ? AND e.deleted_date IS NULL AND NULLIF(TRIM(e.rrule), '') IS NULL
                 AND e.start_date > UTC_TIMESTAMP() - INTERVAL 1 DAY
                 AND e.start_date <= UTC_TIMESTAMP() + INTERVAL ? MINUTE
+                AND NOT EXISTS (SELECT 1 FROM event_notification_skips k
+                                 WHERE k.event_id = e.id AND k.rule_id = r.id)
                 AND NOT EXISTS (SELECT 1 FROM schedule_notification_sends n
                                  WHERE n.rule_id = r.id AND n.event_id = e.id AND n.start_date = e.start_date)
               ORDER BY e.start_date, e.id LIMIT ?",

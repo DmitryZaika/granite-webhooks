@@ -41,6 +41,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(board::set_color))
         .routes(routes!(notifications::list, notifications::create))
         .routes(routes!(notifications::update, notifications::delete))
+        .routes(routes!(notifications::active))
 }
 
 /// The company's address, trimmed; `None` when it has none.
