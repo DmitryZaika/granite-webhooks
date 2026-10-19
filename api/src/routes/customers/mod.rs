@@ -14,7 +14,7 @@
 //! (`app/utils/customersListLoader.server.ts`).
 
 mod activity_search;
-mod duplicates;
+pub(crate) mod duplicates;
 pub mod estimate_time;
 pub(crate) mod fuzzy;
 mod handlers;

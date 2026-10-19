@@ -452,7 +452,7 @@ pub async fn accept_quote(
 }
 
 /// `$12,345.67`.
-fn money(value: f64) -> String {
+pub(crate) fn money(value: f64) -> String {
     #[allow(clippy::cast_possible_truncation)]
     let cents = (value.abs() * 100.0).round() as i64;
     let digits = (cents / 100).to_string();

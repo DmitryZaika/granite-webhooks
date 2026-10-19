@@ -117,3 +117,78 @@ async fn the_bell_lists_mail_activity_and_billing(pool: MySqlPool) {
         .json();
     assert_eq!(with_samples["notifications"].as_array().unwrap().len(), 5);
 }
+
+async fn listed_ids(server: &axum_test::TestServer) -> Vec<String> {
+    let body: serde_json::Value = server
+        .get("/v1/notifications")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    body["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test_db::test(seed)]
+async fn hidden_mail_stays_unread_until_a_newer_message(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO emails (id, thread_id, subject, body, sender_email, receiver_email, sent_at, company_id, message_id) VALUES
+           (9761, 'hide-1', 'Hi', 'x', 'alice@example.com', 'rep@acme.test', NOW() - INTERVAL 1 HOUR, 100, '<hide1@x>'),
+           (9762, 'hide-2', 'Hi', 'x', 'alice@example.com', 'rep@acme.test', NOW() - INTERVAL 1 HOUR, 100, '<hide2@x>');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool.clone());
+    server
+        .post("/v1/notifications/done")
+        .with_session(sessions::REP)
+        .json(&json!({ "hide_only": true, "items": [{ "id": "hide-1", "kind": "email" }] }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(listed_ids(&server).await, ["hide-2"]);
+    assert_eq!(done_ids(&pool).await.1, Vec::<i64>::new());
+
+    // The hide happened 45 minutes ago; a reply came after it.
+    sqlx::raw_sql(
+        "UPDATE notification_email_hides SET hidden_at = NOW() - INTERVAL 45 MINUTE;
+         INSERT INTO emails (id, thread_id, subject, body, sender_email, receiver_email, sent_at, company_id, message_id) VALUES
+           (9763, 'hide-1', 'Re: Hi', 'x', 'alice@example.com', 'rep@acme.test', NOW() - INTERVAL 30 MINUTE, 100, '<hide3@x>');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(listed_ids(&server).await, ["hide-1", "hide-2"]);
+
+    server
+        .post("/v1/notifications/done")
+        .with_session(sessions::REP)
+        .json(&json!({ "hide_only": true, "clear_all": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(listed_ids(&server).await, Vec::<String>::new());
+    assert_eq!(done_ids(&pool).await.1, Vec::<i64>::new());
+}
+
+#[test_db::test(seed)]
+async fn deadline_reminders_stay_until_dismissed(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO deal_activities (deal_id, company_id, name, deadline, is_completed)
+           VALUES (8000, 100, 'Site visit', '2026-05-01 14:30:00', 0);
+         INSERT INTO notifications (id, user_id, deal_id, message, due_at, notification_type, created_at)
+           VALUES (9771, 100, 8000, 'Site visit', UTC_TIMESTAMP() - INTERVAL 2 HOUR, 'activity_deadline_reminder', NOW() - INTERVAL 3 DAY);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool.clone());
+    assert_eq!(listed_ids(&server).await, ["notif-9771"]);
+    sqlx::query("UPDATE deal_activities SET is_completed = 1 WHERE deal_id = 8000")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(listed_ids(&server).await, Vec::<String>::new());
+}

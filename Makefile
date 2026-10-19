@@ -150,6 +150,6 @@ api-openapi:
 
 # Serves http://localhost:9100/lambda-url/api/... through the Lambda runtime emulator.
 .PHONY: api-local
-api-local: api-db-up
+api-local:
 	test -f api/.env.local || cp api/.env.local.example api/.env.local
 	$(WATCH_BASE) -p api --bin api -P 9100 --env-file api/.env.local

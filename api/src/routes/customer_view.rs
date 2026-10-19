@@ -5,6 +5,7 @@
 //! - `POST   /v1/public/customer-view/{company_id}/{view_id}/code`     → email a code
 //! - `POST   /v1/public/customer-view/{company_id}/{view_id}/verify`   → enter it
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}/projects` → their sales
+//! - `GET    /v1/public/customer-view/{company_id}/{view_id}/quotes`   → their online quotes
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}/invoices` → their `QuickBooks` invoices
 //! - `GET    /v1/public/customer-view/{company_id}/{view_id}/invoices/{invoice_id}/pdf`
 //! - `GET    /v1/public/customer-view/{company_id}/login`              → a pending sign-in by email
@@ -40,6 +41,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(send_view_code))
         .routes(routes!(verify_view_code))
         .routes(routes!(projects))
+        .routes(routes!(quotes))
         .routes(routes!(invoices))
         .routes(routes!(invoice_pdf))
         .routes(routes!(pending_login))
@@ -674,6 +676,39 @@ pub async fn projects(
         })
         .collect();
     Ok(no_store(Json(projects)))
+}
+
+/// List the customer's online quotes
+///
+/// The quotes the customer made with the online quote, newest first: each
+/// with its drawing and each color's total (no price breakdown). Only for a
+/// verified visitor.
+#[utoipa::path(
+    get,
+    path = "/v1/public/customer-view/{company_id}/{view_id}/quotes",
+    operation_id = "list_customer_view_quotes",
+    tag = "customer-view",
+    params(
+        ("company_id" = i32, Path, description = "Company id"),
+        ("view_id" = String, Path, description = "The customer's page id (a UUID)"),
+    ),
+    responses(
+        (status = 200, description = "The quotes", body = [crate::routes::online_quotes::CustomerOnlineQuote]),
+        (status = 401, description = "No code entered for this page", body = ErrorBody),
+        (status = 404, description = "No such page", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    )
+)]
+pub async fn quotes(
+    State(state): State<AppState>,
+    Path((company_id, view_id)): Path<(i32, String)>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let customer = verified_customer(&state, &headers, company_id, &view_id).await?;
+    let quotes =
+        crate::routes::online_quotes::customer_online_quotes(&state.pool, company_id, customer.id)
+            .await?;
+    Ok(no_store(Json(quotes)))
 }
 
 fn no_store(response: impl IntoResponse) -> Response {

@@ -1,7 +1,9 @@
 //! `POST /v1/jobs/appointment-reminders`: sends the due appointment
 //! reminders. Customers get a text (else an email) 24 hours and 1 hour
 //! before; reps get a CRM notification and a Telegram message the day
-//! before at 5 PM and 1 hour before.
+//! before at 5 PM and 1 hour before. Then the company's own notification
+//! rules (Admin > Schedule), which replace the customer reminders of their
+//! calendars.
 //!
 //! Port of `processDueAppointmentReminders` and
 //! `processDueAppointmentRepReminders`.
@@ -9,6 +11,7 @@
 use super::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
 use crate::routes::events::notify::{Booking, NotifyKind, appointment_when, notify_booking};
+use crate::routes::schedule::notifications;
 use crate::state::AppState;
 use crate::webhooks_client::TelegramCrmNotify;
 use axum::Json;
@@ -34,6 +37,12 @@ pub struct ReminderRun {
     pub rep_sent: usize,
     /// Rep reminders that failed.
     pub rep_failed: usize,
+    /// Notification-rule messages that were due.
+    pub rule_processed: usize,
+    /// Notification-rule messages sent.
+    pub rule_sent: usize,
+    /// Notification-rule messages that failed.
+    pub rule_failed: usize,
 }
 
 #[derive(sqlx::FromRow)]
@@ -91,6 +100,17 @@ fn customer_or_default(name: Option<&str>) -> &str {
 }
 
 async fn customer_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(), sqlx::Error> {
+    // The company's own rules for the calendar send instead.
+    sqlx::query(
+        "UPDATE appointment_reminders r JOIN events e ON e.id = r.event_id
+            SET r.status = 'cancelled', r.error_message = 'replaced_by_schedule_rule'
+          WHERE r.status = 'pending' AND r.send_at <= UTC_TIMESTAMP()
+            AND EXISTS (SELECT 1 FROM schedule_notification_rules nr
+                         WHERE nr.calendar_id = e.calendar_id AND nr.company_id = r.company_id
+                           AND nr.is_active = 1 AND nr.deleted_at IS NULL)",
+    )
+    .execute(&state.pool)
+    .await?;
     let due: Vec<CustomerReminder> = sqlx::query_as(
         "SELECT r.id, r.company_id, r.customer_id, CAST(r.reminder_kind AS CHAR) AS reminder_kind,
                 c.name AS customer_name, primary_email.email AS customer_email,
@@ -297,6 +317,10 @@ pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Js
     let mut run = ReminderRun::default();
     customer_reminders(&state, &mut run).await?;
     rep_reminders(&state, &mut run).await?;
+    let rules = notifications::send_due(&state).await?;
+    run.rule_processed = rules.processed;
+    run.rule_sent = rules.sent;
+    run.rule_failed = rules.failed;
     Ok(Json(run))
 }
 

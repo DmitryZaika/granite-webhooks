@@ -78,9 +78,17 @@ fn matches_keyword(text: &str, keyword: &str) -> bool {
     })
 }
 
+/// The text without "a", "an" and "the", so "add a user" matches "add user".
+fn without_articles(text: &str) -> String {
+    text.split(' ')
+        .filter(|w| !w.is_empty() && !matches!(*w, "a" | "an" | "the"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// `getCrmManualSectionIdsForQuery`.
 pub fn section_ids_for(search: &str) -> Vec<String> {
-    let normalized = normalize(search);
+    let normalized = without_articles(&normalize(search));
     let mut selected: Vec<String> = MANUAL.core.clone();
     let add = |id: &str, selected: &mut Vec<String>| {
         if !selected.iter().any(|s| s == id) {
@@ -92,7 +100,7 @@ pub fn section_ids_for(search: &str) -> Vec<String> {
         if topic
             .keywords
             .iter()
-            .any(|k| matches_keyword(&normalized, k))
+            .any(|k| matches_keyword(&normalized, &without_articles(&k.to_lowercase())))
         {
             matched = true;
             add(&topic.id, &mut selected);
@@ -208,7 +216,7 @@ pub const ACCESS_RULES: &str = r#"Access rules for the current user:
 2. If they ask about a feature they cannot access, say clearly that they do not have access and which role is required. Do not give step-by-step instructions for locked features.
 3. Superuser Dashboard and Create Company require platform superuser = yes. Super Admin position alone is not enough.
 4. Admin portal pages require Admin portal = yes. Company settings (Users / Company tax/logo) also need the Manager position.
-5. Shop Worker only has Shop Transactions, Samples, My Account — not employee CRM or admin.
+5. Shop Worker only has Shop Transactions, Samples, Maintenance, My Account — not employee CRM or admin.
 6. Marketing position is the external marketing portal only — not employee CRM or admin.
 7. If a non-superuser asks how to "add a new company", do NOT describe Superuser Dashboard. If they have Employee portal access, you may describe CRM > Customers → Add Customer → Company toggle (customer marked as a company). Otherwise say they lack access.
 8. Never invent access the user does not have."#;
@@ -432,6 +440,64 @@ mod tests {
             &section_ids_for("how to change installer name"),
             &HashMap::new(),
         );
-        assert!(manual.contains("Change a person's name") && manual.contains("Actions → Edit"));
+        assert!(manual.contains("Change a person's name") && manual.contains("→ **Edit**"));
+    }
+
+    #[test]
+    fn articles_do_not_break_phrases() {
+        for (question, id) in [
+            ("how do I add a user", "admin-company-settings-users"),
+            ("how do I upload a document", "resources-documents-images"),
+            (
+                "how do I sell a slab",
+                "employee-stones-inventory-selling-slabs",
+            ),
+        ] {
+            assert!(
+                section_ids_for(question).iter().any(|s| s == id),
+                "{question}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_section_is_reachable() {
+        let reachable: std::collections::HashSet<&str> = MANUAL
+            .core
+            .iter()
+            .chain(&MANUAL.fallback)
+            .chain(
+                MANUAL
+                    .topics
+                    .iter()
+                    .flat_map(|t| std::iter::once(&t.id).chain(&t.related)),
+            )
+            .map(String::as_str)
+            .collect();
+        for id in section_ids() {
+            assert!(
+                reachable.contains(id) || id == "document-scope",
+                "no topic loads {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_features_route_to_their_sections() {
+        for (question, id) in [
+            ("how do I create a quote", "employee-quotes"),
+            ("how do I rotate text in the drawing", "quote-drawing"),
+            ("how do I add a new calendar", "schedule-admin-settings"),
+            ("how do I send a contract for e-signature", "esignatures"),
+            ("how do I connect telegram", "employee-dashboard"),
+            ("how do I make a call from the computer", "phone-calls"),
+            ("where are invoices", "invoices"),
+            ("how do I create a follow-up flow", "admin-automations"),
+        ] {
+            assert!(
+                section_ids_for(question).iter().any(|s| s == id),
+                "{question}"
+            );
+        }
     }
 }

@@ -56,6 +56,10 @@ pub struct DoneInput {
     /// The notifications to dismiss.
     #[serde(default)]
     pub items: Vec<NotificationRef>,
+    /// Remove email threads from the bell without marking them read. They
+    /// show again when a newer message arrives.
+    #[serde(default)]
+    pub hide_only: bool,
 }
 
 fn numbered(items: &[NotificationRef], kind: NotificationKind, prefix: &str) -> Vec<i64> {
@@ -159,7 +163,25 @@ pub async fn done(
         }
         builder.build().execute(&mut *tx).await?;
     }
-    if input.clear_all || !threads.is_empty() {
+    if input.hide_only {
+        let listed;
+        let threads: Vec<&str> = if input.clear_all {
+            listed = unread_email(&state, &user).await?;
+            listed.iter().map(|item| item.id.as_str()).collect()
+        } else {
+            threads
+        };
+        if !threads.is_empty() {
+            let mut builder = QueryBuilder::<MySql>::new(
+                "INSERT INTO notification_email_hides (user_id, thread_id, hidden_at) ",
+            );
+            builder.push_values(&threads, |mut row, thread| {
+                row.push_bind(user.id).push_bind(*thread).push("NOW()");
+            });
+            builder.push(" ON DUPLICATE KEY UPDATE hidden_at = VALUES(hidden_at)");
+            builder.build().execute(&mut *tx).await?;
+        }
+    } else if input.clear_all || !threads.is_empty() {
         let mut builder = QueryBuilder::<MySql>::new(
             "UPDATE emails e LEFT JOIN deals d ON d.id = e.deal_id AND d.deleted_at IS NULL
                 SET e.employee_read_at = NOW()
@@ -324,6 +346,9 @@ async fn unread_email(
                  OR LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(e.receiver_email, '<', -1), '>', 1))) = ?
                  OR (e.receiver_email NOT LIKE '%<%' AND LOWER(TRIM(e.receiver_email)) = ?)
                  OR e.receiver_email LIKE ?)
+            AND NOT EXISTS (
+                  SELECT 1 FROM notification_email_hides h
+                   WHERE h.user_id = ? AND h.thread_id = e.thread_id AND h.hidden_at >= e.sent_at)
           ORDER BY e.sent_at DESC LIMIT 50",
     )
     .bind(user.id)
@@ -337,6 +362,7 @@ async fn unread_email(
     .bind(&email)
     .bind(&email)
     .bind(&like)
+    .bind(user.id)
     .fetch_all(&state.pool)
     .await?;
     Ok(rows
@@ -371,7 +397,10 @@ async fn activity(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem
     let rows: Vec<ActivityRow> = sqlx::query_as(
         "SELECT CAST(n.id AS SIGNED) AS id, CAST(n.deal_id AS SIGNED) AS deal_id, c.id AS customer_id, n.message,
                 c.name AS customer_name, n.notification_type, n.actor_name,
-                DATE_FORMAT(n.created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at
+                -- A deadline reminder happens at its deadline, not when it was scheduled.
+                DATE_FORMAT(CASE WHEN n.notification_type = 'activity_deadline_reminder'
+                                 THEN n.due_at ELSE n.created_at END,
+                            '%Y-%m-%dT%H:%i:%sZ') AS created_at
            FROM notifications n
            LEFT JOIN deals d ON d.id = n.deal_id AND d.deleted_at IS NULL
            JOIN customers c ON c.id = COALESCE(d.customer_id, n.customer_id)
@@ -380,15 +409,16 @@ async fn activity(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem
             -- Signature status is emailed to the sender, so it is not listed here.
             AND (n.notification_type IS NULL OR n.notification_type NOT IN
                  ('signature_viewed', 'signature_signed', 'signature_declined'))
+            -- Deadline reminders stay until dismissed or the activity is completed.
             AND CASE WHEN n.notification_type = 'activity_deadline_reminder'
-                     THEN n.due_at <= UTC_TIMESTAMP() AND n.due_at > UTC_TIMESTAMP() - INTERVAL 1 MINUTE
+                     THEN n.due_at <= UTC_TIMESTAMP()
                      ELSE n.due_at <= NOW() END
             AND (n.notification_type != 'activity_deadline_reminder' OR EXISTS (
                   SELECT 1 FROM deal_activities da
                    WHERE da.deal_id = n.deal_id AND da.deleted_at IS NULL AND da.is_completed = 0
                      AND da.deadline IS NOT NULL AND TIME(da.deadline) <> '00:00:00'
                      AND LEFT(da.name, 255) = n.message))
-          ORDER BY n.created_at DESC LIMIT 50",
+          ORDER BY created_at DESC LIMIT 50",
     )
     .bind(user_id)
     .fetch_all(&state.pool)

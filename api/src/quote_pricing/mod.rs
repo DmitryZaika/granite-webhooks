@@ -425,7 +425,7 @@ pub fn sold_out_message(colors: &[String]) -> String {
 }
 
 /// `sinkShapeByCode`.
-fn sink_shape_by_code(code: f64) -> &'static str {
+pub(crate) fn sink_shape_by_code(code: f64) -> &'static str {
     const SPLITS: [&str; 5] = ["double", "60/40", "40/60", "70/30", "30/70"];
     const SQUARE: [&str; 5] = [
         "double-square",

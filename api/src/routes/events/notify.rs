@@ -238,6 +238,16 @@ async fn email_sender(
     pool: &MySqlPool,
     booking: &Booking<'_>,
 ) -> Result<(Option<String>, String), sqlx::Error> {
+    sender_for(pool, booking.company_id, booking.customer_id, booking.user_id).await
+}
+
+/// The customer's sales rep's (else `user_id`'s) name and sending address.
+pub async fn sender_for(
+    pool: &MySqlPool,
+    company_id: i32,
+    customer_id: i32,
+    user_id: i32,
+) -> Result<(Option<String>, String), sqlx::Error> {
     type Sender = (String, Option<String>, Option<String>);
     let rep: Option<Sender> = sqlx::query_as(
         "SELECT u.email, u.email_name, co.domain FROM customers c
@@ -245,8 +255,8 @@ async fn email_sender(
            JOIN company co ON co.id = c.company_id
           WHERE c.id = ? AND c.company_id = ? AND c.deleted_at IS NULL LIMIT 1",
     )
-    .bind(booking.customer_id)
-    .bind(booking.company_id)
+    .bind(customer_id)
+    .bind(company_id)
     .fetch_optional(pool)
     .await?;
     let sender = match rep {
@@ -256,8 +266,8 @@ async fn email_sender(
                 "SELECT u.email, u.email_name, co.domain FROM users u JOIN company co ON co.id = u.company_id
                   WHERE u.id = ? AND u.company_id = ? AND u.is_deleted = 0",
             )
-            .bind(booking.user_id)
-            .bind(booking.company_id)
+            .bind(user_id)
+            .bind(company_id)
             .fetch_optional(pool)
             .await?
         }
@@ -273,7 +283,7 @@ async fn email_sender(
     ))
 }
 
-fn escape_html(text: &str) -> String {
+pub fn escape_html(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

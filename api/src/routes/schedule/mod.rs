@@ -3,10 +3,13 @@
 //!
 //! - `GET /v1/schedule/day-map` → a map of the company and a day's stops
 //! - `POST /v1/schedule/optimize-route` → reorder a day's stops by drive time
+//! - `/v1/schedule/notifications` → admins' texts and emails to customers
+//!   before their appointments (`notifications`)
 //!
 //! Replaces the Remix `api.schedule-day-map` and `api.schedule-optimize-route`.
 
 pub mod board;
+pub mod notifications;
 pub mod route;
 
 use crate::auth::EmployeeUser;
@@ -36,6 +39,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(board::my_schedule))
         .routes(routes!(board::people))
         .routes(routes!(board::set_color))
+        .routes(routes!(notifications::list, notifications::create))
+        .routes(routes!(notifications::update, notifications::delete))
 }
 
 /// The company's address, trimmed; `None` when it has none.

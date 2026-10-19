@@ -116,6 +116,57 @@ impl TelegramBots {
         }
     }
 
+    /// Sends `text` with an inline keyboard: rows of `{"text", "url"}` or
+    /// `{"text", "callback_data"}` buttons. Returns the message id, or None
+    /// when it was not sent (no token, blocked bot, network); failures are
+    /// logged.
+    pub async fn send_with_keyboard(
+        &self,
+        bot: Bot,
+        chat_id: i64,
+        text: &str,
+        rows: &[Vec<serde_json::Value>],
+    ) -> Option<i64> {
+        #[derive(Deserialize)]
+        struct Sent {
+            message_id: i64,
+        }
+        #[derive(Deserialize)]
+        struct Answer {
+            ok: bool,
+            result: Option<Sent>,
+        }
+        let token = self.token(bot)?;
+        let body = serde_json::json!({
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": { "inline_keyboard": rows },
+        });
+        let result = self
+            .http
+            .post(format!("{}/bot{token}/sendMessage", self.api_base))
+            .json(&body)
+            .send()
+            .await;
+        match result {
+            Ok(response) if response.status().is_success() => response
+                .json::<Answer>()
+                .await
+                .ok()
+                .filter(|answer| answer.ok)
+                .and_then(|answer| answer.result)
+                .map(|sent| sent.message_id),
+            Ok(response) => {
+                tracing::warn!(?bot, status = %response.status(), "telegram sendMessage refused");
+                None
+            }
+            Err(err) => {
+                tracing::warn!(?bot, error = %err.without_url(), "telegram sendMessage failed");
+                None
+            }
+        }
+    }
+
     /// Whether `bot` can message `chat_id`: Some(true) yes, Some(false) no
     /// (blocked, chat gone), None when it could not be checked (no token,
     /// network error, unexpected answer).

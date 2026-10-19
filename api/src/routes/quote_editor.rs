@@ -240,7 +240,7 @@ fn new_id(prefix: &str) -> String {
 
 /// The lines a quote gets for the extras its list (`offered`, with the shared
 /// extras applied) marks "always include".
-fn always_included_items(offered: &Value) -> Vec<Value> {
+pub(crate) fn always_included_items(offered: &Value) -> Vec<Value> {
     quote_pricing::js::arr(Some(offered), "arrOtherItems")
         .iter()
         .filter(|o| quote_pricing::js::on(o.get("alwaysIncludeOnQuote")))
@@ -728,7 +728,7 @@ pub struct QuoteDetail {
     pub autosave: Option<Autosave>,
 }
 
-fn icon_url(url: &str) -> String {
+pub(crate) fn icon_url(url: &str) -> String {
     url.rfind('.').map_or_else(
         || format!("{url}-icon"),
         |dot| format!("{}-icon{}", &url[..dot], &url[dot..]),
@@ -1960,7 +1960,7 @@ pub async fn copy_quote(
 }
 
 /// 24 random bytes as hex (`generateToken`).
-fn token() -> ApiResult<String> {
+pub(crate) fn token() -> ApiResult<String> {
     let mut bytes = [0u8; 24];
     getrandom::fill(&mut bytes).map_err(|_| ApiError::Internal("no randomness".into()))?;
     Ok(bytes.iter().fold(String::new(), |mut out, b| {

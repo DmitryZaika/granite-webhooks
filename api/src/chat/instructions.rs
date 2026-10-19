@@ -208,6 +208,138 @@ fn has_query_number(text: &Text, terms: &[String]) -> bool {
         .any(|t| is_number(t) && count_words(t, &text.body) > 0)
 }
 
+/// Typos between two words or numbers: letters added, dropped, changed, or
+/// two neighbours swapped ("speical" → "special", "154999" → "15499").
+fn typo_distance(a: &[char], b: &[char]) -> usize {
+    let mut d = vec![vec![0; b.len() + 1]; a.len() + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for j in 0..=b.len() {
+        d[0][j] = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            d[i][j] = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+            }
+        }
+    }
+    d[a.len()][b.len()]
+}
+
+/// How many typos a term may carry and still be recognised: one for
+/// numbers of 4+ digits and words of 5+ letters, two for words of 8+.
+/// Shorter terms are left alone, too many words sit one letter apart.
+fn allowed_typos(term: &str) -> usize {
+    let len = js_len(term);
+    if is_number(term) {
+        usize::from(len >= 4)
+    } else if len >= 8 {
+        2
+    } else {
+        usize::from(len >= 5)
+    }
+}
+
+/// A query term no instruction has, and the closest word or number one does.
+struct Correction {
+    typed: String,
+    meant: String,
+}
+
+/// The user's misspelled words and mistyped numbers, each mapped to the
+/// closest one the instructions actually use.
+fn corrections(texts: &[Text], terms: &[String]) -> Vec<Correction> {
+    let missing: Vec<&String> = terms
+        .iter()
+        .filter(|t| allowed_typos(t) > 0)
+        .filter(|t| {
+            texts
+                .iter()
+                .all(|x| count_words(t, &x.title) == 0 && count_words(t, &x.body) == 0)
+        })
+        .collect();
+    if missing.is_empty() {
+        return Vec::new();
+    }
+    let words: HashSet<&str> = texts
+        .iter()
+        .flat_map(|x| split_non_word(&x.title).into_iter().chain(split_non_word(&x.body)))
+        .filter(|w| js_len(w) >= 3)
+        .collect();
+    missing
+        .into_iter()
+        .filter_map(|typed| {
+            let max = allowed_typos(typed);
+            let typed_chars: Vec<char> = typed.chars().collect();
+            words
+                .iter()
+                .filter(|w| is_number(w) == is_number(typed))
+                .filter(|w| w.chars().count().abs_diff(typed_chars.len()) <= max)
+                .map(|w| (typo_distance(&typed_chars, &w.chars().collect::<Vec<_>>()), *w))
+                .filter(|(d, _)| *d <= max)
+                .min()
+                .map(|(_, meant)| Correction {
+                    typed: typed.clone(),
+                    meant: meant.to_string(),
+                })
+        })
+        .collect()
+}
+
+/// Query terms with each typo replaced by what the user meant.
+fn corrected_terms(texts: &[Text], terms: Vec<String>) -> Vec<String> {
+    let fixes = corrections(texts, &terms);
+    terms
+        .into_iter()
+        .map(|t| {
+            fixes
+                .iter()
+                .find(|c| c.typed == t)
+                .map_or(t, |c| c.meant.clone())
+        })
+        .collect()
+}
+
+/// "15499" → "15,499"; words stay as they are.
+fn readable(term: &str) -> String {
+    if !is_number(term) {
+        return term.to_string();
+    }
+    let mut out = String::new();
+    for (i, c) in term.chars().enumerate() {
+        if i > 0 && (term.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A user who mistyped something ("$154999" for "$15,499", "calacata" for
+/// "calacatta") gets the closest match instead of a question back.
+fn typo_hint(texts: &[Text], query: &str) -> String {
+    let fixes = corrections(texts, &query_terms(query));
+    if fixes.is_empty() {
+        return String::new();
+    }
+    let list: Vec<String> = fixes
+        .iter()
+        .map(|c| format!("\"{}\" → \"{}\"", readable(&c.typed), readable(&c.meant)))
+        .collect();
+    format!(
+        "LIKELY TYPOS: No instruction has what the user typed, but they have something one or two characters off: {}. Unless a correction plainly does not fit the question, treat it as what the user meant and answer without asking them to confirm. Start with one short line saying what you used, like \"Showing **{}** (closest match to {}).\"\n\n",
+        list.join(", "),
+        readable(&fixes[0].meant),
+        readable(&fixes[0].typed),
+    )
+}
+
 /// Lowercased title and plain body of one instruction, worked out once.
 struct Text {
     title: String,
@@ -535,9 +667,10 @@ pub fn select_for_context(instructions: &[Instruction], query: &str) -> Vec<Inst
         return Vec::new();
     }
     let budget = CONTEXT_CHAR_BUDGET;
-    let terms = query_terms(query);
     let video = is_video_or_link_query(query);
     let texts: Vec<Text> = instructions.iter().map(Text::of).collect();
+    // Typos ("speical", "$154999") count as what the user meant.
+    let terms = corrected_terms(&texts, query_terms(query));
     let ranked: Vec<(usize, usize, usize)> = texts
         .iter()
         .enumerate()
@@ -687,7 +820,8 @@ pub fn instruction_context(instructions: &[Instruction], query: &str) -> String 
         ""
     };
     format!(
-        "{}{procedure}{}SEARCH ALL INSTRUCTIONS: Check every BODY below before answering. Details are often in a later instruction, not the first one that merely mentions the topic. A passing mention (for example \"ACH is an accepted payment method\") is not the answer if another BODY has the actual details (account numbers, routing, rates, steps, contacts). Only say the information is missing after checking every instruction.\n\nHere are the instructions you can use, each TITLE is linked to its own BODY:\n\n{}",
+        "{}{}{procedure}{}SEARCH ALL INSTRUCTIONS: Check every BODY below before answering. Details are often in a later instruction, not the first one that merely mentions the topic. A passing mention (for example \"ACH is an accepted payment method\") is not the answer if another BODY has the actual details (account numbers, routing, rates, steps, contacts). Only say the information is missing after checking every instruction.\n\nHere are the instructions you can use, each TITLE is linked to its own BODY:\n\n{}",
+        typo_hint(&texts, query),
         price_query_hint(&selected, &texts, query),
         video_link_hint(&selected, &texts, query),
         entries.join("\n\n")
@@ -997,5 +1131,57 @@ mod tests {
             assert_eq!(selected[0].id, 96, "{query}");
         }
         assert_eq!(join_digit_groups("$1,234,567 and 12,34"), "$1234567 and 12,34");
+    }
+
+    #[test]
+    fn a_price_one_typo_off_is_found() {
+        let filler = "special order notes ".repeat(600);
+        let mut all: Vec<Instruction> = (1..=10)
+            .map(|id| instruction(id, &format!("Handbook {id}"), &filler))
+            .collect();
+        let packages = format!(
+            "{} Two Full Remodel packages: $11,999 and $15,499.",
+            "quote rules ".repeat(3000)
+        );
+        all.push(instruction(96, "Handbook - 3: Quotes", &packages));
+
+        for query in [
+            "Show me the special for $154999",
+            "Show me the special for $1549",
+            "Show me the special for $15599",
+            "Show me the special for $14599",
+        ] {
+            let selected = select_for_context(&all, query);
+            assert_eq!(selected[0].id, 96, "{query}");
+            let context = instruction_context(&all, query);
+            assert!(context.contains("LIKELY TYPOS"), "{query}");
+            assert!(context.contains("→ \"15,499\""), "{query}");
+        }
+        let exact = instruction_context(&all, "Show me the special for $15499");
+        assert!(!exact.contains("LIKELY TYPOS"));
+        let chars = |s: &str| s.chars().collect::<Vec<_>>();
+        assert_eq!(typo_distance(&chars("154999"), &chars("11999")), 2);
+    }
+
+    #[test]
+    fn a_misspelled_word_is_found() {
+        let filler = "general shop notes ".repeat(600);
+        let mut all: Vec<Instruction> = (1..=10)
+            .map(|id| instruction(id, &format!("Handbook {id}"), &filler))
+            .collect();
+        all.push(instruction(
+            42,
+            "Calacatta Vagli",
+            "Calacatta Vagli is cut on the waterjet only.",
+        ));
+
+        for query in ["how do we cut calacata vagli", "how do we cut calcatta vagil"] {
+            let selected = select_for_context(&all, query);
+            assert_eq!(selected[0].id, 42, "{query}");
+            let context = instruction_context(&all, query);
+            assert!(context.contains("→ \"calacatta\""), "{query}");
+        }
+        let exact = instruction_context(&all, "how do we cut calacatta vagli");
+        assert!(!exact.contains("LIKELY TYPOS"));
     }
 }

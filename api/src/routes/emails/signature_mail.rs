@@ -5,7 +5,7 @@
 use common::utils::email_body::{escape_html, is_html_markup, plain_email_to_html};
 use std::fmt::Write as _;
 
-const EMAIL_FONT: &str = "font-family:Inter,'Helvetica Neue',Arial,sans-serif;";
+pub(crate) const EMAIL_FONT: &str = "font-family:Inter,'Helvetica Neue',Arial,sans-serif;";
 
 /// Who the invitation comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +69,7 @@ pub(crate) fn card_html(branding: &Branding, rows: &str) -> String {
     )
 }
 
-fn button_html(href: &str, label: &str) -> String {
+pub(crate) fn button_html(href: &str, label: &str) -> String {
     format!(
         "<a href=\"{}\" style=\"{EMAIL_FONT}display:inline-block;background:#ffd400;color:#18181b;text-decoration:none;font-size:15px;font-weight:700;padding:14px 34px;border-radius:999px;\">{label}</a>",
         escape_html(href)

@@ -153,7 +153,7 @@ fn adjusted_price(base: f64, adjust: f64, kind: Option<&str>) -> f64 {
     js_round(price * 100.0) / 100.0
 }
 
-fn price_group_of<'a>(product: &'a Value, variant: Option<&'a Value>) -> Option<&'a Value> {
+pub(crate) fn price_group_of<'a>(product: &'a Value, variant: Option<&'a Value>) -> Option<&'a Value> {
     let groups = arr(Some(product), "arrPriceGroups");
     if truthy(get(variant, "priceGroup")) {
         let name = get(variant, "priceGroup");
@@ -169,7 +169,7 @@ fn price_group_of<'a>(product: &'a Value, variant: Option<&'a Value>) -> Option<
     })
 }
 
-fn variant_price(variant: Option<&Value>, group: Option<&Value>) -> Option<f64> {
+pub(crate) fn variant_price(variant: Option<&Value>, group: Option<&Value>) -> Option<f64> {
     if let Some(price) = num(variant, "price") {
         return Some(price);
     }

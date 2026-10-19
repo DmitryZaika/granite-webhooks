@@ -27490,270 +27490,6 @@
         ]
       }
     },
-    "/v1/quotes/{id}/files": {
-      "get": {
-        "tags": [
-          "quotes"
-        ],
-        "summary": "List a quote's files",
-        "description": "Newest first. Private files come with a link valid for an hour.",
-        "operationId": "list_quote_files",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Quote id",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Files",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/QuoteFile"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Caller is not an employee or admin",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such live quote in the company",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Database error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session_cookie": []
-          }
-        ]
-      },
-      "post": {
-        "tags": [
-          "quotes"
-        ],
-        "summary": "Attach uploaded files to a quote",
-        "description": "Each URL must be a file uploaded to the `quote-files` folder.",
-        "operationId": "attach_quote_files",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Quote id",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NewQuoteFiles"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Attached"
-          },
-          "400": {
-            "description": "No files, a blank name, or a URL that is not an uploaded quote file",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Caller is not an employee or admin",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such live quote in the company",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Database or storage error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Uploads are not configured on this server",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session_cookie": []
-          }
-        ]
-      }
-    },
-    "/v1/quotes/{id}/files/{file_id}": {
-      "delete": {
-        "tags": [
-          "quotes"
-        ],
-        "summary": "Delete a quote file",
-        "description": "Removes the row and the stored file.",
-        "operationId": "delete_quote_file",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Quote id",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          },
-          {
-            "name": "file_id",
-            "in": "path",
-            "description": "File id",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Deleted"
-          },
-          "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Caller is not an employee or admin",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such file on a live quote of the company",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Database error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session_cookie": []
-          }
-        ]
-      }
-    },
     "/v1/quotes/suggestions": {
       "get": {
         "tags": [
@@ -28005,6 +27741,238 @@
           },
           "409": {
             "description": "Already signed, or the link is off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/companies/{company_id}/online-quote": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Start an online quote",
+        "description": "What the company's online quote builder offers: the colors (stones in\nstock with a photo that its default price list prices, never their\nprices), the sinks on display with a photo, the cooktop cutout and the\ncounter depth to start with. `available` is false when the company has no\nprice list with prices or no color to offer. Next, price the drawing with\n`POST .../online-quote/prices`. No session needed.",
+        "operationId": "get_online_quote_setup",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the builder offers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnlineQuoteSetup"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/companies/{company_id}/online-quote/prices": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Price an online quote",
+        "description": "The total with tax of each color for the drawing, priced like the quote\npage prices a quote made now with the company's default price list. A\ncolor's total is null when the list cannot price all of it. Nothing is\nsaved; save and email it with `POST .../online-quotes`. No session needed.",
+        "operationId": "price_online_quote",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnlineDrawing"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Each color's total",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnlinePrices"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A piece the builder does not draw (more than 3 sides, corners that are not square, sizes out of range, unknown fields), more than 6 cutouts, a sink or color it does not offer, or not 1 to 10 colors",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The company has no prices for online quotes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/companies/{company_id}/online-quotes": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Send an online quote",
+        "description": "Saves the drawing as a quote of the customer (active, revision 1, priced\nlike `POST .../online-quote/prices`, the price list's tax, payment terms\nand expiration), emails the customer a link to it and tells the team. A\ncustomer the company does not know by this email or phone (last 10\ndigits) becomes a lead (source `leads`, from the `website`) and the quote\nhas no sales rep; the sales managers get it in Telegram (lead alerts) with\na button per sales rep to assign it. A known customer's quote gets their\nsales rep, who is told in Telegram or by email; a known customer without\none goes to the managers. When the email cannot be sent the quote is still\nsaved (`emailed` false) and the team is told. At most 3 quotes an address\na day. No session needed.",
+        "operationId": "create_online_quote",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnlineQuoteInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Saved (and emailed unless `emailed` is false)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnlineQuoteSent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name, an email that is not one, a phone without 10 digits, or a drawing or color `POST .../online-quote/prices` refuses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The company has no prices for online quotes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "This address already got 3 online quotes today, or the company 30 this hour",
             "content": {
               "application/json": {
                 "schema": {
@@ -34599,6 +34567,298 @@
           },
           "403": {
             "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/notifications": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "List the customer notification rules",
+        "description": "Text rules are left out while the company has no `CloudTalk` or\n`RingCentral`.",
+        "operationId": "list_schedule_notifications",
+        "responses": {
+          "200": {
+            "description": "The rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationRules"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Add a customer notification rule",
+        "description": "A text needs `CloudTalk` or `RingCentral`; an email needs a subject.",
+        "operationId": "create_schedule_notification",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationRuleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid field, unknown calendar, or texting not set up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/notifications/{id}": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Edit a customer notification rule",
+        "operationId": "update_schedule_notification",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationRuleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Invalid field, unknown calendar, or texting not set up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rule in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Delete a customer notification rule",
+        "operationId": "delete_schedule_notification",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rule in the caller's company",
             "content": {
               "application/json": {
                 "schema": {
@@ -47420,10 +47680,10 @@
       },
       "Channel": {
         "type": "string",
-        "description": "Which kind of message.",
+        "description": "How a rule reaches the customer.",
         "enum": [
-          "email",
-          "sms"
+          "sms",
+          "email"
         ]
       },
       "ChatInput": {
@@ -49799,6 +50059,21 @@
             "type": "integer",
             "format": "int32",
             "description": "Id of the new model."
+          }
+        }
+      },
+      "CreatedRule": {
+        "type": "object",
+        "description": "`POST /v1/schedule/notifications`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The new rule.",
+            "minimum": 0
           }
         }
       },
@@ -52263,6 +52538,10 @@
               "$ref": "#/components/schemas/NotificationRef"
             },
             "description": "The notifications to dismiss."
+          },
+          "hide_only": {
+            "type": "boolean",
+            "description": "Remove email threads from the bell without marking them read. They\nshow again when a newer message arrives."
           }
         }
       },
@@ -58229,40 +58508,6 @@
         },
         "additionalProperties": false
       },
-      "NewQuoteFile": {
-        "type": "object",
-        "description": "One uploaded file to attach.",
-        "required": [
-          "url",
-          "name"
-        ],
-        "properties": {
-          "url": {
-            "type": "string",
-            "description": "Public URL from `POST /v1/uploads` (folder `quote-files`)."
-          },
-          "name": {
-            "type": "string",
-            "description": "Original file name."
-          }
-        }
-      },
-      "NewQuoteFiles": {
-        "type": "object",
-        "description": "Body of `POST /v1/quotes/{id}/files`.",
-        "required": [
-          "files"
-        ],
-        "properties": {
-          "files": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/NewQuoteFile"
-            },
-            "description": "Files already uploaded with `POST /v1/uploads`."
-          }
-        }
-      },
       "NewQuoteForm": {
         "type": "object",
         "description": "A new form.",
@@ -58762,6 +59007,139 @@
           }
         }
       },
+      "NotificationRule": {
+        "type": "object",
+        "description": "A text or email sent before each appointment on a calendar.",
+        "required": [
+          "id",
+          "calendar_id",
+          "channel",
+          "offset_value",
+          "offset_unit",
+          "body",
+          "is_active"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rule id."
+          },
+          "calendar_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The calendar whose appointments it is sent for."
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel",
+            "description": "`sms` or `email`."
+          },
+          "offset_value": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many `offset_unit`s before the appointment it is sent."
+          },
+          "offset_unit": {
+            "$ref": "#/components/schemas/OffsetUnit",
+            "description": "`minutes`, `hours` or `days`."
+          },
+          "send_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`days` rules: store time (`HH:MM`) it is sent that day; null for\nexactly `offset_value` days before the start."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email subject (null for texts); may hold `{{variables}}`."
+          },
+          "body": {
+            "type": "string",
+            "description": "The text, plain; may hold `{{variables}}`."
+          },
+          "is_active": {
+            "type": "boolean",
+            "description": "Off: kept, but nothing is sent."
+          }
+        }
+      },
+      "NotificationRuleInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/schedule/notifications` and `PUT /v1/schedule/notifications/{id}`.",
+        "required": [
+          "calendar_id",
+          "channel",
+          "offset_value",
+          "offset_unit",
+          "body"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "A calendar of the company."
+          },
+          "channel": {
+            "$ref": "#/components/schemas/Channel",
+            "description": "`sms` needs `CloudTalk` or `RingCentral`."
+          },
+          "offset_value": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 to 30 days' worth of `offset_unit`."
+          },
+          "offset_unit": {
+            "$ref": "#/components/schemas/OffsetUnit"
+          },
+          "send_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`days` rules only: `HH:MM` store time."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Required for email (at most 255 characters)."
+          },
+          "body": {
+            "type": "string",
+            "description": "Up to 1600 characters for a text."
+          },
+          "is_active": {
+            "type": "boolean",
+            "description": "Default on."
+          }
+        }
+      },
+      "NotificationRules": {
+        "type": "object",
+        "description": "`GET /v1/schedule/notifications`.",
+        "required": [
+          "rules",
+          "sms_enabled"
+        ],
+        "properties": {
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationRule"
+            },
+            "description": "Rules, oldest first. Text rules are left out while texting is not set up."
+          },
+          "sms_enabled": {
+            "type": "boolean",
+            "description": "The company texts through `CloudTalk` or `RingCentral`."
+          }
+        }
+      },
       "Notifications": {
         "type": "object",
         "description": "`GET /v1/notifications`.",
@@ -58777,6 +59155,15 @@
             "description": "Newest first."
           }
         }
+      },
+      "OffsetUnit": {
+        "type": "string",
+        "description": "What `offset_value` counts.",
+        "enum": [
+          "minutes",
+          "hours",
+          "days"
+        ]
       },
       "OnboardingFeedback": {
         "type": "object",
@@ -58970,6 +59357,518 @@
             "description": "Latest change (UTC, ISO 8601)."
           }
         }
+      },
+      "OnlineColor": {
+        "type": "object",
+        "description": "A color the customer can pick: a stone in stock with a photo that the\nprice list prices.",
+        "required": [
+          "product",
+          "color",
+          "url",
+          "icon",
+          "stone_id"
+        ],
+        "properties": {
+          "product": {
+            "type": "string",
+            "description": "Material, e.g. `Quartz`; send it back as `product`."
+          },
+          "color": {
+            "type": "string",
+            "description": "Color, e.g. `Calacatta Laza`; send it back as `color`."
+          },
+          "url": {
+            "type": "string",
+            "description": "Photo of the stone."
+          },
+          "icon": {
+            "type": "string",
+            "description": "Small copy of the photo."
+          },
+          "stone_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "A stone of this color: its installed photos are at\n`GET /v1/public/companies/{company_id}/stones/{stone_id}/images`."
+          }
+        }
+      },
+      "OnlineColorPick": {
+        "type": "object",
+        "description": "A color to price: one of the builder's `colors`.",
+        "required": [
+          "product",
+          "color"
+        ],
+        "properties": {
+          "product": {
+            "type": "string",
+            "description": "Its `product`."
+          },
+          "color": {
+            "type": "string",
+            "description": "Its `color`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OnlineCooktop": {
+        "type": "object",
+        "description": "The cutout every cooktop gets: the price list's default cooktop cutout.",
+        "required": [
+          "width",
+          "depth",
+          "burners"
+        ],
+        "properties": {
+          "width": {
+            "type": "number",
+            "format": "double",
+            "description": "Width, inches."
+          },
+          "depth": {
+            "type": "number",
+            "format": "double",
+            "description": "Depth, inches."
+          },
+          "burners": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Burners drawn on it."
+          }
+        }
+      },
+      "OnlineCutout": {
+        "type": "object",
+        "description": "A sink or cooktop cutout in a run.",
+        "required": [
+          "id",
+          "kind",
+          "anchorCorner",
+          "along",
+          "across"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Cutout id: letters, digits, `-` and `_`, up to 40, unique in the drawing."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OnlineCutoutKind",
+            "description": "What it is cut for."
+          },
+          "anchorCorner": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Run corner its position is measured from: 0 start-left, 1 end-left,\n2 end-right, 3 start-right."
+          },
+          "along": {
+            "type": "number",
+            "format": "double",
+            "description": "Inches along the run from that corner to the cutout's center."
+          },
+          "across": {
+            "type": "number",
+            "format": "double",
+            "description": "Inches across the run from that corner to the cutout's center."
+          },
+          "sinkModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A sink from the builder's `sinks` (its name); its size, type, shape\nand faucet holes are the model's. Null for the customer's own sink:\na `sink_type` cutout of `width` × `depth`. Ignored for cooktops,\nwhich are always the builder's `cooktop`."
+          },
+          "sinkType": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OnlineSinkType",
+                "description": "Own sink: how it is mounted; null = undermount. Ignored otherwise."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "width": {
+            "type": "number",
+            "format": "double",
+            "description": "Own sink: cutout width, 10 to 60 inches."
+          },
+          "depth": {
+            "type": "number",
+            "format": "double",
+            "description": "Own sink: cutout depth, 10 to 30 inches."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OnlineCutoutKind": {
+        "type": "string",
+        "description": "`sink` or `cooktop`.",
+        "enum": [
+          "sink",
+          "cooktop"
+        ]
+      },
+      "OnlineDrawing": {
+        "type": "object",
+        "description": "Body of `POST /v1/public/companies/{company_id}/online-quote/prices`.",
+        "required": [
+          "pieces",
+          "colors"
+        ],
+        "properties": {
+          "pieces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnlinePiece"
+            },
+            "description": "1 to 8 countertops."
+          },
+          "colors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnlineColorPick"
+            },
+            "description": "1 to 10 colors to compare."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OnlineEdge": {
+        "type": "object",
+        "description": "One edge of a piece.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/OnlineEdgeType",
+            "description": "`finished` (polished with the color's first edge profile),\n`unfinished` (against a wall) or `splash` (a backsplash on it)."
+          },
+          "splashHeight": {
+            "type": "number",
+            "format": "double",
+            "description": "Backsplash height, inches: 1 to 96 for `splash`; ignored otherwise."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OnlineEdgeType": {
+        "type": "string",
+        "description": "An edge: polished, plain against a wall, or with a backsplash on it.",
+        "enum": [
+          "finished",
+          "unfinished",
+          "splash"
+        ]
+      },
+      "OnlinePiece": {
+        "type": "object",
+        "description": "A countertop: 1 run (straight or an island), 2 (an L) or 3 (a U), as the\nquote drawing stores counters.",
+        "required": [
+          "id",
+          "x",
+          "y",
+          "runs",
+          "edges"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Piece id: letters, digits, `-` and `_`, up to 40, unique in the drawing."
+          },
+          "x": {
+            "type": "number",
+            "format": "double",
+            "description": "Where the first run starts on the drawing, inches."
+          },
+          "y": {
+            "type": "number",
+            "format": "double",
+            "description": "Where the first run starts on the drawing, inches (down is positive)."
+          },
+          "angle": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Direction of the first run in 22.5° steps (0 right, 4 down, -4 up)."
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnlineRun"
+            },
+            "description": "1 to 3 runs."
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnlineEdge"
+            },
+            "description": "2 × runs + 2 edges in drawing order: the left side of each run, the\nend, the right side of each run (last run first), then the start."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OnlinePrice": {
+        "type": "object",
+        "description": "One color's price.",
+        "required": [
+          "product",
+          "color"
+        ],
+        "properties": {
+          "product": {
+            "type": "string",
+            "description": "Material."
+          },
+          "color": {
+            "type": "string",
+            "description": "Color."
+          },
+          "total": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Total with tax, dollars; null when the price list cannot price all of\nit (the company gives that price itself)."
+          }
+        }
+      },
+      "OnlinePrices": {
+        "type": "object",
+        "description": "Each color's total.",
+        "required": [
+          "prices"
+        ],
+        "properties": {
+          "prices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnlinePrice"
+            },
+            "description": "In the order the colors were sent."
+          }
+        }
+      },
+      "OnlineQuoteInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/public/companies/{company_id}/online-quotes`.",
+        "required": [
+          "name",
+          "email",
+          "phone",
+          "pieces",
+          "colors"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The customer's name, 1 to 100 characters."
+          },
+          "email": {
+            "type": "string",
+            "description": "Where the quote is emailed."
+          },
+          "phone": {
+            "type": "string",
+            "description": "Phone with its area code (10 to 15 digits)."
+          },
+          "pieces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnlinePiece"
+            },
+            "description": "1 to 8 countertops."
+          },
+          "colors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnlineColorPick"
+            },
+            "description": "1 to 10 colors, one quote option each."
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A hidden form field people leave empty. When it is filled, the request\nis answered as sent and nothing is saved or sent."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OnlineQuoteSent": {
+        "type": "object",
+        "description": "The saved quote.",
+        "required": [
+          "email",
+          "emailed",
+          "prices"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Where the quote was emailed."
+          },
+          "emailed": {
+            "type": "boolean",
+            "description": "False when the quote was saved but the email could not be sent; the\nteam is told and sends it."
+          },
+          "prices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnlinePrice"
+            },
+            "description": "Each color's total, as on the quote."
+          }
+        }
+      },
+      "OnlineQuoteSetup": {
+        "type": "object",
+        "description": "What the online quote offers.",
+        "required": [
+          "company_name",
+          "available",
+          "default_depth",
+          "colors",
+          "sinks",
+          "cooktop"
+        ],
+        "properties": {
+          "company_name": {
+            "type": "string",
+            "description": "Company name."
+          },
+          "logo_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company logo; null when it has none."
+          },
+          "available": {
+            "type": "boolean",
+            "description": "The company prices quotes online: it has a price list with prices and\nat least one color to offer. When false, show \"call us\" instead."
+          },
+          "default_depth": {
+            "type": "number",
+            "format": "double",
+            "description": "Counter depth (front to back) to start with, inches."
+          },
+          "colors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnlineColor"
+            },
+            "description": "Colors to pick from, by material then name. Prices are never listed."
+          },
+          "sinks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnlineSink"
+            },
+            "description": "Sinks to pick from."
+          },
+          "cooktop": {
+            "$ref": "#/components/schemas/OnlineCooktop",
+            "description": "The cooktop cutout."
+          }
+        }
+      },
+      "OnlineRun": {
+        "type": "object",
+        "description": "A straight run of a piece.",
+        "required": [
+          "length",
+          "depth"
+        ],
+        "properties": {
+          "length": {
+            "type": "number",
+            "format": "double",
+            "description": "Length, 6 to 600 inches, measured on the outside of its turns."
+          },
+          "depth": {
+            "type": "number",
+            "format": "double",
+            "description": "Depth (front to back), 6 to 96 inches."
+          },
+          "turn": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Turn from the run before, in 22.5° steps: 0 for the first run, 4 or\n-4 (a right angle) for the others."
+          },
+          "cutouts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnlineCutout"
+            },
+            "description": "Its sink and cooktop cutouts."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OnlineSink": {
+        "type": "object",
+        "description": "A sink the customer can pick: one of the company's sinks on display, with\na photo.",
+        "required": [
+          "name",
+          "sink_type",
+          "sink_shape",
+          "width",
+          "depth",
+          "faucet_holes",
+          "url",
+          "icon"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Model name; send it back as the cutout's `sinkModel`."
+          },
+          "sink_type": {
+            "type": "string",
+            "description": "`undermount`, `dropIn` or `farmer`."
+          },
+          "sink_shape": {
+            "type": "string",
+            "description": "Cutout shape, e.g. `rectangle` or `60/40`."
+          },
+          "width": {
+            "type": "number",
+            "format": "double",
+            "description": "Cutout width, inches."
+          },
+          "depth": {
+            "type": "number",
+            "format": "double",
+            "description": "Cutout depth, inches."
+          },
+          "faucet_holes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Faucet holes drilled for it."
+          },
+          "url": {
+            "type": "string",
+            "description": "Photo of the sink."
+          },
+          "icon": {
+            "type": "string",
+            "description": "Small copy of the photo."
+          }
+        }
+      },
+      "OnlineSinkType": {
+        "type": "string",
+        "description": "How the customer's own sink is mounted: `undermount`, `dropIn` (top-mount)\nor `farmer` (farmhouse).",
+        "enum": [
+          "undermount",
+          "dropIn",
+          "farmer"
+        ]
       },
       "OpenedView": {
         "type": "object",
@@ -62305,45 +63204,6 @@
           }
         }
       },
-      "QuoteFile": {
-        "type": "object",
-        "description": "A file attached to a quote.",
-        "required": [
-          "id",
-          "url",
-          "name"
-        ],
-        "properties": {
-          "id": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Row id."
-          },
-          "url": {
-            "type": "string",
-            "description": "URL the browser can open (presigned for private files)."
-          },
-          "name": {
-            "type": "string",
-            "description": "File name shown in the list."
-          },
-          "created_by": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Who attached it."
-          },
-          "created_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time",
-            "description": "When it was attached."
-          }
-        }
-      },
       "QuoteForm": {
         "type": "object",
         "description": "A form with its layout.",
@@ -63389,7 +64249,10 @@
           "failed",
           "rep_processed",
           "rep_sent",
-          "rep_failed"
+          "rep_failed",
+          "rule_processed",
+          "rule_sent",
+          "rule_failed"
         ],
         "properties": {
           "processed": {
@@ -63420,6 +64283,21 @@
           "rep_failed": {
             "type": "integer",
             "description": "Rep reminders that failed.",
+            "minimum": 0
+          },
+          "rule_processed": {
+            "type": "integer",
+            "description": "Notification-rule messages that were due.",
+            "minimum": 0
+          },
+          "rule_sent": {
+            "type": "integer",
+            "description": "Notification-rule messages sent.",
+            "minimum": 0
+          },
+          "rule_failed": {
+            "type": "integer",
+            "description": "Notification-rule messages that failed.",
             "minimum": 0
           }
         }
@@ -70042,8 +70920,7 @@
           "sms-uploads",
           "supplier-files",
           "company-logos",
-          "quote-forms",
-          "quote-files"
+          "quote-forms"
         ]
       },
       "UploadRequest": {

@@ -46,6 +46,7 @@ pub mod marketing;
 pub mod me;
 pub mod notifications;
 pub mod onboarding;
+pub mod online_quotes;
 pub mod places;
 pub mod public;
 pub mod questionnaires;
@@ -126,6 +127,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(quote_editor::router())
         .merge(quote_lookups::router())
         .merge(quote_portal::router())
+        .merge(online_quotes::router())
         .merge(commissions::router())
         .merge(company_frame::router())
         .merge(quote_forms::router())
