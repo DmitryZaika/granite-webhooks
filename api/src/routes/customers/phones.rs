@@ -355,10 +355,12 @@ pub async fn from_phone(
         .execute(&state.pool)
         .await?
         .last_insert_id();
+    let id = i32::try_from(id).unwrap_or_default();
+    state.webhooks.sync_contacts(user.company_id, id).await;
     Ok((
         StatusCode::CREATED,
         Json(PhoneCustomer {
-            customer_id: i32::try_from(id).unwrap_or_default(),
+            customer_id: id,
             customer_name: name,
         }),
     ))

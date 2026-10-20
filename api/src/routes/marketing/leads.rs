@@ -432,6 +432,7 @@ pub async fn create(
         "file": text(input.file_url.as_ref()).unwrap_or_default(),
     });
     state.webhooks.notify_new_lead(company_id, &lead).await;
+    state.webhooks.sync_contacts(company_id, id).await;
     Ok((StatusCode::CREATED, Json(CreatedLead { id })))
 }
 

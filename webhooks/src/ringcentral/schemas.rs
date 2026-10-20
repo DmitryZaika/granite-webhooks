@@ -280,7 +280,9 @@ pub fn outbound_call_followup_check(
     })
 }
 
-/// `RingCentral`'s own push for a `message-store/instant?type=SMS` subscription.
+/// `RingCentral`'s own push for a `message-store/instant?type=SMS` subscription
+/// (the message itself, inbound only) or a `message-store` one (only what
+/// changed; how texts sent from the `RingCentral` app reach us).
 #[derive(Deserialize, Debug)]
 pub struct RingcentralSmsNotification {
     #[serde(default)]
@@ -300,6 +302,17 @@ struct NotificationMessage {
     subject: Option<String>,
     #[serde(default)]
     attachments: Vec<NotificationAttachment>,
+    /// A `message-store` push: the kinds of message that changed.
+    #[serde(default)]
+    changes: Vec<MessageStoreChange>,
+}
+
+#[derive(Deserialize, Debug)]
+struct MessageStoreChange {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    #[serde(rename = "newCount", default)]
+    new_count: i64,
 }
 
 #[derive(Deserialize, Debug)]
@@ -344,6 +357,26 @@ pub enum NotifiedSms {
 }
 
 impl RingcentralSmsNotification {
+    /// The extension of a `message-store` push that has new texts.
+    pub fn new_sms_extension(&self) -> Option<String> {
+        if !self.event.contains("/message-store") || self.event.contains("/instant") {
+            return None;
+        }
+        let new_texts = self.body.as_ref()?.changes.iter().any(|change| {
+            change.kind.as_deref() == Some("SMS") && change.new_count > 0
+        });
+        new_texts.then(|| extension_from_event(&self.event)).flatten()
+    }
+
+    /// One `message-store` record of `extension`, as its push would carry it.
+    pub fn from_record(extension: &str, record: serde_json::Value) -> Option<NotifiedSms> {
+        Self {
+            event: format!("/restapi/v1.0/account/~/extension/{extension}/message-store"),
+            body: serde_json::from_value(record).ok(),
+        }
+        .into_sms()
+    }
+
     /// The SMS in the same shape the `/ringcentral/sms` routes store. `None` for anything
     /// that is not a one-to-one SMS with both phone numbers.
     pub fn into_sms(self) -> Option<NotifiedSms> {
@@ -572,5 +605,44 @@ mod tests {
             r#"{"body":{"type":"SMS","direction":"Inbound","from":{"phoneNumber":"+16468956758"},"to":[]}}"#,
         );
         assert!(no_recipient.into_sms().is_none());
+    }
+
+    #[test]
+    fn message_store_push_names_the_extension_with_new_texts() {
+        let parse = |json: &str| -> RingcentralSmsNotification { serde_json::from_str(json).unwrap() };
+        let new_sms = parse(
+            r#"{"event":"/restapi/v1.0/account/1/extension/2765489027/message-store","body":{"extensionId":2765489027,"changes":[{"type":"SMS","newCount":1,"updatedCount":0}]}}"#,
+        );
+        assert_eq!(new_sms.new_sms_extension().as_deref(), Some("2765489027"));
+        let only_updated = parse(
+            r#"{"event":"/restapi/v1.0/account/1/extension/5/message-store","body":{"changes":[{"type":"SMS","newCount":0,"updatedCount":2}]}}"#,
+        );
+        assert!(only_updated.new_sms_extension().is_none());
+        let voicemail = parse(
+            r#"{"event":"/restapi/v1.0/account/1/extension/5/message-store","body":{"changes":[{"type":"VoiceMail","newCount":1}]}}"#,
+        );
+        assert!(voicemail.new_sms_extension().is_none());
+        let instant = parse(
+            r#"{"event":"/restapi/v1.0/account/~/extension/5/message-store/instant?type=SMS","body":{"id":5,"type":"SMS","direction":"Inbound","from":{"phoneNumber":"+16468956758"},"to":[{"phoneNumber":"+13173161456"}]}}"#,
+        );
+        assert!(instant.new_sms_extension().is_none());
+    }
+
+    #[test]
+    fn message_store_record_reads_as_an_outbound_sms() {
+        let record = serde_json::json!({
+            "id": 3912429357027_i64, "type": "SMS", "direction": "Outbound",
+            "from": {"phoneNumber": "+13176767938"}, "to": [{"phoneNumber": "+17652421803"}],
+            "subject": "I will be around 9:30am",
+        });
+        let Some(NotifiedSms::Outbound(sms)) =
+            RingcentralSmsNotification::from_record("2765489027", record)
+        else {
+            panic!("not an outbound sms");
+        };
+        assert_eq!(sms.id, Some(3912429357027));
+        assert_eq!((sms.sender(), sms.recipient()), (3176767938, 7652421803));
+        assert_eq!(sms.agent.as_deref(), Some("2765489027"));
+        assert_eq!(sms.text.0, "I will be around 9:30am");
     }
 }

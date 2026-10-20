@@ -10,11 +10,14 @@
 //! - `POST /v1/jobs/sms-followups` → due flow steps, lead-list drip texts and
 //!   scheduled emails and texts
 //! - `POST /v1/jobs/supplier-files` → supplier price files into chunks
+//! - `POST /v1/jobs/contact-sync` → customers into `RingCentral` and
+//!   `CloudTalk` contacts
 //!
 //! Replaces the Remix `api.*.process` cron routes.
 
 mod appointment_reminders;
 pub mod call_points;
+pub mod contact_sync;
 pub mod maintenance_reminders;
 pub mod signature_reminders;
 pub mod sms_followups;
@@ -36,6 +39,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(signature_reminders::run))
         .routes(routes!(sms_followups::run))
         .routes(routes!(supplier_files::run))
+        .routes(routes!(contact_sync::run))
 }
 
 /// The `time-triggered` Lambda, by its key.

@@ -259,8 +259,57 @@ async fn store_outbound_sms(
         }
     }
 }
-/// `RingCentral`'s own webhook (`message-store/instant?type=SMS`), registered by the CRM
-/// when a company connects. Same storage as the `/ringcentral/sms` routes.
+
+/// How far back a `message-store` push looks for texts sent from the
+/// `RingCentral` app; ones already stored are skipped.
+const SENT_LOOKBACK_MINUTES: i64 = 10;
+
+/// Texts `extension` sent lately, stored like the CRM's own sends (a text the
+/// CRM sent itself is already there under its `RingCentral` id).
+async fn store_recent_outbound(pool: &MySqlPool, company_id: i32, extension: &str) -> BasicResponse {
+    let since = (chrono::Utc::now() - chrono::Duration::minutes(SENT_LOOKBACK_MINUTES))
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ");
+    let path = format!(
+        "account/~/extension/{extension}/message-store?messageType=SMS&direction=Outbound&dateFrom={since}&perPage=100"
+    );
+    let client = Client::new();
+    let messages = match common::telephony::ringcentral::request(
+        pool,
+        &client,
+        company_id,
+        reqwest::Method::GET,
+        &path,
+        &common::telephony::ringcentral::Body::Empty,
+        None,
+    )
+    .await
+    {
+        Ok(messages) => messages,
+        Err(error) => {
+            tracing::error!(
+                company_id,
+                status = error.status,
+                "Could not load sent ringcentral texts"
+            );
+            // A 200 still: RingCentral would only retry the same push.
+            return OK_RESPONSE;
+        }
+    };
+    let records = messages["records"].as_array().cloned().unwrap_or_default();
+    for record in records {
+        if let Some(NotifiedSms::Outbound(sms)) =
+            RingcentralSmsNotification::from_record(extension, record)
+        {
+            store_outbound_sms(pool, company_id, &sms).await;
+        }
+    }
+    OK_RESPONSE
+}
+
+/// `RingCentral`'s own webhook, registered by the CRM when a company connects:
+/// `message-store/instant?type=SMS` brings inbound texts, `message-store` says
+/// a text was sent (from the CRM or the `RingCentral` app). Same storage as
+/// the `/ringcentral/sms` routes.
 pub async fn sms_notification(
     headers: HeaderMap,
     _: RingCentralNotificationUser,
@@ -284,6 +333,11 @@ pub async fn sms_notification(
             return BAD_REQUEST.into_response();
         }
     };
+    if let Some(extension) = notification.new_sms_extension() {
+        return store_recent_outbound(&pool, company_id, &extension)
+            .await
+            .into_response();
+    }
     match notification.into_sms() {
         Some(NotifiedSms::Inbound(sms)) => store_inbound_sms(&pool, company_id, &sms).await,
         Some(NotifiedSms::Outbound(sms)) => store_outbound_sms(&pool, company_id, &sms).await,

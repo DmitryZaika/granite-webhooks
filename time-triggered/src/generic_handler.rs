@@ -173,6 +173,10 @@ async fn process_checklist_surveys() -> Result<usize, Error> {
     post_api_job("survey-notifications", "checklist survey notifications").await
 }
 
+async fn process_contact_sync() -> Result<usize, Error> {
+    post_api_job("contact-sync", "contact sync").await
+}
+
 /// Starts the supplier price file job without waiting for it: a big PDF takes
 /// minutes, and the API Lambda keeps working after this request gives up.
 /// Sent to the long-running deployment (`API_STREAM_URL`) when there is one.
@@ -349,8 +353,15 @@ pub(crate) async fn function_handler(
             0
         }
     };
+    let contact_sync_count = match process_contact_sync().await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(?error, "Failed to sync contacts; continuing");
+            0
+        }
+    };
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, and {} e-signature reminders",
+        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, and {} contact syncs",
         processed_email_count,
         reminder_count,
         estimate_reminder_count,
@@ -358,7 +369,8 @@ pub(crate) async fn function_handler(
         sms_followup_count,
         checklist_survey_count,
         call_points_count,
-        signature_reminder_count
+        signature_reminder_count,
+        contact_sync_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);

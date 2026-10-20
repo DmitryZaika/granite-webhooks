@@ -467,11 +467,18 @@ pub fn notify_address(company_id: i32) -> Option<String> {
     (!base.is_empty()).then(|| format!("{base}/ringcentral/notify/{company_id}"))
 }
 
-/// The SMS event filter of each extension.
+/// The SMS event filters of each extension: inbound texts (`instant`), and
+/// any message-store change, which is how a text sent from the `RingCentral`
+/// app shows up.
 pub fn sms_event_filters(extension_ids: &[String]) -> Vec<String> {
     extension_ids
         .iter()
-        .map(|id| format!("/restapi/v1.0/account/~/extension/{id}/message-store/instant?type=SMS"))
+        .flat_map(|id| {
+            [
+                format!("/restapi/v1.0/account/~/extension/{id}/message-store/instant?type=SMS"),
+                format!("/restapi/v1.0/account/~/extension/{id}/message-store"),
+            ]
+        })
         .collect()
 }
 

@@ -210,6 +210,40 @@ pub async fn customers_by_phone(
     for (phone, id, name) in rows {
         out.entry(phone).or_insert((id, name));
     }
+    // No provider contact: fall back to the customer record itself, as the
+    // thread header does.
+    let missing: Vec<&String> = phones.iter().filter(|p| !out.contains_key(*p)).collect();
+    if missing.is_empty() {
+        return Ok(out);
+    }
+    let list = marks(missing.len());
+    let branch = |column: &str| {
+        format!(
+            "SELECT RIGHT(REGEXP_REPLACE(COALESCE(c.{column}, ''), '[^0-9]', ''), 10) AS phone_digits,
+                    c.id, c.name
+               FROM customers c
+              WHERE c.company_id = ? AND c.deleted_at IS NULL
+                AND RIGHT(REGEXP_REPLACE(COALESCE(c.{column}, ''), '[^0-9]', ''), 10) IN ({list})"
+        )
+    };
+    let mut params: Vec<Param> = Vec::new();
+    for _ in 0..2 {
+        params.push(company_id.into());
+        params.extend(missing.iter().map(|p| Param::from(*p)));
+    }
+    let rows: Vec<(String, i32, Option<String>)> = fetch_all(
+        pool,
+        format!(
+            "{} UNION ALL {} ORDER BY id",
+            branch("phone"),
+            branch("phone_2")
+        ),
+        &params,
+    )
+    .await?;
+    for (phone, id, name) in rows {
+        out.entry(phone).or_insert((id, name));
+    }
     Ok(out)
 }
 
