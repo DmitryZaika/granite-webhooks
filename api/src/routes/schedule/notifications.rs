@@ -1,15 +1,19 @@
 //! Admin > Schedule: the company's own texts and emails to customers before
-//! their appointments ("1 day before every installation, remind them to
-//! disconnect the sink 2 hours ahead").
+//! their appointments. Templates are the messages; a flow puts templates in
+//! a sequence for one calendar ("1 day before: disconnect the sink; 1 hour
+//! before: see you soon").
 //!
-//! - `GET /v1/schedule/notifications` → the rules, and whether texting is set up
-//! - `POST /v1/schedule/notifications`, `PUT`/`DELETE /v1/schedule/notifications/{id}`
-//! - `GET /v1/schedule/notifications/active` → the event form's defaults; an
-//!   event can turn a rule off (`event_notification_skips`)
+//! - `GET /v1/schedule/notifications` → templates, flows, and whether texting is set up
+//! - `POST /v1/schedule/notifications/templates`, `PUT`/`DELETE …/templates/{id}`
+//! - `POST /v1/schedule/notifications/flows`, `PUT`/`DELETE …/flows/{id}`
+//! - `GET /v1/schedule/notifications/active` → the event form's flows. The
+//!   calendar's default flow goes on each of its events unless the event
+//!   turns it off (`event_notification_skips`); the others only go on events
+//!   that pick them (`event_notification_picks`)
 //!
-//! The appointment-reminders job sends the due ones (`send_due`). An event's
+//! The appointment-reminders job sends the due steps (`send_due`). An event's
 //! customer is the one its title names (a bare customer id), else its sale's.
-//! A calendar with an active rule no longer gets the built-in reminders.
+//! An event with a flow on no longer gets the built-in reminders.
 
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -28,17 +32,20 @@ use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, 
 use chrono_tz::America::Indiana::Indianapolis;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
-use sqlx::MySqlPool;
+use sqlx::{MySql, MySqlPool, Transaction};
+use std::collections::HashMap;
 use utoipa::{IntoParams, ToSchema};
 
-/// Longest text a rule may send.
+/// Longest text a template may send.
 const MAX_SMS: usize = 1600;
 const MAX_EMAIL: usize = 20_000;
-/// Rules checked per run, and events per rule.
+/// Most steps in one flow.
+const MAX_STEPS: usize = 10;
+/// Steps checked per run, and events per step.
 const RULE_BATCH: i64 = 500;
 const EVENT_BATCH: i64 = 200;
 
-/// How a rule reaches the customer.
+/// How a template reaches the customer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Channel {
@@ -104,105 +111,247 @@ impl OffsetUnit {
     }
 }
 
-/// A text or email sent before each appointment on a calendar.
+/// A text or email to customers.
 #[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct NotificationRule {
-    /// Rule id.
+pub struct NotificationTemplate {
+    /// Template id.
     pub id: i32,
-    /// The calendar whose appointments it is sent for.
-    pub calendar_id: i32,
+    pub name: String,
     /// `sms` or `email`.
     pub channel: Channel,
-    /// How many `offset_unit`s before the appointment it is sent.
-    pub offset_value: i32,
-    /// `minutes`, `hours` or `days`.
-    pub offset_unit: OffsetUnit,
-    /// `days` rules: store time (`HH:MM`) it is sent that day; null for
-    /// exactly `offset_value` days before the start.
-    pub send_time: Option<String>,
     /// Email subject (null for texts); may hold `{{variables}}`.
     pub subject: Option<String>,
     /// The text, plain; may hold `{{variables}}`.
     pub body: String,
+}
+
+/// A template of a flow, sent at a time before the appointment.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct FlowStep {
+    /// Step id.
+    pub id: i32,
+    pub template_id: i32,
+    /// How many `offset_unit`s before the appointment it is sent.
+    pub offset_value: i32,
+    /// `minutes`, `hours` or `days`.
+    pub offset_unit: OffsetUnit,
+    /// `days` steps: store time (`HH:MM`) it is sent that day; null for
+    /// exactly `offset_value` days before the start.
+    pub send_time: Option<String>,
+}
+
+/// Templates in a sequence for each appointment on a calendar.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct NotificationFlow {
+    /// Flow id.
+    pub id: i32,
+    /// The calendar whose appointments it is for.
+    pub calendar_id: i32,
+    pub name: String,
+    /// Goes on every event of the calendar; else only on events that pick it.
+    pub is_default: bool,
     /// Off: kept, but nothing is sent.
     pub is_active: bool,
+    /// In the order they go out. Text steps are left out while texting is
+    /// not set up.
+    pub steps: Vec<FlowStep>,
 }
 
 /// `GET /v1/schedule/notifications`.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct NotificationRules {
-    /// Rules, oldest first. Text rules are left out while texting is not set up.
-    pub rules: Vec<NotificationRule>,
+pub struct NotificationSettings {
+    /// Templates, oldest first. Texts are left out while texting is not set up.
+    pub templates: Vec<NotificationTemplate>,
+    /// Flows, oldest first.
+    pub flows: Vec<NotificationFlow>,
     /// The company texts through `CloudTalk` or `RingCentral`.
     pub sms_enabled: bool,
 }
 
-/// Body of `POST /v1/schedule/notifications` and `PUT /v1/schedule/notifications/{id}`.
+/// Body of `POST /v1/schedule/notifications/templates` and `PUT …/templates/{id}`.
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct NotificationRuleInput {
-    /// A calendar of the company.
-    pub calendar_id: i32,
+pub struct NotificationTemplateInput {
+    /// At most 100 characters.
+    pub name: String,
     /// `sms` needs `CloudTalk` or `RingCentral`.
     pub channel: Channel,
-    /// 1 to 30 days' worth of `offset_unit`.
-    pub offset_value: i32,
-    pub offset_unit: OffsetUnit,
-    /// `days` rules only: `HH:MM` store time.
-    #[serde(default)]
-    pub send_time: Option<String>,
     /// Required for email (at most 255 characters).
     #[serde(default)]
     pub subject: Option<String>,
     /// Up to 1600 characters for a text.
     pub body: String,
+}
+
+/// A step of `NotificationFlowInput`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct FlowStepInput {
+    /// The step being edited; leave out for a new one.
+    #[serde(default)]
+    pub id: Option<i32>,
+    /// A template of the company.
+    pub template_id: i32,
+    /// 1 to 30 days' worth of `offset_unit`.
+    pub offset_value: i32,
+    pub offset_unit: OffsetUnit,
+    /// `days` steps only: `HH:MM` store time.
+    #[serde(default)]
+    pub send_time: Option<String>,
+}
+
+/// Body of `POST /v1/schedule/notifications/flows` and `PUT …/flows/{id}`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct NotificationFlowInput {
+    /// A calendar of the company.
+    pub calendar_id: i32,
+    /// At most 100 characters.
+    pub name: String,
+    /// The calendar's one default: setting it unsets the calendar's others.
+    #[serde(default)]
+    pub is_default: bool,
     /// Default on.
     #[serde(default = "on")]
     pub is_active: bool,
+    /// 1 to 10 steps. On edit, steps left out are deleted.
+    pub steps: Vec<FlowStepInput>,
 }
 
 const fn on() -> bool {
     true
 }
 
-/// `POST /v1/schedule/notifications`.
+/// `POST /v1/schedule/notifications/templates` and `…/flows`.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct CreatedRule {
-    /// The new rule.
+pub struct Created {
+    /// The new template or flow.
     pub id: u64,
 }
 
 #[derive(sqlx::FromRow)]
-struct RuleRow {
+struct TemplateRow {
     id: i32,
-    calendar_id: i32,
+    name: String,
     channel: String,
-    offset_value: i32,
-    offset_unit: String,
-    send_time: Option<String>,
     subject: Option<String>,
     body: String,
-    is_active: bool,
 }
 
-impl From<RuleRow> for NotificationRule {
-    fn from(row: RuleRow) -> Self {
+impl From<TemplateRow> for NotificationTemplate {
+    fn from(row: TemplateRow) -> Self {
         Self {
             id: row.id,
-            calendar_id: row.calendar_id,
+            name: row.name,
             channel: Channel::parse(&row.channel),
-            offset_value: row.offset_value,
-            offset_unit: OffsetUnit::parse(&row.offset_unit),
-            send_time: row.send_time,
             subject: row.subject,
             body: row.body,
-            is_active: row.is_active,
         }
     }
 }
 
-const RULE_COLUMNS: &str = "r.id, r.calendar_id, CAST(r.channel AS CHAR) AS channel, r.offset_value,
-    CAST(r.offset_unit AS CHAR) AS offset_unit, TIME_FORMAT(r.send_time, '%H:%i') AS send_time,
-    r.subject, r.body, r.is_active <> 0 AS is_active";
+#[derive(sqlx::FromRow)]
+struct FlowRow {
+    id: i32,
+    calendar_id: i32,
+    name: String,
+    is_default: bool,
+    is_active: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct StepRow {
+    id: i32,
+    flow_id: i32,
+    template_id: i32,
+    offset_value: i32,
+    offset_unit: String,
+    send_time: Option<String>,
+}
+
+/// The company's templates; texts only with `sms_enabled`.
+async fn load_templates(
+    pool: &MySqlPool,
+    company_id: i32,
+    sms_enabled: bool,
+) -> Result<Vec<NotificationTemplate>, sqlx::Error> {
+    let rows: Vec<TemplateRow> = sqlx::query_as(
+        "SELECT id, name, CAST(channel AS CHAR) AS channel, subject, body
+           FROM schedule_notification_templates
+          WHERE company_id = ? AND deleted_at IS NULL AND (? OR channel <> 'sms')
+          ORDER BY id",
+    )
+    .bind(company_id)
+    .bind(sms_enabled)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(NotificationTemplate::from).collect())
+}
+
+/// The company's flows with their steps; `active_only` leaves out the ones
+/// turned off.
+async fn load_flows(
+    pool: &MySqlPool,
+    company_id: i32,
+    sms_enabled: bool,
+    active_only: bool,
+) -> Result<Vec<NotificationFlow>, sqlx::Error> {
+    let flows: Vec<FlowRow> = sqlx::query_as(
+        "SELECT f.id, f.calendar_id, f.name, f.is_default <> 0 AS is_default,
+                f.is_active <> 0 AS is_active
+           FROM schedule_notification_flows f
+           JOIN calendars cal ON cal.id = f.calendar_id AND cal.deleted_at IS NULL
+          WHERE f.company_id = ? AND f.deleted_at IS NULL AND (NOT ? OR f.is_active = 1)
+          ORDER BY f.id",
+    )
+    .bind(company_id)
+    .bind(active_only)
+    .fetch_all(pool)
+    .await?;
+    let steps: Vec<StepRow> = sqlx::query_as(
+        "SELECT r.id, r.flow_id, r.template_id, r.offset_value,
+                CAST(r.offset_unit AS CHAR) AS offset_unit, TIME_FORMAT(r.send_time, '%H:%i') AS send_time
+           FROM schedule_notification_rules r
+           JOIN schedule_notification_templates m ON m.id = r.template_id AND m.deleted_at IS NULL
+          WHERE r.company_id = ? AND r.deleted_at IS NULL AND (? OR m.channel <> 'sms')
+          ORDER BY r.id",
+    )
+    .bind(company_id)
+    .bind(sms_enabled)
+    .fetch_all(pool)
+    .await?;
+    let mut by_flow: HashMap<i32, Vec<FlowStep>> = HashMap::new();
+    for row in steps {
+        by_flow.entry(row.flow_id).or_default().push(FlowStep {
+            id: row.id,
+            template_id: row.template_id,
+            offset_value: row.offset_value,
+            offset_unit: OffsetUnit::parse(&row.offset_unit),
+            send_time: row.send_time,
+        });
+    }
+    Ok(flows
+        .into_iter()
+        .map(|row| {
+            let mut steps = by_flow.remove(&row.id).unwrap_or_default();
+            steps.sort_by_key(|step| step_order(step.offset_value, step.offset_unit, step.send_time.as_deref()));
+            NotificationFlow {
+                id: row.id,
+                calendar_id: row.calendar_id,
+                name: row.name,
+                is_default: row.is_default,
+                is_active: row.is_active,
+                steps,
+            }
+        })
+        .collect())
+}
+
+/// Sorts steps in the order they go out: furthest ahead first, and on the
+/// same day the earlier clock time first.
+fn step_order(value: i32, unit: OffsetUnit, send_time: Option<&str>) -> (std::cmp::Reverse<i64>, String) {
+    (
+        std::cmp::Reverse(unit.minutes(value)),
+        send_time.unwrap_or("99:99").to_string(),
+    )
+}
 
 async fn sms_enabled(pool: &MySqlPool, company_id: i32) -> Result<bool, sqlx::Error> {
     Ok(company_features(pool, company_id)
@@ -215,50 +364,33 @@ fn bad(message: &str) -> ApiError {
     ApiError::BadRequest(message.into())
 }
 
-/// The input's subject, body and send time, checked.
-struct Checked {
-    subject: Option<String>,
-    body: String,
-    send_time: Option<String>,
+fn check_name(name: &str) -> ApiResult<String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(bad("Name is required"));
+    }
+    if name.chars().count() > 100 {
+        return Err(bad("Name must be 100 characters or less"));
+    }
+    Ok(name)
 }
 
-async fn check(
+/// The template's name, subject and body, checked.
+struct CheckedTemplate {
+    name: String,
+    subject: Option<String>,
+    body: String,
+}
+
+async fn check_template(
     pool: &MySqlPool,
     company_id: i32,
-    input: &NotificationRuleInput,
-) -> ApiResult<Checked> {
-    let calendar: Option<i32> = sqlx::query_scalar(
-        "SELECT id FROM calendars WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
-    )
-    .bind(input.calendar_id)
-    .bind(company_id)
-    .fetch_optional(pool)
-    .await?;
-    if calendar.is_none() {
-        return Err(bad("Calendar not found"));
-    }
+    input: &NotificationTemplateInput,
+) -> ApiResult<CheckedTemplate> {
+    let name = check_name(&input.name)?;
     if input.channel == Channel::Sms && !sms_enabled(pool, company_id).await? {
         return Err(bad("Texting is not set up for this company"));
     }
-    if input.offset_value < 1 || input.offset_value > input.offset_unit.max() {
-        return Err(bad("Send it between 1 minute and 30 days before"));
-    }
-    let send_time = match input
-        .send_time
-        .as_deref()
-        .map(str::trim)
-        .filter(|time| !time.is_empty())
-    {
-        None => None,
-        Some(_) if input.offset_unit != OffsetUnit::Days => {
-            return Err(bad("A time of day only goes with days"));
-        }
-        Some(time) => {
-            let parsed = NaiveTime::parse_from_str(time, "%H:%M")
-                .map_err(|_| bad("Time of day must be HH:MM"))?;
-            Some(parsed.format("%H:%M:00").to_string())
-        }
-    };
     let body = input.body.trim().to_string();
     if body.is_empty() {
         return Err(bad("Message is required"));
@@ -285,17 +417,92 @@ async fn check(
             Some(subject.to_string())
         }
     };
-    Ok(Checked {
+    Ok(CheckedTemplate {
+        name,
         subject,
         body,
-        send_time,
     })
 }
 
-async fn find(pool: &MySqlPool, company_id: i32, id: i32) -> ApiResult<()> {
-    let found: Option<i32> = sqlx::query_scalar(
-        "SELECT id FROM schedule_notification_rules WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+/// The step's send time, checked; the template is the company's.
+async fn check_step(
+    pool: &MySqlPool,
+    company_id: i32,
+    sms_enabled: bool,
+    input: &FlowStepInput,
+) -> ApiResult<Option<String>> {
+    let channel: Option<String> = sqlx::query_scalar(
+        "SELECT CAST(channel AS CHAR) FROM schedule_notification_templates
+          WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
+    .bind(input.template_id)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(channel) = channel else {
+        return Err(bad("Template not found"));
+    };
+    if Channel::parse(&channel) == Channel::Sms && !sms_enabled {
+        return Err(bad("Texting is not set up for this company"));
+    }
+    if input.offset_value < 1 || input.offset_value > input.offset_unit.max() {
+        return Err(bad("Send it between 1 minute and 30 days before"));
+    }
+    match input
+        .send_time
+        .as_deref()
+        .map(str::trim)
+        .filter(|time| !time.is_empty())
+    {
+        None => Ok(None),
+        Some(_) if input.offset_unit != OffsetUnit::Days => {
+            Err(bad("A time of day only goes with days"))
+        }
+        Some(time) => {
+            let parsed = NaiveTime::parse_from_str(time, "%H:%M")
+                .map_err(|_| bad("Time of day must be HH:MM"))?;
+            Ok(Some(parsed.format("%H:%M:00").to_string()))
+        }
+    }
+}
+
+/// The flow's name and its steps' send times, checked.
+async fn check_flow(
+    pool: &MySqlPool,
+    company_id: i32,
+    input: &NotificationFlowInput,
+) -> ApiResult<(String, Vec<Option<String>>)> {
+    let calendar: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM calendars WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(input.calendar_id)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    if calendar.is_none() {
+        return Err(bad("Calendar not found"));
+    }
+    let name = check_name(&input.name)?;
+    if input.steps.is_empty() {
+        return Err(bad("Add at least one template"));
+    }
+    if input.steps.len() > MAX_STEPS {
+        return Err(ApiError::BadRequest(format!(
+            "A flow has at most {MAX_STEPS} steps"
+        )));
+    }
+    let sms_enabled = sms_enabled(pool, company_id).await?;
+    let mut times = Vec::with_capacity(input.steps.len());
+    for step in &input.steps {
+        times.push(check_step(pool, company_id, sms_enabled, step).await?);
+    }
+    Ok((name, times))
+}
+
+async fn find(pool: &MySqlPool, table: &'static str, company_id: i32, id: i32) -> ApiResult<()> {
+    let found: Option<i32> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT id FROM {table} WHERE id = ? AND company_id = ? AND deleted_at IS NULL"
+    )))
     .bind(id)
     .bind(company_id)
     .fetch_optional(pool)
@@ -303,17 +510,94 @@ async fn find(pool: &MySqlPool, company_id: i32, id: i32) -> ApiResult<()> {
     found.map(|_| ()).ok_or(ApiError::NotFound)
 }
 
-/// List the customer notification rules
+/// Leaves the calendar without a default flow, before another becomes it.
+async fn unset_defaults(
+    tx: &mut Transaction<'_, MySql>,
+    company_id: i32,
+    calendar_id: i32,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE schedule_notification_flows SET is_default = 0
+          WHERE company_id = ? AND calendar_id = ? AND deleted_at IS NULL",
+    )
+    .bind(company_id)
+    .bind(calendar_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Saves the flow's steps: edits the ones named by id, adds the new ones
+/// and deletes the rest. A kept step is not sent again.
+async fn save_steps(
+    tx: &mut Transaction<'_, MySql>,
+    company_id: i32,
+    flow_id: i32,
+    user_id: i32,
+    steps: &[FlowStepInput],
+    times: Vec<Option<String>>,
+) -> Result<(), sqlx::Error> {
+    let existing: Vec<i32> = sqlx::query_scalar(
+        "SELECT id FROM schedule_notification_rules WHERE flow_id = ? AND deleted_at IS NULL",
+    )
+    .bind(flow_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut kept = Vec::new();
+    for (step, send_time) in steps.iter().zip(times) {
+        match step.id.filter(|id| existing.contains(id) && !kept.contains(id)) {
+            Some(id) => {
+                sqlx::query(
+                    "UPDATE schedule_notification_rules
+                        SET template_id = ?, offset_value = ?, offset_unit = ?, send_time = ?
+                      WHERE id = ?",
+                )
+                .bind(step.template_id)
+                .bind(step.offset_value)
+                .bind(step.offset_unit.as_str())
+                .bind(send_time)
+                .bind(id)
+                .execute(&mut **tx)
+                .await?;
+                kept.push(id);
+            }
+            None => {
+                sqlx::query(
+                    "INSERT INTO schedule_notification_rules
+                       (company_id, flow_id, template_id, offset_value, offset_unit, send_time, created_by)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(company_id)
+                .bind(flow_id)
+                .bind(step.template_id)
+                .bind(step.offset_value)
+                .bind(step.offset_unit.as_str())
+                .bind(send_time)
+                .bind(user_id)
+                .execute(&mut **tx)
+                .await?;
+            }
+        }
+    }
+    for id in existing.into_iter().filter(|id| !kept.contains(id)) {
+        sqlx::query("UPDATE schedule_notification_rules SET deleted_at = NOW() WHERE id = ?")
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+/// List the customer notification templates and flows
 ///
-/// Text rules are left out while the company has no `CloudTalk` or
-/// `RingCentral`.
+/// Texts are left out while the company has no `CloudTalk` or `RingCentral`.
 #[utoipa::path(
     get,
     path = "/v1/schedule/notifications",
     operation_id = "list_schedule_notifications",
     tag = "schedule",
     responses(
-        (status = 200, description = "The rules", body = NotificationRules),
+        (status = 200, description = "Templates and flows", body = NotificationSettings),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an admin", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -323,138 +607,265 @@ async fn find(pool: &MySqlPool, company_id: i32, id: i32) -> ApiResult<()> {
 pub async fn list(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
-) -> ApiResult<Json<NotificationRules>> {
-    let sms_enabled = sms_enabled(&state.pool, user.company_id).await?;
-    let rows: Vec<RuleRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {RULE_COLUMNS} FROM schedule_notification_rules r
-           JOIN calendars cal ON cal.id = r.calendar_id AND cal.deleted_at IS NULL
-          WHERE r.company_id = ? AND r.deleted_at IS NULL AND (? OR r.channel <> 'sms')
-          ORDER BY r.id"
-    )))
-    .bind(user.company_id)
-    .bind(sms_enabled)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(Json(NotificationRules {
-        rules: rows.into_iter().map(NotificationRule::from).collect(),
+) -> ApiResult<Json<NotificationSettings>> {
+    let pool = &state.pool;
+    let sms_enabled = sms_enabled(pool, user.company_id).await?;
+    Ok(Json(NotificationSettings {
+        templates: load_templates(pool, user.company_id, sms_enabled).await?,
+        flows: load_flows(pool, user.company_id, sms_enabled, false).await?,
         sms_enabled,
     }))
 }
 
-/// Add a customer notification rule
+/// Add a customer notification template
 ///
 /// A text needs `CloudTalk` or `RingCentral`; an email needs a subject.
 #[utoipa::path(
     post,
-    path = "/v1/schedule/notifications",
-    operation_id = "create_schedule_notification",
+    path = "/v1/schedule/notifications/templates",
+    operation_id = "create_schedule_notification_template",
     tag = "schedule",
-    request_body = NotificationRuleInput,
+    request_body = NotificationTemplateInput,
     responses(
-        (status = 201, description = "Added", body = CreatedRule),
-        (status = 400, description = "Invalid field, unknown calendar, or texting not set up", body = ErrorBody),
+        (status = 201, description = "Added", body = Created),
+        (status = 400, description = "Invalid field, or texting not set up", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an admin", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
-pub async fn create(
+pub async fn create_template(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
-    JsonBody(input): JsonBody<NotificationRuleInput>,
-) -> ApiResult<(StatusCode, Json<CreatedRule>)> {
-    let checked = check(&state.pool, user.company_id, &input).await?;
+    JsonBody(input): JsonBody<NotificationTemplateInput>,
+) -> ApiResult<(StatusCode, Json<Created>)> {
+    let checked = check_template(&state.pool, user.company_id, &input).await?;
     let id = sqlx::query(
-        "INSERT INTO schedule_notification_rules
-           (company_id, calendar_id, channel, offset_value, offset_unit, send_time, subject, body, is_active, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO schedule_notification_templates
+           (company_id, name, channel, subject, body, created_by)
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(user.company_id)
-    .bind(input.calendar_id)
+    .bind(checked.name)
     .bind(input.channel.as_str())
-    .bind(input.offset_value)
-    .bind(input.offset_unit.as_str())
-    .bind(checked.send_time)
     .bind(checked.subject)
     .bind(checked.body)
-    .bind(input.is_active)
     .bind(user.id)
     .execute(&state.pool)
     .await?
     .last_insert_id();
-    Ok((StatusCode::CREATED, Json(CreatedRule { id })))
+    Ok((StatusCode::CREATED, Json(Created { id })))
 }
 
-/// Edit a customer notification rule
+/// Edit a customer notification template
+///
+/// The flows using it send the new text from then on.
 #[utoipa::path(
     put,
-    path = "/v1/schedule/notifications/{id}",
-    operation_id = "update_schedule_notification",
+    path = "/v1/schedule/notifications/templates/{id}",
+    operation_id = "update_schedule_notification_template",
     tag = "schedule",
-    params(("id" = i32, Path, description = "Rule id")),
-    request_body = NotificationRuleInput,
+    params(("id" = i32, Path, description = "Template id")),
+    request_body = NotificationTemplateInput,
     responses(
         (status = 204, description = "Saved"),
-        (status = 400, description = "Invalid field, unknown calendar, or texting not set up", body = ErrorBody),
+        (status = 400, description = "Invalid field, or texting not set up", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an admin", body = ErrorBody),
-        (status = 404, description = "No such rule in the caller's company", body = ErrorBody),
+        (status = 404, description = "No such template in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
-pub async fn update(
+pub async fn update_template(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
-    JsonBody(input): JsonBody<NotificationRuleInput>,
+    JsonBody(input): JsonBody<NotificationTemplateInput>,
 ) -> ApiResult<StatusCode> {
-    find(&state.pool, user.company_id, id).await?;
-    let checked = check(&state.pool, user.company_id, &input).await?;
+    find(&state.pool, "schedule_notification_templates", user.company_id, id).await?;
+    let checked = check_template(&state.pool, user.company_id, &input).await?;
     sqlx::query(
-        "UPDATE schedule_notification_rules
-            SET calendar_id = ?, channel = ?, offset_value = ?, offset_unit = ?, send_time = ?,
-                subject = ?, body = ?, is_active = ?
+        "UPDATE schedule_notification_templates
+            SET name = ?, channel = ?, subject = ?, body = ?
           WHERE id = ?",
     )
-    .bind(input.calendar_id)
+    .bind(checked.name)
     .bind(input.channel.as_str())
-    .bind(input.offset_value)
-    .bind(input.offset_unit.as_str())
-    .bind(checked.send_time)
     .bind(checked.subject)
     .bind(checked.body)
-    .bind(input.is_active)
     .bind(id)
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Delete a customer notification rule
+/// Delete a customer notification template
+///
+/// Refused while a flow uses it.
 #[utoipa::path(
     delete,
-    path = "/v1/schedule/notifications/{id}",
-    operation_id = "delete_schedule_notification",
+    path = "/v1/schedule/notifications/templates/{id}",
+    operation_id = "delete_schedule_notification_template",
     tag = "schedule",
-    params(("id" = i32, Path, description = "Rule id")),
+    params(("id" = i32, Path, description = "Template id")),
     responses(
         (status = 204, description = "Deleted"),
+        (status = 400, description = "A flow uses it", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an admin", body = ErrorBody),
-        (status = 404, description = "No such rule in the caller's company", body = ErrorBody),
+        (status = 404, description = "No such template in the caller's company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
-pub async fn delete(
+pub async fn delete_template(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
-    find(&state.pool, user.company_id, id).await?;
-    sqlx::query("UPDATE schedule_notification_rules SET deleted_at = NOW() WHERE id = ?")
+    find(&state.pool, "schedule_notification_templates", user.company_id, id).await?;
+    let used_by: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT f.name FROM schedule_notification_rules r
+           JOIN schedule_notification_flows f ON f.id = r.flow_id AND f.deleted_at IS NULL
+          WHERE r.template_id = ? AND r.deleted_at IS NULL
+          ORDER BY f.name",
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await?;
+    if !used_by.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "Remove it from these flows first: {}",
+            used_by.join(", ")
+        )));
+    }
+    sqlx::query("UPDATE schedule_notification_templates SET deleted_at = NOW() WHERE id = ?")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Add a customer notification flow
+///
+/// Making it the default unsets the calendar's other default.
+#[utoipa::path(
+    post,
+    path = "/v1/schedule/notifications/flows",
+    operation_id = "create_schedule_notification_flow",
+    tag = "schedule",
+    request_body = NotificationFlowInput,
+    responses(
+        (status = 201, description = "Added", body = Created),
+        (status = 400, description = "Invalid field, unknown calendar or template, or texting not set up", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn create_flow(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    JsonBody(input): JsonBody<NotificationFlowInput>,
+) -> ApiResult<(StatusCode, Json<Created>)> {
+    let (name, times) = check_flow(&state.pool, user.company_id, &input).await?;
+    let mut tx = state.pool.begin().await?;
+    if input.is_default {
+        unset_defaults(&mut tx, user.company_id, input.calendar_id).await?;
+    }
+    let id = sqlx::query(
+        "INSERT INTO schedule_notification_flows
+           (company_id, calendar_id, name, is_default, is_active, created_by)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(user.company_id)
+    .bind(input.calendar_id)
+    .bind(name)
+    .bind(input.is_default)
+    .bind(input.is_active)
+    .bind(user.id)
+    .execute(&mut *tx)
+    .await?
+    .last_insert_id();
+    let flow_id = i32::try_from(id).map_err(|_| ApiError::Internal("flow id".into()))?;
+    save_steps(&mut tx, user.company_id, flow_id, user.id, &input.steps, times).await?;
+    tx.commit().await?;
+    Ok((StatusCode::CREATED, Json(Created { id })))
+}
+
+/// Edit a customer notification flow
+#[utoipa::path(
+    put,
+    path = "/v1/schedule/notifications/flows/{id}",
+    operation_id = "update_schedule_notification_flow",
+    tag = "schedule",
+    params(("id" = i32, Path, description = "Flow id")),
+    request_body = NotificationFlowInput,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 400, description = "Invalid field, unknown calendar or template, or texting not set up", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "No such flow in the caller's company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn update_flow(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Path(id): Path<i32>,
+    JsonBody(input): JsonBody<NotificationFlowInput>,
+) -> ApiResult<StatusCode> {
+    find(&state.pool, "schedule_notification_flows", user.company_id, id).await?;
+    let (name, times) = check_flow(&state.pool, user.company_id, &input).await?;
+    let mut tx = state.pool.begin().await?;
+    if input.is_default {
+        unset_defaults(&mut tx, user.company_id, input.calendar_id).await?;
+    }
+    sqlx::query(
+        "UPDATE schedule_notification_flows
+            SET calendar_id = ?, name = ?, is_default = ?, is_active = ?
+          WHERE id = ?",
+    )
+    .bind(input.calendar_id)
+    .bind(name)
+    .bind(input.is_default)
+    .bind(input.is_active)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    save_steps(&mut tx, user.company_id, id, user.id, &input.steps, times).await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete a customer notification flow
+#[utoipa::path(
+    delete,
+    path = "/v1/schedule/notifications/flows/{id}",
+    operation_id = "delete_schedule_notification_flow",
+    tag = "schedule",
+    params(("id" = i32, Path, description = "Flow id")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "No such flow in the caller's company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn delete_flow(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Path(id): Path<i32>,
+) -> ApiResult<StatusCode> {
+    find(&state.pool, "schedule_notification_flows", user.company_id, id).await?;
+    sqlx::query("UPDATE schedule_notification_flows SET deleted_at = NOW() WHERE id = ?")
         .bind(id)
         .execute(&state.pool)
         .await?;
@@ -465,25 +876,30 @@ pub async fn delete(
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ActiveQuery {
-    /// An event of the company whose turned-off rules to include.
+    /// An event of the company whose choices to include.
     #[serde(default)]
     pub event_id: Option<i32>,
 }
 
 /// `GET /v1/schedule/notifications/active`.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct ActiveRules {
-    /// The active rules of every calendar, oldest first.
-    pub rules: Vec<NotificationRule>,
-    /// Rules turned off for `event_id`.
-    pub skipped_rule_ids: Vec<i32>,
+pub struct ActiveFlows {
+    /// The flows turned on, of every calendar, oldest first.
+    pub flows: Vec<NotificationFlow>,
+    /// The templates their steps send.
+    pub templates: Vec<NotificationTemplate>,
+    /// Default flows turned off for `event_id`.
+    pub skipped_flow_ids: Vec<i32>,
+    /// Other flows picked for `event_id`.
+    pub picked_flow_ids: Vec<i32>,
 }
 
-/// List the active notification rules for the event form
+/// List the notification flows for the event form
 ///
-/// The defaults an event of each calendar gets, and which of them are
-/// turned off for `event_id`. Text rules are left out while texting is not
-/// set up.
+/// Every calendar's flows turned on: the default an event gets, and the
+/// others it can pick instead or as well; with `event_id`, whether it turned
+/// the default off and which others it picked. Texts are left out while
+/// texting is not set up.
 #[utoipa::path(
     get,
     path = "/v1/schedule/notifications/active",
@@ -491,7 +907,7 @@ pub struct ActiveRules {
     tag = "schedule",
     params(ActiveQuery),
     responses(
-        (status = 200, description = "The rules", body = ActiveRules),
+        (status = 200, description = "The flows", body = ActiveFlows),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -502,66 +918,100 @@ pub async fn active(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
     Query(query): Query<ActiveQuery>,
-) -> ApiResult<Json<ActiveRules>> {
+) -> ApiResult<Json<ActiveFlows>> {
     let pool = &state.pool;
     let sms_enabled = sms_enabled(pool, user.company_id).await?;
-    let rows: Vec<RuleRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {RULE_COLUMNS} FROM schedule_notification_rules r
-           JOIN calendars cal ON cal.id = r.calendar_id AND cal.deleted_at IS NULL
-          WHERE r.company_id = ? AND r.deleted_at IS NULL AND r.is_active = 1
-            AND (? OR r.channel <> 'sms')
-          ORDER BY r.id"
-    )))
-    .bind(user.company_id)
-    .bind(sms_enabled)
-    .fetch_all(pool)
-    .await?;
-    let skipped_rule_ids = match query.event_id {
-        Some(event_id) => {
-            sqlx::query_scalar(
-                "SELECT k.rule_id FROM event_notification_skips k
-                   JOIN schedule_notification_rules r ON r.id = k.rule_id AND r.company_id = ?
-                  WHERE k.event_id = ? ORDER BY k.rule_id",
-            )
-            .bind(user.company_id)
-            .bind(event_id)
-            .fetch_all(pool)
-            .await?
-        }
-        None => Vec::new(),
+    let (skipped_flow_ids, picked_flow_ids) = match query.event_id {
+        Some(event_id) => (
+            event_flow_ids(pool, "event_notification_skips", user.company_id, event_id).await?,
+            event_flow_ids(pool, "event_notification_picks", user.company_id, event_id).await?,
+        ),
+        None => (Vec::new(), Vec::new()),
     };
-    Ok(Json(ActiveRules {
-        rules: rows.into_iter().map(NotificationRule::from).collect(),
-        skipped_rule_ids,
+    Ok(Json(ActiveFlows {
+        flows: load_flows(pool, user.company_id, sms_enabled, true).await?,
+        templates: load_templates(pool, user.company_id, sms_enabled).await?,
+        skipped_flow_ids,
+        picked_flow_ids,
     }))
 }
 
-/// Replaces the rules turned off for an event; ids not of the company's
-/// rules are ignored.
+/// The company's flow ids an event has in `table` (skips or picks).
+async fn event_flow_ids(
+    pool: &MySqlPool,
+    table: &'static str,
+    company_id: i32,
+    event_id: i32,
+) -> Result<Vec<i32>, sqlx::Error> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT k.flow_id FROM {table} k
+           JOIN schedule_notification_flows f ON f.id = k.flow_id AND f.company_id = ?
+          WHERE k.event_id = ? ORDER BY k.flow_id"
+    )))
+    .bind(company_id)
+    .bind(event_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Replaces the default flows turned off for an event; ids not of the
+/// company's flows are ignored.
 pub async fn save_event_skips(
     pool: &MySqlPool,
     company_id: i32,
     event_id: i32,
-    rule_ids: &[i32],
+    flow_ids: &[i32],
+) -> Result<(), sqlx::Error> {
+    save_event_flows(pool, "event_notification_skips", company_id, event_id, flow_ids).await
+}
+
+/// Replaces the other flows picked for an event; ids not of the company's
+/// flows are ignored.
+pub async fn save_event_picks(
+    pool: &MySqlPool,
+    company_id: i32,
+    event_id: i32,
+    flow_ids: &[i32],
+) -> Result<(), sqlx::Error> {
+    save_event_flows(pool, "event_notification_picks", company_id, event_id, flow_ids).await
+}
+
+async fn save_event_flows(
+    pool: &MySqlPool,
+    table: &'static str,
+    company_id: i32,
+    event_id: i32,
+    flow_ids: &[i32],
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM event_notification_skips WHERE event_id = ?")
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DELETE FROM {table} WHERE event_id = ?"
+    )))
+    .bind(event_id)
+    .execute(&mut *tx)
+    .await?;
+    for flow_id in flow_ids {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "INSERT IGNORE INTO {table} (event_id, flow_id)
+             SELECT ?, id FROM schedule_notification_flows WHERE id = ? AND company_id = ?"
+        )))
         .bind(event_id)
-        .execute(&mut *tx)
-        .await?;
-    for rule_id in rule_ids {
-        sqlx::query(
-            "INSERT IGNORE INTO event_notification_skips (event_id, rule_id)
-             SELECT ?, id FROM schedule_notification_rules WHERE id = ? AND company_id = ?",
-        )
-        .bind(event_id)
-        .bind(rule_id)
+        .bind(flow_id)
         .bind(company_id)
         .execute(&mut *tx)
         .await?;
     }
     tx.commit().await
 }
+
+/// SQL: the flow `f` goes on the event `e`: its calendar's, turned on, and
+/// the default not turned off for it, or picked for it.
+pub const FLOW_APPLIES: &str = "f.calendar_id = e.calendar_id AND f.is_active = 1 AND f.deleted_at IS NULL
+    AND IF(f.is_default = 1,
+           NOT EXISTS (SELECT 1 FROM event_notification_skips k
+                        WHERE k.event_id = e.id AND k.flow_id = f.id),
+           EXISTS (SELECT 1 FROM event_notification_picks p
+                    WHERE p.event_id = e.id AND p.flow_id = f.id))";
 
 /// When an appointment starts: all-day ones at store midnight of their day.
 fn effective_start(start: NaiveDateTime, all_day: bool) -> DateTime<Utc> {
@@ -871,18 +1321,22 @@ async fn deliver(
     })
 }
 
-/// Sends every rule's messages that are due. A message whose time passed
-/// before the appointment was booked (or the rule was made) is skipped.
+/// Sends every flow step's messages that are due. A message whose time
+/// passed before the appointment was booked (or the step was added) is
+/// skipped.
 pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
     let pool = &state.pool;
     let mut run = RuleRun::default();
     let rules: Vec<DueRule> = sqlx::query_as(
-        "SELECT r.id, r.company_id, CAST(r.channel AS CHAR) AS channel, r.offset_value,
+        "SELECT r.id, r.company_id, CAST(m.channel AS CHAR) AS channel, r.offset_value,
                 CAST(r.offset_unit AS CHAR) AS offset_unit, TIME_FORMAT(r.send_time, '%H:%i') AS send_time,
-                r.subject, r.body, r.created_at
+                m.subject, m.body, r.created_at
            FROM schedule_notification_rules r
-           JOIN calendars cal ON cal.id = r.calendar_id AND cal.deleted_at IS NULL
-          WHERE r.is_active = 1 AND r.deleted_at IS NULL
+           JOIN schedule_notification_flows f ON f.id = r.flow_id
+            AND f.is_active = 1 AND f.deleted_at IS NULL
+           JOIN calendars cal ON cal.id = f.calendar_id AND cal.deleted_at IS NULL
+           JOIN schedule_notification_templates m ON m.id = r.template_id AND m.deleted_at IS NULL
+          WHERE r.deleted_at IS NULL
           ORDER BY r.id LIMIT ?",
     )
     .bind(RULE_BATCH)
@@ -897,12 +1351,13 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
             .and_then(|time| NaiveTime::parse_from_str(time, "%H:%M").ok());
         // Two days more than the offset covers a time of day and all-day events.
         let window = unit.minutes(rule.offset_value) + 2 * 24 * 60;
-        let events: Vec<Appointment> = sqlx::query_as(
+        let events: Vec<Appointment> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT e.id, e.start_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
                     e.location, e.created_date, e.created_user_id,
                     CAST(COALESCE(tc.id, sc.id) AS SIGNED) AS customer_id
                FROM schedule_notification_rules r
-               JOIN events e ON e.calendar_id = r.calendar_id
+               JOIN schedule_notification_flows f ON f.id = r.flow_id
+               JOIN events e ON {FLOW_APPLIES}
                LEFT JOIN customers tc ON TRIM(e.title) REGEXP '^[0-9]+$'
                 AND tc.id = CAST(TRIM(e.title) AS UNSIGNED)
                 AND tc.company_id = r.company_id AND tc.deleted_at IS NULL
@@ -912,12 +1367,10 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
               WHERE r.id = ? AND e.deleted_date IS NULL AND NULLIF(TRIM(e.rrule), '') IS NULL
                 AND e.start_date > UTC_TIMESTAMP() - INTERVAL 1 DAY
                 AND e.start_date <= UTC_TIMESTAMP() + INTERVAL ? MINUTE
-                AND NOT EXISTS (SELECT 1 FROM event_notification_skips k
-                                 WHERE k.event_id = e.id AND k.rule_id = r.id)
                 AND NOT EXISTS (SELECT 1 FROM schedule_notification_sends n
                                  WHERE n.rule_id = r.id AND n.event_id = e.id AND n.start_date = e.start_date)
-              ORDER BY e.start_date, e.id LIMIT ?",
-        )
+              ORDER BY e.start_date, e.id LIMIT ?"
+        )))
         .bind(rule.id)
         .bind(window)
         .bind(EVENT_BATCH)

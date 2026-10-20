@@ -39,8 +39,11 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(board::my_schedule))
         .routes(routes!(board::people))
         .routes(routes!(board::set_color))
-        .routes(routes!(notifications::list, notifications::create))
-        .routes(routes!(notifications::update, notifications::delete))
+        .routes(routes!(notifications::list))
+        .routes(routes!(notifications::create_template))
+        .routes(routes!(notifications::update_template, notifications::delete_template))
+        .routes(routes!(notifications::create_flow))
+        .routes(routes!(notifications::update_flow, notifications::delete_flow))
         .routes(routes!(notifications::active))
 }
 

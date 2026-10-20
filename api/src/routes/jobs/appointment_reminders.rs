@@ -100,15 +100,17 @@ fn customer_or_default(name: Option<&str>) -> &str {
 }
 
 async fn customer_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(), sqlx::Error> {
-    // The company's own rules for the calendar send instead.
-    sqlx::query(
+    // The company's own flow on the event sends instead.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE appointment_reminders r JOIN events e ON e.id = r.event_id
             SET r.status = 'cancelled', r.error_message = 'replaced_by_schedule_rule'
           WHERE r.status = 'pending' AND r.send_at <= UTC_TIMESTAMP()
-            AND EXISTS (SELECT 1 FROM schedule_notification_rules nr
-                         WHERE nr.calendar_id = e.calendar_id AND nr.company_id = r.company_id
-                           AND nr.is_active = 1 AND nr.deleted_at IS NULL)",
-    )
+            AND EXISTS (SELECT 1 FROM schedule_notification_flows f
+                         WHERE f.company_id = r.company_id AND {}
+                           AND EXISTS (SELECT 1 FROM schedule_notification_rules nr
+                                        WHERE nr.flow_id = f.id AND nr.deleted_at IS NULL))",
+        notifications::FLOW_APPLIES
+    )))
     .execute(&state.pool)
     .await?;
     let due: Vec<CustomerReminder> = sqlx::query_as(
