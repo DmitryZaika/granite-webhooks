@@ -38,6 +38,9 @@ pub struct PriceLine {
     /// Flat price per item (size tiers, full radius) on top of the unit price.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flat_each: Option<f64>,
+    /// A price was typed on the quote (even the list price): it is final, so never discounted.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub typed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -280,6 +283,15 @@ struct Line {
     flags: Flags,
     note: Option<&'static str>,
     flat_each: f64,
+    /// Priced at a price typed on the quote (a splash at a typed material price).
+    typed: bool,
+}
+
+impl Line {
+    /// Priced at a material price typed on the quote: typed too.
+    fn typed(self, typed: bool) -> Self {
+        Self { typed, ..self }
+    }
 }
 
 impl Builder<'_> {
@@ -307,6 +319,7 @@ impl Builder<'_> {
             missing: unit_price.is_none(),
             note: l.note,
             flat_each: (l.flat_each != 0.0 && over.is_none()).then_some(l.flat_each),
+            typed: over.is_some() || l.typed,
         });
     }
 }
@@ -329,6 +342,7 @@ const fn line(
         flags,
         note: None,
         flat_each: 0.0,
+        typed: false,
     }
 }
 
@@ -500,7 +514,8 @@ fn drawing_lines(
             if mat.by_slab { 0.0 } else { s.sq_ft },
             if mat.by_slab { Some(0.0) } else { mat_price },
             flags_of(filter_of(sr)),
-        ));
+        )
+        .typed(material_override.is_some()));
     }
     for (list, label) in [
         (&r.waterfall, "Waterfall"),
@@ -524,7 +539,8 @@ fn drawing_lines(
                 if mat.by_slab { 0.0 } else { s.sq_ft },
                 if mat.by_slab { Some(0.0) } else { mat_price },
                 flags_of(filter_of(wr)),
-            ));
+            )
+            .typed(material_override.is_some()));
         }
     }
 
@@ -701,6 +717,7 @@ fn drawing_lines(
             flags: flags_of(filter_of(fr)),
             note: None,
             flat_each,
+            typed: false,
         });
     }
 
@@ -980,6 +997,7 @@ fn item_lines(b: &mut Builder, pl: &Value, items: &[&QuoteItem], area_sq_ft: Opt
                         flags,
                         note: None,
                         flat_each: num(range, "flatPrice").unwrap_or(0.0),
+                        typed: false,
                     });
                     continue;
                 }
@@ -1156,8 +1174,9 @@ pub fn price_quote(doc: &QuoteDoc, pl: &Value, opts: PriceOptions) -> Vec<Option
                 all.iter()
                     .flat_map(|a| a.lines.iter().map(move |l| (l, a.quantity)))
             };
+            // Like Moraware: a price typed on the quote is final and takes no discount.
             let discountable = all_lines()
-                .filter(|(l, _)| l.flags.allow_discount)
+                .filter(|(l, _)| l.flags.allow_discount && !l.typed)
                 .fold(0.0, |s, (l, q)| s + l.total * q);
             let discount = js_min(
                 js_max(discountable, 0.0),
