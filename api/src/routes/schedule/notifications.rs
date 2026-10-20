@@ -116,6 +116,7 @@ impl OffsetUnit {
 pub struct NotificationTemplate {
     /// Template id.
     pub id: i32,
+    /// What admins call it, e.g. "Disconnect the sink".
     pub name: String,
     /// `sms` or `email`.
     pub channel: Channel,
@@ -147,6 +148,7 @@ pub struct NotificationFlow {
     pub id: i32,
     /// The calendar whose appointments it is for.
     pub calendar_id: i32,
+    /// What admins and the event form call it.
     pub name: String,
     /// Goes on every event of the calendar; else only on events that pick it.
     pub is_default: bool,
@@ -797,6 +799,9 @@ pub async fn create_flow(
 }
 
 /// Edit a customer notification flow
+///
+/// Steps sent in `steps` with their id are kept (and not sent again); the
+/// others are added, and steps left out are deleted.
 #[utoipa::path(
     put,
     path = "/v1/schedule/notifications/flows/{id}",
@@ -844,6 +849,8 @@ pub async fn update_flow(
 }
 
 /// Delete a customer notification flow
+///
+/// Events that had it get none of its messages from then on.
 #[utoipa::path(
     delete,
     path = "/v1/schedule/notifications/flows/{id}",

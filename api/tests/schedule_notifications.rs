@@ -75,7 +75,7 @@ fn flow(template: i64, is_default: bool) -> Value {
     json!({
         "calendar_id": 8830, "name": "Installation", "is_default": is_default,
         "steps": [
-            { "template_id": template, "offset_value": 1, "offset_unit": "hours" },
+            { "template_id": template, "offset_value": 1, "offset_unit": "hours", "send_time": null },
             { "template_id": template, "offset_value": 1, "offset_unit": "days", "send_time": "09:00" },
         ],
     })

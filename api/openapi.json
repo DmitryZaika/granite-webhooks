@@ -4009,6 +4009,82 @@
         }
       }
     },
+    "/v1/public/customer-view/{company_id}/{view_id}/quotes": {
+      "get": {
+        "tags": [
+          "customer-view"
+        ],
+        "summary": "List the customer's online quotes",
+        "description": "The quotes the customer made with the online quote, newest first: each\nwith its drawing and each color's total (no price breakdown). Only for a\nverified visitor.",
+        "operationId": "list_customer_view_quotes",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "description": "The customer's page id (a UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The quotes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CustomerOnlineQuote"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No code entered for this page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/public/customer-view/{company_id}/{view_id}/invoices": {
       "get": {
         "tags": [
@@ -34598,16 +34674,16 @@
         "tags": [
           "schedule"
         ],
-        "summary": "List the customer notification rules",
-        "description": "Text rules are left out while the company has no `CloudTalk` or\n`RingCentral`.",
+        "summary": "List the customer notification templates and flows",
+        "description": "Texts are left out while the company has no `CloudTalk` or `RingCentral`.",
         "operationId": "list_schedule_notifications",
         "responses": {
           "200": {
-            "description": "The rules",
+            "description": "Templates and flows",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NotificationRules"
+                  "$ref": "#/components/schemas/NotificationSettings"
                 }
               }
             }
@@ -34648,19 +34724,21 @@
             "session_cookie": []
           }
         ]
-      },
+      }
+    },
+    "/v1/schedule/notifications/templates": {
       "post": {
         "tags": [
           "schedule"
         ],
-        "summary": "Add a customer notification rule",
+        "summary": "Add a customer notification template",
         "description": "A text needs `CloudTalk` or `RingCentral`; an email needs a subject.",
-        "operationId": "create_schedule_notification",
+        "operationId": "create_schedule_notification_template",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NotificationRuleInput"
+                "$ref": "#/components/schemas/NotificationTemplateInput"
               }
             }
           },
@@ -34672,13 +34750,13 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CreatedRule"
+                  "$ref": "#/components/schemas/Created"
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid field, unknown calendar, or texting not set up",
+            "description": "Invalid field, or texting not set up",
             "content": {
               "application/json": {
                 "schema": {
@@ -34725,18 +34803,19 @@
         ]
       }
     },
-    "/v1/schedule/notifications/{id}": {
+    "/v1/schedule/notifications/templates/{id}": {
       "put": {
         "tags": [
           "schedule"
         ],
-        "summary": "Edit a customer notification rule",
-        "operationId": "update_schedule_notification",
+        "summary": "Edit a customer notification template",
+        "description": "The flows using it send the new text from then on.",
+        "operationId": "update_schedule_notification_template",
         "parameters": [
           {
             "name": "id",
             "in": "path",
-            "description": "Rule id",
+            "description": "Template id",
             "required": true,
             "schema": {
               "type": "integer",
@@ -34748,7 +34827,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NotificationRuleInput"
+                "$ref": "#/components/schemas/NotificationTemplateInput"
               }
             }
           },
@@ -34759,7 +34838,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "Invalid field, unknown calendar, or texting not set up",
+            "description": "Invalid field, or texting not set up",
             "content": {
               "application/json": {
                 "schema": {
@@ -34789,7 +34868,7 @@
             }
           },
           "404": {
-            "description": "No such rule in the caller's company",
+            "description": "No such template in the caller's company",
             "content": {
               "application/json": {
                 "schema": {
@@ -34819,13 +34898,263 @@
         "tags": [
           "schedule"
         ],
-        "summary": "Delete a customer notification rule",
-        "operationId": "delete_schedule_notification",
+        "summary": "Delete a customer notification template",
+        "description": "Refused while a flow uses it.",
+        "operationId": "delete_schedule_notification_template",
         "parameters": [
           {
             "name": "id",
             "in": "path",
-            "description": "Rule id",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "A flow uses it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such template in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/notifications/flows": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Add a customer notification flow",
+        "description": "Making it the default unsets the calendar's other default.",
+        "operationId": "create_schedule_notification_flow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationFlowInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Created"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid field, unknown calendar or template, or texting not set up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/notifications/flows/{id}": {
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Edit a customer notification flow",
+        "description": "Steps sent in `steps` with their id are kept (and not sent again); the\nothers are added, and steps left out are deleted.",
+        "operationId": "update_schedule_notification_flow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationFlowInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Invalid field, unknown calendar or template, or texting not set up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such flow in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Delete a customer notification flow",
+        "description": "Events that had it get none of its messages from then on.",
+        "operationId": "delete_schedule_notification_flow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Flow id",
             "required": true,
             "schema": {
               "type": "integer",
@@ -34858,7 +35187,76 @@
             }
           },
           "404": {
-            "description": "No such rule in the caller's company",
+            "description": "No such flow in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/notifications/active": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "List the notification flows for the event form",
+        "description": "Every calendar's flows turned on: the default an event gets, and the\nothers it can pick instead or as well; with `event_id`, whether it turned\nthe default off and which others it picked. Texts are left out while\ntexting is not set up.",
+        "operationId": "list_active_schedule_notifications",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "query",
+            "description": "An event of the company whose choices to include.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The flows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveFlows"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
             "content": {
               "application/json": {
                 "schema": {
@@ -45434,6 +45832,48 @@
           }
         }
       },
+      "ActiveFlows": {
+        "type": "object",
+        "description": "`GET /v1/schedule/notifications/active`.",
+        "required": [
+          "flows",
+          "templates",
+          "skipped_flow_ids",
+          "picked_flow_ids"
+        ],
+        "properties": {
+          "flows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationFlow"
+            },
+            "description": "The flows turned on, of every calendar, oldest first."
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationTemplate"
+            },
+            "description": "The templates their steps send."
+          },
+          "skipped_flow_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Default flows turned off for `event_id`."
+          },
+          "picked_flow_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Other flows picked for `event_id`."
+          }
+        }
+      },
       "Activity": {
         "type": "object",
         "description": "A to-do on a deal.",
@@ -47680,7 +48120,7 @@
       },
       "Channel": {
         "type": "string",
-        "description": "How a rule reaches the customer.",
+        "description": "How a template reaches the customer.",
         "enum": [
           "sms",
           "email"
@@ -49882,6 +50322,21 @@
           }
         }
       },
+      "Created": {
+        "type": "object",
+        "description": "`POST /v1/schedule/notifications/templates` and `…/flows`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The new template or flow.",
+            "minimum": 0
+          }
+        }
+      },
       "CreatedCalendar": {
         "type": "object",
         "description": "`POST /v1/calendars`.",
@@ -50059,21 +50514,6 @@
             "type": "integer",
             "format": "int32",
             "description": "Id of the new model."
-          }
-        }
-      },
-      "CreatedRule": {
-        "type": "object",
-        "description": "`POST /v1/schedule/notifications`.",
-        "required": [
-          "id"
-        ],
-        "properties": {
-          "id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "The new rule.",
-            "minimum": 0
           }
         }
       },
@@ -50664,6 +51104,52 @@
               "null"
             ],
             "description": "The `QuickBooks` customer id."
+          }
+        }
+      },
+      "CustomerOnlineQuote": {
+        "type": "object",
+        "description": "One of a customer's online quotes, as their own page shows it.",
+        "required": [
+          "id",
+          "name",
+          "doc",
+          "prices"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Quote id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "created_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was made (ISO 8601, UTC)."
+          },
+          "expiration_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Prices good until (YYYY-MM-DD)."
+          },
+          "doc": {
+            "type": "object",
+            "description": "The drawing (the quote document, no supplier costs): its `counters`\nare the pieces."
+          },
+          "prices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnlinePrice"
+            },
+            "description": "Each color's total, as on the quote; no breakdown."
           }
         }
       },
@@ -53983,6 +54469,28 @@
               "format": "int32"
             },
             "description": "Create only: attachments of `copy_from_event_id` to copy."
+          },
+          "skipped_notification_flow_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Its calendar's default notification flow, turned off for this\nevent; leave out to keep the saved choice."
+          },
+          "picked_notification_flow_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Its calendar's other notification flows picked for this event;\nleave out to keep the saved choice."
           }
         }
       },
@@ -55120,6 +55628,45 @@
             "type": "integer",
             "format": "int32",
             "description": "Minutes after the previous step (or the start)."
+          }
+        }
+      },
+      "FlowStepInput": {
+        "type": "object",
+        "description": "A step of `NotificationFlowInput`.",
+        "required": [
+          "template_id",
+          "offset_value",
+          "offset_unit"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The step being edited; leave out for a new one."
+          },
+          "template_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "A template of the company."
+          },
+          "offset_value": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 to 30 days' worth of `offset_unit`."
+          },
+          "offset_unit": {
+            "$ref": "#/components/schemas/OffsetUnit"
+          },
+          "send_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`days` steps only: `HH:MM` store time."
           }
         }
       },
@@ -58857,6 +59404,84 @@
           }
         }
       },
+      "NotificationFlow": {
+        "type": "object",
+        "description": "Templates in a sequence for each appointment on a calendar.",
+        "required": [
+          "id",
+          "calendar_id",
+          "name",
+          "is_default",
+          "is_active",
+          "steps"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Flow id."
+          },
+          "calendar_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The calendar whose appointments it is for."
+          },
+          "name": {
+            "type": "string",
+            "description": "What admins and the event form call it."
+          },
+          "is_default": {
+            "type": "boolean",
+            "description": "Goes on every event of the calendar; else only on events that pick it."
+          },
+          "is_active": {
+            "type": "boolean",
+            "description": "Off: kept, but nothing is sent."
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlowStep"
+            },
+            "description": "In the order they go out. Text steps are left out while texting is\nnot set up."
+          }
+        }
+      },
+      "NotificationFlowInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/schedule/notifications/flows` and `PUT …/flows/{id}`.",
+        "required": [
+          "calendar_id",
+          "name",
+          "steps"
+        ],
+        "properties": {
+          "calendar_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "A calendar of the company."
+          },
+          "name": {
+            "type": "string",
+            "description": "At most 100 characters."
+          },
+          "is_default": {
+            "type": "boolean",
+            "description": "The calendar's one default: setting it unsets the calendar's others."
+          },
+          "is_active": {
+            "type": "boolean",
+            "description": "Default on."
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlowStepInput"
+            },
+            "description": "1 to 10 steps. On edit, steps left out are deleted."
+          }
+        }
+      },
       "NotificationItem": {
         "type": "object",
         "description": "A notification of the bell.",
@@ -59007,48 +59632,57 @@
           }
         }
       },
-      "NotificationRule": {
+      "NotificationSettings": {
         "type": "object",
-        "description": "A text or email sent before each appointment on a calendar.",
+        "description": "`GET /v1/schedule/notifications`.",
+        "required": [
+          "templates",
+          "flows",
+          "sms_enabled"
+        ],
+        "properties": {
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationTemplate"
+            },
+            "description": "Templates, oldest first. Texts are left out while texting is not set up."
+          },
+          "flows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationFlow"
+            },
+            "description": "Flows, oldest first."
+          },
+          "sms_enabled": {
+            "type": "boolean",
+            "description": "The company texts through `CloudTalk` or `RingCentral`."
+          }
+        }
+      },
+      "NotificationTemplate": {
+        "type": "object",
+        "description": "A text or email to customers.",
         "required": [
           "id",
-          "calendar_id",
+          "name",
           "channel",
-          "offset_value",
-          "offset_unit",
-          "body",
-          "is_active"
+          "body"
         ],
         "properties": {
           "id": {
             "type": "integer",
             "format": "int32",
-            "description": "Rule id."
+            "description": "Template id."
           },
-          "calendar_id": {
-            "type": "integer",
-            "format": "int32",
-            "description": "The calendar whose appointments it is sent for."
+          "name": {
+            "type": "string",
+            "description": "What admins call it, e.g. \"Disconnect the sink\"."
           },
           "channel": {
             "$ref": "#/components/schemas/Channel",
             "description": "`sms` or `email`."
-          },
-          "offset_value": {
-            "type": "integer",
-            "format": "int32",
-            "description": "How many `offset_unit`s before the appointment it is sent."
-          },
-          "offset_unit": {
-            "$ref": "#/components/schemas/OffsetUnit",
-            "description": "`minutes`, `hours` or `days`."
-          },
-          "send_time": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`days` rules: store time (`HH:MM`) it is sent that day; null for\nexactly `offset_value` days before the start."
           },
           "subject": {
             "type": [
@@ -59060,47 +59694,25 @@
           "body": {
             "type": "string",
             "description": "The text, plain; may hold `{{variables}}`."
-          },
-          "is_active": {
-            "type": "boolean",
-            "description": "Off: kept, but nothing is sent."
           }
         }
       },
-      "NotificationRuleInput": {
+      "NotificationTemplateInput": {
         "type": "object",
-        "description": "Body of `POST /v1/schedule/notifications` and `PUT /v1/schedule/notifications/{id}`.",
+        "description": "Body of `POST /v1/schedule/notifications/templates` and `PUT …/templates/{id}`.",
         "required": [
-          "calendar_id",
+          "name",
           "channel",
-          "offset_value",
-          "offset_unit",
           "body"
         ],
         "properties": {
-          "calendar_id": {
-            "type": "integer",
-            "format": "int32",
-            "description": "A calendar of the company."
+          "name": {
+            "type": "string",
+            "description": "At most 100 characters."
           },
           "channel": {
             "$ref": "#/components/schemas/Channel",
             "description": "`sms` needs `CloudTalk` or `RingCentral`."
-          },
-          "offset_value": {
-            "type": "integer",
-            "format": "int32",
-            "description": "1 to 30 days' worth of `offset_unit`."
-          },
-          "offset_unit": {
-            "$ref": "#/components/schemas/OffsetUnit"
-          },
-          "send_time": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`days` rules only: `HH:MM` store time."
           },
           "subject": {
             "type": [
@@ -59112,31 +59724,6 @@
           "body": {
             "type": "string",
             "description": "Up to 1600 characters for a text."
-          },
-          "is_active": {
-            "type": "boolean",
-            "description": "Default on."
-          }
-        }
-      },
-      "NotificationRules": {
-        "type": "object",
-        "description": "`GET /v1/schedule/notifications`.",
-        "required": [
-          "rules",
-          "sms_enabled"
-        ],
-        "properties": {
-          "rules": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/NotificationRule"
-            },
-            "description": "Rules, oldest first. Text rules are left out while texting is not set up."
-          },
-          "sms_enabled": {
-            "type": "boolean",
-            "description": "The company texts through `CloudTalk` or `RingCentral`."
           }
         }
       },
@@ -59411,6 +59998,15 @@
         },
         "additionalProperties": false
       },
+      "OnlineContactBy": {
+        "type": "string",
+        "description": "How the customer wants to hear from the team: `call`, `text` or `email`.",
+        "enum": [
+          "call",
+          "text",
+          "email"
+        ]
+      },
       "OnlineCooktop": {
         "type": "object",
         "description": "The cutout every cooktop gets: the price list's default cooktop cutout.",
@@ -59673,7 +60269,7 @@
           },
           "phone": {
             "type": "string",
-            "description": "Phone with its area code (10 to 15 digits)."
+            "description": "US phone with its area code: 10 digits, or 11 starting with 1."
           },
           "pieces": {
             "type": "array",
@@ -59695,6 +60291,17 @@
               "null"
             ],
             "description": "A hidden form field people leave empty. When it is filled, the request\nis answered as sent and nothing is saved or sent."
+          },
+          "contact_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OnlineContactBy",
+                "description": "How the customer wants to hear from the team about the quote; the\nteam's notice says so. Null: no preference."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -59793,7 +60400,7 @@
           "depth": {
             "type": "number",
             "format": "double",
-            "description": "Depth (front to back), 6 to 96 inches."
+            "description": "Depth (front to back), 6 to 600 inches."
           },
           "turn": {
             "type": "integer",
