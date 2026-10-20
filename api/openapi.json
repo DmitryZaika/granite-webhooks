@@ -20118,6 +20118,308 @@
         ]
       }
     },
+    "/v1/sms/all/threads": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "List conversations over every provider",
+        "description": "A page of the company's SMS conversations through any provider, merged by\nphone, latest first — or unread first when narrowed to one rep\n(`agent_id` = the rep's user id from `/v1/sms/all/sales-reps`). A search\nmatches phone digits, message text and customer or supplier names.",
+        "operationId": "list_all_sms_threads",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Phone digits, message text, or a customer's or supplier's name.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 100 (default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Threads to skip.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`all` for the whole company (admins only).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose conversations to list.",
+              "enum": [
+                "mine",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "description": "With `scope=all`, one rep's conversations (their agent id).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of conversations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/all/threads/{phone}": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Get a conversation over every provider",
+        "description": "The newest messages with one phone through any provider, oldest first\n(page back by raising `limit`; `before_id` is ignored), the customer or\nsupplier it belongs to and the SMS flow running on it. `agent_id` reads\nas one rep (their user id). Never sendable: the admin inbox is read-only.",
+        "operationId": "get_all_sms_thread",
+        "parameters": [
+          {
+            "name": "phone",
+            "in": "path",
+            "description": "The other party's phone digits",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Messages, 1 to 200 (default 30), newest first before reversing.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before_id",
+            "in": "query",
+            "description": "Only messages older than this one (paging back).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`all` to read as an admin (anyone else reads their own).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose conversations to list.",
+              "enum": [
+                "mine",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "description": "With `scope=all`, read as one rep (their agent id).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The onboarding sample",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/all/sales-reps": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "List reps who text through any provider",
+        "description": "The company's users with an agent or extension id on any provider, for\nthe admin inbox's rep filter; `agent_id` is the user's id.",
+        "operationId": "list_all_sms_sales_reps",
+        "responses": {
+          "200": {
+            "description": "Reps by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SalesRep"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/sms/{provider}/threads": {
       "get": {
         "tags": [
@@ -20930,6 +21232,71 @@
         "security": [
           {
             "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/ringcentral/inbound-media": {
+      "post": {
+        "tags": [
+          "sms"
+        ],
+        "operationId": "store_ringcentral_inbound_media",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboundMedia"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Files stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundMediaStored"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such message in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
           }
         ]
       }
@@ -53147,6 +53514,18 @@
             ],
             "format": "int32",
             "description": "Hours after a deal enters the list, 0 to 8760."
+          },
+          "minute_delay": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes on top of `hour_delay`, 0 to 59."
+          },
+          "customer_sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Customer sources that get it; empty or left out: only leads."
           }
         }
       },
@@ -56562,6 +56941,75 @@
           }
         }
       },
+      "InboundMedia": {
+        "type": "object",
+        "description": "Body of `POST /v1/sms/ringcentral/inbound-media`.",
+        "required": [
+          "company_id",
+          "sms_id",
+          "message_id",
+          "files"
+        ],
+        "properties": {
+          "company_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sms_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The stored `ringcentral_sms` row."
+          },
+          "message_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`RingCentral`'s message id."
+          },
+          "extension_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The extension whose message store holds it; the token's own when null."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboundMediaFile"
+            }
+          }
+        }
+      },
+      "InboundMediaFile": {
+        "type": "object",
+        "description": "One file of the message, still on `RingCentral`.",
+        "required": [
+          "id",
+          "content_type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The attachment id under the message's `content/`."
+          },
+          "content_type": {
+            "type": "string"
+          }
+        }
+      },
+      "InboundMediaStored": {
+        "type": "object",
+        "description": "How many files were stored.",
+        "required": [
+          "stored"
+        ],
+        "properties": {
+          "stored": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "Installed": {
         "type": "object",
         "description": "Body of `POST /v1/transactions/{id}/installed`.",
@@ -58469,6 +58917,7 @@
         "description": "One message.",
         "required": [
           "id",
+          "provider",
           "direction",
           "text",
           "created_at",
@@ -58479,7 +58928,11 @@
           "id": {
             "type": "integer",
             "format": "int32",
-            "description": "The SMS row id (page back with `before_id`)."
+            "description": "The SMS row id (page back with `before_id`); unique per provider."
+          },
+          "provider": {
+            "$ref": "#/components/schemas/SmsProvider",
+            "description": "The provider that carried it."
           },
           "direction": {
             "$ref": "#/components/schemas/Direction"
@@ -68217,7 +68670,9 @@
           "body",
           "position",
           "scope",
-          "can_edit"
+          "can_edit",
+          "minute_delay",
+          "customer_sources"
         ],
         "properties": {
           "id": {
@@ -68276,6 +68731,18 @@
             ],
             "format": "int32",
             "description": "Company drip: hours after a deal enters the list."
+          },
+          "minute_delay": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company drip: minutes on top of `hour_delay`, 0 to 59."
+          },
+          "customer_sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Company drip: customer sources (`customers.source`) that get it."
           }
         }
       },
@@ -71732,7 +72199,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Labels: priority, stage, amount, \"Received\", ..."
+            "description": "Labels: stage, amount, \"Received\", ..."
           }
         }
       },

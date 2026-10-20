@@ -35,8 +35,8 @@ pub enum Channel {
 pub struct Drip {
     /// "Pipeline › List" of the deal list that starts it.
     pub list: String,
-    /// Hours after the deal enters the list.
-    pub hours: i32,
+    /// Minutes after the deal enters the list.
+    pub minutes: i32,
 }
 
 /// A company template as customers would get it.
@@ -175,7 +175,7 @@ fn template_notice(
         channel,
         &format!(
             "{} after a deal enters <b>{}</b>",
-            duration(drip.hours * 60, true),
+            duration(drip.minutes, true),
             escape_html(&drip.list)
         ),
         shown.subject.as_deref(),
@@ -212,11 +212,11 @@ fn template_changes(before: &Template, after: &Template) -> Vec<String> {
                 escape_html(&was.list)
             ));
         }
-        if was.hours != now.hours {
+        if was.minutes != now.minutes {
             changes.push(format!(
                 "Now sends <b>{}</b> after that (was {}).",
-                duration(now.hours * 60, false),
-                duration(was.hours * 60, false)
+                duration(now.minutes, false),
+                duration(was.minutes, false)
             ));
         }
     }
@@ -615,7 +615,7 @@ async fn load_email_template(
         name: name.unwrap_or_default(),
         subject,
         body: body.unwrap_or_default(),
-        drip: drip(pool, list, hours).await?,
+        drip: drip(pool, list, hours.map(|hours| hours * 60)).await?,
     }))
 }
 
@@ -641,15 +641,15 @@ async fn load_sms_template(
     company_id: i32,
     id: i32,
 ) -> Result<Option<Template>, sqlx::Error> {
-    let row: Option<(String, String, Option<i32>, Option<i32>)> = sqlx::query_as(
-        "SELECT name, body, lead_list_id, hour_delay FROM cloudtalk_sms_templates
+    let row: Option<(String, String, Option<i32>, Option<i32>, i32)> = sqlx::query_as(
+        "SELECT name, body, lead_list_id, hour_delay, minute_delay FROM cloudtalk_sms_templates
           WHERE id = ? AND company_id = ? AND user_id IS NULL AND deleted_at IS NULL",
     )
     .bind(id)
     .bind(company_id)
     .fetch_optional(pool)
     .await?;
-    let Some((name, body, list, hours)) = row else {
+    let Some((name, body, list, hours, minutes)) = row else {
         return Ok(None);
     };
     Ok(Some(Template {
@@ -657,19 +657,19 @@ async fn load_sms_template(
         name,
         subject: None,
         body,
-        drip: drip(pool, list, hours).await?,
+        drip: drip(pool, list, hours.map(|hours| hours * 60 + minutes)).await?,
     }))
 }
 
 async fn drip(
     pool: &MySqlPool,
     list: Option<i32>,
-    hours: Option<i32>,
+    minutes: Option<i32>,
 ) -> Result<Option<Drip>, sqlx::Error> {
-    match (list, hours) {
-        (Some(list), Some(hours)) => Ok(Some(Drip {
+    match (list, minutes) {
+        (Some(list), Some(minutes)) => Ok(Some(Drip {
             list: list_label(pool, list).await?,
-            hours,
+            minutes,
         })),
         _ => Ok(None),
     }
@@ -808,7 +808,7 @@ mod tests {
     fn contacted(hours: i32) -> Option<Drip> {
         Some(Drip {
             list: "Sales › Contacted".into(),
-            hours,
+            minutes: hours * 60,
         })
     }
 
@@ -861,7 +861,7 @@ mod tests {
             Some(sms(
                 Some(Drip {
                     list: "Sales › Quoted".into(),
-                    hours: 0,
+                    minutes: 0,
                 }),
                 "Hello",
             )),

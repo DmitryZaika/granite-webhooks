@@ -123,6 +123,32 @@ async fn templates_are_created_with_checks(pool: MySqlPool) {
         .json();
     assert_eq!(drip["scope"], "company");
     assert_eq!(drip["hour_delay"], 24);
+    assert_eq!(drip["minute_delay"], 0);
+    assert_eq!(drip["customer_sources"], json!(["leads"]));
+
+    // Same hour, other minutes: a separate step; sources are normalized.
+    let res = server
+        .post("/v1/sms-templates")
+        .with_session(sessions::ADMIN)
+        .json(
+            &json!({ "name": "Drip 30", "body": "y", "scope": "company", "drip": {
+            "lead_list_id": 101, "hour_delay": 1, "minute_delay": 30,
+            "customer_sources": [" Leads", "check-in", "leads"] } }),
+        )
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let minutes: Value = res.json();
+    assert_eq!(minutes["minute_delay"], 30);
+    assert_eq!(minutes["customer_sources"], json!(["leads", "check-in"]));
+    server
+        .post("/v1/sms-templates")
+        .with_session(sessions::ADMIN)
+        .json(
+            &json!({ "name": "Bad", "body": "y", "scope": "company", "drip": {
+            "lead_list_id": 101, "hour_delay": 2, "minute_delay": 60 } }),
+        )
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
 }
 
 #[test_db::test(seed)]

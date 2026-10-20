@@ -7,6 +7,17 @@ pub struct RingcentralSMS {
     recipient: CleanedPhone,
     pub text: CleanText,
     pub agent: Option<String>,
+    /// Pictures and files of an MMS; only `RingCentral`'s own push carries them.
+    #[serde(skip)]
+    pub media: Vec<MmsMedia>,
+}
+
+/// One file of an inbound MMS, still on `RingCentral`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MmsMedia {
+    /// The attachment id under the message's `content/`.
+    pub id: String,
+    pub content_type: String,
 }
 
 impl RingcentralSMS {
@@ -287,6 +298,37 @@ struct NotificationMessage {
     #[serde(default)]
     to: Vec<NotificationParty>,
     subject: Option<String>,
+    #[serde(default)]
+    attachments: Vec<NotificationAttachment>,
+}
+
+#[derive(Deserialize, Debug)]
+struct NotificationAttachment {
+    id: Option<serde_json::Value>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    #[serde(rename = "contentType")]
+    content_type: Option<String>,
+}
+
+impl NotificationAttachment {
+    /// A picture or file the customer sent; the text part is the subject already.
+    fn into_media(self) -> Option<MmsMedia> {
+        if self.kind.as_deref() != Some("MmsAttachment") {
+            return None;
+        }
+        let id = match self.id? {
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::String(s) if !s.is_empty() => s,
+            _ => return None,
+        };
+        Some(MmsMedia {
+            id,
+            content_type: self
+                .content_type
+                .unwrap_or_else(|| "application/octet-stream".to_string()),
+        })
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -322,6 +364,11 @@ impl RingcentralSmsNotification {
             recipient: CleanedPhone(recipient),
             text: CleanText(body.subject.unwrap_or_default()),
             agent: extension_from_event(&self.event),
+            media: body
+                .attachments
+                .into_iter()
+                .filter_map(NotificationAttachment::into_media)
+                .collect(),
         };
         match body.direction.as_deref() {
             Some("Inbound") => Some(NotifiedSms::Inbound(sms)),
@@ -484,6 +531,24 @@ mod tests {
         assert_eq!(sms.recipient(), 3_173_161_456);
         assert_eq!(sms.text.0, "Is the slab still available?");
         assert_eq!(sms.agent.as_deref(), Some("540273"));
+        assert!(sms.media.is_empty());
+    }
+
+    #[test]
+    fn notification_keeps_mms_pictures() {
+        let mms = notification(
+            r#"{"event":"/restapi/v1.0/account/2765489027/extension/2765489027/message-store/instant?type=SMS","body":{"id":"3912429357027","type":"SMS","direction":"Inbound","from":{"phoneNumber":"+13179384645"},"to":[{"phoneNumber":"+13176767938"}],"subject":" ","attachments":[{"id":"3912429357027","type":"Text","contentType":"text/plain"},{"id":"445048423027","type":"MmsAttachment","uri":"https://media.ringcentral.com/x","contentType":"image/png","size":775135}]}}"#,
+        );
+        let Some(NotifiedSms::Inbound(sms)) = mms.into_sms() else {
+            panic!("expected inbound sms");
+        };
+        assert_eq!(
+            sms.media,
+            vec![MmsMedia {
+                id: "445048423027".into(),
+                content_type: "image/png".into(),
+            }]
+        );
     }
 
     #[test]

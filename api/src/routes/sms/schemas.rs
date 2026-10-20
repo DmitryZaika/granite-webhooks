@@ -1,3 +1,4 @@
+use super::provider::SmsProvider;
 use super::scope::SmsScope;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -162,8 +163,10 @@ pub enum MessageStatus {
 /// One message.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Message {
-    /// The SMS row id (page back with `before_id`).
+    /// The SMS row id (page back with `before_id`); unique per provider.
     pub id: i32,
+    /// The provider that carried it.
+    pub provider: SmsProvider,
     pub direction: Direction,
     /// The text; empty for a photo or file alone.
     pub text: String,

@@ -168,7 +168,10 @@ async fn a_bccd_copy_is_in_the_receivers_inbox(pool: MySqlPool) {
     .execute(&pool)
     .await
     .unwrap();
-    assert_eq!(email_ids(&get(&pool, "/v1/emails/threads", OLGA).await)[0], 8898);
+    assert_eq!(
+        email_ids(&get(&pool, "/v1/emails/threads", OLGA).await)[0],
+        8898
+    );
     assert_eq!(get(&pool, "/v1/emails/unread", OLGA).await["count"], 2);
 }
 

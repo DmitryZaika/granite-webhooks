@@ -242,7 +242,7 @@ pub async fn customer_by_phone(
 }
 
 /// Unread inbound messages of one thread for the caller.
-async fn thread_unread(
+pub(super) async fn thread_unread(
     pool: &MySqlPool,
     provider: SmsProvider,
     user: &SessionUser,
@@ -388,7 +388,7 @@ const fn status_of(stored: &str) -> MessageStatus {
 }
 
 /// Visible messages, oldest first, and whether older ones exist.
-async fn messages(
+pub(super) async fn messages(
     pool: &MySqlPool,
     provider: SmsProvider,
     company_id: i32,
@@ -446,6 +446,7 @@ async fn to_messages(
                 (id, name)
             };
             Message {
+                provider,
                 attachments: files.remove(&row.id).unwrap_or_default(),
                 id: row.id,
                 direction: if inbound {
@@ -489,7 +490,7 @@ pub async fn message_by_id(
         .next())
 }
 
-fn checked_phone(phone: &str) -> ApiResult<String> {
+pub(super) fn checked_phone(phone: &str) -> ApiResult<String> {
     if !valid_thread_phone(phone) {
         return Err(ApiError::BadRequest("invalid_phone".into()));
     }

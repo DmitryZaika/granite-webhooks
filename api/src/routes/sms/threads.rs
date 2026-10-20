@@ -54,22 +54,23 @@ pub async fn upkeep(
 }
 
 #[derive(sqlx::FromRow)]
-struct RollupRow {
-    phone_digits: String,
-    last_id: i64,
-    last_at: DateTime<Utc>,
-    message_count: i64,
-    unread: i64,
-    total_count: i64,
-    total_unread: i64,
+pub(super) struct RollupRow {
+    pub phone_digits: String,
+    pub last_id: i64,
+    pub last_at: DateTime<Utc>,
+    pub last_inbound_at: Option<DateTime<Utc>>,
+    pub message_count: i64,
+    pub unread: i64,
+    pub total_count: i64,
+    pub total_unread: i64,
 }
 
 #[derive(sqlx::FromRow)]
-struct LastRow {
+pub(super) struct LastRow {
     id: i32,
-    text: String,
-    sender: Option<String>,
-    agent: Option<String>,
+    pub text: String,
+    pub sender: Option<String>,
+    pub agent: Option<String>,
 }
 
 /// "📷 Photo", "📷 7 photos", "📎 File", "📷 2 photos, 📎 1 file".
@@ -127,7 +128,7 @@ pub async fn attachments(
 
 /// Text, sender and agent of the rows; a picture-only message previews what
 /// was sent.
-async fn last_rows(
+pub(super) async fn last_rows(
     pool: &MySqlPool,
     provider: SmsProvider,
     company_id: i32,
@@ -252,7 +253,7 @@ pub async fn suppliers_by_phone(
 }
 
 /// Rows of the rollup query in `mode`, or none when nothing is visible.
-async fn rollup<T>(
+pub(super) async fn rollup<T>(
     pool: &MySqlPool,
     provider: SmsProvider,
     user: &SessionUser,
@@ -273,7 +274,7 @@ where
     fetch_all(pool, sql, &params).await
 }
 
-async fn unread_threads(
+pub(super) async fn unread_threads(
     pool: &MySqlPool,
     provider: SmsProvider,
     user: &SessionUser,

@@ -60,12 +60,29 @@ struct DripContext {
     customer_id: i32,
     user_id: Option<i32>,
     company_id: i32,
+    source: String,
 }
 
 #[derive(sqlx::FromRow)]
 struct DripTemplate {
     id: i32,
     hour_delay: Option<i32>,
+    minute_delay: i32,
+    /// JSON array of `customers.source` keys; null: only leads.
+    customer_sources: Option<String>,
+}
+
+impl DripTemplate {
+    /// The customer's source gets this drip.
+    fn reaches(&self, source: &str) -> bool {
+        self.customer_sources
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
+            .filter(|list| !list.is_empty())
+            .map_or(source == "leads", |list| {
+                list.iter().any(|key| key == source)
+            })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -89,8 +106,20 @@ impl DripChannel {
         }
     }
 
-    fn send_at(self, hour_delay: i32) -> DateTime<Utc> {
-        let when = Utc::now() + Duration::hours(hour_delay.into());
+    /// Email templates have no minutes or sources: leads only.
+    const fn template_columns(self) -> &'static str {
+        match self {
+            Self::Email => "id, hour_delay, 0 AS minute_delay, NULL AS customer_sources",
+            Self::Sms => {
+                "id, hour_delay, minute_delay, CAST(customer_sources AS CHAR) AS customer_sources"
+            }
+        }
+    }
+
+    fn send_at(self, hour_delay: i32, minute_delay: i32) -> DateTime<Utc> {
+        let when = Utc::now()
+            + Duration::hours(hour_delay.into())
+            + Duration::minutes(minute_delay.into());
         match self {
             Self::Email => clamp_automated_email_send_at(when),
             Self::Sms => clamp_automated_sms_send_at(when),
@@ -101,8 +130,9 @@ impl DripChannel {
 /// Cancels the deal's pending drips and schedules those of `list_id`.
 ///
 /// Port of `syncDealListDripEmails` + `syncDealListDripSms`. Only deals of
-/// lead customers with an owner get drips; a new deal of a customer who
-/// already has another deal gets none.
+/// customers with an owner get drips: leads, or for an SMS template the
+/// sources it names; a new deal of a customer who already has another deal
+/// gets none.
 pub async fn sync_drip(
     pool: &MySqlPool,
     deal_id: i64,
@@ -121,11 +151,11 @@ pub async fn sync_drip(
     }
 
     let context: Option<DripContext> = sqlx::query_as(
-        "SELECT d.customer_id, d.user_id, c.company_id
+        "SELECT d.customer_id, d.user_id, c.company_id,
+                LOWER(TRIM(IFNULL(c.source, ''))) AS source
          FROM deals d
          JOIN customers c ON c.id = d.customer_id
          WHERE d.id = ? AND d.deleted_at IS NULL AND c.deleted_at IS NULL
-           AND LOWER(TRIM(IFNULL(c.source, ''))) = 'leads'
          LIMIT 1",
     )
     .bind(deal_id)
@@ -152,9 +182,10 @@ pub async fn sync_drip(
 
     for channel in [DripChannel::Email, DripChannel::Sms] {
         let templates: Vec<DripTemplate> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT id, hour_delay FROM {}
+            "SELECT {} FROM {}
              WHERE company_id = ? AND user_id IS NULL AND lead_list_id = ? AND deleted_at IS NULL
              ORDER BY hour_delay ASC, id ASC",
+            channel.template_columns(),
             channel.template_table()
         )))
         .bind(context.company_id)
@@ -162,6 +193,9 @@ pub async fn sync_drip(
         .fetch_all(pool)
         .await?;
         for template in templates {
+            if !template.reaches(&context.source) {
+                continue;
+            }
             let table = channel.scheduled_table();
             let existing: Option<i32> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                 "SELECT id FROM {table} WHERE template_id = ? AND customer_id = ? \
@@ -175,7 +209,7 @@ pub async fn sync_drip(
                 continue;
             }
             let send_at = channel
-                .send_at(template.hour_delay.unwrap_or(0))
+                .send_at(template.hour_delay.unwrap_or(0), template.minute_delay)
                 .naive_utc();
             sqlx::query(sqlx::AssertSqlSafe(format!(
                 "INSERT INTO {table}

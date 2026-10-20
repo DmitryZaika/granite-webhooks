@@ -61,17 +61,20 @@ struct DueDrip {
     company_id: i32,
 }
 
-/// Rows a check below skips (no longer a lead, deal deleted or moved off the
-/// list) stay pending in case they qualify again; the query leaves them out
-/// so they cannot fill the batch.
+/// Rows a check below skips (source no longer one the template targets,
+/// deal deleted or moved off the list) stay pending in case they qualify
+/// again; the query leaves them out so they cannot fill the batch.
 async fn due_drips(state: &AppState) -> Result<Vec<DueDrip>, sqlx::Error> {
     sqlx::query_as(
         "SELECT s.id, s.template_id, s.deal_id, s.customer_id, s.user_id, s.company_id
            FROM scheduled_sms s
            JOIN customers c ON c.id = s.customer_id AND c.company_id = s.company_id
            JOIN deals d ON d.id = s.deal_id
+           JOIN cloudtalk_sms_templates t ON t.id = s.template_id
           WHERE s.status = 'pending' AND s.send_at <= UTC_TIMESTAMP()
-            AND c.deleted_at IS NULL AND LOWER(TRIM(IFNULL(c.source, ''))) = 'leads'
+            AND c.deleted_at IS NULL
+            AND JSON_CONTAINS(COALESCE(t.customer_sources, JSON_ARRAY('leads')),
+                              JSON_QUOTE(LOWER(TRIM(IFNULL(c.source, '')))))
             AND d.deleted_at IS NULL AND (s.list_id IS NULL OR d.list_id = s.list_id)
           ORDER BY s.send_at ASC, s.id ASC
           LIMIT ?",

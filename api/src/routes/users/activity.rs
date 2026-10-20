@@ -81,7 +81,7 @@ pub struct UserActivity {
     pub file_url: Option<String>,
     /// A deal activity's deadline (UTC, ISO 8601).
     pub due_at: Option<String>,
-    /// Labels: priority, stage, amount, "Received", ...
+    /// Labels: stage, amount, "Received", ...
     pub tags: Vec<String>,
 }
 
@@ -124,8 +124,6 @@ struct Row {
     body: Option<String>,
     #[sqlx(default)]
     file_url: Option<String>,
-    #[sqlx(default)]
-    priority: Option<String>,
     #[sqlx(default)]
     deadline: Option<String>,
     #[sqlx(default)]
@@ -197,14 +195,6 @@ type PhoneRow = (i64, Option<String>, Option<String>, Option<String>);
 struct CustomerRef {
     id: i64,
     name: Option<String>,
-}
-
-/// `value` with its first letter upper-cased.
-fn capitalize(value: &str) -> String {
-    let mut chars = value.chars();
-    chars.next().map_or_else(String::new, |first| {
-        first.to_uppercase().chain(chars).collect()
-    })
 }
 
 /// Whole dollars with thousands separators (`$1,235`); None for 0.
@@ -384,22 +374,14 @@ async fn deal_rows(
                 DATE_FORMAT(da.created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at,
                 cust.name AS customer_name, CAST(cust.id AS SIGNED) AS customer_id,
                 CAST(da.deal_id AS SIGNED) AS deal_id, da.name AS summary,
-                CAST(da.priority AS CHAR) AS priority,
                 DATE_FORMAT(da.deadline, '%Y-%m-%dT%H:%i:%sZ') AS deadline
            FROM deal_activities da {} {} {}
           WHERE da.company_id = ? AND da.deleted_at IS NULL AND da.created_at >= ?",
         scope("da"), creator("da.company_id", "da.created_by"), owner("da"),
     ), company, cutoff).await?;
     all.extend(created.into_iter().map(|row| {
-        let tags = row
-            .priority
-            .as_deref()
-            .filter(|p| !p.is_empty())
-            .map(|p| vec![format!("{} priority", capitalize(p))])
-            .unwrap_or_default();
         let due_at = row.deadline.clone();
         let mut activity = row.into_activity();
-        activity.tags = tags;
         activity.due_at = due_at;
         activity
     }));
@@ -869,6 +851,5 @@ mod tests {
         assert_eq!(email_key(Some("b@y.com")), "b@y.com");
         assert_eq!(last10("+1 (317) 555-0100"), Some("3175550100".into()));
         assert_eq!(last10("555-0100"), None);
-        assert_eq!(capitalize("high"), "High");
     }
 }

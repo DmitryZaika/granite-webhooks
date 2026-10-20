@@ -421,3 +421,98 @@ async fn history_lists_a_deals_or_phones_texts(pool: MySqlPool) {
     .await;
     assert_eq!(other["items"], serde_json::json!([]));
 }
+
+// Rita also texts through RingCentral (extension 601): Alice got a later text
+// there, and a stranger (3175550555) texted the company's RingCentral line.
+const RINGCENTRAL: &str = "
+UPDATE users SET ringcentral_extension_id = '601' WHERE id = 100;
+INSERT INTO ringcentral_sms (id, ringcentral_id, sender, recipient, text, direction, status, agent, sender_user_id,
+                             company_id, created_date, sender10, recipient10, phone_digits, is_echo) VALUES
+  (9000, 500, 3175550998, 3175550100, 'Via RingCentral', 'outbound', 'sent', '601', 100, 100, '2025-06-05 10:00:00', '3175550998', '3175550100', '3175550100', 0),
+  (9001, 501, 3175550555, 3175550998, 'Who is this?', 'inbound', 'received', NULL, NULL, 100, '2025-06-03 12:00:00', '3175550555', '3175550998', '3175550555', 0);
+";
+
+#[test_db::test(seed)]
+async fn the_admin_inbox_merges_every_provider(pool: MySqlPool) {
+    seed(&pool).await;
+    sqlx::raw_sql(RINGCENTRAL).execute(&pool).await.unwrap();
+
+    let all = get(&pool, "/v1/sms/all/threads", sessions::ADMIN).await;
+    assert_eq!(
+        phones(&all),
+        [
+            "3175550100",
+            "3175550888",
+            "3175550555",
+            "3175550777",
+            "3175550102"
+        ]
+    );
+    assert_eq!(all["total_count"], 5);
+    assert_eq!(all["unread_count"], 4);
+    let alice = &all["threads"][0];
+    assert_eq!(alice["last_message_text"], "Via RingCentral");
+    assert_eq!(alice["message_count"], 3);
+    assert_eq!(alice["customer_name"], "Alice Lead");
+
+    let page = get(
+        &pool,
+        "/v1/sms/all/threads?limit=2&offset=2",
+        sessions::ADMIN,
+    )
+    .await;
+    assert_eq!(phones(&page), ["3175550555", "3175550777"]);
+    assert_eq!(page["has_more"], true);
+
+    // Rita (user 100) through both of her ids.
+    let rita = get(&pool, "/v1/sms/all/threads?agent_id=100", sessions::ADMIN).await;
+    assert_eq!(phones(&rita), ["3175550100", "3175550888"]);
+
+    let thread = get(&pool, "/v1/sms/all/threads/3175550100", sessions::ADMIN).await;
+    let texts: Vec<(&str, &str)> = thread["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| (m["provider"].as_str().unwrap(), m["text"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            ("cloudtalk", "Hello Alice"),
+            ("cloudtalk", "Thanks!"),
+            ("ringcentral", "Via RingCentral"),
+        ]
+    );
+    assert_eq!(thread["can_send"], false);
+    assert_eq!(thread["customer"]["name"], "Alice Lead");
+
+    let older = get(
+        &pool,
+        "/v1/sms/all/threads/3175550100?limit=2",
+        sessions::ADMIN,
+    )
+    .await;
+    assert_eq!(older["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(older["has_older"], true);
+
+    let reps = get(&pool, "/v1/sms/all/sales-reps", sessions::ADMIN).await;
+    assert_eq!(
+        reps,
+        serde_json::json!([
+            { "agent_id": "101", "name": "Mark Manager" },
+            { "agent_id": "100", "name": "Rita Rep" },
+        ])
+    );
+
+    for path in [
+        "/v1/sms/all/threads",
+        "/v1/sms/all/threads/3175550100",
+        "/v1/sms/all/sales-reps",
+    ] {
+        server(pool.clone())
+            .get(path)
+            .with_session(sessions::REP)
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+}

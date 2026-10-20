@@ -156,7 +156,10 @@ fn adjusted_price(base: f64, adjust: f64, kind: Option<&str>) -> f64 {
     js_round(price * 100.0) / 100.0
 }
 
-pub(crate) fn price_group_of<'a>(product: &'a Value, variant: Option<&'a Value>) -> Option<&'a Value> {
+pub(crate) fn price_group_of<'a>(
+    product: &'a Value,
+    variant: Option<&'a Value>,
+) -> Option<&'a Value> {
     let groups = arr(Some(product), "arrPriceGroups");
     if truthy(get(variant, "priceGroup")) {
         let name = get(variant, "priceGroup");
@@ -498,35 +501,11 @@ fn drawing_lines(
 
     for s in &r.splash {
         let sr = rule("arrSplashes");
-        b.add(line(
-            k(&format!("splash:{}", num_str(s.height))),
-            format!(
-                "{} sq ft - {}\" Splash{}",
-                fmt_num(s.sq_ft),
-                fmt_num(s.height),
-                if mat.by_slab {
-                    " Priced by the slab"
-                } else {
-                    ""
-                }
-            ),
-            if mat.by_slab { None } else { SQ_FT },
-            if mat.by_slab { 0.0 } else { s.sq_ft },
-            if mat.by_slab { Some(0.0) } else { mat_price },
-            flags_of(filter_of(sr)),
-        )
-        .typed(material_override.is_some()));
-    }
-    for (list, label) in [
-        (&r.waterfall, "Waterfall"),
-        (&r.mitered, "Mitered Edge Material"),
-    ] {
-        for s in list {
-            let wr = rule("arrWaterfallMiteredEdgeMaterialCharges");
-            b.add(line(
-                k(&format!("{label}:{}", num_str(s.height))),
+        b.add(
+            line(
+                k(&format!("splash:{}", num_str(s.height))),
                 format!(
-                    "{} sq ft - {}\" {label}{}",
+                    "{} sq ft - {}\" Splash{}",
                     fmt_num(s.sq_ft),
                     fmt_num(s.height),
                     if mat.by_slab {
@@ -538,9 +517,37 @@ fn drawing_lines(
                 if mat.by_slab { None } else { SQ_FT },
                 if mat.by_slab { 0.0 } else { s.sq_ft },
                 if mat.by_slab { Some(0.0) } else { mat_price },
-                flags_of(filter_of(wr)),
+                flags_of(filter_of(sr)),
             )
-            .typed(material_override.is_some()));
+            .typed(material_override.is_some()),
+        );
+    }
+    for (list, label) in [
+        (&r.waterfall, "Waterfall"),
+        (&r.mitered, "Mitered Edge Material"),
+    ] {
+        for s in list {
+            let wr = rule("arrWaterfallMiteredEdgeMaterialCharges");
+            b.add(
+                line(
+                    k(&format!("{label}:{}", num_str(s.height))),
+                    format!(
+                        "{} sq ft - {}\" {label}{}",
+                        fmt_num(s.sq_ft),
+                        fmt_num(s.height),
+                        if mat.by_slab {
+                            " Priced by the slab"
+                        } else {
+                            ""
+                        }
+                    ),
+                    if mat.by_slab { None } else { SQ_FT },
+                    if mat.by_slab { 0.0 } else { s.sq_ft },
+                    if mat.by_slab { Some(0.0) } else { mat_price },
+                    flags_of(filter_of(wr)),
+                )
+                .typed(material_override.is_some()),
+            );
         }
     }
 

@@ -202,7 +202,10 @@ async fn admins_manage_templates_and_flows(pool: MySqlPool) {
     let body = list().await;
     let steps = body["flows"][0]["steps"].as_array().unwrap();
     assert_eq!(steps.len(), 1);
-    assert_eq!((steps[0]["id"].as_i64(), steps[0]["offset_value"].as_i64()), (Some(kept_step), Some(2)));
+    assert_eq!(
+        (steps[0]["id"].as_i64(), steps[0]["offset_value"].as_i64()),
+        (Some(kept_step), Some(2))
+    );
     assert_eq!(body["flows"][0]["is_active"], false);
     server
         .put(&format!("/v1/schedule/notifications/flows/{first}"))
@@ -340,13 +343,21 @@ async fn due_rules_email_the_customer_once(pool: MySqlPool) {
     };
     let body: Value = run().await.json();
     assert_eq!(
-        (&body["rule_processed"], &body["rule_sent"], &body["rule_failed"]),
+        (
+            &body["rule_processed"],
+            &body["rule_sent"],
+            &body["rule_failed"]
+        ),
         (&json!(1), &json!(1), &json!(0))
     );
     let emails = sent.emails.lock().unwrap().clone();
     assert_eq!(emails.len(), 1);
     assert_eq!(emails[0].subject, "Reminder for Alice");
-    assert!(emails[0].body.starts_with("<p>Hi Alice, your installation is "));
+    assert!(
+        emails[0]
+            .body
+            .starts_with("<p>Hi Alice, your installation is ")
+    );
     assert!(
         emails[0]
             .body
@@ -474,8 +485,22 @@ async fn last_event(pool: &MySqlPool) -> i32 {
 #[test_db::test(seed)]
 async fn events_get_the_default_flow_or_the_ones_they_pick(pool: MySqlPool) {
     sqlx::raw_sql(CALENDARS).execute(&pool).await.unwrap();
-    let default = rule(&pool, 8830, "email", "Default {{customer.first_name}}", true).await;
-    let other = rule(&pool, 8830, "email", "Picked {{customer.first_name}}", false).await;
+    let default = rule(
+        &pool,
+        8830,
+        "email",
+        "Default {{customer.first_name}}",
+        true,
+    )
+    .await;
+    let other = rule(
+        &pool,
+        8830,
+        "email",
+        "Picked {{customer.first_name}}",
+        false,
+    )
+    .await;
     // Gets the default only.
     event(&pool, 8830, "1000", 23, false).await;
     // Turned the default off and picked the other one instead.
@@ -500,7 +525,9 @@ async fn events_get_the_default_flow_or_the_ones_they_pick(pool: MySqlPool) {
     }
     let (server, sent) = server(&pool).await;
     let active: Value = server
-        .get(&format!("/v1/schedule/notifications/active?event_id={swapped}"))
+        .get(&format!(
+            "/v1/schedule/notifications/active?event_id={swapped}"
+        ))
         .with_session(sessions::REP)
         .await
         .json();

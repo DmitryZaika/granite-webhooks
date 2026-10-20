@@ -12,6 +12,7 @@ use crate::libs::app_request::{SmsFollowupCallCheckBody, spawn_sms_followup_call
 use crate::libs::constants::{BAD_REQUEST, ERR_DB, OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use crate::ringcentral::api::sync_customer_to_ring_central;
+use crate::ringcentral::media::store_inbound_media;
 use crate::ringcentral::schemas::{
     NotifiedSms, RingcentralSMS, RingcentralSmsNotification,
     inbound_customer_phone_from_call_payload, outbound_call_followup_check,
@@ -88,6 +89,16 @@ async fn store_inbound_sms(
         Ok(result) => {
             let rows_affected = result.rows_affected();
             if rows_affected > 0 {
+                if let Some(message_id) = form.id {
+                    store_inbound_media(
+                        company_id,
+                        result.last_insert_id(),
+                        message_id,
+                        form.agent.as_deref(),
+                        &form.media,
+                    )
+                    .await;
+                }
                 if let Err(error) =
                     cancel_flow_enrollments_on_reply(pool, company_id, form.sender()).await
                 {

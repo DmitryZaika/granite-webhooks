@@ -7,6 +7,9 @@ use sqlx::mysql::MySqlArguments;
 use sqlx::{Arguments, MySql};
 
 impl SmsProvider {
+    /// Every provider, for the admin inbox that merges them.
+    pub const ALL: [Self; 2] = [Self::Cloudtalk, Self::Ringcentral];
+
     pub const fn sms_table(self) -> &'static str {
         match self {
             Self::Cloudtalk => "cloudtalk_sms",

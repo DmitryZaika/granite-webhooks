@@ -314,7 +314,7 @@ fn outer(threads: &str, mut params: Vec<Param>, mode: Mode, one_rep: bool) -> (S
             params.push(offset.into());
             (
                 format!(
-                    "SELECT t.phone_digits, t.last_id, t.last_at, t.message_count, t.unread,
+                    "SELECT t.phone_digits, t.last_id, t.last_at, t.last_inbound_at, t.message_count, t.unread,
                             COUNT(*) OVER () AS total_count,
                             CAST(SUM(CASE WHEN t.unread > 0 THEN 1 ELSE 0 END) OVER () AS SIGNED) AS total_unread
                        FROM ({threads}) t

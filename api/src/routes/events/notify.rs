@@ -238,7 +238,13 @@ async fn email_sender(
     pool: &MySqlPool,
     booking: &Booking<'_>,
 ) -> Result<(Option<String>, String), sqlx::Error> {
-    sender_for(pool, booking.company_id, booking.customer_id, booking.user_id).await
+    sender_for(
+        pool,
+        booking.company_id,
+        booking.customer_id,
+        booking.user_id,
+    )
+    .await
 }
 
 /// The customer's sales rep's (else `user_id`'s) name and sending address.

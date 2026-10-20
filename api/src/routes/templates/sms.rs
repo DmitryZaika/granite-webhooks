@@ -1,8 +1,9 @@
 //! SMS templates (`cloudtalk_sms_templates`, used by both providers).
 //!
 //! A company template can be an automated drip: sent `hour_delay` hours
-//! after a lead's deal enters `lead_list_id` (one template per list and
-//! delay). Replaces the Remix `api.sms.templates*` routes and their unused
+//! and `minute_delay` minutes after a deal enters `lead_list_id`, to
+//! customers whose source is in `customer_sources` (default: leads only; one
+//! template per list and delay). Replaces the Remix `api.sms.templates*` routes and their unused
 //! `api.{cloudtalk,ringcentral}.sms.templates*` twins.
 
 use super::handlers::template_body_error;
@@ -26,6 +27,8 @@ use utoipa::{IntoParams, ToSchema};
 /// Longest text a template may hold (one SMS body).
 const MAX_BODY: usize = 1600;
 const MAX_HOUR_DELAY: i32 = 8760;
+/// Source a drip goes to when the template names none.
+const DEFAULT_SOURCE: &str = "leads";
 
 #[derive(Debug, FromRow)]
 struct Row {
@@ -35,13 +38,15 @@ struct Row {
     body: String,
     lead_list_id: Option<i32>,
     hour_delay: Option<i32>,
+    minute_delay: i32,
+    customer_sources: Option<String>,
     position: i32,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
 }
 
-const COLUMNS: &str =
-    "id, user_id, name, body, lead_list_id, hour_delay, position, created_at, updated_at";
+const COLUMNS: &str = "id, user_id, name, body, lead_list_id, hour_delay, minute_delay, \
+     CAST(customer_sources AS CHAR) AS customer_sources, position, created_at, updated_at";
 
 /// An SMS template.
 #[derive(Debug, Serialize, ToSchema)]
@@ -65,6 +70,10 @@ pub struct SmsTemplate {
     pub lead_list_id: Option<i32>,
     /// Company drip: hours after a deal enters the list.
     pub hour_delay: Option<i32>,
+    /// Company drip: minutes on top of `hour_delay`, 0 to 59.
+    pub minute_delay: i32,
+    /// Company drip: customer sources (`customers.source`) that get it.
+    pub customer_sources: Vec<String>,
 }
 
 /// A deal list a drip can start from.
@@ -99,12 +108,52 @@ pub struct SmsTemplates {
 }
 
 /// When a company template sends itself.
-#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct Drip {
     /// The deal list that starts it; null: no drip.
     pub lead_list_id: Option<i32>,
     /// Hours after a deal enters the list, 0 to 8760.
     pub hour_delay: Option<i32>,
+    /// Minutes on top of `hour_delay`, 0 to 59.
+    #[serde(default)]
+    pub minute_delay: i32,
+    /// Customer sources that get it; empty or left out: only leads.
+    #[serde(default)]
+    pub customer_sources: Vec<String>,
+}
+
+/// A checked drip as stored: list, hours, minutes, sources JSON.
+#[derive(Debug, Clone)]
+struct StoredDrip {
+    list: Option<i32>,
+    hours: Option<i32>,
+    minutes: i32,
+    sources: Option<String>,
+}
+
+impl StoredDrip {
+    const NONE: Self = Self {
+        list: None,
+        hours: None,
+        minutes: 0,
+        sources: None,
+    };
+
+    fn of(row: &Row) -> Self {
+        Self {
+            list: row.lead_list_id,
+            hours: row.hour_delay,
+            minutes: row.minute_delay,
+            sources: row.customer_sources.clone(),
+        }
+    }
+}
+
+/// The stored sources JSON as a list; leads when unset or unreadable.
+fn sources_of(json: Option<&str>) -> Vec<String> {
+    json.and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
+        .filter(|list| !list.is_empty())
+        .unwrap_or_else(|| vec![DEFAULT_SOURCE.to_string()])
 }
 
 /// Body of `POST /v1/sms-templates`.
@@ -157,6 +206,8 @@ fn to_template(row: Row, user: &SessionUser, company_editable: bool) -> SmsTempl
         updated_at: row.updated_at,
         lead_list_id: row.lead_list_id,
         hour_delay: row.hour_delay,
+        minute_delay: row.minute_delay,
+        customer_sources: sources_of(row.customer_sources.as_deref()),
     }
 }
 
@@ -192,41 +243,66 @@ fn checked_text(name: &str, body: &str) -> ApiResult<(String, String)> {
 }
 
 /// A drip needs both a list and a delay in range; without a list there is
-/// none.
-fn checked_drip(list: Option<i32>, delay: Option<i32>) -> ApiResult<(Option<i32>, Option<i32>)> {
-    let Some(list) = list.filter(|id| *id > 0) else {
-        return Ok((None, None));
+/// none. Sources are trimmed, lowercased and deduped; none means leads.
+fn checked_drip(drip: Drip) -> ApiResult<StoredDrip> {
+    let Some(list) = drip.lead_list_id.filter(|id| *id > 0) else {
+        return Ok(StoredDrip::NONE);
     };
-    match delay {
-        None => Err(ApiError::BadRequest(
-            "Set how many hours to wait before sending.".into(),
-        )),
-        Some(hours) if !(0..=MAX_HOUR_DELAY).contains(&hours) => Err(ApiError::BadRequest(
-            "Delay must be between 0 and 8760 hours.".into(),
-        )),
-        Some(hours) => Ok((Some(list), Some(hours))),
+    let hours = match drip.hour_delay {
+        None => {
+            return Err(ApiError::BadRequest(
+                "Set how long to wait before sending.".into(),
+            ));
+        }
+        Some(hours) if !(0..=MAX_HOUR_DELAY).contains(&hours) => {
+            return Err(ApiError::BadRequest(
+                "Delay must be between 0 and 8760 hours.".into(),
+            ));
+        }
+        Some(hours) => hours,
+    };
+    if !(0..=59).contains(&drip.minute_delay) {
+        return Err(ApiError::BadRequest(
+            "Minutes must be between 0 and 59.".into(),
+        ));
     }
+    let mut sources: Vec<String> = Vec::new();
+    for source in &drip.customer_sources {
+        let source = source.trim().to_lowercase();
+        if !source.is_empty() && !sources.contains(&source) {
+            sources.push(source);
+        }
+    }
+    let sources = (!sources.is_empty() && sources != [DEFAULT_SOURCE])
+        .then(|| serde_json::to_string(&sources).unwrap_or_default());
+    Ok(StoredDrip {
+        list: Some(list),
+        hours: Some(hours),
+        minutes: drip.minute_delay,
+        sources,
+    })
 }
 
 /// Another company template already drips on this list and delay.
 async fn drip_taken(
     pool: &MySqlPool,
     company_id: i32,
-    drip: (Option<i32>, Option<i32>),
+    drip: &StoredDrip,
     except: Option<i32>,
 ) -> ApiResult<()> {
-    let (Some(list), Some(delay)) = drip else {
+    let (Some(list), Some(delay)) = (drip.list, drip.hours) else {
         return Ok(());
     };
     let taken: Option<i32> = sqlx::query_scalar(
         "SELECT id FROM cloudtalk_sms_templates
           WHERE company_id = ? AND user_id IS NULL AND lead_list_id = ? AND hour_delay = ?
-            AND deleted_at IS NULL AND id <> ?
+            AND minute_delay = ? AND deleted_at IS NULL AND id <> ?
           LIMIT 1",
     )
     .bind(company_id)
     .bind(list)
     .bind(delay)
+    .bind(drip.minutes)
     .bind(except.unwrap_or(0))
     .fetch_optional(pool)
     .await?;
@@ -398,10 +474,10 @@ pub async fn create(
         return Err(ApiError::Forbidden);
     }
     let drip = match input.drip {
-        Some(drip) if company => checked_drip(drip.lead_list_id, drip.hour_delay)?,
-        _ => (None, None),
+        Some(drip) if company => checked_drip(drip)?,
+        _ => StoredDrip::NONE,
     };
-    drip_taken(pool, user.company_id, drip, None).await?;
+    drip_taken(pool, user.company_id, &drip, None).await?;
     let owner = (!company).then_some(user.id);
     let position: Option<i32> = sqlx::query_scalar(
         "SELECT MAX(position) FROM cloudtalk_sms_templates
@@ -413,15 +489,18 @@ pub async fn create(
     .await?;
     let id = sqlx::query(
         "INSERT INTO cloudtalk_sms_templates
-           (company_id, user_id, name, body, lead_list_id, hour_delay, position, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+           (company_id, user_id, name, body, lead_list_id, hour_delay, minute_delay,
+            customer_sources, position, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user.company_id)
     .bind(owner)
     .bind(&name)
     .bind(&body)
-    .bind(drip.0)
-    .bind(drip.1)
+    .bind(drip.list)
+    .bind(drip.hours)
+    .bind(drip.minutes)
+    .bind(&drip.sources)
     .bind(position.map_or(0, |max| max + 1))
     .bind(user.id)
     .execute(pool)
@@ -468,27 +547,30 @@ pub async fn update(
     let (name, body) = checked_text(&input.name, &input.body)?;
     let company = existing.user_id.is_none();
     let drip = match input.drip {
-        Some(drip) if company => checked_drip(drip.lead_list_id, drip.hour_delay)?,
-        _ => (existing.lead_list_id, existing.hour_delay),
+        Some(drip) if company => checked_drip(drip)?,
+        _ => StoredDrip::of(&existing),
     };
     if company {
-        drip_taken(pool, user.company_id, drip, Some(id)).await?;
+        drip_taken(pool, user.company_id, &drip, Some(id)).await?;
     }
     let before = automation_notice::sms_template(pool, user.company_id, id).await;
     sqlx::query(
         "UPDATE cloudtalk_sms_templates
-            SET name = ?, body = ?, lead_list_id = ?, hour_delay = ?, updated_at = NOW()
+            SET name = ?, body = ?, lead_list_id = ?, hour_delay = ?, minute_delay = ?,
+                customer_sources = ?, updated_at = NOW()
           WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
     )
     .bind(&name)
     .bind(&body)
-    .bind(drip.0)
-    .bind(drip.1)
+    .bind(drip.list)
+    .bind(drip.hours)
+    .bind(drip.minutes)
+    .bind(&drip.sources)
     .bind(id)
     .bind(user.company_id)
     .execute(pool)
     .await?;
-    if company && (drip.0.is_none() || drip.1.is_none()) {
+    if company && (drip.list.is_none() || drip.hours.is_none()) {
         cancel_scheduled(pool, id, "Template deleted").await?;
     }
     let after = automation_notice::sms_template(pool, user.company_id, id).await;

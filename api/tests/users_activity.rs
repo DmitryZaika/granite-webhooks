@@ -64,7 +64,7 @@ async fn admins_see_what_users_did(pool: MySqlPool) {
 
     let task = find(activities, "deal_activity", 9800);
     assert_eq!(task["user_name"], "Rita Rep");
-    assert_eq!(task["tags"], serde_json::json!(["High priority"]));
+    assert_eq!(task["tags"], serde_json::json!([]));
     assert!(task["due_at"].is_string());
     let note = find(activities, "deal_note", 9801);
     assert_eq!(note["summary"], "Measured the island");

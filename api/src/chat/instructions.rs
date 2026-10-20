@@ -181,7 +181,9 @@ fn split_non_word(text: &str) -> Vec<&str> {
 fn join_digit_groups(text: &str) -> String {
     let mut text = text.to_string();
     loop {
-        let joined = re!(r"(\d),(\d{3})\b").replace_all(&text, "$1$2").into_owned();
+        let joined = re!(r"(\d),(\d{3})\b")
+            .replace_all(&text, "$1$2")
+            .into_owned();
         if joined == text {
             return text;
         }
@@ -269,7 +271,11 @@ fn corrections(texts: &[Text], terms: &[String]) -> Vec<Correction> {
     }
     let words: HashSet<&str> = texts
         .iter()
-        .flat_map(|x| split_non_word(&x.title).into_iter().chain(split_non_word(&x.body)))
+        .flat_map(|x| {
+            split_non_word(&x.title)
+                .into_iter()
+                .chain(split_non_word(&x.body))
+        })
         .filter(|w| js_len(w) >= 3)
         .collect();
     missing
@@ -281,7 +287,12 @@ fn corrections(texts: &[Text], terms: &[String]) -> Vec<Correction> {
                 .iter()
                 .filter(|w| is_number(w) == is_number(typed))
                 .filter(|w| w.chars().count().abs_diff(typed_chars.len()) <= max)
-                .map(|w| (typo_distance(&typed_chars, &w.chars().collect::<Vec<_>>()), *w))
+                .map(|w| {
+                    (
+                        typo_distance(&typed_chars, &w.chars().collect::<Vec<_>>()),
+                        *w,
+                    )
+                })
                 .filter(|(d, _)| *d <= max)
                 .min()
                 .map(|(_, meant)| Correction {
@@ -1130,7 +1141,10 @@ mod tests {
             let selected = select_for_context(&all, query);
             assert_eq!(selected[0].id, 96, "{query}");
         }
-        assert_eq!(join_digit_groups("$1,234,567 and 12,34"), "$1234567 and 12,34");
+        assert_eq!(
+            join_digit_groups("$1,234,567 and 12,34"),
+            "$1234567 and 12,34"
+        );
     }
 
     #[test]
@@ -1175,7 +1189,10 @@ mod tests {
             "Calacatta Vagli is cut on the waterjet only.",
         ));
 
-        for query in ["how do we cut calacata vagli", "how do we cut calcatta vagil"] {
+        for query in [
+            "how do we cut calacata vagli",
+            "how do we cut calcatta vagil",
+        ] {
             let selected = select_for_context(&all, query);
             assert_eq!(selected[0].id, 42, "{query}");
             let context = instruction_context(&all, query);

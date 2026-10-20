@@ -222,11 +222,7 @@ pub async fn board(
     ));
     query.push_bind(company_id);
     push_in(&mut query, "deal_id", &ids);
-    query.push(
-        " ORDER BY deadline IS NULL, deadline,
-           CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 ELSE 3 END,
-           created_at, id",
-    );
+    query.push(" ORDER BY deadline IS NULL, deadline, created_at, id");
     let activities: Vec<ActivityRow> = query.build_query_as().fetch_all(pool).await?;
     let mut activity_count: HashMap<i64, i64> = HashMap::new();
     let mut next_activity: HashMap<i64, NextActivity> = HashMap::new();

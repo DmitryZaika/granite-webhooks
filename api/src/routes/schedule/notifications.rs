@@ -62,7 +62,11 @@ impl Channel {
     }
 
     fn parse(text: &str) -> Self {
-        if text == "sms" { Self::Sms } else { Self::Email }
+        if text == "sms" {
+            Self::Sms
+        } else {
+            Self::Email
+        }
     }
 }
 
@@ -333,7 +337,13 @@ async fn load_flows(
         .into_iter()
         .map(|row| {
             let mut steps = by_flow.remove(&row.id).unwrap_or_default();
-            steps.sort_by_key(|step| step_order(step.offset_value, step.offset_unit, step.send_time.as_deref()));
+            steps.sort_by_key(|step| {
+                step_order(
+                    step.offset_value,
+                    step.offset_unit,
+                    step.send_time.as_deref(),
+                )
+            });
             NotificationFlow {
                 id: row.id,
                 calendar_id: row.calendar_id,
@@ -348,7 +358,11 @@ async fn load_flows(
 
 /// Sorts steps in the order they go out: furthest ahead first, and on the
 /// same day the earlier clock time first.
-fn step_order(value: i32, unit: OffsetUnit, send_time: Option<&str>) -> (std::cmp::Reverse<i64>, String) {
+fn step_order(
+    value: i32,
+    unit: OffsetUnit,
+    send_time: Option<&str>,
+) -> (std::cmp::Reverse<i64>, String) {
     (
         std::cmp::Reverse(unit.minutes(value)),
         send_time.unwrap_or("99:99").to_string(),
@@ -547,7 +561,10 @@ async fn save_steps(
     .await?;
     let mut kept = Vec::new();
     for (step, send_time) in steps.iter().zip(times) {
-        match step.id.filter(|id| existing.contains(id) && !kept.contains(id)) {
+        match step
+            .id
+            .filter(|id| existing.contains(id) && !kept.contains(id))
+        {
             Some(id) => {
                 sqlx::query(
                     "UPDATE schedule_notification_rules
@@ -686,7 +703,13 @@ pub async fn update_template(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<NotificationTemplateInput>,
 ) -> ApiResult<StatusCode> {
-    find(&state.pool, "schedule_notification_templates", user.company_id, id).await?;
+    find(
+        &state.pool,
+        "schedule_notification_templates",
+        user.company_id,
+        id,
+    )
+    .await?;
     let checked = check_template(&state.pool, user.company_id, &input).await?;
     sqlx::query(
         "UPDATE schedule_notification_templates
@@ -727,7 +750,13 @@ pub async fn delete_template(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
-    find(&state.pool, "schedule_notification_templates", user.company_id, id).await?;
+    find(
+        &state.pool,
+        "schedule_notification_templates",
+        user.company_id,
+        id,
+    )
+    .await?;
     let used_by: Vec<String> = sqlx::query_scalar(
         "SELECT DISTINCT f.name FROM schedule_notification_rules r
            JOIN schedule_notification_flows f ON f.id = r.flow_id AND f.deleted_at IS NULL
@@ -793,7 +822,15 @@ pub async fn create_flow(
     .await?
     .last_insert_id();
     let flow_id = i32::try_from(id).map_err(|_| ApiError::Internal("flow id".into()))?;
-    save_steps(&mut tx, user.company_id, flow_id, user.id, &input.steps, times).await?;
+    save_steps(
+        &mut tx,
+        user.company_id,
+        flow_id,
+        user.id,
+        &input.steps,
+        times,
+    )
+    .await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(Created { id })))
 }
@@ -825,7 +862,13 @@ pub async fn update_flow(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<NotificationFlowInput>,
 ) -> ApiResult<StatusCode> {
-    find(&state.pool, "schedule_notification_flows", user.company_id, id).await?;
+    find(
+        &state.pool,
+        "schedule_notification_flows",
+        user.company_id,
+        id,
+    )
+    .await?;
     let (name, times) = check_flow(&state.pool, user.company_id, &input).await?;
     let mut tx = state.pool.begin().await?;
     if input.is_default {
@@ -871,7 +914,13 @@ pub async fn delete_flow(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
-    find(&state.pool, "schedule_notification_flows", user.company_id, id).await?;
+    find(
+        &state.pool,
+        "schedule_notification_flows",
+        user.company_id,
+        id,
+    )
+    .await?;
     sqlx::query("UPDATE schedule_notification_flows SET deleted_at = NOW() WHERE id = ?")
         .bind(id)
         .execute(&state.pool)
@@ -969,7 +1018,14 @@ pub async fn save_event_skips(
     event_id: i32,
     flow_ids: &[i32],
 ) -> Result<(), sqlx::Error> {
-    save_event_flows(pool, "event_notification_skips", company_id, event_id, flow_ids).await
+    save_event_flows(
+        pool,
+        "event_notification_skips",
+        company_id,
+        event_id,
+        flow_ids,
+    )
+    .await
 }
 
 /// Replaces the other flows picked for an event; ids not of the company's
@@ -980,7 +1036,14 @@ pub async fn save_event_picks(
     event_id: i32,
     flow_ids: &[i32],
 ) -> Result<(), sqlx::Error> {
-    save_event_flows(pool, "event_notification_picks", company_id, event_id, flow_ids).await
+    save_event_flows(
+        pool,
+        "event_notification_picks",
+        company_id,
+        event_id,
+        flow_ids,
+    )
+    .await
 }
 
 async fn save_event_flows(
@@ -1013,7 +1076,8 @@ async fn save_event_flows(
 
 /// SQL: the flow `f` goes on the event `e`: its calendar's, turned on, and
 /// the default not turned off for it, or picked for it.
-pub const FLOW_APPLIES: &str = "f.calendar_id = e.calendar_id AND f.is_active = 1 AND f.deleted_at IS NULL
+pub const FLOW_APPLIES: &str =
+    "f.calendar_id = e.calendar_id AND f.is_active = 1 AND f.deleted_at IS NULL
     AND IF(f.is_default = 1,
            NOT EXISTS (SELECT 1 FROM event_notification_skips k
                         WHERE k.event_id = e.id AND k.flow_id = f.id),
@@ -1387,8 +1451,13 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
             if effective_start(event.start_date, event.all_day) <= now {
                 continue;
             }
-            let Some(at) = send_at(rule.offset_value, unit, time, event.start_date, event.all_day)
-            else {
+            let Some(at) = send_at(
+                rule.offset_value,
+                unit,
+                time,
+                event.start_date,
+                event.all_day,
+            ) else {
                 continue;
             };
             if at > now {
@@ -1397,7 +1466,9 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
             if !claim(pool, rule.id, &event).await? {
                 continue;
             }
-            let booked = event.created_date.map_or(rule.created_at, |created| created.max(rule.created_at));
+            let booked = event
+                .created_date
+                .map_or(rule.created_at, |created| created.max(rule.created_at));
             let skip = if at < booked {
                 Some("booked_after_send_time")
             } else if event.customer_id.is_none() {
@@ -1476,12 +1547,7 @@ mod tests {
     fn appointment_variables_are_filled() {
         let text = "Hi, see you {{appointment.date}} at {{ appointment.time }} at {{appointment.address}}. {{customer.first_name}}";
         assert_eq!(
-            fill_appointment(
-                text,
-                at("2030-01-15 15:00"),
-                false,
-                Some(" 1 Main St ")
-            ),
+            fill_appointment(text, at("2030-01-15 15:00"), false, Some(" 1 Main St ")),
             "Hi, see you Tuesday, January 15 at 10:00 AM at 1 Main St. {{customer.first_name}}"
         );
         // No address: the variable stays, so the send is held back.

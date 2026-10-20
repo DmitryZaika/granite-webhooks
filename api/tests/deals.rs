@@ -450,6 +450,39 @@ async fn creating_for_a_lead_schedules_the_stage_drips(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn sms_drips_reach_the_customer_sources_they_name(pool: MySqlPool) {
+    // A walk-in without deals; 8671 targets walk-ins too, 30 minutes in.
+    sqlx::raw_sql(
+        "INSERT INTO customers (id, name, company_id, source, sales_rep) VALUES (8691, 'Walk In', 100, 'check-in', 107);
+         UPDATE cloudtalk_sms_templates SET hour_delay = 0, minute_delay = 30,
+                customer_sources = JSON_ARRAY('leads', 'check-in') WHERE id = 8671;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let res = server(pool.clone())
+        .post("/v1/deals")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "customer_id": 8691, "list_id": 101 }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    // Email drips stay leads-only.
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            &format!("SELECT COUNT(*) FROM scheduled_emails WHERE deal_id = {id}")
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        scalar_i64(&pool, &format!("SELECT COUNT(*) FROM scheduled_sms WHERE deal_id = {id} AND template_id = 8671 AND status = 'pending'")).await,
+        1
+    );
+}
+
+#[test_db::test(seed)]
 async fn creating_reuses_the_customers_open_deal(pool: MySqlPool) {
     // Erin (1004) has open deals 8002 (Rita's, the oldest) and 8601.
     let res = server(pool.clone())
