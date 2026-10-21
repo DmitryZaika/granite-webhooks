@@ -23,11 +23,13 @@ use crate::followups::js::{js_len, js_slice, trim};
 use crate::followups::prompt::FollowupTimelineMessage;
 use crate::followups::send_window::FollowupChannel;
 use crate::routes::ai::conversation_reply::REPLY_FALLBACK_MODEL;
+use crate::routes::ai::reply_context;
 use crate::routes::sms::provider::valid_thread_phone;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use chrono::{DateTime, Utc};
+use lambda_http::tracing;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -48,7 +50,14 @@ const COMPOSE_EDIT_PHASE: &str = "compose";
 pub const REP_NOTES_MAX: usize = 10;
 pub const REP_NOTE_MAX_CHARS: usize = 140;
 /// Recent suggestion → sent pairs the note writer looks at.
-const REP_NOTES_EVIDENCE_PAIRS: i64 = 6;
+const REP_NOTES_EVIDENCE_PAIRS: usize = 20;
+/// Recent pairs read to find those evidence pairs among the rewrites.
+const REP_NOTES_CANDIDATE_PAIRS: i64 = 60;
+/// Each side of an evidence pair, so 20 long emails stay a small prompt.
+const REP_NOTES_PAIR_MAX_CHARS: usize = 700;
+/// Share of the suggestion's words the sent message must keep to count as
+/// an edit of it; below that the rep wrote a different message.
+const MIN_EDIT_OVERLAP: f64 = 0.4;
 
 pub const COMPOSE_AUTOCOMPLETE_SYSTEM_PROMPT: &str = r#"You are inline autocomplete for a countertop sales rep typing a message to a customer.
 Continue the rep's DRAFT from exactly where it stops. Predict only the next few words, at most the end of the current sentence (max ~15 words).
@@ -62,7 +71,10 @@ Rules:
 - If the DRAFT is empty, suggest how the rep's next message should start: one short sentence (max ~20 words) that fits where the conversation is now. Follow the GREETING line: with GREETING: NONE (an SMS or email with them earlier today) never start with "Hi", "Hey" or "Hello" and never use the customer's name; start with the content.
 - Never repeat or rephrase something the rep already said in the CONVERSATION. If the rep's last message is still unanswered, don't ask its question again: add something new (a different angle, an offer, a next step) or return an empty string.
 - Use the customer's name at most once in a message. Write plainly like the rep: no "I hope this finds you well", "Just following up", "I wanted to reach out", no em dashes.
+- Stop once the point is made. Never tack on an extra offer, a promise to follow up or send something, or "let me know if you have any questions" unless the rep's own messages end that way: reps delete these more than anything else.
+- Sound like the rep's notes (HOW … WRITES) and RECENT MESSAGES BY THE REP: their length, wording, greeting, and the name they introduce themselves with (it can differ from SALES REP).
 - If the DRAFT is empty and the customer has not written to us yet, suggest the whole message (1–3 short sentences) built from CUSTOMER / PROJECT INFO: who the rep is and the company (unless already said on this channel), what the customer asked for, and one question that moves the project forward.
+- When the customer asked something, answer it with the facts in CUSTOMER / PROJECT INFO and QUOTES (the sink, color, edge, price, what is included). Only when a fact is not there may the rep say they'll check.
 - If nothing useful fits, return an empty string.
 Examples (DRAFT → your output):
 "I'll be soo" → "n, see you Friday at 5:00."
@@ -73,7 +85,9 @@ Examples (DRAFT → your output):
 pub const REP_NOTES_SYSTEM_PROMPT: &str = r#"You keep short notes on how one countertop sales rep writes to customers, so the AI that suggests their messages sounds like them.
 You get the current notes and recent examples of what the AI suggested and what the rep actually sent instead.
 Return JSON {"notes": [...]}: at most 10 notes, each one concrete habit under 140 characters, quoting the rep's own words when that helps (e.g. "Opens with 'Hey', not 'Hi'", "Signs off as 'Dema'", "Says 'template', never 'measure'").
-Notes are about how the rep writes and what they choose to say, never facts about one customer or project.
+Most useful first: the name the rep introduces themselves with (it can differ from REP), how they open and close, what they keep cutting from suggestions, typical length, recurring phrases.
+Notes are about how the rep writes and what they choose to say, never facts about one customer or project, and never vague ("Keeps messages concise") when a concrete habit fits.
+A habit seen only in texts starts with "SMS: ", only in emails with "Email: "; habits seen in both have no prefix.
 Keep notes the examples still support, merge overlapping ones, drop ones the rep now contradicts. If the examples teach nothing new, return the current notes unchanged."#;
 
 /// What the prompt is built from, cached per thread for a minute.
@@ -85,6 +99,10 @@ pub struct ComposeContext {
     company_name: Option<String>,
     company_address: Option<String>,
     rep_notes: Vec<String>,
+    /// The rep's own recent messages to any customer.
+    rep_voice: Vec<String>,
+    /// The customer's quotes, formatted (empty: none).
+    quotes: String,
 }
 
 /// Recently gathered threads (`warm` fills it).
@@ -140,6 +158,11 @@ static CODE_FENCE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^```[a-z]*\n?|\n?```$").expect("valid pattern"));
 static QUOTED: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"^\s*"([\s\S]*)"\s*$"#).expect("valid pattern"));
+/// A prompt label the model echoed ("GREETING: Hello Ann").
+static PROMPT_LABEL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(?:GREETING|DRAFT)\s*:\s*").expect("valid pattern"));
+static CHANNEL_NOTE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^(sms|email)\s*:\s*").expect("valid pattern"));
 
 fn draft_tail_note(draft: &str) -> String {
     if let Some(partial) = PARTIAL_WORD.find(draft) {
@@ -155,12 +178,30 @@ fn draft_tail_note(draft: &str) -> String {
     }
 }
 
-/// The rep's notes block of the prompt (`formatRepNotesBlock`).
-pub fn format_rep_notes_block(rep_name: &str, notes: &[String]) -> String {
-    if notes.is_empty() {
+/// The rep's notes block of the prompt (`formatRepNotesBlock`): shared notes
+/// and those for this channel ("SMS: …", "Email: …").
+pub fn format_rep_notes_block(
+    rep_name: &str,
+    notes: &[String],
+    channel: FollowupChannel,
+) -> String {
+    let lines: Vec<String> = notes
+        .iter()
+        .filter_map(|note| {
+            CHANNEL_NOTE.captures(note).map_or_else(
+                || Some(note.clone()),
+                |prefix| {
+                    prefix[1]
+                        .eq_ignore_ascii_case(channel.as_str())
+                        .then(|| note[prefix[0].len()..].to_string())
+                },
+            )
+        })
+        .map(|note| format!("- {note}"))
+        .collect();
+    if lines.is_empty() {
         return String::new();
     }
-    let lines: Vec<String> = notes.iter().map(|note| format!("- {note}")).collect();
     format!(
         "HOW {} WRITES (learned from what they change in suggestions — write like this):\n{}",
         rep_name.to_uppercase(),
@@ -205,7 +246,14 @@ pub fn build_user_prompt(
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(", ");
-    let notes = format_rep_notes_block(user_name, &context.rep_notes);
+    let notes = [
+        format_rep_notes_block(user_name, &context.rep_notes, channel),
+        crate::followups::rep_voice::format_voice_block(&context.rep_voice),
+    ]
+    .into_iter()
+    .filter(|block| !block.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n\n");
     let phone = context
         .rep_phone
         .as_deref()
@@ -214,6 +262,14 @@ pub fn build_user_prompt(
         .map(|p| format!(", phone {p}"))
         .unwrap_or_default();
     let profile = trim(&context.profile);
+    let quotes = if trim(&context.quotes).is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nQUOTES (this customer's quotes, newest first; times UTC):\n{}",
+            trim(&context.quotes)
+        )
+    };
     // How the next message opens: only asked for with an empty draft.
     let greeting = chrono::NaiveDateTime::parse_from_str(now, "%Y-%m-%d %H:%M")
         .ok()
@@ -236,7 +292,7 @@ pub fn build_user_prompt(
         )
     };
     format!(
-        "CHANNEL: {}\nSALES REP: {user_name}{phone}\nCOMPANY: {}\n{}\nCUSTOMER / PROJECT INFO:\n{}\n\nCONVERSATION — oldest first:\n{timeline}\n\nNOW: {now}\n\n{draft_part}",
+        "CHANNEL: {}\nSALES REP: {user_name}{phone}\nCOMPANY: {}\n{}\nCUSTOMER / PROJECT INFO:\n{}{quotes}\n\nCONVERSATION — oldest first:\n{timeline}\n\nNOW: {now}\n\n{draft_part}",
         channel.as_str().to_uppercase(),
         if company.is_empty() {
             "(unknown)"
@@ -289,6 +345,7 @@ pub fn normalize_completion(raw: &str, draft: &str) -> String {
     if let Some(inner) = QUOTED.captures(&text).and_then(|c| c.get(1)) {
         text = inner.as_str().to_string();
     }
+    text = PROMPT_LABEL.replace(&text, "").into_owned();
     if !draft.is_empty() && text.to_lowercase().starts_with(&draft.to_lowercase()) {
         text = js_slice(&text, js_len(draft), js_len(&text));
     }
@@ -448,6 +505,23 @@ async fn load_context(
             .find(|p| !p.is_empty())
     });
     let (company_name, company_address) = company.unwrap_or_default();
+    let deal_id = thread.deal_id.map(i64::from);
+    // Best effort, like the reply drafter: without them the AI only can't
+    // answer quote questions.
+    let quotes = match gathered.customer_id {
+        Some(customer_id) => {
+            match reply_context::load_quotes(&state.pool, user.company_id, customer_id, deal_id)
+                .await
+            {
+                Ok(quotes) => reply_context::format_quotes(&quotes, deal_id),
+                Err(err) => {
+                    tracing::warn!(error = %err, customer_id, "compose: quotes unavailable");
+                    String::new()
+                }
+            }
+        }
+        None => String::new(),
+    };
     let context = ComposeContext {
         profile: gathered.profile,
         timeline: trim_timeline(&gathered.timeline, TIMELINE_MAX_CHARS),
@@ -458,6 +532,8 @@ async fn load_context(
             .style_profile
             .and_then(|p| p.notes)
             .unwrap_or_default(),
+        rep_voice: gathered.rep_voice.examples,
+        quotes,
     };
     let mut cache = state
         .compose_contexts
@@ -647,6 +723,27 @@ fn squash(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// The rep reworded the suggestion rather than writing a different message,
+/// so the pair shows how they write, not what this customer needed.
+pub fn is_edit_of(suggested: &str, sent: &str) -> bool {
+    let suggested = words(suggested);
+    if suggested.is_empty() {
+        return false;
+    }
+    let sent: std::collections::HashSet<String> = words(sent).into_iter().collect();
+    let kept = suggested.iter().filter(|w| sent.contains(*w)).count();
+    #[allow(clippy::cast_precision_loss)]
+    let overlap = kept as f64 / suggested.len() as f64;
+    overlap >= MIN_EDIT_OVERLAP
+}
+
 /// The model's notes, cleaned (`normalizeRepNotes`); `None` when unusable.
 pub fn parse_rep_notes_reply(raw: &str) -> Option<Vec<String>> {
     let parsed: Value = serde_json::from_str(raw).ok()?;
@@ -749,20 +846,34 @@ pub async fn learn(
     .bind(COMPOSE_EDIT_PHASE)
     .execute(pool)
     .await?;
+    // A different message still shows the rep's voice (kept above), but
+    // teaches no habit.
+    if !is_edit_of(&suggested, &sent) {
+        return Ok(Json(Learned { learned: false }));
+    }
     let current = crate::followups::gather::load_style_profile(pool, user.id, user.company_id)
         .await?
         .and_then(|p| p.notes)
         .unwrap_or_default();
-    let mut pairs: Vec<(String, String, String)> = sqlx::query_as(
+    let recent: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT CAST(channel AS CHAR), generated_text, final_text FROM ai_followup_edit_pairs
           WHERE user_id = ? AND company_id = ? AND phase = ? ORDER BY id DESC LIMIT ?",
     )
     .bind(user.id)
     .bind(user.company_id)
     .bind(COMPOSE_EDIT_PHASE)
-    .bind(REP_NOTES_EVIDENCE_PAIRS)
+    .bind(REP_NOTES_CANDIDATE_PAIRS)
     .fetch_all(pool)
     .await?;
+    let mut pairs: Vec<_> = recent
+        .into_iter()
+        .filter(|(_, suggested, sent)| is_edit_of(suggested, sent))
+        .take(REP_NOTES_EVIDENCE_PAIRS)
+        .map(|(channel, suggested, sent)| {
+            let cap = |text: &str| js_slice(text, 0, REP_NOTES_PAIR_MAX_CHARS.min(js_len(text)));
+            (channel, cap(&suggested), cap(&sent))
+        })
+        .collect();
     pairs.reverse();
     let mut chat = Chat::new(MINI_MODEL)
         .message("system", REP_NOTES_SYSTEM_PROMPT)
@@ -890,6 +1001,8 @@ mod tests {
             company_name: Some("Acme Stone".into()),
             company_address: None,
             rep_notes: vec!["Opens with 'Hey'".into()],
+            rep_voice: Vec::new(),
+            quotes: String::new(),
         };
         let prompt = build_user_prompt(
             FollowupChannel::Sms,
@@ -907,6 +1020,8 @@ mod tests {
             "Rita",
             &ComposeContext {
                 rep_notes: Vec::new(),
+                rep_voice: Vec::new(),
+                quotes: String::new(),
                 ..context
             },
             "",
@@ -927,6 +1042,8 @@ mod tests {
             company_name: None,
             company_address: Some("  ".into()),
             rep_notes: Vec::new(),
+            rep_voice: Vec::new(),
+            quotes: String::new(),
         };
         let prompt = build_user_prompt(FollowupChannel::Sms, "Dema", &context, "", "x");
         assert!(prompt.contains("SALES REP: Dema\n"));
@@ -961,6 +1078,8 @@ mod tests {
             company_name: None,
             company_address: None,
             rep_notes: Vec::new(),
+            rep_voice: Vec::new(),
+            quotes: String::new(),
         };
         let prompt = build_user_prompt(
             FollowupChannel::Email,
@@ -999,5 +1118,62 @@ mod tests {
         assert_eq!(notes, ["Opens with 'Hey'", "Signs off as Dema"]);
         assert_eq!(parse_rep_notes_reply("nope"), None);
         assert_eq!(parse_rep_notes_reply(r#"{"x": []}"#), None);
+    }
+
+    #[test]
+    fn channel_notes_reach_only_their_channel() {
+        let notes = [
+            "Opens with 'Hey'".to_string(),
+            "SMS: Introduces self as 'Dima'".to_string(),
+            "Email: Ends with 'Thanks!'".to_string(),
+        ];
+        let sms = format_rep_notes_block("Dema", &notes, FollowupChannel::Sms);
+        assert!(sms.ends_with("- Opens with 'Hey'\n- Introduces self as 'Dima'"));
+        let email = format_rep_notes_block("Dema", &notes, FollowupChannel::Email);
+        assert!(email.ends_with("- Opens with 'Hey'\n- Ends with 'Thanks!'"));
+        assert_eq!(
+            format_rep_notes_block("Dema", &notes[2..], FollowupChannel::Sms),
+            ""
+        );
+    }
+
+    #[test]
+    fn the_reps_own_messages_are_in_the_prompt() {
+        let context = ComposeContext {
+            profile: String::new(),
+            timeline: Vec::new(),
+            rep_phone: None,
+            company_name: None,
+            company_address: None,
+            quotes: String::new(),
+            rep_notes: Vec::new(),
+            rep_voice: vec!["Hey Simon, this is Dima with Granite Depot.".into()],
+        };
+        let prompt = build_user_prompt(FollowupChannel::Sms, "Dema", &context, "", "x");
+        assert!(
+            prompt.contains("RECENT MESSAGES BY THE REP (to various customers, newest first).")
+        );
+        assert!(prompt.contains("- Hey Simon, this is Dima with Granite Depot.\n"));
+    }
+
+    #[test]
+    fn an_echoed_prompt_label_is_dropped() {
+        assert_eq!(
+            normalize_completion("GREETING: Hello Elizabeth, I'm Cristina.", ""),
+            "Hello Elizabeth, I'm Cristina."
+        );
+    }
+
+    #[test]
+    fn a_different_message_is_not_an_edit() {
+        assert!(is_edit_of(
+            "Hey Pete, could you resend the picture? That way I can check it.",
+            "Hey Pete, could you please resend the picture?"
+        ));
+        assert!(!is_edit_of(
+            "Hi Edward, I can send you a link to browse our stones.",
+            "Hey Edward! How would you like to pay the deposit: card or Zelle?"
+        ));
+        assert!(!is_edit_of("", "Hi"));
     }
 }

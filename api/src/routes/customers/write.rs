@@ -327,6 +327,19 @@ pub async fn update(
     .bind(user.company_id)
     .execute(&mut *tx)
     .await?;
+    // The customer's quotes take the phone and address only where theirs is empty.
+    sqlx::query(
+        "UPDATE quotes
+         SET phone = IF(phone IS NULL OR TRIM(phone) = '', COALESCE(?, phone), phone),
+             address = IF(address IS NULL OR TRIM(address) = '', COALESCE(?, address), address)
+         WHERE customer_id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(blank_to_none(input.phone.as_deref()))
+    .bind(blank_to_none(input.address.as_deref()))
+    .bind(id)
+    .bind(user.company_id)
+    .execute(&mut *tx)
+    .await?;
     sync_emails(&mut tx, id, &input.emails, user.id).await?;
     tx.commit().await?;
 

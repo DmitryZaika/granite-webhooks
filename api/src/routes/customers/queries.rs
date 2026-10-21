@@ -181,8 +181,8 @@ pub async fn search_customers(
 ) -> Result<Vec<CustomerSearchRow>, sqlx::Error> {
     let term = query.term.trim();
     let mut sql = QueryBuilder::<MySql>::new(
-        "SELECT c.id, c.name, c.address, c.phone, c.phone_2, primary_email.email AS email,
-            c.company_name,
+        "SELECT c.id, c.name, c.address, c.city, c.state, c.postal_code, c.phone, c.phone_2,
+            primary_email.email AS email, c.company_name,
             -- deals.id is BIGINT UNSIGNED, which decodes only as u64.
             (SELECT CAST(d.id AS SIGNED) FROM deals d
               WHERE d.customer_id = c.id AND d.deleted_at IS NULL

@@ -3,6 +3,7 @@
 //!
 //! - `GET|POST /v1/quote-tax-rates`, `PUT|DELETE /v1/quote-tax-rates/{id}`
 //! - `GET|POST /v1/quote-payment-terms`, `PUT|DELETE /v1/quote-payment-terms/{id}`
+//! - `GET|POST /v1/online-quote-options`, `PUT|DELETE .../{id}` → extras the online quote offers
 //! - `GET|PUT /v1/quote-settings` → measurement defaults
 //! - `GET|POST /v1/quote-email-templates`, `PUT|DELETE .../{id}` → email defaults
 //! - `PUT /v1/quote-email-templates/order` → save a drag (the templates' sequence)
@@ -28,6 +29,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(update_tax_rate, delete_tax_rate))
         .routes(routes!(list_payment_terms, create_payment_term))
         .routes(routes!(update_payment_term, delete_payment_term))
+        .routes(routes!(list_online_options, create_online_option))
+        .routes(routes!(update_online_option, delete_online_option))
         .routes(routes!(get_settings, save_settings))
         .routes(routes!(list_email_templates, create_email_template))
         .routes(routes!(update_email_template, delete_email_template))
@@ -436,6 +439,219 @@ pub async fn delete_payment_term(
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
     soft_delete(&state, "quote_payment_terms", user.company_id, id).await
+}
+
+/// What every company's online quote starts with, all off.
+const DEFAULT_ONLINE_OPTIONS: [&str; 3] = ["Laminate tear out", "Stone tear out", "10 year sealer"];
+
+/// An extra the online quote can offer the customer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
+pub struct OnlineQuoteOption {
+    /// Option id.
+    pub id: i32,
+    /// Name, e.g. "Stone tear out". A price list extra of the same name prices it.
+    pub name: String,
+    /// Order on the customer's Extras step.
+    pub sequence: i32,
+    /// Offered to customers. When any is on, the online quote has an Extras step.
+    pub enabled: bool,
+}
+
+/// Body of creating or saving an online quote option.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OnlineQuoteOptionInput {
+    /// Name; required, at most 120 characters (longer is cut).
+    pub name: String,
+    /// Order; 1 or more (default 1).
+    #[serde(default)]
+    pub sequence: Option<i32>,
+    /// Offered to customers (default false).
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// List online quote options
+///
+/// The extras the company's online quote can offer, by sequence then name.
+/// A company that never had any gets Laminate tear out, Stone tear out and
+/// 10 year sealer, all off.
+#[utoipa::path(
+    get,
+    path = "/v1/online-quote-options",
+    operation_id = "list_online_quote_options",
+    tag = "quotes",
+    responses(
+        (status = 200, description = "Options", body = Vec<OnlineQuoteOption>),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn list_online_options(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+) -> ApiResult<Json<Vec<OnlineQuoteOption>>> {
+    // Deleted rows count: defaults the admin deleted stay deleted.
+    let ever: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM online_quote_options WHERE company_id = ?")
+            .bind(user.company_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if ever == 0 {
+        for (sequence, name) in (1..).zip(DEFAULT_ONLINE_OPTIONS) {
+            sqlx::query(
+                "INSERT INTO online_quote_options (company_id, name, sequence, enabled, created_by)
+                 VALUES (?, ?, ?, 0, ?)",
+            )
+            .bind(user.company_id)
+            .bind(name)
+            .bind(sequence)
+            .bind(user.id)
+            .execute(&state.pool)
+            .await?;
+        }
+    }
+    Ok(Json(
+        sqlx::query_as(
+            "SELECT id, name, sequence, enabled FROM online_quote_options
+              WHERE company_id = ? AND deleted_at IS NULL ORDER BY sequence, name, id",
+        )
+        .bind(user.company_id)
+        .fetch_all(&state.pool)
+        .await?,
+    ))
+}
+
+/// The names of the company's options offered to customers, in order.
+pub async fn enabled_online_options(
+    pool: &sqlx::MySqlPool,
+    company_id: i32,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT name FROM online_quote_options
+          WHERE company_id = ? AND enabled = 1 AND deleted_at IS NULL ORDER BY sequence, name, id",
+    )
+    .bind(company_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Add an online quote option
+///
+/// Adds an extra the online quote can offer.
+#[utoipa::path(
+    post,
+    path = "/v1/online-quote-options",
+    operation_id = "create_online_quote_option",
+    tag = "quotes",
+    request_body = OnlineQuoteOptionInput,
+    responses(
+        (status = 201, description = "Added", body = OnlineQuoteOption),
+        (status = 400, description = "No name", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn create_online_option(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    JsonBody(input): JsonBody<OnlineQuoteOptionInput>,
+) -> ApiResult<(StatusCode, Json<OnlineQuoteOption>)> {
+    let name = required(&input.name, 120, "Name is required.")?;
+    let sequence = sequence(input.sequence);
+    let id = sqlx::query(
+        "INSERT INTO online_quote_options (company_id, name, sequence, enabled, created_by)
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(user.company_id)
+    .bind(&name)
+    .bind(sequence)
+    .bind(input.enabled)
+    .bind(user.id)
+    .execute(&state.pool)
+    .await?
+    .last_insert_id();
+    Ok((
+        StatusCode::CREATED,
+        Json(OnlineQuoteOption {
+            id: i32::try_from(id).unwrap_or(i32::MAX),
+            name,
+            sequence,
+            enabled: input.enabled,
+        }),
+    ))
+}
+
+/// Save an online quote option
+///
+/// Saves the name, sequence and whether customers are offered it.
+#[utoipa::path(
+    put,
+    path = "/v1/online-quote-options/{id}",
+    operation_id = "update_online_quote_option",
+    tag = "quotes",
+    params(("id" = i32, Path, description = "Option id")),
+    request_body = OnlineQuoteOptionInput,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 400, description = "No name", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "No such option in the company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn update_online_option(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Path(id): Path<i32>,
+    JsonBody(input): JsonBody<OnlineQuoteOptionInput>,
+) -> ApiResult<StatusCode> {
+    let name = required(&input.name, 120, "Name is required.")?;
+    exists(&state, "online_quote_options", user.company_id, id).await?;
+    sqlx::query(
+        "UPDATE online_quote_options SET name = ?, sequence = ?, enabled = ?
+          WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(name)
+    .bind(sequence(input.sequence))
+    .bind(input.enabled)
+    .bind(id)
+    .bind(user.company_id)
+    .execute(&state.pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete an online quote option
+///
+/// Removes the option; quotes keep the extras they got.
+#[utoipa::path(
+    delete,
+    path = "/v1/online-quote-options/{id}",
+    operation_id = "delete_online_quote_option",
+    tag = "quotes",
+    params(("id" = i32, Path, description = "Option id")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "No such option in the company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn delete_online_option(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Path(id): Path<i32>,
+) -> ApiResult<StatusCode> {
+    soft_delete(&state, "online_quote_options", user.company_id, id).await
 }
 
 /// Measurement roundings a company can pick, in inches.

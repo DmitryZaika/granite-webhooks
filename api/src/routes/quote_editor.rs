@@ -244,24 +244,27 @@ pub(crate) fn always_included_items(offered: &Value) -> Vec<Value> {
     quote_pricing::js::arr(Some(offered), "arrOtherItems")
         .iter()
         .filter(|o| quote_pricing::js::on(o.get("alwaysIncludeOnQuote")))
-        .map(|o| {
-            json!({
-                "id": new_id("item"),
-                "kind": "priceList",
-                "areaId": null,
-                "name": o.get("name").cloned().unwrap_or(Value::Null),
-                "option": null,
-                "catalogId": o.get("catalogId").cloned().unwrap_or(Value::Null),
-                "optionId": null,
-                "quantity": 1,
-                "amount": if quote_pricing::js::arr(Some(o), "arrRanges").is_empty() { Value::Null } else { json!(0) },
-                "price": null,
-                "hideOnQuote": false,
-                "allowDiscount": true,
-                "taxable": true,
-            })
-        })
+        .map(price_list_item)
         .collect()
+}
+
+/// A quote line for one of the list's extras (`arrOtherItems` entry).
+pub(crate) fn price_list_item(extra: &Value) -> Value {
+    json!({
+        "id": new_id("item"),
+        "kind": "priceList",
+        "areaId": null,
+        "name": extra.get("name").cloned().unwrap_or(Value::Null),
+        "option": null,
+        "catalogId": extra.get("catalogId").cloned().unwrap_or(Value::Null),
+        "optionId": null,
+        "quantity": 1,
+        "amount": if quote_pricing::js::arr(Some(extra), "arrRanges").is_empty() { Value::Null } else { json!(0) },
+        "price": null,
+        "hideOnQuote": false,
+        "allowDiscount": true,
+        "taxable": true,
+    })
 }
 
 /// The same extra: its shared extra's id, or its name (trimmed, any case).
@@ -292,6 +295,73 @@ fn for_price_list(doc: &mut Value, offered: &Value) {
         if !items.iter().any(|i| same_extra(i, &item)) {
             items.push(item);
         }
+    }
+}
+
+/// The customer's street with "City, ST 46143" on a second line, since the
+/// deal keeps city, state and ZIP apart. The street alone when it already has
+/// a second line or the ZIP; null when there is nothing.
+fn full_address(
+    street: Option<&str>,
+    city: Option<&str>,
+    state: Option<&str>,
+    zip: Option<&str>,
+) -> Option<String> {
+    let part = |v: Option<&str>| v.map(str::trim).unwrap_or_default().to_string();
+    let (street, city, state, zip) = (part(street), part(city), part(state), part(zip));
+    if street.contains('\n') || (!zip.is_empty() && street.contains(&zip)) {
+        return Some(street);
+    }
+    let place = [city, state]
+        .into_iter()
+        .filter(|v| !v.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let locality = [place, zip]
+        .into_iter()
+        .filter(|v| !v.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let lines: Vec<String> = [street, locality]
+        .into_iter()
+        .filter(|v| !v.is_empty())
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+#[cfg(test)]
+mod full_address_tests {
+    use super::full_address;
+
+    #[test]
+    fn adds_city_state_and_zip_on_a_second_line() {
+        assert_eq!(
+            full_address(
+                Some("992 Cherry Tree Lane"),
+                Some("Carmel"),
+                Some("IN"),
+                Some("46143")
+            ),
+            Some("992 Cherry Tree Lane\nCarmel, IN 46143".into())
+        );
+        assert_eq!(
+            full_address(Some("992 Cherry Tree Lane"), None, Some(""), Some("46143")),
+            Some("992 Cherry Tree Lane\n46143".into())
+        );
+    }
+
+    #[test]
+    fn keeps_a_street_that_already_has_the_zip() {
+        assert_eq!(
+            full_address(
+                Some("1 Main St, Carmel, IN 46143"),
+                Some("Carmel"),
+                Some("IN"),
+                Some("46143")
+            ),
+            Some("1 Main St, Carmel, IN 46143".into())
+        );
+        assert_eq!(full_address(Some("  "), None, None, None), None);
     }
 }
 
@@ -326,12 +396,15 @@ pub async fn create_quote(
     struct Customer {
         name: Option<String>,
         address: Option<String>,
+        city: Option<String>,
+        state: Option<String>,
+        postal_code: Option<String>,
         phone: Option<String>,
         phone_2: Option<String>,
         email: Option<String>,
     }
     let customer: Option<Customer> = sqlx::query_as(
-        "SELECT c.name, c.address, c.phone, c.phone_2, ce.email
+        "SELECT c.name, c.address, c.city, c.state, c.postal_code, c.phone, c.phone_2, ce.email
            FROM customers c
            LEFT JOIN customers_emails ce ON ce.id = c.email_id AND ce.customer_id = c.id
           WHERE c.id = ? AND c.company_id = ?",
@@ -419,7 +492,12 @@ pub async fn create_quote(
     .bind(chosen.as_ref().and_then(|(row, _)| row.current_revision_id))
     .bind(expiration_days)
     .bind(doc.to_string())
-    .bind(copy(customer.address.as_deref()))
+    .bind(full_address(
+        customer.address.as_deref(),
+        customer.city.as_deref(),
+        customer.state.as_deref(),
+        customer.postal_code.as_deref(),
+    ))
     .bind(copy(customer.phone.as_deref()).or_else(|| copy(customer.phone_2.as_deref())))
     .bind(copy(customer.email.as_deref()))
     .execute(&state.pool)

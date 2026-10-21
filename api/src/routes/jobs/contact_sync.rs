@@ -4,7 +4,7 @@
 //! Edits already sync right away; this catches customers created elsewhere
 //! (lead forms, imports, inbound texts) and syncs that failed. Each run takes
 //! a few customers without a contact per provider; one that is still missing
-//! after its try waits [`RETRY_AFTER_HOURS`] for the next.
+//! after its try waits a while (`Provider::retry_after_hours`) for the next.
 
 use super::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
@@ -15,10 +15,6 @@ use serde::Serialize;
 use sqlx::MySqlPool;
 use utoipa::ToSchema;
 
-/// Customers per provider per run; `RingCentral` allows about 40 contact
-/// calls a minute and a sync makes two or three.
-const PER_RUN: i64 = 10;
-const RETRY_AFTER_HOURS: i64 = 24;
 
 /// What a run did.
 #[derive(Debug, Default, Serialize, ToSchema)]
@@ -42,6 +38,24 @@ impl Provider {
         match self {
             Self::Ringcentral => "ringcentral",
             Self::Cloudtalk => "cloudtalk",
+        }
+    }
+
+    /// Customers per run. `RingCentral` throttles its contact API hard (and
+    /// the call-log sync shares the limit); a sync makes two or three calls.
+    const fn per_run(self) -> i64 {
+        match self {
+            Self::Ringcentral => 3,
+            Self::Cloudtalk => 10,
+        }
+    }
+
+    /// Before a customer still without a contact is tried again; a
+    /// `RingCentral` miss is usually only throttling.
+    const fn retry_after_hours(self) -> i64 {
+        match self {
+            Self::Ringcentral => 2,
+            Self::Cloudtalk => 24,
         }
     }
 
@@ -88,8 +102,8 @@ async fn due(pool: &MySqlPool, provider: Provider) -> Result<Vec<(i32, i32)>, sq
         contacts = provider.contacts_table(),
     )))
     .bind(provider.name())
-    .bind(RETRY_AFTER_HOURS)
-    .bind(PER_RUN)
+    .bind(provider.retry_after_hours())
+    .bind(provider.per_run())
     .fetch_all(pool)
     .await
 }

@@ -185,3 +185,63 @@ async fn company_quote_email_templates_stay_numbered(pool: MySqlPool) {
     assert_eq!(list.as_array().unwrap().len(), 1);
     assert_eq!(list[0]["sequence"], 1);
 }
+
+#[test_db::test(seed)]
+async fn online_quote_options_start_with_three_defaults_all_off(pool: MySqlPool) {
+    let server = server(pool);
+    server
+        .get("/v1/online-quote-options")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let list: Value = server
+        .get("/v1/online-quote-options")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    let rows: Vec<(&str, bool)> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| (row["name"].as_str().unwrap(), row["enabled"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(
+        rows,
+        [("Laminate tear out", false), ("Stone tear out", false), ("10 year sealer", false)]
+    );
+    let laminate = list[0]["id"].as_i64().unwrap();
+    let sealer = list[2]["id"].as_i64().unwrap();
+    server
+        .delete(&format!("/v1/online-quote-options/{laminate}"))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .put(&format!("/v1/online-quote-options/{sealer}"))
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "10 year sealer", "sequence": 3, "enabled": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .post("/v1/online-quote-options")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": " Plumbing ", "sequence": 4 }))
+        .await
+        .assert_status(StatusCode::CREATED);
+    // The deleted default does not come back.
+    let list: Value = server
+        .get("/v1/online-quote-options")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    let rows: Vec<(&str, bool)> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| (row["name"].as_str().unwrap(), row["enabled"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(
+        rows,
+        [("Stone tear out", false), ("10 year sealer", true), ("Plumbing", false)]
+    );
+}

@@ -280,6 +280,12 @@ pub struct CustomerSearchRow {
     pub name: Option<String>,
     /// Billing address.
     pub address: Option<String>,
+    /// City of the address.
+    pub city: Option<String>,
+    /// State of the address.
+    pub state: Option<String>,
+    /// ZIP code.
+    pub postal_code: Option<String>,
     /// Main phone number.
     pub phone: Option<String>,
     /// Second phone number.

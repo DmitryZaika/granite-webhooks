@@ -21,6 +21,7 @@
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::quote_pricing::doc::QuoteDoc;
+use crate::quote_pricing::edit::new_id;
 use crate::quote_pricing::js::{arr, num, on, truthy};
 use crate::quote_pricing::price_list::{key, material_name, sync_with_stock};
 use crate::quote_pricing::pricing::{PriceOptions, price_group_of, price_quote, variant_price};
@@ -29,9 +30,11 @@ use crate::quote_pricing::{load_stock, sink_shape_by_code};
 use crate::routes::auth::{app_origin, company_subdomain};
 use crate::routes::customers::duplicates::phone_last10;
 use crate::routes::emails::signature_mail::{Branding, EMAIL_FONT, button_html, card_html};
-use crate::routes::quote_editor::{STONE_IN_STOCK_SQL, always_included_items, icon_url, token};
+use crate::routes::quote_editor::{
+    STONE_IN_STOCK_SQL, always_included_items, icon_url, price_list_item, token,
+};
 use crate::routes::quote_portal::money;
-use crate::routes::quote_presets::{QuoteSettings, load_quote_settings};
+use crate::routes::quote_presets::{QuoteSettings, enabled_online_options, load_quote_settings};
 use crate::routes::quote_price_lists::{default_id, find as find_price_list, list_rows};
 use crate::state::AppState;
 use crate::telegram::Bot;
@@ -141,6 +144,9 @@ pub struct OnlineQuoteSetup {
     pub sinks: Vec<OnlineSink>,
     /// The cooktop cutout.
     pub cooktop: OnlineCooktop,
+    /// Extras the customer can add (Admin > Quotes > Customer Quote), in
+    /// order. Empty: the builder has no Extras step.
+    pub extras: Vec<String>,
 }
 
 /// An edge: polished, plain against a wall, or with a backsplash on it.
@@ -271,6 +277,9 @@ pub struct OnlineDrawing {
     pub pieces: Vec<OnlinePiece>,
     /// 1 to 10 colors to compare.
     pub colors: Vec<OnlineColorPick>,
+    /// The builder's `extras` the customer wants, by name.
+    #[serde(default)]
+    pub extras: Vec<String>,
 }
 
 /// One color's price.
@@ -315,6 +324,10 @@ pub struct OnlineQuoteInput {
     pub pieces: Vec<OnlinePiece>,
     /// 1 to 10 colors, one quote option each.
     pub colors: Vec<OnlineColorPick>,
+    /// The builder's `extras` the customer wants, by name; each goes on the
+    /// quote as an extra.
+    #[serde(default)]
+    pub extras: Vec<String>,
     /// A hidden form field people leave empty. When it is filled, the request
     /// is answered as sent and nothing is saved or sent.
     #[serde(default)]
@@ -760,13 +773,14 @@ fn piece_counter(
 
 /// Checks the pieces and colors against what the builder offers and makes
 /// the quote document: one area, one option per color, the company's depth,
-/// rounding and "always include" extras.
+/// rounding and "always include" extras, and the extras the customer picked.
 fn build_drawing(
     offer: &Offer,
     offered: &[OnlineColor],
     sinks: &[OnlineSink],
     pieces: &[OnlinePiece],
     picks: &[OnlineColorPick],
+    extras: &[String],
 ) -> ApiResult<Drawing> {
     if pieces.is_empty() || pieces.len() > MAX_PIECES {
         return Err(bad("Add 1 to 8 countertops."));
@@ -818,11 +832,63 @@ fn build_drawing(
         "areas": [{ "id": AREA_ID, "name": "Area #1", "quantity": 1 }],
         "colorOptions": options,
         "layouts": {},
-        "items": always_included_items(&offer.prices),
+        "items": quote_items(&offer.prices, extras),
         "priceOverrides": {},
         "rounding": offer.settings.rounding,
     });
     Ok(Drawing { doc, colors })
+}
+
+/// The list's "always include" extras, then each extra the customer picked
+/// that is not one of them: the list's extra of that name, or a line with no
+/// price for the team to price.
+fn quote_items(prices: &Value, extras: &[String]) -> Vec<Value> {
+    let mut items = always_included_items(prices);
+    let listed = arr(Some(prices), "arrOtherItems");
+    for extra in extras {
+        if items.iter().any(|i| key(name_of(i)) == key(extra)) {
+            continue;
+        }
+        items.push(match listed.iter().find(|o| key(name_of(o)) == key(extra)) {
+            Some(def) => price_list_item(def),
+            None => json!({
+                "id": new_id("item"),
+                "kind": "misc",
+                "areaId": null,
+                "name": extra,
+                "option": null,
+                "catalogId": null,
+                "optionId": null,
+                "quantity": 1,
+                "amount": null,
+                "price": null,
+                "hideOnQuote": false,
+                "allowDiscount": true,
+                "taxable": true,
+            }),
+        });
+    }
+    items
+}
+
+/// The customer's extras, checked against what the company offers.
+async fn checked_extras(
+    pool: &MySqlPool,
+    company_id: i32,
+    picks: &[String],
+) -> ApiResult<Vec<String>> {
+    let offered = enabled_online_options(pool, company_id).await?;
+    let mut extras: Vec<String> = Vec::with_capacity(picks.len());
+    for pick in picks {
+        let found = offered
+            .iter()
+            .find(|o| key(o) == key(pick))
+            .ok_or_else(|| bad("One of your extras is no longer offered. Go back and check them."))?;
+        if !extras.contains(found) {
+            extras.push(found.clone());
+        }
+    }
+    Ok(extras)
 }
 
 /// Each color's total (to the cent, null when not all of it is priced) and
@@ -906,6 +972,7 @@ pub async fn setup(
             colors: Vec::new(),
             sinks: Vec::new(),
             cooktop: cooktop_cutout(&Value::Null),
+            extras: Vec::new(),
         }));
     };
     let colors = offered_colors(&state.pool, company_id, &offer.prices).await?;
@@ -918,6 +985,7 @@ pub async fn setup(
         cooktop: cooktop_cutout(&offer.prices),
         colors,
         sinks,
+        extras: enabled_online_options(&state.pool, company_id).await?,
     }))
 }
 
@@ -949,7 +1017,8 @@ pub async fn prices(
 ) -> ApiResult<Json<OnlinePrices>> {
     company_of(&state.pool, company_id).await?;
     let (offer, colors, sinks) = ready_offer(&state.pool, company_id).await?;
-    let drawing = build_drawing(&offer, &colors, &sinks, &input.pieces, &input.colors)?;
+    let extras = checked_extras(&state.pool, company_id, &input.extras).await?;
+    let drawing = build_drawing(&offer, &colors, &sinks, &input.pieces, &input.colors, &extras)?;
     let (prices, _) = price_drawing(&offer, &drawing)?;
     Ok(Json(OnlinePrices { prices }))
 }
@@ -1521,7 +1590,8 @@ pub async fn create(
     let (name, email, phone) = contact(&input)?;
     let company = company_of(&state.pool, company_id).await?;
     let (offer, colors, sinks) = ready_offer(&state.pool, company_id).await?;
-    let drawing = build_drawing(&offer, &colors, &sinks, &input.pieces, &input.colors)?;
+    let extras = checked_extras(&state.pool, company_id, &input.extras).await?;
+    let drawing = build_drawing(&offer, &colors, &sinks, &input.pieces, &input.colors, &extras)?;
     let (prices, totals) = price_drawing(&offer, &drawing)?;
     throttle(&state.pool, company_id, &email).await?;
 

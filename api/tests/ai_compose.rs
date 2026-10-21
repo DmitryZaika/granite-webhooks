@@ -243,4 +243,65 @@ async fn what_the_rep_changed_becomes_their_notes(pool: MySqlPool) {
         .await;
     assert_eq!(res.json::<Value>(), json!({ "learned": false }));
     assert_eq!(model.requests().len(), 2);
+
+    // A different message is kept as the rep's voice but rewrites no notes.
+    let res = server
+        .post("/v1/ai/compose/learn")
+        .with_session(sessions::REP)
+        .json(&json!({ "channel": "sms", "customer_id": 1000,
+                       "suggested": "Hi Alice, I can send you a link to our stones.",
+                       "sent": "How would you like to pay the deposit: card or Zelle?" }))
+        .await;
+    assert_eq!(res.json::<Value>(), json!({ "learned": false }));
+    assert_eq!(model.requests().len(), 2);
+    let pairs: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM ai_followup_edit_pairs WHERE user_id = 100")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(pairs, 2);
+}
+
+#[test_db::test(seed)]
+async fn a_spouse_writing_from_their_own_address_gets_the_customers_thread(pool: MySqlPool) {
+    let (server, model) = setup(&pool).await;
+    // Bob, Alice's husband, has no customer of his own: he writes in a
+    // thread with Alice copied.
+    sqlx::raw_sql(
+        "INSERT INTO emails (id, subject, body, sent_at, message_id, thread_id, sender_email, receiver_email, company_id, is_draft)
+           VALUES (9901, 'RE: Your new quote', 'What sink did you quote in our plan?', UTC_TIMESTAMP() - INTERVAL 1 HOUR,
+                   '<m9901@bob.test>', 'thread-bob', 'bob@work.test', 'rita@acme.test', 100, 0);
+         INSERT INTO email_participants (email_id, email, customer_id, user_id, type) VALUES
+           (9901, 'bob@work.test', NULL, NULL, 'from'),
+           (9901, 'rita@acme.test', 1000, 100, 'to'),
+           (9901, 'alice@home.test', 1000, NULL, 'cc');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    model.reply("Hi Bob, the plan has our 60/40 sink.");
+    server
+        .post("/v1/ai/compose/autocomplete")
+        .with_session(sessions::REP)
+        .json(&json!({ "channel": "email", "customer_email": "Bob@work.test", "draft": "" }))
+        .await
+        .assert_status_ok();
+    let prompt = model.requests()[0]["messages"][1]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        prompt.contains(
+            "EMAIL Customer: Subject: RE: Your new quote\nWhat sink did you quote in our plan?"
+        ),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("SMS Customer: Can you come measure on Friday?"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.ends_with("DRAFT: (empty — suggest how the next message starts)"),
+        "{prompt}"
+    );
 }

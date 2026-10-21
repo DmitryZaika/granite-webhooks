@@ -826,7 +826,7 @@ async fn customer_phones(
     Ok(phones)
 }
 
-/// The customer of the request: given, or found by phone.
+/// The customer of the request: given, or found by phone or email.
 pub async fn resolve_customer_id(
     pool: &MySqlPool,
     request: &FollowupRequest,
@@ -835,7 +835,10 @@ pub async fn resolve_customer_id(
         return Ok(request.customer_id);
     }
     let Some(phone) = request.phone_digits.as_deref() else {
-        return Ok(None);
+        return match request.customer_email.as_deref() {
+            Some(email) => customer_by_email(pool, request.company_id, email).await,
+            None => Ok(None),
+        };
     };
     let customer = crate::routes::sms::thread::customer_by_phone(
         pool,
@@ -845,6 +848,47 @@ pub async fn resolve_customer_id(
     )
     .await?;
     Ok(customer.map(|c| c.id))
+}
+
+/// The customer with this address, or else the newest customer in an email
+/// thread with it (a spouse writing from their own address).
+async fn customer_by_email(
+    pool: &MySqlPool,
+    company_id: i32,
+    email: &str,
+) -> Result<Option<i32>, sqlx::Error> {
+    let email = trim(email).to_lowercase();
+    if email.is_empty() {
+        return Ok(None);
+    }
+    let own: Option<i32> = sqlx::query_scalar(
+        "SELECT c.id FROM customers_emails ce JOIN customers c ON c.id = ce.customer_id
+          WHERE ce.email = ? AND c.company_id = ? AND c.deleted_at IS NULL
+          ORDER BY c.id DESC LIMIT 1",
+    )
+    .bind(&email)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    if own.is_some() {
+        return Ok(own);
+    }
+    // Employees' addresses can be linked to customers too: skip them.
+    sqlx::query_scalar(
+        "SELECT c.id FROM email_participants ep
+           JOIN emails e ON e.id = ep.email_id AND e.company_id = ? AND e.deleted_at IS NULL
+           JOIN emails t ON t.company_id = e.company_id AND t.thread_id = e.thread_id AND t.deleted_at IS NULL
+           JOIN email_participants other ON other.email_id = t.id AND other.customer_id IS NOT NULL
+                                        AND other.user_id IS NULL
+           JOIN customers c ON c.id = other.customer_id AND c.company_id = e.company_id
+                           AND c.deleted_at IS NULL
+          WHERE ep.email = ? AND e.thread_id IS NOT NULL
+          ORDER BY t.sent_at DESC, t.id DESC LIMIT 1",
+    )
+    .bind(company_id)
+    .bind(&email)
+    .fetch_optional(pool)
+    .await
 }
 
 /// Keeps the newest messages within 80,000 characters.

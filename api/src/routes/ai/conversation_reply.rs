@@ -307,7 +307,7 @@ pub fn build_user_prompt(
             trim(&extras.quotes)
         )
     };
-    let notes_block = format_rep_notes_block(user_name, &extras.rep_notes);
+    let notes_block = format_rep_notes_block(user_name, &extras.rep_notes, channel);
     let voice_block = format_voice_block(&extras.voice.examples);
     let style_section = [notes_block, voice_block]
         .into_iter()

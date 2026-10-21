@@ -601,3 +601,53 @@ async fn bots_and_floods_are_turned_away(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);
 }
+
+#[test_db::test(seed)]
+async fn the_customer_adds_the_extras_the_company_offers(pool: MySqlPool) {
+    let (server, _, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    // Off by default: no Extras step.
+    let setup = server.get("/v1/public/companies/100/online-quote").await;
+    assert_eq!(setup.json::<Value>()["extras"], json!([]));
+    sqlx::raw_sql(
+        "INSERT INTO online_quote_options (company_id, name, sequence, enabled) VALUES
+           (100, 'Stone tear out', 1, 1), (100, 'Haul away', 2, 1), (100, '10 year sealer', 3, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let setup = server.get("/v1/public/companies/100/online-quote").await;
+    assert_eq!(setup.json::<Value>()["extras"], json!(["Stone tear out", "Haul away"]));
+
+    // One that is off is turned away.
+    let mut body = quote_body("jane@new.example", "(317) 555-0199");
+    body["extras"] = json!(["10 year sealer"]);
+    server
+        .post("/v1/public/companies/100/online-quotes")
+        .json(&body)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // "Haul away" is already on every quote; "Stone tear out" has no price
+    // list extra, so it goes on unpriced for the team.
+    body["extras"] = json!(["stone tear out", "Haul away"]);
+    let res = server
+        .post("/v1/public/companies/100/online-quotes")
+        .json(&body)
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let doc: String = sqlx::query_scalar(
+        "SELECT draft_drawing_json FROM quotes WHERE email = 'jane@new.example'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let doc: Value = serde_json::from_str(&doc).unwrap();
+    let items: Vec<(&str, &str)> = doc["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["kind"].as_str().unwrap(), i["name"].as_str().unwrap()))
+        .collect();
+    assert_eq!(items, [("priceList", "Haul away"), ("misc", "Stone tear out")]);
+}
