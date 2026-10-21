@@ -248,6 +248,9 @@ fn test_section(test: &TestReport) -> String {
                     files.join(", ")
                 );
             }
+            if let Some(steps) = &test.manual_test_steps {
+                html.push_str(&block("Check it in the app", steps));
+            }
         }
         TestStatus::NotPossible => {
             let why = test.why_not_possible.as_deref().unwrap_or("not stated");

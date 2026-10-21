@@ -32,16 +32,30 @@ impl Mode {
 
 /// Error messages that are noise, not bugs: matched case-insensitively
 /// against `<type>: <message>`. `POSTHOG_AUTOFIX_EXCLUDE` replaces this list.
+/// Each entry was seen in production PostHog issues (October 2026).
 pub const DEFAULT_EXCLUDE: &[&str] = &[
+    // The network dropped or a deploy replaced a chunk mid-session.
     "TypeError: Failed to fetch",
     "TypeError: NetworkError when attempting to fetch resource",
     "TypeError: Load failed",
     "TypeError: Importing a module script failed",
     "Failed to fetch dynamically imported module",
     "AbortError",
+    "Unable to decode turbo-stream response",
+    // The service worker offline or mid-update.
+    "service-worker.js",
+    "FetchEvent.respondWith received an error",
+    // The browser or its extensions, not our code.
     "ResizeObserver loop",
     "window.ethereum",
     "Script error.",
+    "runtime.sendMessage",
+    "Object Not Found Matching Id",
+    "NotReadableError: The I/O read operation failed",
+    "Failed to read the 'localStorage' property",
+    "The database connection is closing",
+    // A signed-out session: the app sends the user to the login page.
+    "Granite API 401 on",
 ];
 
 #[derive(Clone)]
@@ -347,6 +361,36 @@ mod tests {
             ready.missing_for_mode(),
             Some("POSTHOG_AUTOFIX_GITHUB_TOKEN")
         );
+    }
+
+    #[test]
+    fn production_noise_is_excluded_but_real_errors_are_not() {
+        let excluded = |text: &str| {
+            Config::default()
+                .exclude
+                .iter()
+                .any(|pattern| text.to_lowercase().contains(&pattern.to_lowercase()))
+        };
+        for noise in [
+            "TypeError: Failed to fetch",
+            "Error: Invalid call to runtime.sendMessage(). Tab not found.",
+            "UnhandledRejection: Non-Error promise rejection captured with value: Object Not Found Matching Id:2, MethodName:update, ParamCount:4",
+            "DOMException: SecurityError: Failed to read the 'localStorage' property from 'Window': Access is denied for this document.",
+            "DOMException: InvalidStateError: Failed to execute 'transaction' on 'IDBDatabase': The database connection is closing.",
+            "TypeError: Script https://granitedepotindy.granite-manager.com/service-worker.js load failed",
+            r#"GraniteApiError: Granite API 401 on /v1/me: {"error":"unauthorized"}"#,
+        ] {
+            assert!(excluded(noise), "{noise}");
+        }
+        for bug in [
+            r#"GraniteApiError: Granite API 500 on /v1/notifications/done: {"error":"database error"}"#,
+            r#"GraniteApiError: Granite API 400 on /v1/sms/all/sales-reps: Invalid URL: unknown variant `all`"#,
+            "TypeError: Cannot read properties of undefined (reading 'title')",
+            "ApiError: Database(PoolTimedOut)",
+            "HTTPError: Failed to build payload",
+        ] {
+            assert!(!excluded(bug), "{bug}");
+        }
     }
 
     #[test]

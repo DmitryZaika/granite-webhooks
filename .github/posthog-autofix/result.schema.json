@@ -80,7 +80,7 @@
           "maxLength": 1500
         },
         "manual_test_steps": {
-          "description": "Numbered steps a developer follows to check the fix by hand. Required when status is not_possible.",
+          "description": "Numbered steps a reviewer follows to see the fix in the app. Give them for every fix; required when status is not_possible.",
           "type": ["string", "null"],
           "maxLength": 2000
         }

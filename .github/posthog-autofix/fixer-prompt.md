@@ -157,7 +157,8 @@ End with the structured result that the schema describes. That result is your en
 - `fix_summary` and `risk`: what changed and what it could affect. Use empty strings when there is no fix.
 - `test`:
   - `files` and `command` when you wrote a test. The command must be exactly `bunx vitest run <test files>`, or `cargo test -p <crate> <filter>` (add `--test <file>` for an `api/tests/<file>.rs` test). Run it from the target repository's root.
-  - `why_not_possible` and `manual_test_steps` for `fixed_without_test`.
+  - `manual_test_steps` for every fix: numbered steps a reviewer follows to see the fix in the app.
+  - `why_not_possible` for `fixed_without_test`.
   - `status: not_applicable` with nulls when there is no fix.
 - `recommendation` for every outcome without a fix.
 - `pr_title`: a conventional-commit title, for example `fix(slabs): return 404 for a deleted slab`. Use null without a fix.

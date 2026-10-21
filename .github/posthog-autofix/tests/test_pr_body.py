@@ -68,6 +68,14 @@ class RenderTest(unittest.TestCase):
         self.assertIn("Agent cost: $1.50", body)
         self.assertIn("https://github.com/x/actions/runs/1", body)
 
+    def test_a_tested_fix_also_says_how_to_check_it_in_the_app(self) -> None:
+        result = sample_result()
+        result["test"] = {**result["test"], "manual_test_steps": "1. Open a <slab>\n2. Sell it"}
+        body = self.render(result, "verified")
+        self.assertIn("**Check it in the app:**", body)
+        self.assertIn("1. Open a &lt;slab&gt;", body)
+        self.assertNotIn("Check it in the app", self.render(sample_result(), "verified"))
+
     def test_unverified_body_carries_the_evidence(self) -> None:
         body = self.render(sample_result(), "unverified", "test result: ok. 1 passed")
         self.assertIn("**Unverified**", body)
