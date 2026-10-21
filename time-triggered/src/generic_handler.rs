@@ -169,6 +169,10 @@ async fn process_signature_reminders() -> Result<usize, Error> {
     post_api_job("signature-reminders", "e-signature reminders").await
 }
 
+async fn process_posthog_autofix() -> Result<usize, Error> {
+    post_api_job("posthog-autofix", "PostHog auto-fix").await
+}
+
 async fn process_checklist_surveys() -> Result<usize, Error> {
     post_api_job("survey-notifications", "checklist survey notifications").await
 }
@@ -360,8 +364,15 @@ pub(crate) async fn function_handler(
             0
         }
     };
+    let posthog_autofix_count = match process_posthog_autofix().await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(?error, "Failed to process PostHog auto-fix; continuing");
+            0
+        }
+    };
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, and {} contact syncs",
+        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, {} contact syncs, and {} PostHog auto-fix changes",
         processed_email_count,
         reminder_count,
         estimate_reminder_count,
@@ -370,7 +381,8 @@ pub(crate) async fn function_handler(
         checklist_survey_count,
         call_points_count,
         signature_reminder_count,
-        contact_sync_count
+        contact_sync_count,
+        posthog_autofix_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);
