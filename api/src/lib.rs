@@ -39,6 +39,7 @@ pub mod pdf_fonts;
 pub mod pdf_preview;
 pub mod period;
 pub mod posthog;
+pub mod posthog_autofix;
 pub mod price_list_chunking;
 pub mod price_lists;
 pub mod qbo;
