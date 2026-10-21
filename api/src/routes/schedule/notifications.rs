@@ -1435,7 +1435,7 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
                LEFT JOIN sales s ON s.id = e.sale_id AND s.company_id = r.company_id
                LEFT JOIN customers sc ON sc.id = s.customer_id
                 AND sc.company_id = r.company_id AND sc.deleted_at IS NULL
-              WHERE r.id = ? AND e.deleted_date IS NULL AND NULLIF(TRIM(e.rrule), '') IS NULL
+              WHERE r.id = ? AND e.deleted_date IS NULL AND e.unscheduled = 0 AND NULLIF(TRIM(e.rrule), '') IS NULL
                 AND e.start_date > UTC_TIMESTAMP() - INTERVAL 1 DAY
                 AND e.start_date <= UTC_TIMESTAMP() + INTERVAL ? MINUTE
                 AND NOT EXISTS (SELECT 1 FROM schedule_notification_sends n

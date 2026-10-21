@@ -1,6 +1,7 @@
 //! The schedule page's data.
 //!
 //! - `GET /v1/schedule/events` → the events of a date range
+//! - `GET /v1/schedule/unscheduled` → the events waiting for their day
 //! - `GET /v1/schedule/people` → installers and template makers with their colors
 //! - `PUT /v1/schedule/people/{user_id}/color` → an admin picks a person's color
 //! - `GET /v1/me/schedule` → an installer's or template maker's own events
@@ -175,7 +176,7 @@ async fn load_events(
             AND c.id = CAST(TRIM(e.title) AS UNSIGNED)
             AND c.company_id = u.company_id
             AND c.deleted_at IS NULL
-          WHERE u.company_id = ? AND e.deleted_date IS NULL
+          WHERE u.company_id = ? AND e.deleted_date IS NULL AND e.unscheduled = 0
             AND (? IS NULL OR e.calendar_id IS NULL OR NOT EXISTS (
                   SELECT 1 FROM calendar_hidden_users h
                    WHERE h.calendar_id = e.calendar_id AND h.company_id = u.company_id
@@ -229,6 +230,56 @@ async fn load_events(
         events,
         quickbooks_connected,
     })
+}
+
+/// Events waiting for their day
+///
+/// The company's unscheduled events (kept off the calendar until someone
+/// picks the date), oldest first, with the customer named by a numeric
+/// title. Events of calendars hidden for the caller are left out.
+#[utoipa::path(
+    get,
+    path = "/v1/schedule/unscheduled",
+    operation_id = "list_unscheduled_events",
+    tag = "schedule",
+    responses(
+        (status = 200, description = "Events", body = Vec<ScheduleEvent>),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn unscheduled(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+) -> ApiResult<Json<Vec<ScheduleEvent>>> {
+    let events = sqlx::query_as(
+        "SELECT e.id, e.title, e.description, e.location,
+                DATE_FORMAT(e.start_date, '%Y-%m-%dT%H:%i:%sZ') AS start_date,
+                DATE_FORMAT(e.end_date, '%Y-%m-%dT%H:%i:%sZ') AS end_date,
+                COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.notes,
+                e.calendar_id, NULL AS rrule, NULL AS recurrence_until,
+                e.created_user_id, e.assigned_user_id, e.sale_id, c.name AS customer_name
+           FROM events e
+           JOIN users u ON e.created_user_id = u.id
+           LEFT JOIN customers c
+             ON TRIM(e.title) REGEXP '^[0-9]+$'
+            AND c.id = CAST(TRIM(e.title) AS UNSIGNED)
+            AND c.company_id = u.company_id
+            AND c.deleted_at IS NULL
+          WHERE u.company_id = ? AND e.deleted_date IS NULL AND e.unscheduled = 1
+            AND (e.calendar_id IS NULL OR NOT EXISTS (
+                  SELECT 1 FROM calendar_hidden_users h
+                   WHERE h.calendar_id = e.calendar_id AND h.company_id = u.company_id
+                     AND h.user_id = ?))
+          ORDER BY e.created_date, e.id",
+    )
+    .bind(user.company_id)
+    .bind(user.id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(events))
 }
 
 /// Query of `GET /v1/me/schedule`.

@@ -26,6 +26,7 @@ pub mod pricing;
 pub mod takeoff;
 
 use crate::error::ApiResult;
+use crate::routes::events::history::{History, record};
 use doc::QuoteDoc;
 use price_list::{Stock, StockSink, StockStone};
 use pricing::{PriceOptions, price_quote};
@@ -704,7 +705,67 @@ pub async fn mark_quote_sold(
     .bind(quote.company_id)
     .execute(pool)
     .await?;
+    add_waiting_jobs(pool, &quote, user_id).await?;
     Ok(Some(QuoteSale { deal_id, amount }))
+}
+
+/// A sold quote's template and installation: one unscheduled event on each
+/// of those calendars, "not ready", for the schedule manager to date. Once
+/// per quote: selling it again adds nothing.
+async fn add_waiting_jobs(
+    pool: &MySqlPool,
+    quote: &Quote,
+    user_id: Option<i32>,
+) -> Result<(), sqlx::Error> {
+    let Some(creator) = user_id.or(quote.salesperson_id).or(quote.created_by) else {
+        return Ok(());
+    };
+    let added: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM events WHERE quote_id = ? AND deleted_date IS NULL LIMIT 1",
+    )
+    .bind(quote.id)
+    .fetch_optional(pool)
+    .await?;
+    if added.is_some() {
+        return Ok(());
+    }
+    let calendars: Vec<i32> = sqlx::query_scalar(
+        "SELECT id FROM calendars
+          WHERE company_id = ? AND slug IN ('templates', 'installations') AND deleted_at IS NULL
+          ORDER BY slug = 'installations', id",
+    )
+    .bind(quote.company_id)
+    .fetch_all(pool)
+    .await?;
+    let address: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT NULLIF(TRIM(address), '') FROM customers WHERE id = ? AND company_id = ?",
+    )
+    .bind(quote.customer_id)
+    .bind(quote.company_id)
+    .fetch_optional(pool)
+    .await?;
+    let address = address.flatten();
+    for calendar_id in calendars {
+        let id = sqlx::query(
+            "INSERT INTO events (title, location, start_date, end_date, all_day, unscheduled,
+                color, status, created_user_id, calendar_id, quote_id)
+             VALUES (?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 1, 'blue', 'not_ready', ?, ?, ?)",
+        )
+        .bind(quote.customer_id.to_string())
+        .bind(address.as_deref())
+        .bind(creator)
+        .bind(calendar_id)
+        .bind(quote.id)
+        .execute(pool)
+        .await?
+        .last_insert_id();
+        if let Ok(event_id) = i32::try_from(id) {
+            let line = History::new(event_id, quote.company_id, "created", None)
+                .message("Added when the quote was sold");
+            record(pool, &line).await;
+        }
+    }
+    Ok(())
 }
 
 /// Same cleaning as the file name the quote page gives a contract PDF.

@@ -11,7 +11,7 @@ use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
 use utoipa::ToSchema;
@@ -50,6 +50,10 @@ pub struct EventInput {
     /// All-day event.
     #[serde(default)]
     pub all_day: bool,
+    /// Waiting for its day: off the calendar, in the unscheduled list. The
+    /// dates may then be left empty (they become now).
+    #[serde(default)]
+    pub unscheduled: bool,
     /// The company calendar it is on; required.
     #[serde(default)]
     pub calendar_id: Option<i32>,
@@ -165,12 +169,17 @@ pub fn check(input: &EventInput) -> ApiResult<Checked<'_>> {
         .rrule
         .as_deref()
         .map(str::trim)
-        .filter(|rule| !rule.is_empty());
+        .filter(|rule| !rule.is_empty() && !input.unscheduled);
     if rrule.is_some_and(|rule| length(rule) > 500) {
         return Err(bad("Recurrence rule must be 500 characters or less"));
     }
-    let start = parse_event_time(&input.start_date).ok_or_else(|| bad("Invalid start date"))?;
-    let end = parse_event_time(&input.end_date).ok_or_else(|| bad("Invalid end date"))?;
+    let time = |text: &str, message: &str| match parse_event_time(text) {
+        Some(at) => Ok(at),
+        None if input.unscheduled && text.trim().is_empty() => Ok(Utc::now().naive_utc()),
+        None => Err(bad(message)),
+    };
+    let start = time(&input.start_date, "Invalid start date")?;
+    let end = time(&input.end_date, "Invalid end date")?;
     if end < start {
         return Err(bad("End date must be on or after start date"));
     }
@@ -350,6 +359,7 @@ pub struct StoredEvent {
     pub start_date: NaiveDateTime,
     pub end_date: NaiveDateTime,
     pub all_day: bool,
+    pub unscheduled: bool,
     pub color: Option<String>,
     pub status: Option<String>,
     pub notes: Option<String>,
@@ -366,8 +376,9 @@ pub async fn company_event(
 ) -> Result<Option<StoredEvent>, sqlx::Error> {
     sqlx::query_as(
         "SELECT e.title, e.description, e.location, e.start_date, e.end_date,
-                COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.notes,
-                e.calendar_id, e.rrule, e.recurrence_until, e.created_user_id
+                COALESCE(e.all_day, 0) <> 0 AS all_day, e.unscheduled <> 0 AS unscheduled,
+                e.color, e.status, e.notes, e.calendar_id, e.rrule, e.recurrence_until,
+                e.created_user_id
            FROM events e JOIN users u ON u.id = e.created_user_id
           WHERE e.id = ? AND u.company_id = ? AND e.deleted_date IS NULL",
     )
@@ -409,9 +420,10 @@ pub async fn create(
     let event = check(&input)?;
     check_calendar(pool, user.company_id, event.calendar_id).await?;
     let id = sqlx::query(
-        "INSERT INTO events (title, description, location, start_date, end_date, all_day, color,
-            status, notes, created_user_id, assigned_user_id, sale_id, calendar_id, rrule, recurrence_until)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO events (title, description, location, start_date, end_date, all_day,
+            unscheduled, color, status, notes, created_user_id, assigned_user_id, sale_id,
+            calendar_id, rrule, recurrence_until)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(event.title)
     .bind(event.description)
@@ -419,6 +431,7 @@ pub async fn create(
     .bind(event.start)
     .bind(event.end)
     .bind(input.all_day)
+    .bind(input.unscheduled)
     .bind(event.color)
     .bind(event.status)
     .bind(event.notes)
@@ -454,8 +467,16 @@ pub async fn create(
 }
 
 /// History lines of an edit, besides date, label and location.
-fn change_messages(event: &Checked<'_>, existing: &StoredEvent) -> Vec<String> {
+fn change_messages(
+    event: &Checked<'_>,
+    unscheduled: bool,
+    existing: &StoredEvent,
+) -> Vec<String> {
     let mut messages = Vec::new();
+    if unscheduled != existing.unscheduled {
+        let message = if unscheduled { "Moved to unscheduled" } else { "Scheduled" };
+        messages.push(message.into());
+    }
     if event.title != existing.title {
         messages.push(format!("Title changed to \"{}\"", event.title));
     }
@@ -514,8 +535,9 @@ pub async fn update(
     check_calendar(pool, user.company_id, event.calendar_id).await?;
     sqlx::query(
         "UPDATE events SET title = ?, description = ?, location = ?, start_date = ?, end_date = ?,
-            all_day = ?, color = ?, status = ?, notes = ?, assigned_user_id = ?, sale_id = ?,
-            calendar_id = ?, rrule = ?, recurrence_until = ?, updated_date = CURRENT_TIMESTAMP
+            all_day = ?, unscheduled = ?, color = ?, status = ?, notes = ?, assigned_user_id = ?,
+            sale_id = ?, calendar_id = ?, rrule = ?, recurrence_until = ?,
+            updated_date = CURRENT_TIMESTAMP
           WHERE id = ?",
     )
     .bind(event.title)
@@ -524,6 +546,7 @@ pub async fn update(
     .bind(event.start)
     .bind(event.end)
     .bind(input.all_day)
+    .bind(input.unscheduled)
     .bind(event.color)
     .bind(event.status)
     .bind(event.notes)
@@ -547,7 +570,8 @@ pub async fn update(
     let by = user.name.as_deref();
     let moved = event.start != existing.start_date
         || event.end != existing.end_date
-        || input.all_day != existing.all_day;
+        || input.all_day != existing.all_day
+        || input.unscheduled != existing.unscheduled;
     let mut actions = Vec::new();
     if moved {
         actions.push("date_updated");
@@ -561,14 +585,16 @@ pub async fn update(
     for action in actions {
         record(pool, &History::new(id, user.company_id, action, by)).await;
     }
-    for message in change_messages(&event, &existing) {
+    for message in change_messages(&event, input.unscheduled, &existing) {
         record(
             pool,
             &History::new(id, user.company_id, "updated", by).message(&message),
         )
         .await;
     }
-    if moved {
+    if input.unscheduled {
+        reminders::cancel(pool, id).await?;
+    } else if moved {
         reminders::resync_after_move(
             pool,
             id,
