@@ -271,7 +271,8 @@ pub struct DealPatch {
     #[serde(default, deserialize_with = "double_option")]
     #[schema(value_type = Option<String>)]
     pub due_date: Option<Option<String>>,
-    /// Move to this stage. A closed deal moved to another stage is reopened.
+    /// Move to this stage. A won or lost deal stays closed (reopen it with
+    /// `PUT /v1/deals/{id}/outcome`).
     pub list_id: Option<i32>,
     /// Move to the first stage of this group (ignored when the deal is
     /// already in it, or when `list_id` is sent).

@@ -581,8 +581,13 @@ async fn patch_changes_only_the_fields_sent(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn moving_a_lost_deal_reopens_it(pool: MySqlPool) {
+async fn moving_a_closed_deal_keeps_it_closed(pool: MySqlPool) {
     // 8604 is lost in stage 101; customer 1011 is not a lead.
+    let before = rows(
+        &pool,
+        "SELECT CAST(updated_at AS CHAR), lost_reason FROM deals WHERE id = 8604",
+    )
+    .await;
     server(pool.clone())
         .patch("/v1/deals/8604")
         .with_session(sessions::DEALER)
@@ -590,8 +595,17 @@ async fn moving_a_lost_deal_reopens_it(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NO_CONTENT);
     assert_eq!(
-        rows(&pool, "SELECT CAST(is_won AS CHAR), lost_reason, status, CAST(list_id AS CHAR), CAST(position AS CHAR) FROM deals WHERE id = 8604").await,
-        vec![vec!["NULL", "NULL", "New", "100", "4"]]
+        rows(&pool, "SELECT CAST(is_won AS CHAR), status, CAST(list_id AS CHAR), CAST(position AS CHAR) FROM deals WHERE id = 8604").await,
+        vec![vec!["0", "New", "100", "4"]]
+    );
+    // Lost reason and close date are untouched, so monthly totals don't move.
+    assert_eq!(
+        rows(
+            &pool,
+            "SELECT CAST(updated_at AS CHAR), lost_reason FROM deals WHERE id = 8604"
+        )
+        .await,
+        before
     );
     assert_eq!(
         scalar_i64(
@@ -664,6 +678,44 @@ async fn reorder_saves_positions_and_moves(pool: MySqlPool) {
         .json(&json!({ "updates": [] }))
         .await
         .assert_status_bad_request();
+}
+
+#[test_db::test(seed)]
+async fn dragging_a_won_deal_keeps_it_won_and_dated(pool: MySqlPool) {
+    // 8603 is won in stage 101. Dragging it to 100 must not reopen it nor
+    // move its sale to this month.
+    sqlx::query("UPDATE deals SET updated_at = '2026-09-25 12:00:00' WHERE id = 8603")
+        .execute(&pool)
+        .await
+        .unwrap();
+    server(pool.clone())
+        .post("/v1/deals/reorder")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "updates": [{ "id": 8603, "list_id": 100, "position": 0 }] }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        rows(&pool, "SELECT CAST(list_id AS CHAR), CAST(is_won AS CHAR), CAST(updated_at AS CHAR) FROM deals WHERE id = 8603").await,
+        vec![vec!["100", "1", "2026-09-25 12:00:00"]]
+    );
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            "SELECT list_id FROM deal_stage_history WHERE deal_id = 8603 AND exited_at IS NULL"
+        )
+        .await,
+        100
+    );
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            "SELECT (SELECT COUNT(*) FROM scheduled_emails WHERE deal_id = 8603 AND status = 'pending')
+                  + (SELECT COUNT(*) FROM scheduled_sms WHERE deal_id = 8603 AND status = 'pending')"
+        )
+        .await,
+        0,
+        "no drips for a closed deal"
+    );
 }
 
 #[test_db::test(seed)]
@@ -1275,7 +1327,7 @@ async fn patch_group_moves_to_its_first_stage(pool: MySqlPool) {
         .await,
         vec![vec!["101", "1"]]
     );
-    // Won deal to Remodel: first stage, reopened.
+    // Won deal to Remodel: first stage, still won.
     app.patch("/v1/deals/8603")
         .with_session(sessions::DEALER)
         .json(&json!({ "group_id": 104 }))
@@ -1287,7 +1339,7 @@ async fn patch_group_moves_to_its_first_stage(pool: MySqlPool) {
             "SELECT CAST(list_id AS CHAR), CAST(is_won AS CHAR), status FROM deals WHERE id = 8603"
         )
         .await,
-        vec![vec!["104", "NULL", "Measure"]]
+        vec![vec!["104", "1", "Measure"]]
     );
     for group in [105, 101] {
         app.patch("/v1/deals/8603")

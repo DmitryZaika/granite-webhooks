@@ -374,9 +374,10 @@ fn parse_due_date(raw: &str) -> ApiResult<NaiveDate> {
 ///
 /// Changes only the fields sent. Moving a deal to another stage (`list_id`,
 /// or `group_id` for the first stage of another pipeline) records the stage
-/// history, schedules that stage's drip emails and SMS, and reopens it when
-/// it was won or lost. Changing `customer_id` gives the deal to another
-/// customer of the company.
+/// history and, for an open deal, schedules that stage's drip emails and SMS.
+/// A won or lost deal stays closed and keeps its close date; reopen it with
+/// `PUT /v1/deals/{id}/outcome`. Changing `customer_id` gives the deal to
+/// another customer of the company.
 #[utoipa::path(
     patch,
     path = "/v1/deals/{id}",
@@ -467,10 +468,10 @@ pub async fn update(
                 .ok_or_else(|| ApiError::BadRequest(format!("unknown list_id {list_id}")))?;
             separated.push("list_id = ").push_bind_unseparated(list_id);
             separated.push("status = ").push_bind_unseparated(name);
-            separated.push("updated_at = NOW()");
-            if deal.outcome != DealStatus::Open {
-                separated.push("is_won = NULL");
-                separated.push("lost_reason = NULL");
+            // A won or lost deal stays closed, and keeps `updated_at`: monthly
+            // totals date closed deals by it.
+            if deal.outcome == DealStatus::Open {
+                separated.push("updated_at = NOW()");
             }
             sets.push("list_id");
             Some(list_id)
@@ -484,7 +485,7 @@ pub async fn update(
     query.build().execute(&state.pool).await?;
 
     if let Some(list_id) = moved {
-        service::transition_stage(&state.pool, id, list_id).await?;
+        move_stage(&state.pool, id, list_id, deal.outcome).await?;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -492,9 +493,9 @@ pub async fn update(
 /// Save the order of the board after a drag
 ///
 /// Sets stage and position of every card sent. Cards that changed stage get
-/// the same treatment as `PATCH /v1/deals/{id}` with `list_id` (history,
-/// drips, reopening a closed deal). Every deal and stage must belong to the
-/// company, otherwise nothing is saved.
+/// the same treatment as `PATCH /v1/deals/{id}` with `list_id` (history, and
+/// drips for open deals; won and lost deals stay closed). Every deal and
+/// stage must belong to the company, otherwise nothing is saved.
 #[utoipa::path(
     post,
     path = "/v1/deals/reorder",
@@ -533,31 +534,46 @@ pub async fn reorder(
     let mut tx = state.pool.begin().await?;
     for (item, deal, name) in plan {
         let across = deal.list_id != item.list_id;
-        let reopen = across && deal.outcome != DealStatus::Open;
+        // Only open deals get a new `updated_at`: closed deals are dated by it.
+        let touch = across && deal.outcome == DealStatus::Open;
         sqlx::query(
             "UPDATE deals SET list_id = ?, status = ?, position = ?,
-               lost_reason = IF(?, NULL, lost_reason), is_won = IF(?, NULL, is_won),
                updated_at = IF(?, NOW(), updated_at)
              WHERE id = ?",
         )
         .bind(item.list_id)
         .bind(name)
         .bind(item.position)
-        .bind(reopen)
-        .bind(reopen)
-        .bind(across)
+        .bind(touch)
         .bind(item.id)
         .execute(&mut *tx)
         .await?;
         if across {
-            moved.push((item.id, item.list_id));
+            moved.push((item.id, item.list_id, deal.outcome));
         }
     }
     tx.commit().await?;
-    for (deal_id, list_id) in moved {
-        service::transition_stage(&state.pool, deal_id, list_id).await?;
+    for (deal_id, list_id, outcome) in moved {
+        move_stage(&state.pool, deal_id, list_id, outcome).await?;
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Side effects of moving a deal to `list_id`. An open deal gets the stage
+/// history and the stage's drips; a won or lost deal stays closed and only
+/// gets the stage history (no drips to a customer who already decided).
+async fn move_stage(
+    pool: &sqlx::MySqlPool,
+    deal_id: i64,
+    list_id: i32,
+    outcome: DealStatus,
+) -> Result<(), sqlx::Error> {
+    if outcome == DealStatus::Open {
+        return service::transition_stage(pool, deal_id, list_id).await;
+    }
+    let mut tx = pool.begin().await?;
+    service::enter_stage(&mut tx, deal_id, list_id).await?;
+    tx.commit().await
 }
 
 /// Close or reopen a deal

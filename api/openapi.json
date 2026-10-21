@@ -12729,7 +12729,7 @@
           "deals"
         ],
         "summary": "Save the order of the board after a drag",
-        "description": "Sets stage and position of every card sent. Cards that changed stage get\nthe same treatment as `PATCH /v1/deals/{id}` with `list_id` (history,\ndrips, reopening a closed deal). Every deal and stage must belong to the\ncompany, otherwise nothing is saved.",
+        "description": "Sets stage and position of every card sent. Cards that changed stage get\nthe same treatment as `PATCH /v1/deals/{id}` with `list_id` (history, and\ndrips for open deals; won and lost deals stay closed). Every deal and\nstage must belong to the company, otherwise nothing is saved.",
         "operationId": "reorder_deals",
         "requestBody": {
           "content": {
@@ -13056,7 +13056,7 @@
           "deals"
         ],
         "summary": "Update a deal",
-        "description": "Changes only the fields sent. Moving a deal to another stage (`list_id`,\nor `group_id` for the first stage of another pipeline) records the stage\nhistory, schedules that stage's drip emails and SMS, and reopens it when\nit was won or lost. Changing `customer_id` gives the deal to another\ncustomer of the company.",
+        "description": "Changes only the fields sent. Moving a deal to another stage (`list_id`,\nor `group_id` for the first stage of another pipeline) records the stage\nhistory and, for an open deal, schedules that stage's drip emails and SMS.\nA won or lost deal stays closed and keeps its close date; reopen it with\n`PUT /v1/deals/{id}/outcome`. Changing `customer_id` gives the deal to\nanother customer of the company.",
         "operationId": "update_deal",
         "parameters": [
           {
@@ -52667,7 +52667,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "Move to this stage. A closed deal moved to another stage is reopened."
+            "description": "Move to this stage. A won or lost deal stays closed (reopen it with\n`PUT /v1/deals/{id}/outcome`)."
           },
           "group_id": {
             "type": [
