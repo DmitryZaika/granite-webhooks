@@ -2,14 +2,17 @@ use crate::amazonses::routes::{read_receipt_handler, receive_handler};
 use crate::cloudtalk::receive::{
     call_received as cloudtalk_call_received, sms_received as cloudtalk_sms_received,
     sms_received_unscoped as cloudtalk_sms_received_unscoped, sms_sent as cloudtalk_sms_sent,
-    sync_cloudtalk,
+    sync_cloudtalk, unsync_cloudtalk,
 };
 use crate::google::receive::address_information;
 use crate::libs::constants::OK_RESPONSE;
 use crate::middleware::request_logger::print_request_body;
+use crate::outbound::send_handler as send_email;
+use crate::outbound::sms::send_handler as send_sms;
 use crate::ringcentral::receive::{
-    call_received as ringcentral_call_received, sms_received as ringcentral_sms_received,
-    sms_sent as ringcentral_sms_sent, sync_ringcentral,
+    call_received as ringcentral_call_received, sms_notification as ringcentral_sms_notification,
+    sms_received as ringcentral_sms_received, sms_sent as ringcentral_sms_sent, sync_ringcentral,
+    unsync_ringcentral,
 };
 use crate::schemas::add_customer::NewLeadForm;
 use crate::telegram::cleanup::delete_lead_telegram_messages;
@@ -80,6 +83,8 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         )
         .route("/ses/read-receipt", post(read_receipt_handler))
         .route("/ses/receive-email", post(receive_handler))
+        .route("/email/send", post(send_email))
+        .route("/sms/send", post(send_sms))
         .route("/cloudtalk/sms", post(cloudtalk_sms_received_unscoped))
         .route("/cloudtalk/sms/{company_id}", post(cloudtalk_sms_received))
         .route("/cloudtalk/sms/sent/{company_id}", post(cloudtalk_sms_sent))
@@ -89,7 +94,7 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
         )
         .route(
             "/cloudtalk/sync/{company_id}/{customer_id}",
-            post(sync_cloudtalk),
+            post(sync_cloudtalk).delete(unsync_cloudtalk),
         )
         .route(
             "/ringcentral/sms/{company_id}",
@@ -100,12 +105,16 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
             post(ringcentral_sms_sent),
         )
         .route(
+            "/ringcentral/notify/{company_id}",
+            post(ringcentral_sms_notification),
+        )
+        .route(
             "/ringcentral/call/{company_id}",
             post(ringcentral_call_received),
         )
         .route(
             "/ringcentral/sync/{company_id}/{customer_id}",
-            post(sync_ringcentral),
+            post(sync_ringcentral).delete(unsync_ringcentral),
         )
         .route("/telnyx/event-progress", post(event_progress))
         .route(

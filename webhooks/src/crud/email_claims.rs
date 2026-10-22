@@ -129,7 +129,7 @@ mod tests {
         .unwrap();
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn first_claim_wins(pool: MySqlPool) {
         assert_eq!(
             claim_email_processing(&pool, MESSAGE_ID, TOKEN_A).await,
@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(holder(&pool, MESSAGE_ID).await.as_deref(), Some(TOKEN_A));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn second_claim_with_another_token_loses(pool: MySqlPool) {
         assert_eq!(
             claim_email_processing(&pool, MESSAGE_ID, TOKEN_A).await,
@@ -156,7 +156,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn live_claim_is_not_taken_over_and_keeps_its_time(pool: MySqlPool) {
         claim_email_processing(&pool, MESSAGE_ID, TOKEN_A).await;
         age_claim(&pool, MESSAGE_ID, EMAIL_CLAIM_TTL_SECONDS - 5).await;
@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(fresh, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn expired_claim_is_taken_over(pool: MySqlPool) {
         claim_email_processing(&pool, MESSAGE_ID, TOKEN_A).await;
         // 41 s: a claim left by a run the 30 s Lambda timeout killed is free
@@ -196,7 +196,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn release_deletes_only_your_own_claim(pool: MySqlPool) {
         claim_email_processing(&pool, MESSAGE_ID, TOKEN_A).await;
         release_email_processing(&pool, MESSAGE_ID, TOKEN_B)
@@ -217,7 +217,7 @@ mod tests {
 
     /// The Lambda can be deployed before the migration is applied: then every
     /// email is processed without a claim, as before.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn missing_table_degrades_to_no_claim(pool: MySqlPool) {
         sqlx::query("DROP TABLE email_processing_claims")
             .execute(&pool)

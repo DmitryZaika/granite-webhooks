@@ -3,7 +3,7 @@
 //! Production code asks [`cloudtalk_base_url`] / [`google_places_base_url`] for its
 //! endpoint; a test points them at a local server with [`StubServer::route`] and
 //! [`use_cloudtalk`] / [`use_google_places`]. The overrides are thread-local, and
-//! `#[sqlx::test]` / `#[tokio::test]` run each test on its own current-thread
+//! `#[test_db::test]` / `#[tokio::test]` run each test on its own current-thread
 //! runtime, so tests do not see each other's stubs.
 
 use axum::Router;

@@ -506,13 +506,13 @@ mod tests {
         Ok(rec.last_insert_id() as i32)
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_get_default_list_id_from_company_id(pool: MySqlPool) {
         let id = get_default_list_id_from_company_id(&pool, 1).await.unwrap();
         assert_eq!(id, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn get_assigned_list_id_from_company_id(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(id as u64, list_id);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_multiple_default_groups(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
 
@@ -541,7 +541,7 @@ mod tests {
         assert_eq!(id as u64, list_id1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_no_default_groups(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
 
@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(id, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_deleted_records_ignored(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
@@ -585,7 +585,7 @@ mod tests {
         assert_eq!(id as u64, valid_list_id);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_deals_list_ordering(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
@@ -617,7 +617,7 @@ mod tests {
         assert_eq!(id as u64, pos1_id);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn create_deal_reuses_existing_open_deal(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
@@ -661,7 +661,7 @@ mod tests {
         assert_eq!(deal_count, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn create_deal_concurrent_retries_insert_once(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
@@ -697,7 +697,7 @@ mod tests {
         assert_eq!(deal_count, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn create_deal_from_lead_reuses_existing_open_deal(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
@@ -726,7 +726,7 @@ mod tests {
         assert_eq!(first.id, second.id);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn create_deal_allows_new_deal_when_existing_is_won_or_deleted(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
         let group_id = insert_group_list(&pool, company_id).await.unwrap();
@@ -770,7 +770,7 @@ mod tests {
         assert_ne!(after_won.id, after_deleted.id);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn set_customer_email_adds_without_replacing(pool: MySqlPool) {
         let company_id = insert_company(&pool).await.unwrap();
         let first = FaceBookContactForm {
@@ -823,7 +823,7 @@ mod tests {
         assert_eq!(primary, "jeremy.gerber@icloud.com");
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_find_existing_customer_matches_phone_digits(pool: MySqlPool) {
         let id = sqlx::query!(
             r#"INSERT INTO customers (name, company_id, phone, source) VALUES ('Formatted', 1, '(317) 999-5973', 'leads')"#
@@ -850,7 +850,7 @@ mod tests {
         assert!(empty.is_none());
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_find_existing_customer_matches_phone_2_and_any_email(pool: MySqlPool) {
         let id = sqlx::query!(
             r#"INSERT INTO customers (name, company_id, phone, phone_2, source) VALUES ('Two', 1, '111-111-1111', '+1 (812) 374-4195', 'leads')"#

@@ -61,7 +61,9 @@ impl<'de> Deserialize<'de> for FlexibleSmsTime {
 }
 
 /// Lenient Option: invalid / empty timestamps become None instead of failing the payload.
-fn deserialize_optional_sms_time<'de, D>(deserializer: D) -> Result<Option<FlexibleSmsTime>, D::Error>
+fn deserialize_optional_sms_time<'de, D>(
+    deserializer: D,
+) -> Result<Option<FlexibleSmsTime>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -303,7 +305,9 @@ fn json_u64(value: &serde_json::Value) -> Option<u64> {
     match value {
         serde_json::Value::Number(n) => n.as_u64().or_else(|| n.as_f64().map(|f| f as u64)),
         serde_json::Value::String(s) => s.trim().parse().ok(),
-        serde_json::Value::Bool(_) | serde_json::Value::Null | serde_json::Value::Array(_)
+        serde_json::Value::Bool(_)
+        | serde_json::Value::Null
+        | serde_json::Value::Array(_)
         | serde_json::Value::Object(_) => None,
     }
 }
@@ -350,17 +354,20 @@ fn first_field_in_call_objects<'a>(
 
 /// Outbound call longer than 60s talking time — enqueue background transcript
 /// check before cancelling automated follow-ups.
-pub fn outbound_call_followup_check(value: &serde_json::Value) -> Option<OutboundCallFollowupCheck> {
+pub fn outbound_call_followup_check(
+    value: &serde_json::Value,
+) -> Option<OutboundCallFollowupCheck> {
     if !call_payload_is_outgoing(value) {
         return None;
     }
-    let talking_time = first_field_in_call_objects(value, &["talking_time", "talkingTime"])
-        .and_then(json_u64)?;
+    let talking_time =
+        first_field_in_call_objects(value, &["talking_time", "talkingTime"]).and_then(json_u64)?;
     if talking_time <= OUTBOUND_FOLLOWUP_MIN_TALKING_SECONDS {
         return None;
     }
     let phone_digits = customer_phone_from_call_payload(value)?;
-    let call_id = first_field_in_call_objects(value, &["id", "call_id", "callId"]).and_then(json_u64)?;
+    let call_id =
+        first_field_in_call_objects(value, &["id", "call_id", "callId"]).and_then(json_u64)?;
     let is_voicemail = first_field_in_call_objects(value, &["is_voicemail", "isVoicemail"])
         .and_then(json_bool)
         .unwrap_or(false);
@@ -686,10 +693,9 @@ mod tests {
 
     #[test]
     fn outbound_call_payload_does_not_yield_a_phone() {
-        let outgoing: serde_json::Value = serde_json::from_str(
-            r#"{"external_number":"+15551234567","type":"outgoing"}"#,
-        )
-        .unwrap();
+        let outgoing: serde_json::Value =
+            serde_json::from_str(r#"{"external_number":"+15551234567","type":"outgoing"}"#)
+                .unwrap();
         assert_eq!(inbound_customer_phone_from_call_payload(&outgoing), None);
 
         let missing_type: serde_json::Value =

@@ -105,7 +105,10 @@ mod tests {
             split_name(Some("Pat Stone")),
             ("Pat".to_string(), "Stone".to_string())
         );
-        assert_eq!(split_name(Some("  ")), ("Customer".to_string(), String::new()));
+        assert_eq!(
+            split_name(Some("  ")),
+            ("Customer".to_string(), String::new())
+        );
         assert_eq!(split_name(None), ("Customer".to_string(), String::new()));
     }
 }

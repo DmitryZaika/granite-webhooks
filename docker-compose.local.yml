@@ -1,6 +1,10 @@
 # Local MySQL for the `api` Lambda: integration tests (sqlx::test creates a
 # throwaway database per test) and `make api-local` against seeded data.
 # Port 3307 so it never collides with another MySQL already on 3306.
+# A fixed project name, so every worktree of this repo shares these
+# containers instead of clashing over their names.
+name: granite-webhooks
+
 services:
   mysql:
     image: mysql:8.0
@@ -11,7 +15,17 @@ services:
       MYSQL_DATABASE: granite_local
     ports:
       - "3307:3306"
-    command: ["--default-authentication-plugin=mysql_native_password", "--log-bin-trust-function-creators=1"]
+    # Local data is disposable, so trade crash durability for speed: without
+    # the binlog and fsyncs a fresh database with all migrations takes ~2s
+    # instead of ~30s, which is what every sqlx::test pays.
+    command:
+      - "--default-authentication-plugin=mysql_native_password"
+      - "--log-bin-trust-function-creators=1"
+      - "--skip-log-bin"
+      - "--innodb-flush-log-at-trx-commit=0"
+      - "--sync-binlog=0"
+      - "--innodb-doublewrite=0"
+      - "--innodb-flush-method=nosync"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pgranite"]
       interval: 2s
@@ -19,6 +33,20 @@ services:
       retries: 60
     volumes:
       - granite_local_mysql:/var/lib/mysql
+
+  # S3-compatible storage for uploads (stone, sink and faucet images): the
+  # API presigns uploads to it with STORAGE_ENDPOINT=http://localhost:9090.
+  # S3Mock skips signature checks, answers CORS preflights and serves objects
+  # without auth, like the public-read production bucket. Data is in memory:
+  # a restart empties it.
+  s3:
+    image: adobe/s3mock:5.2.2
+    container_name: granite-local-s3
+    restart: unless-stopped
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: granite-local
+    ports:
+      - "9090:9090"
 
 volumes:
   granite_local_mysql:

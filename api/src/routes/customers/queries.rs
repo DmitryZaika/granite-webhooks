@@ -1,4 +1,8 @@
-use super::schemas::{CompanyRow, CustomerRow, CustomersView, EmailsByCustomer, ListFilter};
+use super::fuzzy::matches_name_fuzzy;
+use super::schemas::{
+    CompanyRow, CustomerDetail, CustomerRow, CustomerSearchBy, CustomerSearchQuery,
+    CustomerSearchRow, CustomersView, EmailsByCustomer, ListFilter,
+};
 use sqlx::{FromRow, MySql, MySqlPool, QueryBuilder};
 
 const CUSTOMER_COLUMNS: &str = "
@@ -123,4 +127,280 @@ pub async fn emails_by_customer_ids(
         }
     }
     Ok(emails)
+}
+
+/// Remix: the loader of `api.customers.$customerId.tsx`.
+pub async fn find_customer(
+    pool: &MySqlPool,
+    company_id: i32,
+    customer_id: i32,
+    include_deleted: bool,
+) -> Result<Option<CustomerDetail>, sqlx::Error> {
+    let customer = sqlx::query_as::<_, CustomerDetail>(
+        "SELECT c.id, c.name, c.address, c.phone, c.phone_2, ce.email, c.company_name,
+            c.source, c.referral_source, c.your_message, c.sales_rep, u.name AS sales_rep_name,
+            c.city, c.state, c.postal_code, CAST(c.customer_temperature AS CHAR) AS customer_temperature,
+            c.notes, c.qbo_id, c.attached_file, c.created_date, c.invalid_lead,
+            c.remodal_type, c.project_size, c.contact_time, c.remove_and_dispose, c.improve_offer,
+            c.sink, c.when_start, c.details, c.compaign_name, c.adset_name, c.ad_name,
+            c.backsplash, c.kitchen_stove
+         FROM customers c
+         LEFT JOIN customers_emails ce ON ce.id = c.email_id AND ce.customer_id = c.id
+         LEFT JOIN users u ON u.id = c.sales_rep AND u.is_deleted = 0
+         WHERE c.id = ? AND c.company_id = ? AND (c.deleted_at IS NULL OR ?)",
+    )
+    .bind(customer_id)
+    .bind(company_id)
+    .bind(include_deleted)
+    .fetch_optional(pool)
+    .await?;
+    let Some(mut customer) = customer else {
+        return Ok(None);
+    };
+    customer.emails = emails_by_customer_ids(pool, company_id, &[customer_id])
+        .await?
+        .remove(&customer_id)
+        .unwrap_or_default();
+    Ok(Some(customer))
+}
+
+/// Rows a name or company search fetches before the typo filter keeps 15.
+const SEARCH_PREFETCH: i64 = 100;
+const SEARCH_RESULTS: usize = 15;
+
+/// Remix: `api.customers.search.tsx`.
+///
+/// The Remix SQL used `SELECT DISTINCT`
+/// with a join on deals and ordered by a deal column, which MySQL 8 rejects
+/// (error 3065); deals are an `EXISTS` in the ordering here instead.
+pub async fn search_customers(
+    pool: &MySqlPool,
+    company_id: i32,
+    user_id: i32,
+    query: &CustomerSearchQuery,
+) -> Result<Vec<CustomerSearchRow>, sqlx::Error> {
+    let term = query.term.trim();
+    let mut sql = QueryBuilder::<MySql>::new(
+        "SELECT c.id, c.name, c.address, c.city, c.state, c.postal_code, c.phone, c.phone_2,
+            primary_email.email AS email, c.company_name,
+            -- deals.id is BIGINT UNSIGNED, which decodes only as u64.
+            (SELECT CAST(d.id AS SIGNED) FROM deals d
+              WHERE d.customer_id = c.id AND d.deleted_at IS NULL
+              ORDER BY d.id DESC LIMIT 1) AS deal_id,
+            (SELECT d.is_won FROM deals d WHERE d.customer_id = c.id AND d.deleted_at IS NULL
+              ORDER BY d.id DESC LIMIT 1) AS deal_is_won,
+            (SELECT l.group_id FROM deals d JOIN deals_list l ON l.id = d.list_id
+              WHERE d.customer_id = c.id AND d.deleted_at IS NULL
+              ORDER BY d.id DESC LIMIT 1) AS deal_group_id
+         FROM customers c
+         LEFT JOIN customers_emails primary_email
+           ON primary_email.id = c.email_id AND primary_email.customer_id = c.id
+         WHERE c.deleted_at IS NULL AND c.company_id = ",
+    );
+    sql.push_bind(company_id);
+    if query.own_only {
+        sql.push(" AND (c.sales_rep IS NULL OR c.sales_rep = ")
+            .push_bind(user_id)
+            .push(")");
+    }
+    let limit = push_search_filter(&mut sql, query.by, term, user_id);
+    sql.push(", c.id DESC LIMIT ").push_bind(limit);
+
+    let mut rows = sql
+        .build_query_as::<CustomerSearchRow>()
+        .fetch_all(pool)
+        .await?;
+    let lowered = term.to_lowercase();
+    let company_contains = |row: &CustomerSearchRow| {
+        row.company_name
+            .as_deref()
+            .is_some_and(|company| company.to_lowercase().contains(&lowered))
+    };
+    match query.by {
+        CustomerSearchBy::Name => rows.retain(|row| {
+            matches_name_fuzzy(row.name.as_deref().unwrap_or_default(), term)
+                || matches_name_fuzzy(row.company_name.as_deref().unwrap_or_default(), term)
+                || company_contains(row)
+        }),
+        CustomerSearchBy::Company => rows.retain(|row| {
+            matches_name_fuzzy(row.company_name.as_deref().unwrap_or_default(), term)
+                || company_contains(row)
+        }),
+        CustomerSearchBy::Phone | CustomerSearchBy::Email | CustomerSearchBy::Address => {}
+    }
+    rows.truncate(SEARCH_RESULTS);
+
+    let ids: Vec<i32> = rows.iter().map(|row| row.id).collect();
+    let mut emails = emails_by_customer_ids(pool, company_id, &ids).await?;
+    for row in &mut rows {
+        row.emails = emails
+            .remove(&row.id)
+            .unwrap_or_else(|| row.email.clone().into_iter().collect());
+    }
+    Ok(rows)
+}
+
+const PHONE: &str = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(c.phone,'-',''),' ',''),'(',''),')',''),'+',''),'.','')";
+const PHONE_2: &str = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(c.phone_2,'-',''),' ',''),'(',''),')',''),'+',''),'.','')";
+
+/// ` AND <match>` plus ` ORDER BY ...` for one search mode; returns the
+/// SQL row limit.
+fn push_search_filter(
+    sql: &mut QueryBuilder<MySql>,
+    by: CustomerSearchBy,
+    term: &str,
+    user_id: i32,
+) -> i64 {
+    let like = format!("%{term}%");
+    let prefix = format!("{term}%");
+    let company_match = |sql: &mut QueryBuilder<MySql>| {
+        sql.push("(c.company_name IS NOT NULL AND c.company_name != '' AND (c.company_name LIKE ")
+            .push_bind(prefix.clone())
+            .push(" OR c.company_name LIKE ")
+            .push_bind(like.clone())
+            .push("))");
+    };
+    let digits: String = term.chars().filter(char::is_ascii_digit).collect();
+    let last10: String = digits
+        .chars()
+        .skip(digits.chars().count().saturating_sub(10))
+        .collect();
+    match by {
+        CustomerSearchBy::Name => {
+            let words: Vec<&str> = term.split_whitespace().collect();
+            let short = |word: &str| format!("%{}%", word.chars().take(3).collect::<String>());
+            sql.push(" AND ((c.name LIKE ");
+            if words.len() > 1 {
+                sql.push_bind(format!("%{}%", words.join(" ")))
+                    .push(" OR (");
+                for (index, word) in words.iter().enumerate() {
+                    if index > 0 {
+                        sql.push(" AND ");
+                    }
+                    sql.push("c.name LIKE ").push_bind(short(word));
+                }
+                sql.push("))");
+            } else {
+                sql.push_bind(short(term)).push(")");
+            }
+            sql.push(" OR ");
+            company_match(sql);
+            sql.push(")");
+            push_rank(sql, user_id, "c.name LIKE ", &prefix, &like);
+            SEARCH_PREFETCH
+        }
+        CustomerSearchBy::Company => {
+            sql.push(" AND ");
+            company_match(sql);
+            push_rank(sql, user_id, "c.company_name LIKE ", &prefix, &like);
+            SEARCH_PREFETCH
+        }
+        CustomerSearchBy::Phone if digits.is_empty() => {
+            sql.push(" AND (c.phone LIKE ")
+                .push_bind(like.clone())
+                .push(" OR c.phone_2 LIKE ")
+                .push_bind(like.clone())
+                .push(")");
+            push_owner_rank(sql, user_id);
+            sql.push(" CASE WHEN c.phone LIKE ")
+                .push_bind(prefix.clone())
+                .push(" OR c.phone_2 LIKE ")
+                .push_bind(prefix.clone())
+                .push(" THEN 0 WHEN c.phone LIKE ")
+                .push_bind(like.clone())
+                .push(" OR c.phone_2 LIKE ")
+                .push_bind(like.clone())
+                .push(" THEN 1 ELSE 2 END");
+            15
+        }
+        CustomerSearchBy::Phone => {
+            sql.push(" AND ");
+            push_phone_match(sql, format!("%{digits}%"), format!("%{last10}%"));
+            push_owner_rank(sql, user_id);
+            sql.push(" CASE WHEN ");
+            push_phone_match(sql, format!("{digits}%"), format!("{last10}%"));
+            sql.push(" THEN 0 WHEN ");
+            push_phone_match(sql, format!("%{digits}%"), format!("%{last10}%"));
+            sql.push(" THEN 1 ELSE 2 END");
+            15
+        }
+        CustomerSearchBy::Address => {
+            push_address_filter(sql, term, &prefix, user_id);
+            15
+        }
+        CustomerSearchBy::Email => {
+            let has_email = |sql: &mut QueryBuilder<MySql>, pattern: String| {
+                sql.push(
+                    "EXISTS (SELECT 1 FROM customers_emails search_email
+                      WHERE search_email.customer_id = c.id AND search_email.email LIKE ",
+                )
+                .push_bind(pattern)
+                .push(")");
+            };
+            sql.push(" AND (");
+            has_email(sql, prefix.clone());
+            sql.push(" OR ");
+            has_email(sql, like.clone());
+            sql.push(")");
+            push_owner_rank(sql, user_id);
+            sql.push(" CASE WHEN ");
+            has_email(sql, prefix.clone());
+            sql.push(" THEN 0 WHEN ");
+            has_email(sql, like.clone());
+            sql.push(" THEN 1 ELSE 2 END");
+            15
+        }
+    }
+}
+
+/// Every word of `term` in the address; addresses starting with it first.
+fn push_address_filter(sql: &mut QueryBuilder<MySql>, term: &str, prefix: &str, user_id: i32) {
+    let words: Vec<&str> = term.split_whitespace().take(6).collect();
+    sql.push(" AND c.address IS NOT NULL");
+    if words.is_empty() {
+        sql.push(" AND 1 = 0");
+    }
+    for word in &words {
+        sql.push(" AND c.address LIKE ")
+            .push_bind(format!("%{word}%"));
+    }
+    push_owner_rank(sql, user_id);
+    sql.push(" CASE WHEN c.address LIKE ")
+        .push_bind(prefix.to_string())
+        .push(" THEN 0 ELSE 1 END");
+}
+
+/// Either phone column, digits only, matches either pattern.
+fn push_phone_match(sql: &mut QueryBuilder<MySql>, a: String, b: String) {
+    sql.push(format!("({PHONE} LIKE "))
+        .push_bind(a.clone())
+        .push(format!(" OR {PHONE} LIKE "))
+        .push_bind(b.clone())
+        .push(format!(" OR {PHONE_2} LIKE "))
+        .push_bind(a)
+        .push(format!(" OR {PHONE_2} LIKE "))
+        .push_bind(b)
+        .push(")");
+}
+
+/// ` ORDER BY` customers with the caller's live deal, then the caller's own
+/// customers, then the rest (each followed by the caller's next keys).
+fn push_owner_rank(sql: &mut QueryBuilder<MySql>, user_id: i32) {
+    sql.push(
+        " ORDER BY CASE WHEN EXISTS (SELECT 1 FROM deals mine
+            WHERE mine.customer_id = c.id AND mine.user_id = ",
+    )
+    .push_bind(user_id)
+    .push(" AND mine.deleted_at IS NULL) THEN 0 WHEN c.sales_rep = ")
+    .push_bind(user_id)
+    .push(" THEN 1 ELSE 2 END,");
+}
+
+fn push_rank(sql: &mut QueryBuilder<MySql>, user_id: i32, column: &str, prefix: &str, like: &str) {
+    push_owner_rank(sql, user_id);
+    sql.push(format!(" CASE WHEN {column}"))
+        .push_bind(prefix.to_string())
+        .push(format!(" THEN 0 WHEN {column}"))
+        .push_bind(like.to_string())
+        .push(" THEN 1 ELSE 2 END");
 }

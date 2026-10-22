@@ -348,16 +348,8 @@ where
                 create_new_deal_existing_customer(pool, &existing, company_id, form, bot).await;
             match deal {
                 Ok(Some(deal)) => {
-                    return handle_repeat_lead(
-                        &existing,
-                        deal,
-                        pool,
-                        company_id,
-                        form,
-                        bot,
-                        true,
-                    )
-                    .await;
+                    return handle_repeat_lead(&existing, deal, pool, company_id, form, bot, true)
+                        .await;
                 }
                 Ok(None) => CREATED_RESPONSE,
                 Err(e) => {

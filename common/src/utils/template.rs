@@ -6,6 +6,56 @@ fn get_first_name(full_name: &str) -> String {
     full_name.split(' ').next().unwrap_or(full_name).to_string()
 }
 
+/// Everything after the first word ("Mary Ann Smith" -> "Ann Smith"); none
+/// for a one-word name.
+fn get_last_name(full_name: &str) -> Option<String> {
+    let rest: Vec<&str> = full_name.split_whitespace().skip(1).collect();
+    (!rest.is_empty()).then(|| rest.join(" "))
+}
+
+/// `12345.5` -> `$12,345.50`.
+pub fn format_usd(amount: f64) -> String {
+    let cents = (amount.abs() * 100.0).round();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let cents = cents as u64;
+    let digits = (cents / 100).to_string();
+    let mut whole = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            whole.push(',');
+        }
+        whole.push(c);
+    }
+    let sign = if amount < 0.0 && cents > 0 { "-" } else { "" };
+    format!("{sign}${whole}.{:02}", cents % 100)
+}
+
+/// `2026-10-14` -> `October 14, 2026`; anything else is kept as it is.
+fn format_long_date(raw: &str) -> String {
+    let raw = raw.trim();
+    chrono::NaiveDate::parse_from_str(raw.get(..10).unwrap_or(raw), "%Y-%m-%d")
+        .map_or_else(|_| raw.to_string(), |d| d.format("%B %-d, %Y").to_string())
+}
+
+fn finite_usd(amount: Option<f64>) -> Option<String> {
+    amount.filter(|a| a.is_finite()).map(format_usd)
+}
+
+/// The `{{key}}` names in `text`, trimmed, in order (no markup handling).
+pub fn placeholder_keys(text: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            break;
+        };
+        keys.push(after[..end].trim().to_string());
+        rest = &after[end + 2..];
+    }
+    keys
+}
+
 fn format_current_date() -> String {
     // %e produces space-padded day (e.g. " 3"), so we clean up double spaces
     Local::now()
@@ -26,11 +76,7 @@ fn inventory_subdomain_slug(raw: &str) -> Option<String> {
         .unwrap_or("")
         .trim()
         .to_lowercase();
-    if slug.is_empty() {
-        None
-    } else {
-        Some(slug)
-    }
+    if slug.is_empty() { None } else { Some(slug) }
 }
 
 fn company_subdomain_slug(company: Option<&InfoVariableData>) -> Option<String> {
@@ -39,7 +85,10 @@ fn company_subdomain_slug(company: Option<&InfoVariableData>) -> Option<String> 
         .subdomain
         .as_ref()
         .filter(|value| !value.trim().is_empty())
-        .or(company.domain.as_ref().filter(|value| !value.trim().is_empty()))?;
+        .or(company
+            .domain
+            .as_ref()
+            .filter(|value| !value.trim().is_empty()))?;
     inventory_subdomain_slug(raw)
 }
 
@@ -58,21 +107,40 @@ fn customer_inventory_link(company: Option<&InfoVariableData>) -> Option<String>
 fn build_variable_map(data: &TemplateVariableData) -> HashMap<&'static str, String> {
     let customer = data.customer.as_ref();
     let company = data.company.as_ref();
+    let deal = data.deal.as_ref();
+    let quote = data.quote.as_ref();
     let first_name = data.user.name.as_ref().map(|n| get_first_name(n));
     let customer_name = customer.and_then(|c| c.name.as_ref().map(|n| get_first_name(n)));
 
     [
         ("user.name", data.user.name.clone()),
         ("user.first_name", first_name),
+        (
+            "user.last_name",
+            data.user.name.as_deref().and_then(get_last_name),
+        ),
         ("user.email", data.user.email.clone()),
         ("user.phone_number", data.user.phone_number.clone()),
         ("customer.name", customer.and_then(|c| c.name.clone())),
         ("customer.first_name", customer_name),
-        ("customer.address", customer.and_then(|c| c.address.clone())),
         (
-            "customer.inventory_link",
-            customer_inventory_link(company),
+            "customer.last_name",
+            customer.and_then(|c| c.name.as_deref().and_then(get_last_name)),
         ),
+        ("customer.email", customer.and_then(|c| c.email.clone())),
+        ("customer.phone", customer.and_then(|c| c.phone.clone())),
+        ("customer.address", customer.and_then(|c| c.address.clone())),
+        ("deal.name", deal.and_then(|d| d.name.clone())),
+        ("deal.amount", deal.and_then(|d| finite_usd(d.amount))),
+        ("quote.name", quote.and_then(|q| q.name.clone())),
+        ("quote.total", quote.and_then(|q| finite_usd(q.total))),
+        ("quote.color", quote.and_then(|q| q.color.clone())),
+        ("quote.link", quote.and_then(|q| q.link.clone())),
+        (
+            "quote.expiration",
+            quote.and_then(|q| q.expiration.as_deref().map(format_long_date)),
+        ),
+        ("customer.inventory_link", customer_inventory_link(company)),
         ("company.name", company.and_then(|c| c.name.clone())),
         ("company.address", company.and_then(|c| c.address.clone())),
         ("company.subdomain", company_subdomain_slug(company)),
@@ -85,7 +153,7 @@ fn build_variable_map(data: &TemplateVariableData) -> HashMap<&'static str, Stri
         ("current_date", Some(format_current_date())),
     ]
     .into_iter()
-    .filter_map(|(k, v)| v.filter(|s| !s.is_empty()).map(|val| (k, val)))
+    .filter_map(|(k, v)| v.filter(|s| !s.trim().is_empty()).map(|val| (k, val)))
     .collect()
 }
 
@@ -155,7 +223,9 @@ mod tests {
                 hours_of_operation: Some("Monday - Friday 9 to 6, Saturday 10 to 3".to_string()),
                 domain: Some("example.granite-manager.com".to_string()),
                 subdomain: Some("example".to_string()),
+                ..Default::default()
             }),
+            ..Default::default()
         }
     }
 
@@ -167,9 +237,7 @@ mod tests {
 
         assert!(result.contains("Hi Jordan,"));
         assert!(result.contains("My name is Alice,"));
-        assert!(result.contains(
-            "https://example.granite-manager.com/customer/1/stones"
-        ));
+        assert!(result.contains("https://example.granite-manager.com/customer/1/stones"));
         assert!(!result.contains("{{customer.first_name}}"));
         assert!(!result.contains("{{user.first_name}}"));
         assert!(!result.contains("{{customer.inventory_link}}"));
@@ -201,8 +269,7 @@ mod tests {
                 email_name: None,
                 phone_number: None,
             },
-            customer: None,
-            company: None,
+            ..Default::default()
         };
         let result = replace_template_variables("Hi {{customer.first_name}}", &data);
 
@@ -254,10 +321,7 @@ mod tests {
 
     #[test]
     fn replaces_customer_inventory_link_from_company_subdomain_and_id() {
-        let result = replace_template_variables(
-            "{{customer.inventory_link}}",
-            &make_full_data(),
-        );
+        let result = replace_template_variables("{{customer.inventory_link}}", &make_full_data());
         assert_eq!(
             result,
             "https://example.granite-manager.com/customer/1/stones"
@@ -302,5 +366,105 @@ mod tests {
             &make_full_data(),
         );
         assert_eq!(result, "{{unknown.var}} and Jordan");
+    }
+
+    fn make_quote_email_data() -> TemplateVariableData {
+        use crate::crud::template::{DealVariableData, QuoteVariableData};
+        let mut data = make_full_data();
+        data.user.name = Some("Alice Mae Johnson".to_string());
+        if let Some(customer) = data.customer.as_mut() {
+            customer.email = Some("jordan@example.com".to_string());
+            customer.phone = Some("(317) 555-0100".to_string());
+        }
+        data.deal = Some(DealVariableData {
+            name: Some("Kitchen remodel".to_string()),
+            amount: Some(4500.0),
+        });
+        data.quote = Some(QuoteVariableData {
+            name: Some("Smith Kitchen".to_string()),
+            total: Some(12345.678),
+            color: Some("Quartz Calacatta Laza".to_string()),
+            link: Some("https://example.granite-manager.com/quote-portal/abc?e=def".to_string()),
+            expiration: Some("2026-11-05".to_string()),
+        });
+        data
+    }
+
+    #[test]
+    fn replaces_last_names_and_customer_contact_details() {
+        let result = replace_template_variables(
+            "{{customer.last_name}} | {{user.last_name}} | {{customer.email}} | {{customer.phone}}",
+            &make_quote_email_data(),
+        );
+        assert_eq!(
+            result,
+            "Smith | Mae Johnson | jordan@example.com | (317) 555-0100"
+        );
+    }
+
+    #[test]
+    fn leaves_last_name_for_a_one_word_name() {
+        let mut data = make_full_data();
+        data.user.name = Some("Cher".to_string());
+        let result = replace_template_variables("{{user.last_name}}", &data);
+        assert_eq!(result, "{{user.last_name}}");
+    }
+
+    #[test]
+    fn replaces_deal_variables_when_sent_from_a_deal() {
+        let result = replace_template_variables(
+            "{{deal.name}} for {{Deal.Amount}}",
+            &make_quote_email_data(),
+        );
+        assert_eq!(result, "Kitchen remodel for $4,500.00");
+    }
+
+    #[test]
+    fn leaves_deal_and_quote_variables_without_a_deal_or_quote() {
+        let template = "{{deal.name}} {{deal.amount}} {{quote.total}} {{quote.link}}";
+        assert_eq!(
+            replace_template_variables(template, &make_full_data()),
+            template
+        );
+    }
+
+    #[test]
+    fn replaces_quote_variables_in_a_quote_email() {
+        let result = replace_template_variables(
+            "{{quote.name}}: {{quote.color}} for {{quote.total}}, valid until {{quote.expiration}}. {{quote.link}}",
+            &make_quote_email_data(),
+        );
+        assert_eq!(
+            result,
+            "Smith Kitchen: Quartz Calacatta Laza for $12,345.68, valid until November 5, 2026. https://example.granite-manager.com/quote-portal/abc?e=def"
+        );
+    }
+
+    #[test]
+    fn leaves_quote_total_when_it_is_not_a_number() {
+        let mut data = make_quote_email_data();
+        if let Some(quote) = data.quote.as_mut() {
+            quote.total = Some(f64::NAN);
+        }
+        assert_eq!(
+            replace_template_variables("{{quote.total}}", &data),
+            "{{quote.total}}"
+        );
+    }
+
+    #[test]
+    fn formats_dollars() {
+        assert_eq!(format_usd(0.0), "$0.00");
+        assert_eq!(format_usd(999.999), "$1,000.00");
+        assert_eq!(format_usd(1_234_567.5), "$1,234,567.50");
+        assert_eq!(format_usd(-12.3), "-$12.30");
+    }
+
+    #[test]
+    fn lists_placeholder_keys() {
+        assert_eq!(
+            placeholder_keys("Hi {{ customer.name }}, {{quote.total}} {{ broken"),
+            vec!["customer.name".to_string(), "quote.total".to_string()]
+        );
     }
 }

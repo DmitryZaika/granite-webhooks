@@ -257,7 +257,9 @@ pub async fn resolve_unknown<C: ReferralClassifier>(
         let earlier = remembered.reason.as_deref().unwrap_or("no reason given");
         return (
             Resolution::NeedsReview {
-                reason: format!("GPT-6.1 Sol was not sure when this value was first seen: {earlier}"),
+                reason: format!(
+                    "GPT-6.1 Sol was not sure when this value was first seen: {earlier}"
+                ),
             },
             None,
         );
@@ -743,7 +745,8 @@ mod tests {
         assert_eq!(
             resolution,
             Resolution::NeedsReview {
-                reason: "GPT-6.1 Sol answered \"tiktok\", which is not an allowed value".to_string()
+                reason: "GPT-6.1 Sol answered \"tiktok\", which is not an allowed value"
+                    .to_string()
             }
         );
     }
@@ -822,7 +825,7 @@ mod tests {
         assert!(!body.contains("<script>"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_check_referral_source_remembers_ai_decision(pool: MySqlPool) {
         let classifier = MockClassifier::verdict(true, FACEBOOK);
         for _ in 0..2 {
@@ -841,7 +844,7 @@ mod tests {
         assert_eq!(alias.times_seen, 3);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_check_referral_source_emails_unsure_value_once_a_day(pool: MySqlPool) {
         let classifier = MockClassifier::verdict(false, AI_NONE);
         let mut first = form(json!({ "name": "A", "referral_source": "Meta" }));
@@ -871,7 +874,7 @@ mod tests {
         assert_eq!(review.map(|r| r.times_seen), Some(3));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_check_referral_source_known_value_is_not_remembered(pool: MySqlPool) {
         let classifier = MockClassifier::verdict(true, WEBSITE);
         let mut lead = form(json!({ "name": "Test", "referral_source": "WordPress" }));

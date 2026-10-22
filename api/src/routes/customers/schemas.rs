@@ -142,3 +142,165 @@ pub struct EmailsBatchRequest {
 /// `{ "<customer_id>": ["primary@x.com", "other@x.com"] }`. Customers with no
 /// email rows are absent.
 pub type EmailsByCustomer = BTreeMap<i32, Vec<String>>;
+
+/// One customer with contact details, as the customer picker shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
+pub struct CustomerDetail {
+    /// Customer id.
+    pub id: i32,
+    /// Contact person's name.
+    pub name: Option<String>,
+    /// Billing address.
+    pub address: Option<String>,
+    /// Main phone number.
+    pub phone: Option<String>,
+    /// Second phone number.
+    pub phone_2: Option<String>,
+    /// Primary email address; null when the customer has none.
+    pub email: Option<String>,
+    /// Every email address, primary first.
+    #[sqlx(skip)]
+    pub emails: Vec<String>,
+    /// Company name for business customers; null or empty for private ones.
+    pub company_name: Option<String>,
+    /// Where the lead came from, e.g. `leads`, `check-in`, `other`.
+    pub source: Option<String>,
+    /// Referral source, free text.
+    pub referral_source: Option<String>,
+    /// Message the customer left when signing up.
+    pub your_message: Option<String>,
+    /// Assigned sales rep (user id); null when unassigned.
+    pub sales_rep: Option<i32>,
+    /// Name of the assigned sales rep; null when unassigned or deleted.
+    pub sales_rep_name: Option<String>,
+    /// City of the address.
+    pub city: Option<String>,
+    /// State of the address.
+    pub state: Option<String>,
+    /// ZIP code.
+    pub postal_code: Option<String>,
+    /// Lead temperature: `hot`, `medium`, `cold`, or null.
+    pub customer_temperature: Option<String>,
+    /// Internal notes about the customer.
+    pub notes: Option<String>,
+    /// QuickBooks customer id when linked.
+    pub qbo_id: Option<i32>,
+    /// File the lead attached to the web form (URL).
+    pub attached_file: Option<String>,
+    /// When the customer was created.
+    #[serde(serialize_with = "js_date")]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub created_date: Option<DateTime<Utc>>,
+    /// Why the lead was marked invalid; null or empty for a valid one.
+    pub invalid_lead: Option<String>,
+    /// Lead form answers, as the lead sources send them (free text).
+    #[sqlx(flatten)]
+    pub lead: LeadAnswers,
+}
+
+/// What a lead answered on the ad or web form; every field free text, null
+/// when not asked.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, FromRow, ToSchema)]
+pub struct LeadAnswers {
+    /// Kind of remodel (kitchen, bath...).
+    pub remodal_type: Option<String>,
+    /// Project size.
+    pub project_size: Option<String>,
+    /// Best time to call.
+    pub contact_time: Option<String>,
+    /// Whether old countertops must be torn out and disposed of.
+    pub remove_and_dispose: Option<String>,
+    /// Asked for a better offer (1 yes, 0 no).
+    pub improve_offer: Option<i8>,
+    /// Sink wanted.
+    pub sink: Option<String>,
+    /// When the project should start.
+    pub when_start: Option<String>,
+    /// Project details.
+    pub details: Option<String>,
+    /// Ad campaign name.
+    pub compaign_name: Option<String>,
+    /// Ad set name.
+    pub adset_name: Option<String>,
+    /// Ad name.
+    pub ad_name: Option<String>,
+    /// Backsplash wanted.
+    pub backsplash: Option<String>,
+    /// Stove type.
+    pub kitchen_stove: Option<String>,
+}
+
+/// Query of `GET /v1/customers/{id}`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct CustomerQuery {
+    /// Also return the customer when it was deleted.
+    #[serde(default)]
+    pub include_deleted: bool,
+}
+
+/// How `GET /v1/customers/search` matches `term`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CustomerSearchBy {
+    /// Person or company name, tolerating typos.
+    #[default]
+    Name,
+    /// Phone or second phone, by digits (formatting ignored).
+    Phone,
+    /// Any of the customer's email addresses.
+    Email,
+    /// Company name, tolerating typos.
+    Company,
+    /// Every word typed appears in the address ("123 main" finds "123 N Main St").
+    Address,
+}
+
+/// Query string of `GET /v1/customers/search`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct CustomerSearchQuery {
+    /// What the user typed. Required (may be empty for phone search).
+    pub term: String,
+    /// Which field to match: `name` (default), `phone`, `email`, `company`, `address`.
+    #[serde(default)]
+    #[param(inline)]
+    pub by: CustomerSearchBy,
+    /// `true` returns only customers assigned to the caller or unassigned.
+    #[serde(default)]
+    pub own_only: bool,
+}
+
+/// A customer matching a search, with their latest deal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
+pub struct CustomerSearchRow {
+    /// Customer id.
+    pub id: i32,
+    /// Contact person's name.
+    pub name: Option<String>,
+    /// Billing address.
+    pub address: Option<String>,
+    /// City of the address.
+    pub city: Option<String>,
+    /// State of the address.
+    pub state: Option<String>,
+    /// ZIP code.
+    pub postal_code: Option<String>,
+    /// Main phone number.
+    pub phone: Option<String>,
+    /// Second phone number.
+    pub phone_2: Option<String>,
+    /// Primary email address.
+    pub email: Option<String>,
+    /// Every email address, primary first.
+    #[sqlx(skip)]
+    pub emails: Vec<String>,
+    /// Company name for business customers.
+    pub company_name: Option<String>,
+    /// The customer's most recent live deal; null when none.
+    pub deal_id: Option<i64>,
+    /// That deal's outcome: 1 won, 0 lost, null open or no deal.
+    pub deal_is_won: Option<i32>,
+    /// Board group of that deal's list; null when there is no deal.
+    pub deal_group_id: Option<i32>,
+}

@@ -60,7 +60,7 @@ mod flow_enrollment_tests {
         .c
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn cancel_flow_enrollments_on_reply_stops_active_and_paused(pool: MySqlPool) {
         insert_enrollment(&pool, 1, 5551234567, "active").await;
         insert_enrollment(&pool, 1, 5551234567, "paused").await;
@@ -80,7 +80,7 @@ mod flow_enrollment_tests {
         assert_eq!(status_of(&pool, 2, 5551234567, "active").await, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn cancel_flow_enrollments_for_customer_stops_by_id_and_phone(pool: MySqlPool) {
         let company = sqlx::query!(r#"INSERT INTO company (name) VALUES ('Call Co')"#)
             .execute(&pool)
@@ -116,14 +116,17 @@ mod flow_enrollment_tests {
             status_of(&pool, company_id, 5_551_234_567, "stopped_by_reply").await,
             1
         );
-        assert_eq!(status_of(&pool, company_id, 5_559_999_999, "active").await, 1);
+        assert_eq!(
+            status_of(&pool, company_id, 5_559_999_999, "active").await,
+            1
+        );
         assert_eq!(
             status_of(&pool, company_id + 1, 5_551_234_567, "active").await,
             1
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_call_webhook_cancels_matching_enrollments(pool: MySqlPool) {
         insert_enrollment(&pool, 42, 5_551_234_567, "active").await;
         insert_enrollment(&pool, 42, 5_551_234_567, "paused").await;
@@ -148,7 +151,7 @@ mod flow_enrollment_tests {
         assert_eq!(status_of(&pool, 42, 5_559_999_999, "active").await, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn outbound_call_webhook_does_not_cancel_enrollments(pool: MySqlPool) {
         insert_enrollment(&pool, 42, 5_551_234_567, "active").await;
 
@@ -165,7 +168,7 @@ mod flow_enrollment_tests {
         assert_eq!(status_of(&pool, 42, 5_551_234_567, "active").await, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn outbound_call_over_60s_does_not_cancel_immediately(pool: MySqlPool) {
         insert_enrollment(&pool, 42, 5_551_234_567, "active").await;
 
@@ -188,7 +191,7 @@ mod flow_enrollment_tests {
         assert_eq!(status_of(&pool, 42, 5_551_234_567, "active").await, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn inbound_sms_webhook_cancels_matching_enrollments(pool: MySqlPool) {
         // INBOUND_SMS sender +16468956758 -> last-10 digits 6468956758.
         insert_enrollment(&pool, 42, 6468956758, "active").await;
@@ -218,7 +221,7 @@ mod flow_enrollment_tests {
 
     const INBOUND_SMS_WITH_ID: i64 = 2200000200;
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn redelivered_inbound_sms_does_not_cancel_enrollment_started_after_original(
         pool: MySqlPool,
     ) {
@@ -255,7 +258,7 @@ mod flow_enrollment_tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn second_inbound_sms_with_distinct_id_cancels_enrollment_started_between(
         pool: MySqlPool,
     ) {
@@ -291,3 +294,6 @@ mod flow_enrollment_tests {
         );
     }
 }
+
+/// `RingCentral`'s own `message-store/instant?type=SMS` webhook body (fixture numbers).
+pub const NOTIFY_INBOUND_SMS: &[u8] = br#"{"uuid":"5c5a4c1e-0000-0000-0000-000000000000","event":"/restapi/v1.0/account/~/extension/540273/message-store/instant?type=SMS","timestamp":"2026-10-08T19:34:23.000Z","subscriptionId":"sub-1","ownerId":"540273","body":{"id":"3894319559027","to":[{"phoneNumber":"+13173161456","name":"Rep","location":"Indianapolis, IN"}],"from":{"phoneNumber":"+16468956758","location":"New York, NY"},"type":"SMS","creationTime":"2026-10-08T19:34:23.000Z","lastModifiedTime":"2026-10-08T19:34:23.000Z","readStatus":"Unread","priority":"Normal","attachments":[{"id":"3894319559027","type":"Text","contentType":"text/plain"}],"direction":"Inbound","availability":"Alive","subject":"Is the slab still available?","messageStatus":"Received","conversationId":"123"}}"#;

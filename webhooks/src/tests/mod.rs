@@ -1,7 +1,7 @@
 #[cfg(test)]
 pub mod cloudtalk;
-pub mod ringcentral;
 pub mod data;
+pub mod ringcentral;
 #[cfg(test)]
 pub mod stub_http;
 pub mod telegram;

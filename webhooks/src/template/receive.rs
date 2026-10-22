@@ -159,7 +159,7 @@ mod tests {
         Ok(rec.last_insert_id() as i32)
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_fetch_template_all_data_present(pool: MySqlPool) {
         let company_id = insert_test_company(
             &pool,
@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(company.id, Some(company_id));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_fetch_template_minimal_user_only(pool: MySqlPool) {
         let company_id = insert_test_company(&pool, "Enterprise Corp", None, None, None)
             .await
@@ -235,7 +235,7 @@ mod tests {
         assert!(result.company.is_some());
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_fetch_customer_fallback_to_customer_id(pool: MySqlPool) {
         let company_id = insert_test_company(&pool, "Company A", None, None, None)
             .await
@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(customer.name, Some("Direct Customer".to_string()));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_customer_and_deal_soft_deletes_ignored(pool: MySqlPool) {
         let company_id = insert_test_company(&pool, "Company B", None, None, None)
             .await
@@ -343,7 +343,9 @@ mod tests {
                 hours_of_operation: Some("Mon-Fri 9-5".to_string()),
                 domain: Some("granitedepot.com".to_string()),
                 subdomain: Some("granitedepot".to_string()),
+                ..Default::default()
             }),
+            ..Default::default()
         }
     }
 
@@ -356,8 +358,7 @@ mod tests {
                 email_name: None,
                 phone_number: None,
             },
-            customer: None,
-            company: None,
+            ..Default::default()
         }
     }
 
@@ -572,7 +573,7 @@ mod tests {
         assert!(!result.contains("{{Company.name}}"));
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_scheduled_email_style_fetch_and_replace_customer_name(pool: MySqlPool) {
         let company_id = insert_test_company(&pool, "Auto Email Co", None, None, None)
             .await

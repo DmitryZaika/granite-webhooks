@@ -60,9 +60,19 @@ pub struct TelegramBot {
 impl Default for TelegramBot {
     fn default() -> Self {
         Self {
-            bot: teloxide::Bot::from_env(),
+            bot: bot_from_env(),
         }
     }
+}
+
+/// `teloxide::Bot::from_env()`, except that tests (which never load `.env`)
+/// get a placeholder token instead of panicking.
+fn bot_from_env() -> teloxide::Bot {
+    #[cfg(test)]
+    if std::env::var("TELOXIDE_TOKEN").is_err() {
+        return teloxide::Bot::new("test-token");
+    }
+    teloxide::Bot::from_env()
 }
 
 impl Telegram for TelegramBot {
@@ -174,10 +184,13 @@ pub struct NotificationsTelegramBot {
 impl Default for NotificationsTelegramBot {
     fn default() -> Self {
         let token = std::env::var("TELOXIDE_NOTIFICATIONS_TOKEN")
-            .or_else(|_| std::env::var("TELEGRAM_NOTIFICATIONS_BOT_TOKEN"))
-            .unwrap_or_else(|error| {
-                panic!("TELOXIDE_NOTIFICATIONS_TOKEN must be set: {error}");
-            });
+            .or_else(|_| std::env::var("TELEGRAM_NOTIFICATIONS_BOT_TOKEN"));
+        // Tests never load `.env`, so they never get (or use) the real token.
+        #[cfg(test)]
+        let token = token.or_else(|_| Ok::<_, std::env::VarError>("test-token".to_string()));
+        let token = token.unwrap_or_else(|error| {
+            panic!("TELOXIDE_NOTIFICATIONS_TOKEN must be set: {error}");
+        });
         Self {
             bot: teloxide::Bot::new(token),
         }
@@ -307,7 +320,7 @@ where
             return Err(FORBIDDEN_RESPONSE);
         }
         Ok(Self {
-            bot: teloxide::Bot::from_env(),
+            bot: bot_from_env(),
         })
     }
 }
@@ -470,6 +483,36 @@ where
             Some(uuid) if uuid == CORRECT_ID => Ok(Self),
             _ => {
                 tracing::warn!("RingCentral SMS webhook: missing or invalid bearer token");
+                Err((StatusCode::FORBIDDEN, "Forbidden"))
+            }
+        }
+    }
+}
+
+/// `RingCentral`'s own webhook push (`/ringcentral/notify`). It cannot send a bearer, so the
+/// subscription carries `CORRECT_ID` as its `verificationToken`, echoed in `Verification-Token`.
+pub struct RingCentralNotificationUser;
+
+impl<S> FromRequestParts<S> for RingCentralNotificationUser
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // Subscription handshake: accepted before auth so the address can be verified.
+        if parts.headers.get("Validation-Token").is_some() {
+            return Ok(Self);
+        }
+        let token = parts
+            .headers
+            .get("Verification-Token")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| Uuid::parse_str(value.trim()).ok());
+        match token {
+            Some(uuid) if uuid == CORRECT_ID => Ok(Self),
+            _ => {
+                tracing::warn!("RingCentral notification: missing or invalid verification token");
                 Err((StatusCode::FORBIDDEN, "Forbidden"))
             }
         }

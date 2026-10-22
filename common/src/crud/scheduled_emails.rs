@@ -368,7 +368,7 @@ mod tests {
     }
 
     /// Test that emails with hour_delay=0 appear in ready emails.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_immediate_send_appears_in_ready(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_immediate@example.com", "Test Immediate").await;
         let customer_id = insert_test_customer(&pool, "cust100@test.com", "Cust 100", 1).await;
@@ -396,7 +396,7 @@ mod tests {
     }
 
     /// Test that emails with hour_delay=None (defaults to 0) appear in ready.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_none_delay_defaults_to_zero(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_none@example.com", "Test None").await;
         let customer_id = insert_test_customer(&pool, "cust101@test.com", "Cust 101", 1).await;
@@ -422,7 +422,7 @@ mod tests {
     }
 
     /// Test that emails with a future hour_delay do NOT appear in ready emails.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_future_send_does_not_appear(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_future@example.com", "Test Future").await;
         let customer_id = insert_test_customer(&pool, "cust102@test.com", "Cust 102", 1).await;
@@ -446,7 +446,7 @@ mod tests {
     }
 
     /// Test that after marking an email as sent, it no longer appears in ready and status is 'sent'.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_mark_sent_removes_from_ready(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_mark@example.com", "Test Mark").await;
         let customer_id = insert_test_customer(&pool, "cust103@test.com", "Cust 103", 1).await;
@@ -489,7 +489,7 @@ mod tests {
     }
 
     /// Test mixed scenario: some past, some future, some marked as sent.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_mixed_scenario(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_mixed@example.com", "Test Mixed").await;
 
@@ -562,7 +562,7 @@ mod tests {
     }
 
     /// Test that email from get_ready includes the user's email via JOIN.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_ready_email_includes_user_email(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_email_join@example.com", "Join Test").await;
         let customer_id =
@@ -587,7 +587,7 @@ mod tests {
     }
 
     /// Test that a negative hour_delay results in a past send_at, so the email appears ready.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_negative_delay_appears_in_ready(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_negdelay@example.com", "NegDelay Test").await;
         let customer_id = insert_test_customer(&pool, "cust400@test.com", "Cust 400", 1).await;
@@ -611,7 +611,7 @@ mod tests {
     }
 
     /// Test that marking a non-existent email id does not crash and affects 0 rows.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_mark_sent_nonexistent_id(pool: MySqlPool) {
         let result = mark_scheduled_email_as_sent(&pool, -1).await;
         assert!(result.is_ok(), "marking a non-existent id should not error");
@@ -623,7 +623,7 @@ mod tests {
     }
 
     /// Test that an email already marked as sent is not returned again after re-marking.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_double_mark_sent(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_double@example.com", "Double Mark").await;
         let customer_id = insert_test_customer(&pool, "cust500@test.com", "Cust 500", 1).await;
@@ -660,7 +660,7 @@ mod tests {
     }
 
     /// Test that multiple ready emails are all returned.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_multiple_ready_emails(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_multi@example.com", "Multi Test").await;
 
@@ -719,7 +719,7 @@ mod tests {
     }
 
     /// Test that a future email stays hidden even with other ready emails present.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_future_among_ready(pool: MySqlPool) {
         let user_id =
             insert_test_user(&pool, "test_future_among@example.com", "Future Among").await;
@@ -763,7 +763,7 @@ mod tests {
     }
 
     /// Test that mark_scheduled_email_as_failed sets status to 'failed' and does NOT set sent_at.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_mark_as_failed(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_failed@example.com", "Test Failed").await;
         let customer_id = insert_test_customer(&pool, "cust700@test.com", "Cust 700", 1).await;
@@ -806,14 +806,14 @@ mod tests {
     }
 
     /// Test that marking a non-existent email as failed does not crash.
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_mark_failed_nonexistent_id(pool: MySqlPool) {
         let result = mark_scheduled_email_as_failed(&pool, -1).await;
         assert!(result.is_ok(), "marking a non-existent id should not error");
         assert_eq!(result.unwrap().rows_affected(), 0);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn test_does_not_schedule_same_template_twice_for_customer(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "test_dup_tpl@example.com", "Dup Tpl").await;
         let customer_id = insert_test_customer(&pool, "custdup@test.com", "Cust Dup", 1).await;
@@ -853,23 +853,15 @@ mod tests {
         assert_eq!(count, 1);
     }
 
-    #[sqlx::test(migrations = "../migrations")]
-    async fn thank_you_for_lead_on_not_contacted_yet_is_ready_and_recorded(
-        pool: MySqlPool,
-    ) {
+    #[test_db::test]
+    async fn thank_you_for_lead_on_not_contacted_yet_is_ready_and_recorded(pool: MySqlPool) {
         use crate::crud::outbound_email::{
             OutboundScheduledEmail, record_outbound_scheduled_email,
         };
 
-        let user_id =
-            insert_test_user(&pool, "dema@granitedepotindy.com", "Dema").await;
-        let customer_id = insert_test_customer(
-            &pool,
-            "dema.gdindy@gmail.com",
-            "Dema Test",
-            1,
-        )
-        .await;
+        let user_id = insert_test_user(&pool, "dema@granitedepotindy.com", "Dema").await;
+        let customer_id =
+            insert_test_customer(&pool, "dema.gdindy@gmail.com", "Dema Test", 1).await;
 
         let group_id = sqlx::query("INSERT INTO groups_list (name, company_id) VALUES (?, 1)")
             .bind("Leads")
@@ -877,15 +869,14 @@ mod tests {
             .await
             .unwrap()
             .last_insert_id() as i32;
-        let list_id = sqlx::query(
-            "INSERT INTO deals_list (name, group_id, position) VALUES (?, ?, 0)",
-        )
-        .bind("Not Contacted Yet")
-        .bind(group_id)
-        .execute(&pool)
-        .await
-        .unwrap()
-        .last_insert_id() as i32;
+        let list_id =
+            sqlx::query("INSERT INTO deals_list (name, group_id, position) VALUES (?, ?, 0)")
+                .bind("Not Contacted Yet")
+                .bind(group_id)
+                .execute(&pool)
+                .await
+                .unwrap()
+                .last_insert_id() as i32;
         let deal_id = sqlx::query(
             "INSERT INTO deals (customer_id, status, list_id, position, user_id) VALUES (?, 'Not Contacted Yet', ?, 0, ?)",
         )
@@ -908,24 +899,20 @@ mod tests {
         .await
         .unwrap();
 
-        schedule_templates_for_deal_list(
-            &pool,
-            list_id,
-            1,
-            deal_id,
-            customer_id,
-            user_id,
-            false,
-        )
-        .await
-        .unwrap();
+        schedule_templates_for_deal_list(&pool, list_id, 1, deal_id, customer_id, user_id, false)
+            .await
+            .unwrap();
 
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         make_all_scheduled_emails_due(&pool).await;
 
         let ready = get_ready_scheduled_emails(&pool).await.unwrap();
-        assert_eq!(ready.len(), 1, "hour_delay=0 Thank You should be ready to send");
+        assert_eq!(
+            ready.len(),
+            1,
+            "hour_delay=0 Thank You should be ready to send"
+        );
         assert_eq!(ready[0].email.as_deref(), Some("dema.gdindy@gmail.com"));
         assert_eq!(ready[0].template_subject, "Thank You for Your Request");
 
@@ -973,7 +960,10 @@ mod tests {
             Some("dema.gdindy@gmail.com")
         );
         assert_eq!(row.get::<Option<u64>, _>("deal_id"), Some(deal_id));
-        assert!(row.get::<Option<chrono::NaiveDateTime>, _>("deleted_at").is_none());
+        assert!(
+            row.get::<Option<chrono::NaiveDateTime>, _>("deleted_at")
+                .is_none()
+        );
         assert!(
             row.get::<Option<String>, _>("thread_id")
                 .as_ref()
@@ -981,7 +971,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "../migrations")]
+    #[test_db::test]
     async fn does_not_schedule_thank_you_when_customer_is_not_a_lead(pool: MySqlPool) {
         let user_id = insert_test_user(&pool, "rep@example.com", "Rep").await;
         let customer_id = sqlx::query!(
@@ -999,15 +989,14 @@ mod tests {
             .await
             .unwrap()
             .last_insert_id() as i32;
-        let list_id = sqlx::query(
-            "INSERT INTO deals_list (name, group_id, position) VALUES (?, ?, 0)",
-        )
-        .bind("Not Contacted Yet")
-        .bind(group_id)
-        .execute(&pool)
-        .await
-        .unwrap()
-        .last_insert_id() as i32;
+        let list_id =
+            sqlx::query("INSERT INTO deals_list (name, group_id, position) VALUES (?, ?, 0)")
+                .bind("Not Contacted Yet")
+                .bind(group_id)
+                .execute(&pool)
+                .await
+                .unwrap()
+                .last_insert_id() as i32;
         let deal_id = sqlx::query(
             "INSERT INTO deals (customer_id, status, list_id, position, user_id) VALUES (?, 'Not Contacted Yet', ?, 0, ?)",
         )
@@ -1030,23 +1019,16 @@ mod tests {
         .await
         .unwrap();
 
-        schedule_templates_for_deal_list(
-            &pool,
-            list_id,
-            1,
-            deal_id,
-            customer_id,
-            user_id,
-            false,
-        )
-        .await
-        .unwrap();
-
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scheduled_emails WHERE customer_id = ?")
-            .bind(customer_id)
-            .fetch_one(&pool)
+        schedule_templates_for_deal_list(&pool, list_id, 1, deal_id, customer_id, user_id, false)
             .await
             .unwrap();
+
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM scheduled_emails WHERE customer_id = ?")
+                .bind(customer_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(count, 0);
     }
 }

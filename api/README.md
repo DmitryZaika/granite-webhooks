@@ -15,6 +15,8 @@ api/
     openapi.rs           OpenAPI document info, security scheme, tags
     state.rs             AppState (pool, SESSION_SECRET, CORS origins)
     error.rs             ApiError -> JSON {"error": "..."} with 400/401/403/500
+    extract.rs           MultiQuery: query strings with repeated keys (list filters)
+    sql.rs               QueryBuilder helpers (push_in: ` AND col IN (...)`)
     auth/
       cookie.rs          React Router `__session` cookie decode/encode
       session.rs         session -> user lookup, super-admin company switch
@@ -52,34 +54,150 @@ the Remix page that uses it. Pick the folder by the main table the query reads:
 | `schedule`      | `/v1/events/...`          | `events`, calendars                            |
 | `emails` / `sms`| `/v1/emails/...`          | message tables                                 |
 
-Only `me`, `customers` and `users` exist so far; create the others as their first route
-is migrated, following the same four files.
+Exist so far: `me`, `customers`, `users`, `stones`, `slabs`, `sinks`, `faucets`
+(sinks and faucets share `routes/fixtures.rs`), `sales`, `catalog` (suppliers,
+colors, stone types), `checklists` (post-installation checklists), `uploads`
+and `public` (the showroom, no session).
+Create the others as their first route is migrated, following the same files.
+
+### Public routes
+
+`/v1/public/...` take no session (no extractor): `tests/openapi.rs` exempts
+them from `security` and 401. They must never return costs, hidden items or
+other companies' data; `tests/public.rs` checks that.
+
+`/v1/webhooks/...` are third parties' callbacks (Stripe, SignWell): no
+session either, the sender proves itself (`Stripe-Signature` with
+`STRIPE_WEBHOOK_SECRET`; SignWell's `?token=` = `SIGNWELL_WEBHOOK_SECRET` or
+its event hash keyed with `SIGNWELL_WEBHOOK_ID`).
+Point the provider's webhook at `https://api.granite-manager.com/v1/webhooks/<name>`.
+
+### Streaming answers
+
+The AI chat (`POST /v1/ai/chat`, server-sent events) and other long AI
+calls outlast API Gateway's 30 s. The same binary also runs behind a Lambda
+Function URL in `RESPONSE_STREAM` mode: set `LAMBDA_RESPONSE_STREAMING=1` on
+that function (`main.rs` then uses `run_with_streaming_response`). Put it on
+a subdomain of the session cookie's domain (for example through CloudFront)
+so the browser sends the cookie; the frontend calls it from
+`VITE_GRANITE_STREAM_URL`. The chat's CRM manual is
+`api/src/chat/crm_manual.json`, rebuilt from the CRM repo with
+`node scripts/sync-crm-manual.mjs ../general_datebase`.
+
+### Pictures, PDFs and audio
+
+Pure Rust, so nothing to install on Lambda: `images.rs` reads phone photos
+(HEIC with `zune-heic`) and makes thumbnails and SMS-ready pictures;
+`pdf_preview.rs` draws a PDF's first page with `hayro`. Responses stay
+under Lambda's 6 MB: big files go up with presigned PUTs (`POST
+/v1/uploads`) and down with presigned GETs or redirects (document and
+attachment previews, call recordings copied to the bucket, quote prints).
+The bucket's CORS must allow `GET` and `HEAD` too: the call player fetches
+the recording. `CLOUDTALK_BASE_URL` points CloudTalk calls at a stand-in
+(the frontend's browser tests).
+
+Signed documents (`routes/signatures.rs`) open in a browser tab with the
+session cookie. Native ones are read from the private
+`SIGNATURE_STORAGE_BUCKET` (same storage credentials) and hash-checked;
+SignWell signed copies are fetched and titled "<document> signed". PDFs over
+4 MB redirect to a presigned link (big SignWell copies are stored under
+`signed-documents/`, which a bucket lifecycle rule may expire after a day).
+
+Native signatures are on with `NATIVE_SIGNATURES_ENABLED=1`,
+`SIGNATURE_INVITATION_SECRET` (32 bytes, base64url) and
+`SIGNATURE_APP_ORIGIN` (`native_signing.rs`); the scheduled
+`POST /v1/jobs/signature-reminders` then expires open requests and sends
+reminders and notifications (it does nothing while they are off).
+
+Sending documents for signature (`POST /v1/emails` with
+`signature_requests`, `routes/emails/signatures.rs`): through SignWell by
+default (the company's `signwell_api_key`, else `SIGNWELL_API_KEY`;
+`SIGNWELL_TEST_MODE=true` for test documents), natively when enabled. A
+native send also needs the company's verified settings in
+`SIGNATURE_VERIFIED_COMPANY_SETTINGS` (`{"<company id>": {"verifiedAt",
+"evidenceReference", "settings"}}`) and a `SIGNATURE_STORAGE_BUCKET` that
+blocks all public access. `signing_pdf.rs` freezes the PDF's form and prints
+what the sender filled in, matching pdf-lib's output.
+
+SignWell reports viewed / signed / declined documents to
+`POST /v1/webhooks/signwell` (`routes/signwell_webhook.rs`): the sender is
+emailed (links to `SIGNATURE_APP_ORIGIN`) and notified in the app, and a
+signed contract ("<contract form> - <quote name>.pdf") sells its quote: the
+deal is won with the sold option's total. `quote_pricing/` prices quotes as
+the CRM does (`priceQuote`, the price snapshot, stock sync and extras),
+checked line by line against the TypeScript on the Moraware fixtures.
+
+### SMS / email flows
+
+`followups/processor.rs` sends the due steps of flows (`sms_flow_enrollments`)
+from the scheduled `POST /v1/jobs/sms-followups`, which also sends lead-list
+drip texts and everyone's scheduled emails and texts; a rep's start or "send
+now" sends the first step before the response. After an outbound call the
+`webhooks` Lambda posts to `POST /v1/followups/call-check` (with
+`LAMBDA_KEY`; it needs `API_URL` set to this API). Follow-up texts reuse
+`sms-flow-<run>-<step>` / `sms-drip-<row>` as the provider's idempotency key.
+
+### Billing (Stripe)
+
+`src/billing/` keeps `company_billing` in step with Stripe (the state machine
+is a port of the CRM's `stripeBilling.ts`, tested in memory in
+`billing/machine.rs`, against MySQL in `tests/billing.rs` with a fake Stripe,
+and against Stripe's test mode in `tests/billing_stripe_live.rs` when
+`STRIPE_TEST_SECRET_KEY=sk_test_...` is set). Env: `STRIPE_SECRET_KEY`,
+`STRIPE_WEBHOOK_SECRET`, `STRIPE_BILLING_PLANS` (`price|Name|cents,...`) or
+`STRIPE_PRICE_ID`.
+
+### Uploads and storage
+
+Images go straight from the browser to the bucket with a presigned PUT
+(`POST /v1/uploads`); routes that take an image URL call
+`routes::uploads::attach` (checks the file is in the folder, stores the
+`-icon` thumbnail) and `remove` when replacing or deleting. `Storage` is
+S3 (`STORAGE_BUCKET`, `STORAGE_REGION`, `STORAGE_ACCESS_KEY`,
+`STORAGE_SECRET`, optional `STORAGE_ENDPOINT` / `STORAGE_PUBLIC_URL`),
+`Storage::memory()` in tests (`common::server_with_storage`), or disabled
+(upload routes answer 503). Locally `docker-compose.local.yml` runs
+`adobe/s3mock` on :9090. Production needs bucket CORS allowing `PUT` from
+`https://*.granite-manager.com`.
+
+### Writes
+
+Multi-statement writes run in one transaction (`state.pool.begin()`), so a
+failure leaves nothing half saved. Validate everything that can be checked
+before the first write, scope every id the client sends by company, and
+answer 400 with a message the page can show.
 
 ## Rules for every migrated endpoint
 
 1. **One endpoint per database read.** If a Remix loader runs three queries,
    write three endpoints. The frontend calls them (in parallel where possible)
    and composes the page. Don't add "page" endpoints that bundle reads.
-2. **Same SQL as Remix.** Copy the query, keep column aliases so the JSON
-   field names match the TypeScript type the page already uses. Use runtime
-   `sqlx::query_as` / `QueryBuilder` with `#[derive(FromRow)]` (no
-   compile-time macros), so building this crate never needs a database.
+2. **Same results as Remix, not necessarily the same SQL or shape.** Start
+   from the old query and keep what it returns (rows, filters, counts); clean
+   up the SQL and the JSON shape where that makes a better resource (see
+   [Designing a route](#designing-a-route)), and adapt in the frontend's
+   `app/lib/api/<domain>.ts`. Use runtime `sqlx::query_as` / `QueryBuilder`
+   with `#[derive(FromRow)]` (no compile-time macros), so building this crate
+   never needs a database.
 3. **Always scope by `user.company_id`** from the auth extractor, including
    lookups by ids the client sends (Remix trusted ids it had just queried
    itself; the API cannot).
 4. **Keep the composition in the frontend.** The pure "rows -> page data"
-   code moves from the Remix loader into a client-safe module that the new
-   client loader calls.
+   code (sorting for display, grouping, merging two endpoints) moves from the
+   Remix loader into the page or a client-safe module.
 5. **Match wire types.** Remix sent mysql2 values: `Date` for timestamps,
    strings for `DECIMAL`, numbers for `COUNT`. The API sends ISO strings
-   (`serde_helpers::js_date`), `CAST(... AS CHAR)` for decimals, `i64` for counts;
-   the client loader converts ISO strings back to `Date`.
+   (`serde_helpers::js_date`), `CAST(... AS CHAR)` for decimals, `i64` for counts,
+   `bool` for flags; the frontend adapter converts where the page needs the
+   old type (e.g. ISO strings back to `Date`).
 6. **Errors become status codes.** Remix's `selectMany` swallowed SQL errors
    and returned `[]`; the API returns 500. Invalid params return 400.
 7. **Tests are the proof.** The old loader is deleted in the same change, so
    `tests/<domain>.rs` must cover every branch of the old SQL against seeded
    data: exact JSON for at least one row per response shape, each filter,
-   NULL/deleted rows, tenant isolation, and the auth cases.
+   NULL/deleted rows, tenant isolation, and the auth cases. The page itself is
+   pinned by Playwright tests in the frontend repo (`e2e/`), written and run
+   against the Remix page before migrating it.
 8. **Document it for agents.** AI agents call this API from the OpenAPI spec
    alone, so every route is described well enough to use without reading
    the code. See [OpenAPI](#openapi) below; `tests/openapi.rs` fails on
@@ -93,10 +211,54 @@ is migrated, following the same four files.
 3. For each read: add a function in `queries.rs`, a handler with
    `#[utoipa::path]`, `.routes(routes!(handlers::name))` in the domain
    `mod.rs`, and tests. `make api-openapi`, then `make api-test`.
-4. Frontend: add typed callers in `app/lib/api/<domain>.ts`, move the
-   composition into a client-safe module, replace the route's `loader` with a
-   `clientLoader`, and delete the old loader code. See
-   `docs/backend-migration.md` in that repo.
+4. Frontend: add typed callers in `app/lib/api/<domain>.ts`, fetch them with
+   React Query in the page, delete the route's `loader`, and prove the page
+   unchanged with the Playwright suite. See `docs/backend-migration.md` in
+   that repo; it is the full runbook.
+
+## Designing a route
+
+The Remix loaders were written page by page; the API is designed resource by
+resource. Keep the behaviour (tests prove it), not the shape:
+
+- **Resources, not pages.** `GET /v1/stones`, not `GET /v1/employee-stones-page`.
+  Unrelated reads a loader bundled become separate endpoints.
+- **API names for params.** `include_sold_out=true` (not the page's
+  `show_sold_out`), `supplier_id` (not `supplier`). The frontend maps its URL
+  filters to these (`stonesListParams` in `app/lib/api/stones.ts`).
+- **Lists as repeated keys.** `?type=granite&type=quartz&color_id=2`. Take them
+  with `MultiQuery<T>` (`Vec<String>` / `Vec<i32>` fields with
+  `#[serde(default)]`); `axum::extract::Query` cannot. Malformed values are a
+  JSON 400 (`invalid query string: ...`). Use `#[param(rename = "type")]`
+  next to `#[serde(rename = "type")]` so the spec shows the wire name.
+- **Honest types.** Flags are booleans (`COALESCE(col, 0) AS col` decodes as
+  `bool`), `DECIMAL` is a string (`CAST(col AS CHAR)`), counts are `i64`, and
+  related numbers can be grouped (`Stone.slabs` via `#[sqlx(flatten)]`).
+- **Deterministic order.** Always end `ORDER BY` with the primary key.
+
+## Seed data
+
+`seed/local_seed.sql` is shared by the Rust tests, the frontend's Playwright
+tests (`e2e/` in general_datebase, which reset the docker DB with
+`make api-db-reset`) and local dev. Append only; ids by range:
+
+| Range       | Rows                                                        |
+|-------------|-------------------------------------------------------------|
+| 100-106     | companies 100/101, users, sessions `aaaaaaaa-...-000000000<user id>` |
+| 300-302     | suppliers                                                   |
+| 1000+, 2000 | customers (2000 = company 101)                              |
+| 3000-3009, 4000 | stones (4000 = company 101)                             |
+| 3100-3107   | sink types (3106 = company 101)                             |
+| 3200-3205   | faucet types (3205 = company 101)                           |
+| 5000+       | customer emails                                             |
+| 6000+       | slabs; 6100+ sink units; 6200+ faucet units                 |
+| 7000-7003, 7010-7012 | sales (7010-7012 for the slabs dialog / sale forms)  |
+| 3010, 6070-6077 | stone Taj Mahal (hidden) and its slabs                  |
+| 6109-6111   | sink units installed on slab 6071                           |
+| 100-104     | stone types; installed photos of stones, sinks and faucets  |
+| 9000-9006   | post-installation checklists (9006 = company 101)           |
+
+Changing an existing row breaks assertions in both repos; add a new row.
 
 ## OpenAPI
 
@@ -186,9 +348,74 @@ curl -H "Cookie: $C" -H 'content-type: application/json' \
 
 ## Deploying
 
-`make deploy-api` creates/updates the `granite-api` Lambda. It needs these
-environment variables: `DATABASE_URL`, `SESSION_SECRET` (same as Remix),
-optionally `API_ALLOWED_ORIGINS`. Expose it on `api.granite-manager.com`
-(CloudFront or an API Gateway custom domain in front of the function URL) so
-the session cookie is sent; then set `VITE_GRANITE_API_URL` in the frontend's
-`.env.prod` (pages that use the API do not work without it).
+```
+make build <api|webhooks|time-triggered>
+make deploy <api|webhooks|time-triggered> <dev|prod>
+```
+
+`make deploy` builds the binary and uploads it to the Lambda for that app and
+environment (`granite-api`, `granite-api-dev`, `granite-webhooks`,
+`granite-webhooks-dev`, `time-triggered`; there is no dev time-triggered). It
+creates the Lambda when it does not exist and never changes its environment
+variables.
+
+Production `granite-api` needs `DATABASE_URL`, `SESSION_SECRET` (same as
+Remix), optionally `API_ALLOWED_ORIGINS`, and is served on
+`api.granite-manager.com` (CloudFront in front of the function URL) so the
+session cookie is sent.
+
+## Streaming deployment
+
+`granite-api-stream` runs the same binary with `LAMBDA_RESPONSE_STREAMING=1`
+behind a `RESPONSE_STREAM` function URL (15 min timeout, 1 GB). `make deploy api
+prod` updates it with `granite-api`; its environment is `granite-api`'s plus
+that flag, so copy any new variable to both. The browser reaches it at
+`https://stream.granite-manager.com` (`infra/api-domain.yaml`, stack
+`granite-api-stream`, us-east-1; CloudFront waits up to 60 s between bytes).
+`time-triggered` starts the supplier files job on its function URL directly
+(`API_STREAM_URL`), so a long run is not cut by CloudFront.
+
+## Scheduled jobs and webhooks
+
+`time-triggered` (every minute) posts to `<API_URL>/v1/jobs/*` with
+`Authorization: <LAMBDA_KEY>`, the API's `LAMBDA_KEY`. `webhooks` asks the API
+whether a called customer answered (`<API_URL>/v1/followups/call-check`, same
+key); the API sends mail and texts through `webhooks` (`WEBHOOKS_URL`, and
+`WEBHOOKS_KEY` = the webhooks Lambda's `REMIX_KEY`).
+
+## Dev environment
+
+`granite-api-dev`, `granite-api-stream-dev` and `granite-webhooks-dev` never touch
+production:
+
+- `DATABASE_URL` points at the `duplicate` database, never `main`.
+- `granite-api-stream-dev` is `granite-api-dev`'s environment plus
+  `LAMBDA_RESPONSE_STREAMING=1` behind a `RESPONSE_STREAM` function URL (15 min,
+  1 GB). The dev site has no stream host of its own: `POST /v1/ai/chat` and
+  `POST /v1/ai/design` on `api-dev.granite-manager.com` are routed to it by the
+  CloudFront distribution (60 s between bytes), so the session cookie reaches it.
+  Without that, a long AI answer on dev hits `granite-api-dev`'s 30 s limit.
+- Their secrets (`SESSION_SECRET`, `LAMBDA_KEY`, `REMIX_KEY`/`WEBHOOKS_KEY`,
+  `WEBHOOK_SECRET`) are their own.
+- `SESSION_COOKIE_DOMAIN=none`: the dev session cookie is host-only on
+  `api-dev.granite-manager.com`, so signing in on dev never replaces the
+  production cookie on `.granite-manager.com`. The browser then sends both
+  `__session` cookies to dev; the API uses the one that verifies.
+- No `AES_KEY`: the integration tokens copied into `duplicate` (QuickBooks,
+  RingCentral) stay unreadable, so dev cannot refresh production's tokens.
+  CloudTalk, RingCentral, QuickBooks, Calendly and Telegram are not configured.
+- Files go to `granite-storage-dev-<account>` (us-east-1) through the
+  `granite-storage-dev` IAM user, which can reach only that bucket.
+
+`infra/dev-api.yaml` (stack `granite-api-dev`, us-east-1) holds the dev bucket,
+its IAM user, and CloudFront + certificate + DNS for
+`https://api-dev.granite-manager.com` in front of the function URL:
+
+```
+aws cloudformation deploy --region us-east-1 --stack-name granite-api-dev \
+  --template-file infra/dev-api.yaml --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides FunctionUrlDomain=<granite-api-dev function URL host> \
+  StreamFunctionUrlDomain=<granite-api-stream-dev function URL host>
+```
+
+The frontend's `make deploy-dev` builds against `api-dev.granite-manager.com`.

@@ -68,6 +68,13 @@ fn every_operation_is_documented() {
         for method in METHODS {
             let Some(op) = item.get(method) else { continue };
             let at = format!("{} {path}", method.to_uppercase());
+            // The showroom, signing in and third parties' webhooks (signed
+            // by the sender) are public: no session, so no security and no 401.
+            let public = path.starts_with("/v1/public/")
+                || path.starts_with("/v1/webhooks/")
+                || path == "/v1/auth/login"
+                || path == "/v1/auth/logout"
+                || path.starts_with("/v1/auth/password-reset");
 
             match op["operationId"].as_str() {
                 // The default is the handler's name (`list`); tools need `list_customers`.
@@ -91,7 +98,11 @@ fn every_operation_is_documented() {
             if op["tags"].as_array().is_none_or(Vec::is_empty) {
                 problems.push(format!("{at}: missing `tag`"));
             }
-            if op["security"].as_array().is_none_or(Vec::is_empty) {
+            if public {
+                if op["security"].as_array().is_some_and(|s| !s.is_empty()) {
+                    problems.push(format!("{at}: public routes take no session"));
+                }
+            } else if op["security"].as_array().is_none_or(Vec::is_empty) {
                 problems.push(format!(
                     "{at}: missing `security((\"session_cookie\" = []))`"
                 ));
@@ -105,10 +116,14 @@ fn every_operation_is_documented() {
                 }
             }
             let responses = op["responses"].as_object();
-            if !responses.is_some_and(|r| r.keys().any(|code| code.starts_with('2'))) {
+            // A redirect is the answer of routes made for `<img>` (previews).
+            if !responses.is_some_and(|r| {
+                r.keys()
+                    .any(|code| code.starts_with('2') || code.starts_with('3'))
+            }) {
                 problems.push(format!("{at}: no success response"));
             }
-            if !responses.is_some_and(|r| r.contains_key("401")) {
+            if !public && !responses.is_some_and(|r| r.contains_key("401")) {
                 problems.push(format!("{at}: no 401 response"));
             }
         }
@@ -130,10 +145,19 @@ fn every_schema_field_is_documented() {
 }
 
 /// Every property needs a description, except `$ref`s, whose target schema
-/// carries its own.
+/// carries its own. A nullable object (`Option<T>`) is a `oneOf` of the
+/// `$ref` and `null`, and utoipa puts the field's doc on the `$ref` member.
 fn check_properties(name: &str, schema: &Value, problems: &mut Vec<String>) {
     for (field, property) in schema["properties"].as_object().into_iter().flatten() {
-        if property.get("$ref").is_none() && !has_text(property.get("description")) {
+        let nullable_ref_documented = property["oneOf"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|member| member.get("$ref").is_some() && has_text(member.get("description")));
+        if property.get("$ref").is_none()
+            && !nullable_ref_documented
+            && !has_text(property.get("description"))
+        {
             problems.push(format!(
                 "schema `{name}`: field `{field}` has no doc comment"
             ));
