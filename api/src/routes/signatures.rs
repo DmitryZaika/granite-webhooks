@@ -330,7 +330,7 @@ struct RequestRow {
 }
 
 /// The URL of a `SignWell` document's signed PDF.
-async fn signwell_completed_pdf_url(
+pub(crate) async fn signwell_completed_pdf_url(
     state: &AppState,
     company_id: i32,
     document_id: &str,

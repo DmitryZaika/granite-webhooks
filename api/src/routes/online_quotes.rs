@@ -849,24 +849,26 @@ fn quote_items(prices: &Value, extras: &[String]) -> Vec<Value> {
         if items.iter().any(|i| key(name_of(i)) == key(extra)) {
             continue;
         }
-        items.push(match listed.iter().find(|o| key(name_of(o)) == key(extra)) {
-            Some(def) => price_list_item(def),
-            None => json!({
-                "id": new_id("item"),
-                "kind": "misc",
-                "areaId": null,
-                "name": extra,
-                "option": null,
-                "catalogId": null,
-                "optionId": null,
-                "quantity": 1,
-                "amount": null,
-                "price": null,
-                "hideOnQuote": false,
-                "allowDiscount": true,
-                "taxable": true,
-            }),
-        });
+        items.push(
+            match listed.iter().find(|o| key(name_of(o)) == key(extra)) {
+                Some(def) => price_list_item(def),
+                None => json!({
+                    "id": new_id("item"),
+                    "kind": "misc",
+                    "areaId": null,
+                    "name": extra,
+                    "option": null,
+                    "catalogId": null,
+                    "optionId": null,
+                    "quantity": 1,
+                    "amount": null,
+                    "price": null,
+                    "hideOnQuote": false,
+                    "allowDiscount": true,
+                    "taxable": true,
+                }),
+            },
+        );
     }
     items
 }
@@ -883,7 +885,9 @@ async fn checked_extras(
         let found = offered
             .iter()
             .find(|o| key(o) == key(pick))
-            .ok_or_else(|| bad("One of your extras is no longer offered. Go back and check them."))?;
+            .ok_or_else(|| {
+                bad("One of your extras is no longer offered. Go back and check them.")
+            })?;
         if !extras.contains(found) {
             extras.push(found.clone());
         }
@@ -1018,7 +1022,14 @@ pub async fn prices(
     company_of(&state.pool, company_id).await?;
     let (offer, colors, sinks) = ready_offer(&state.pool, company_id).await?;
     let extras = checked_extras(&state.pool, company_id, &input.extras).await?;
-    let drawing = build_drawing(&offer, &colors, &sinks, &input.pieces, &input.colors, &extras)?;
+    let drawing = build_drawing(
+        &offer,
+        &colors,
+        &sinks,
+        &input.pieces,
+        &input.colors,
+        &extras,
+    )?;
     let (prices, _) = price_drawing(&offer, &drawing)?;
     Ok(Json(OnlinePrices { prices }))
 }
@@ -1591,7 +1602,14 @@ pub async fn create(
     let company = company_of(&state.pool, company_id).await?;
     let (offer, colors, sinks) = ready_offer(&state.pool, company_id).await?;
     let extras = checked_extras(&state.pool, company_id, &input.extras).await?;
-    let drawing = build_drawing(&offer, &colors, &sinks, &input.pieces, &input.colors, &extras)?;
+    let drawing = build_drawing(
+        &offer,
+        &colors,
+        &sinks,
+        &input.pieces,
+        &input.colors,
+        &extras,
+    )?;
     let (prices, totals) = price_drawing(&offer, &drawing)?;
     throttle(&state.pool, company_id, &email).await?;
 

@@ -23,6 +23,11 @@ use utoipa::ToSchema;
 
 pub const SIGNATURE_IMAGE_PREFIX: &str = "data:image/png;base64,";
 const SIGNATURE_IMAGE_MAX_LENGTH: usize = 300_000;
+/// Smallest checkmark box, points (`CHECKMARK_MIN_SIZE`).
+const CHECKMARK_MIN_SIZE: f64 = 6.0;
+/// A checkmark field holding this clears the box: white over what is
+/// printed there (a ☑ the form came with), then an empty ☐ (`UNCHECKED_VALUE`).
+const UNCHECKED_VALUE: &str = "☐";
 const MAX_FONT_SIZE: f32 = 11.0;
 const MIN_FONT_SIZE: f32 = 6.0;
 const LINE_GAP: f32 = 1.15;
@@ -35,7 +40,7 @@ const TEXT_COLOR: &str = "0.06 0.09 0.16 rg";
 /// filled (`value`), which is printed before it goes out.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SignatureField {
-    /// `signature`, `date`, `text` or `autofill_date_signed`.
+    /// `signature`, `date`, `text`, `autofill_date_signed` or `checkmark`.
     #[serde(rename = "type")]
     pub kind: FieldKind,
     /// From 1.
@@ -72,6 +77,10 @@ pub enum FieldKind {
     Date,
     Text,
     AutofillDateSigned,
+    /// A ✓ the sender puts on the document (e.g. on a printed ☐), or with
+    /// value `☐` an emptied box over a printed ☑; always printed before it
+    /// goes out, never the signer's.
+    Checkmark,
 }
 
 const PREFILL_KEYS: [&str; 11] = [
@@ -106,11 +115,18 @@ impl SignatureField {
     pub fn check(&self) -> Result<(), &'static str> {
         let within =
             |value: f64, min: f64, max: f64| value.is_finite() && value >= min && value <= max;
+        // A checkmark sits on a small printed box.
+        let (min_width, min_height) = if self.kind == FieldKind::Checkmark {
+            (CHECKMARK_MIN_SIZE, CHECKMARK_MIN_SIZE)
+        } else {
+            (20.0, 12.0)
+        };
         if !(1..=500).contains(&self.page)
             || !within(self.x, 0.0, 2000.0)
             || !within(self.y, 0.0, 4000.0)
-            || !within(self.width, 20.0, 600.0)
-            || !within(self.height, 12.0, 200.0)
+            || !within(self.width, min_width, 600.0)
+            || !within(self.height, min_height, 200.0)
+            || (self.kind == FieldKind::Checkmark && self.trimmed_value().is_empty())
         {
             return Err("Invalid signature field");
         }
@@ -744,6 +760,13 @@ fn stamp(
         let Some(crop) = crop_box(doc, page) else {
             continue;
         };
+        if field.kind == FieldKind::Checkmark {
+            edit_for(edits, page)
+                .ops
+                .extend_from_slice(checkmark_ops(field, crop, geometry.as_ref()).as_bytes());
+            stamped += 1;
+            continue;
+        }
         if field.kind == FieldKind::Signature {
             let Some(image) = signature_png(field.value.as_deref().unwrap_or(""))
                 .and_then(|bytes| Image::decode(&bytes))
@@ -878,6 +901,57 @@ fn stamp(
         stamped += 1;
     }
     Ok(stamped)
+}
+
+/// A ✓ stroked inside the field's square: from the left middle down to the
+/// bottom third, then up to the top right. An unchecked one (`☐`) whites out
+/// the field and draws an empty box instead.
+fn checkmark_ops(
+    field: &SignatureField,
+    crop: (f64, f64, f64, f64),
+    geometry: Option<&Geometry>,
+) -> String {
+    let to_pdf =
+        |x: f64, y: f64| geometry.map_or((crop.0 + x, crop.1 + crop.3 - y), |g| g.to_pdf(x, y));
+    // Points (top-left page space) joined by lines.
+    let path = |points: &[(f64, f64)]| {
+        let mut ops = String::new();
+        for (i, &(x, y)) in points.iter().enumerate() {
+            let (x, y) = to_pdf(x, y);
+            let _ = writeln!(
+                ops,
+                "{} {} {}",
+                fmt(x),
+                fmt(y),
+                if i == 0 { "m" } else { "l" }
+            );
+        }
+        ops
+    };
+    let side = field.width.min(field.height);
+    let left = field.x + (field.width - side) / 2.0;
+    let top = field.y + (field.height - side) / 2.0;
+    let at = |dx: f64, dy: f64| (left + side * dx, top + side * dy);
+    if field.trimmed_value() == UNCHECKED_VALUE {
+        // White over the whole field hides the mark printed there, then an empty box.
+        let (x, y, w, h) = (field.x, field.y, field.width, field.height);
+        return format!(
+            "q\n1 1 1 rg\n{}h\nf\n0.06 0.09 0.16 RG\n{} w\n0 J\n0 j\n{}h\nS\nQ\n",
+            path(&[(x, y), (x + w, y), (x + w, y + h), (x, y + h)]),
+            fmt((side * 0.07).max(0.5)),
+            path(&[
+                at(0.12, 0.12),
+                at(0.88, 0.12),
+                at(0.88, 0.88),
+                at(0.12, 0.88)
+            ]),
+        );
+    }
+    format!(
+        "q\n0.06 0.09 0.16 RG\n{} w\n1 J\n1 j\n{}S\nQ\n",
+        fmt((side * 0.14).max(0.8)),
+        path(&[at(0.15, 0.55), at(0.4, 0.8), at(0.88, 0.18)]),
+    )
 }
 
 fn save(doc: &mut Document) -> Result<Vec<u8>, PdfSigningError> {
@@ -1535,5 +1609,41 @@ mod tests {
         assert_eq!(g.to_pdf(10.0, 20.0), (20.0, 10.0));
         let g = Geometry { rotation: 0, ..g };
         assert_eq!(g.to_pdf(10.0, 20.0), (10.0, 772.0));
+    }
+
+    fn checkmark(size: f64, value: Option<&str>) -> SignatureField {
+        SignatureField {
+            kind: FieldKind::Checkmark,
+            page: 1,
+            x: 100.0,
+            y: 50.0,
+            width: size,
+            height: size,
+            required: false,
+            value: value.map(str::to_string),
+            prefill: None,
+            label: None,
+            id: None,
+        }
+    }
+
+    #[test]
+    fn a_checkmark_is_small_and_always_printed() {
+        assert!(checkmark(10.0, Some("✓")).check().is_ok());
+        assert!(checkmark(10.0, Some("✓")).is_stamped());
+        // Never left for the signer.
+        assert!(checkmark(10.0, None).check().is_err());
+        assert!(checkmark(4.0, Some("✓")).check().is_err());
+        // Stroked inside its box: x 100..110, y 50..60 from the top of a 792pt page.
+        let ops = checkmark_ops(&checkmark(10.0, Some("✓")), (0.0, 0.0, 612.0, 792.0), None);
+        assert!(ops.contains("101.5 736.5 m"), "{ops}");
+        assert!(ops.contains("108.8 740.2 l\nS"), "{ops}");
+        // Unchecked: the field filled white, then an empty box inside it.
+        let ops = checkmark_ops(&checkmark(10.0, Some("☐")), (0.0, 0.0, 612.0, 792.0), None);
+        assert!(
+            ops.contains("1 1 1 rg\n100 742 m\n110 742 l\n110 732 l\n100 732 l\nh\nf"),
+            "{ops}"
+        );
+        assert!(ops.contains("101.2 740.8 m"), "{ops}");
     }
 }

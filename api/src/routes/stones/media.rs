@@ -6,7 +6,6 @@ use super::schemas::StoneRef;
 use crate::auth::{AdminUser, EmployeeUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
-use crate::routes::slabs::queries::bundle_taken;
 use crate::routes::uploads::{self, schemas::UploadFolder};
 use crate::state::AppState;
 use axum::Json;
@@ -680,11 +679,6 @@ pub async fn add_slab(
     .fetch_optional(&mut *tx)
     .await?;
     let (stone_length, stone_width) = stone.ok_or(ApiError::NotFound)?;
-    if bundle_taken(&mut *tx, id, &bundle, None).await? {
-        return Err(ApiError::BadRequest(format!(
-            "Slab number {bundle} is already used on this stone"
-        )));
-    }
     let (mut length, mut width) = (body.length.unwrap_or(0.0), body.width.unwrap_or(0.0));
     if length == 0.0 && width == 0.0 {
         length = f64::from(stone_length.unwrap_or(0.0));
