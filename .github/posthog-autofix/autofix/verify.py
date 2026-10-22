@@ -100,9 +100,11 @@ def _fix(inputs: Inputs, session: Session, outcome: str, target: str) -> Report:
             )
     for note in errors:
         session.log(f"contract: {note}")
+    notes: list[str] = []
     if not errors:
         commits = [commit.sha for commit in contract.commits]
-        errors = _execute_checks(inputs, session, git, target, outcome, base, commits)
+        checked = _execute_checks(inputs, session, git, target, outcome, base, commits)
+        errors, notes = checked.errors, checked.notes
     if errors:
         verification = "unverified"
     else:
@@ -111,7 +113,8 @@ def _fix(inputs: Inputs, session: Session, outcome: str, target: str) -> Report:
     return Report(
         conclusion="completed",
         verification=verification,
-        notes=_join(errors),
+        # Errors first: the notes are trimmed from the end.
+        notes=_join(errors + notes),
         publish=contract.publishable,
         target_repo=target,
         base_sha=base,
@@ -127,25 +130,27 @@ def _execute_checks(
     outcome: str,
     base: str,
     commits: list[str],
-) -> list[str]:
+) -> gates.GateResult:
     """Red/green and the repo's gates; leaves the fix commit checked out."""
     fix = commits[-1]
     branch = git.current_branch()
-    errors: list[str] = []
+    result = gates.GateResult()
     try:
         if outcome == "fixed_with_test":
-            errors += _red_green(inputs, session, git, target, commits[0], fix)
-        errors += _gates(session, git, target, base, fix)
+            result.errors += _red_green(inputs, session, git, target, commits[0], fix)
+        checked = _gates(session, git, target, base, fix)
+        result.errors += checked.errors
+        result.notes += checked.notes
     except OutOfTime as error:
-        errors.append(str(error))
+        result.errors.append(str(error))
     except GitError as error:
-        errors.append(f"git: {error}")
+        result.errors.append(f"git: {error}")
     finally:
         try:
             git.checkout(branch or fix)
         except GitError as error:
-            errors.append(f"git: could not return to the fix commit: {error}")
-    return errors
+            result.errors.append(f"git: could not return to the fix commit: {error}")
+    return result
 
 
 def _red_green(
@@ -183,15 +188,18 @@ def _red_green(
     return errors
 
 
-def _gates(session: Session, git: Git, target: str, base: str, fix: str) -> list[str]:
+def _gates(session: Session, git: Git, target: str, base: str, fix: str) -> gates.GateResult:
     git.checkout_detached(fix)
     touched = git.files_between(base, fix, existing_only=True)
     if target == "general_datebase":
-        return gates.datebase_gates(session, git.repo, touched)
+        return gates.datebase_gates(session, git, base, fix, touched)
     return gates.webhooks_gates(session, git, base, fix, touched)
 
 
 def _join(notes: list[str]) -> str | None:
     if not notes:
         return None
-    return proc.tail("\n".join(notes), _NOTES_LIMIT)
+    text = "\n".join(notes)
+    if len(text) <= _NOTES_LIMIT:
+        return text
+    return text[: _NOTES_LIMIT - 1] + "…"

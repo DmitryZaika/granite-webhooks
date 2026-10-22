@@ -52,6 +52,7 @@ class Session:
         cwd: Path,
         cap_seconds: float,
         env_extra: Mapping[str, str] | None = None,
+        merge_output: bool = False,
     ) -> proc.Completed:
         remaining = self.deadline - self.clock()
         if remaining < _MIN_SECONDS:
@@ -63,6 +64,7 @@ class Session:
             timeout=min(cap_seconds, remaining),
             env={**QUIET_ENV, **(env_extra or {})},
             run_as=self.run_as,
+            merge_output=merge_output,
         )
         completed = proc.Completed(
             completed.argv,

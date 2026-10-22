@@ -91,7 +91,9 @@ def render(inputs: BodyInputs) -> str:
 def _test_section(test: dict[str, Any]) -> str:
     if test["status"] == "written":
         files = "\n".join(test["files"]) or "(none listed)"
-        section = f"Command:\n\n{code_block(test['command'] or '')}\n\nFiles:\n\n{code_block(files)}"
+        section = (
+            f"Command:\n\n{code_block(test['command'] or '')}\n\nFiles:\n\n{code_block(files)}"
+        )
         if test.get("manual_test_steps"):
             section += f"\n\n**Check it in the app:**\n\n{escape(test['manual_test_steps'])}"
         return section

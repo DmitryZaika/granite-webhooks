@@ -70,11 +70,13 @@ def run(
     timeout: float,
     env: Mapping[str, str] | None = None,
     run_as: RunAs | None = None,
+    merge_output: bool = False,
 ) -> Completed:
     """Runs `argv` in `cwd`, stopping it and everything it started on timeout.
 
     `env` holds variables to set on top of the baseline: this process's
     environment, or with `run_as` only `run_as.env` (sudo resets the rest).
+    `merge_output` interleaves stderr into stdout in the order written.
     """
     if run_as is None:
         full_argv = list(argv)
@@ -90,7 +92,7 @@ def run(
         env=popen_env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT if merge_output else subprocess.PIPE,
         text=True,
         errors="replace",
         start_new_session=True,
@@ -102,7 +104,7 @@ def run(
         timed_out = True
         _stop(process, run_as)
         stdout, stderr = process.communicate()
-    return Completed(tuple(argv), process.returncode, stdout, stderr, timed_out)
+    return Completed(tuple(argv), process.returncode, stdout, stderr or "", timed_out)
 
 
 def _stop(process: subprocess.Popen[str], run_as: RunAs | None) -> None:

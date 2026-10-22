@@ -43,9 +43,9 @@ class RecordingRunner:
     def __init__(self) -> None:
         self.calls: list[tuple[str, ...]] = []
 
-    def __call__(self, argv, cwd, timeout, env=None, run_as=None) -> proc.Completed:
+    def __call__(self, argv, cwd, timeout, **options) -> proc.Completed:
         self.calls.append(tuple(argv))
-        return proc.run(argv, cwd=cwd, timeout=timeout, env=env, run_as=run_as)
+        return proc.run(argv, cwd=cwd, timeout=timeout, **options)
 
 
 @unittest.skipUnless(HAS_CARGO, "cargo and clippy are needed")
@@ -69,8 +69,9 @@ class VerifyTest(unittest.TestCase):
         other = init_repo(self.workspace / "general_datebase")
         self.base_shas = {"general_datebase": commit(other, "init", {"README.md": "spa\n"})}
 
-    def make_base(self, source: str) -> None:
+    def make_base(self, source: str, extra: dict[str, str] | None = None) -> None:
         files = {
+            **(extra or {}),
             "Cargo.toml": WORKSPACE_TOML,
             "toy/Cargo.toml": CRATE_TOML,
             "toy/src/lib.rs": source,
@@ -146,6 +147,32 @@ class VerifyTest(unittest.TestCase):
         report, _ = self.run_verify(sample_result())
         self.assertEqual(report.verification, "unverified")
         self.assertIn("new warning", report.notes or "")
+
+    def test_a_test_already_failing_on_main_does_not_count(self) -> None:
+        legacy = {"toy/tests/legacy.rs": "#[test]\nfn broken_on_main() {\n    assert!(false);\n}\n"}
+        self.make_base(BUGGY, legacy)
+        commit(self.repo, "test: reproduce", {"toy/src/lib.rs": with_test(BUGGY)})
+        commit(self.repo, "fix: add", {"toy/src/lib.rs": with_test(FIXED)})
+        report, runner = self.run_verify(sample_result())
+        self.assertEqual(report.verification, "verified", report.notes)
+        self.assertIn("broken_on_main (--test legacy)", report.notes or "")
+        self.assertIn("pre-existing on main", report.notes or "")
+        rerun = ("cargo", "test", "--no-fail-fast", "-p", "toy", "--test", "legacy",
+                 "--", "--exact", "broken_on_main")  # fmt: skip
+        self.assertIn(rerun, runner.calls)
+
+    def test_a_fix_that_breaks_another_test_is_unverified(self) -> None:
+        # Passes on the buggy base, where add(2, 2) == 0.
+        twice = {
+            "toy/tests/twice.rs": "#[test]\nfn doubles() {\n    assert_eq!(toy::add(2, 2), 0);\n}\n"
+        }
+        self.make_base(BUGGY, twice)
+        commit(self.repo, "test: reproduce", {"toy/src/lib.rs": with_test(BUGGY)})
+        commit(self.repo, "fix: add", {"toy/src/lib.rs": with_test(FIXED)})
+        report, _ = self.run_verify(sample_result())
+        self.assertEqual(report.verification, "unverified")
+        self.assertIn("1 test(s) fail on the fix: doubles (--test twice)", report.notes or "")
+        self.assertNotIn("pre-existing", report.notes or "")
 
     def test_wrong_commit_count_is_unverified_without_running(self) -> None:
         self.make_base(BUGGY)

@@ -1,11 +1,25 @@
-"""Reading test and clippy output."""
+"""Reading test and clippy output, and the general_datebase checks."""
 
 import json
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
 
-import helpers  # noqa: F401  (puts the package on sys.path)
+from helpers import commit, git, init_repo
 
-from autofix.gates import clippy_warnings, failed_for_the_right_reason, passed, touched_crates
+from autofix.gates import (
+    PREEXISTING,
+    GateResult,
+    clippy_warnings,
+    datebase_gates,
+    failed_for_the_right_reason,
+    passed,
+    touched_crates,
+)
+from autofix.git import Git
+from autofix.proc import Completed
+from autofix.session import Session
 
 VITEST_FAILED = """
  FAIL  app/utils/phone.test.ts > canonicalPhone10 > strips a leading 1
@@ -104,6 +118,67 @@ class CratesTest(unittest.TestCase):
         }
         touched = ["api/src/sms.rs", "test-db/macros/src/lib.rs", "README.md", "migrations/x.sql"]
         self.assertEqual(touched_crates(crates, touched), ["api", "test-db-macros"])
+
+
+class DatebaseGatesTest(unittest.TestCase):
+    """The checks run for real git checkouts; the commands are faked."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.repo = init_repo(self.tmp / "general_datebase")
+        self.base = commit(self.repo, "base", {"app/old.ts": "export const a = 1\n"})
+        self.fix = commit(
+            self.repo, "fix", {"app/old.ts": "export const a = 2\n", "app/new.ts": "x\n"}
+        )
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def runner(self, failing: dict[str, set[str]]):
+        """Fails a command on the commits named in `failing[command]`."""
+
+        def run(argv, cwd, timeout, **options) -> Completed:
+            head = git(cwd, "rev-parse", "HEAD")
+            commit_name = "base" if head == self.base else "fix"
+            self.calls.append((commit_name, tuple(argv)))
+            name = " ".join(argv[:3])
+            code = 1 if commit_name in failing.get(name, set()) else 0
+            return Completed(tuple(argv), code, f"{name} output on {commit_name}", "", False)
+
+        return run
+
+    def gates(self, failing: dict[str, set[str]]) -> GateResult:
+        session = Session.start(self.runner(failing), 600)
+        touched = ["app/old.ts", "app/new.ts"]
+        return datebase_gates(session, Git(self.repo), self.base, self.fix, touched)
+
+    def test_all_pass_without_touching_the_base(self) -> None:
+        result = self.gates({})
+        self.assertEqual((result.errors, result.notes), ([], []))
+        self.assertTrue(all(commit_name == "fix" for commit_name, _ in self.calls))
+
+    def test_failing_on_main_too_is_a_note(self) -> None:
+        result = self.gates({"bunx tsc -b": {"fix", "base"}, "bun run build": {"fix"}})
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn("`bun run build` failed (exit 1)", result.errors[0])
+        self.assertIn("bun run build output on fix", result.errors[0])
+        self.assertEqual(
+            result.notes, ["`bunx tsc -b` fails on the base too: " + PREEXISTING + "."]
+        )
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.fix)
+
+    def test_biome_on_the_base_lints_only_files_it_has(self) -> None:
+        result = self.gates({"bunx biome check": {"fix", "base"}})
+        base_biome = [argv for name, argv in self.calls if name == "base" and argv[1] == "biome"]
+        self.assertEqual(base_biome[0][-1], "app/old.ts")
+        self.assertNotIn("app/new.ts", base_biome[0])
+        self.assertEqual(len(result.notes), 1)
+
+    def test_biome_on_files_new_to_the_fix_has_no_baseline(self) -> None:
+        self.fix = commit(self.repo, "only new", {"app/new2.ts": "y\n"})
+        session = Session.start(self.runner({"bunx biome check": {"fix", "base"}}), 600)
+        result = datebase_gates(session, Git(self.repo), self.base, self.fix, ["app/new2.ts"])
+        self.assertEqual(len(result.errors), 1)
+        self.assertFalse(any(name == "base" and argv[1] == "biome" for name, argv in self.calls))
 
 
 if __name__ == "__main__":

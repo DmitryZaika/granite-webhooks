@@ -81,6 +81,14 @@ class Git:
         out = self.run("diff", "--name-only", "-z", "--no-renames", *flags, base, head)
         return [path for path in out.split("\0") if path]
 
+    def existing_at(self, rev: str, paths: list[str]) -> list[str]:
+        """The `paths` that exist at `rev`, in their given order."""
+        if not paths:
+            return []
+        out = self.run("ls-tree", "-r", "--name-only", "-z", rev, "--", *paths)
+        present = set(out.split("\0"))
+        return [path for path in paths if path in present]
+
     def show(self, rev: str, path: str) -> str:
         """A file's content at `rev`, read from git's objects rather than the
         work tree (where it could be a symlink to anything)."""

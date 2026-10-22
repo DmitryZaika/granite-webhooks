@@ -59,6 +59,12 @@ class RunTest(unittest.TestCase):
             )
         self.assertEqual(completed.stdout.strip(), "1 2")
 
+    def test_merge_output_keeps_the_write_order(self) -> None:
+        script = "echo one; echo two >&2; echo three"
+        completed = proc.run(["/bin/sh", "-c", script], Path.cwd(), 10, merge_output=True)
+        self.assertEqual(completed.stdout.split(), ["one", "two", "three"])
+        self.assertEqual(completed.stderr, "")
+
     def test_timeout_stops_the_whole_group(self) -> None:
         marker = Path(tempfile.mkdtemp()) / "survived"
         script = f"(sleep 2; touch {marker}) & sleep 30"
