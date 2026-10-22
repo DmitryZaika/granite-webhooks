@@ -1,3 +1,7 @@
+use std::sync::LazyLock;
+
+use regex::Regex;
+
 pub const TELEGRAM_SENT_MARKER: &str = "__telegram_sent__";
 
 const ACTIVITY_ICON: &str = "📋";
@@ -163,11 +167,45 @@ fn wrap_preview_lines(value: &str, max_lines: usize) -> String {
     lines.join("\n")
 }
 
+/// "On Wed, Oct 21, 2026 at 6:14 PM <dema@example.com> wrote:" — Gmail, Apple
+/// Mail and Outlook mobile reply attribution. May be wrapped over several
+/// lines or follow the reply on the same line. A digit (date/time) is required
+/// so ordinary prose like "On second thought I wrote: ..." is kept.
+static ON_WROTE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)\bOn\s.{0,300}?\d.{0,300}?\swrote:").unwrap());
+
+/// Outlook desktop / other clients' quoted-history separators.
+static QUOTE_SEPARATOR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?im)^\s*(?:-{2,}\s*Original Message\s*-{2,}|_{10,}|From:[^\n]*\n\s*(?:Sent|Date):)",
+    )
+    .unwrap()
+});
+
+/// Returns only the new text of a reply: cuts everything from the quoted
+/// history ("On … wrote:", Outlook separators) and drops `>` quoted lines.
+fn strip_quoted_reply(body: &str) -> String {
+    let mut text = body;
+    if let Some(found) = ON_WROTE_RE.find(text) {
+        text = &text[..found.start()];
+    }
+    if let Some(found) = QUOTE_SEPARATOR_RE.find(text) {
+        text = &text[..found.start()];
+    }
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with('>'))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 fn email_body_preview(body: Option<&str>) -> Option<String> {
     let Some(raw) = body else {
         return None;
     };
-    let preview = wrap_preview_lines(raw, EMAIL_BODY_MAX_LINES);
+    let reply = strip_quoted_reply(raw);
+    let preview = wrap_preview_lines(&reply, EMAIL_BODY_MAX_LINES);
     if preview.is_empty() {
         return None;
     }
@@ -318,6 +356,55 @@ mod tests {
         assert!(subject.chars().count() <= TELEGRAM_LINE_CHARS * EMAIL_SUBJECT_MAX_LINES);
         assert!(name.ends_with("..."));
         assert!(subject.ends_with("..."));
+    }
+
+    #[test]
+    fn email_notification_hides_quoted_reply_history() {
+        let msg = format_email_notification(
+            Some("Craig Hogwood"),
+            Some("Re: Your countertop quote"),
+            Some(
+                "Is that installation included?\n\nOn Wed, Oct 21, 2026 at 6:14 PM <dema@granitedepotindy.com>\nwrote:\n\n> Hi Craig, here is your quote.",
+            ),
+            None,
+            "thread-4",
+        );
+        assert!(msg.text.ends_with("💬 <i>Is that installation included?</i>"));
+        assert!(!msg.text.contains("wrote"));
+    }
+
+    #[test]
+    fn strip_quoted_reply_handles_inline_attribution_and_outlook() {
+        assert_eq!(
+            strip_quoted_reply(
+                "Sounds good. On Oct 21, 2026, at 6:14 PM, Dema <dema@example.com> wrote: old"
+            ),
+            "Sounds good."
+        );
+        assert_eq!(
+            strip_quoted_reply("Thanks!\n\n-----Original Message-----\nFrom: Dema"),
+            "Thanks!"
+        );
+        assert_eq!(
+            strip_quoted_reply("Thanks!\nFrom: Dema <d@x.com>\nSent: Wednesday\nold"),
+            "Thanks!"
+        );
+        assert_eq!(
+            strip_quoted_reply("On second thought, I wrote: yes please."),
+            "On second thought, I wrote: yes please."
+        );
+    }
+
+    #[test]
+    fn email_notification_omits_preview_when_body_is_only_quote() {
+        let msg = format_email_notification(
+            Some("Jane"),
+            Some("Re: Quote"),
+            Some("On Wed, Oct 21, 2026 at 6:14 PM <dema@x.com> wrote:\n> old"),
+            None,
+            "thread-5",
+        );
+        assert_eq!(msg.text, "👤 <i><b>Jane</b></i>\n✉️ <b>Re: Quote</b>");
     }
 
     #[test]
