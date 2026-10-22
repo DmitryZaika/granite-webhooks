@@ -1,7 +1,8 @@
 //! Writing back to PostHog.
 //!
 //! Once a fix's pull request is open, its issue is assigned to whoever
-//! reviews AI fixes, so the issue list shows it has an owner. Off unless
+//! reviews AI fixes, so the issue list shows it has an owner. PostHog takes
+//! one assignee per issue, so several reviewers take turns by run. Off unless
 //! `POSTHOG_AUTOFIX_WRITE_KEY` (`error_tracking:write`) and
 //! `POSTHOG_AUTOFIX_ASSIGNEE` are both set.
 
@@ -49,8 +50,9 @@ fn is_uuid(id: &str) -> bool {
 pub trait IssueWriter: Sync {
     /// Whether write-back is configured at all.
     fn enabled(&self) -> bool;
-    /// Assigns the issue; an error is logged and retried on the next poll.
-    async fn assign(&self, issue_id: &str) -> Result<(), String>;
+    /// Assigns the issue of run `run_id`; an error is logged and retried on
+    /// the next poll.
+    async fn assign(&self, run_id: u64, issue_id: &str) -> Result<(), String>;
 }
 
 /// The PostHog REST API.
@@ -61,11 +63,14 @@ pub struct PostHogWriter<'a> {
 
 impl IssueWriter for PostHogWriter<'_> {
     fn enabled(&self) -> bool {
-        self.config.write_key.is_some() && self.config.assignee.is_some()
+        self.config.write_key.is_some() && !self.config.assignees.is_empty()
     }
 
-    async fn assign(&self, issue_id: &str) -> Result<(), String> {
-        let (Some(key), Some(assignee)) = (&self.config.write_key, &self.config.assignee) else {
+    async fn assign(&self, run_id: u64, issue_id: &str) -> Result<(), String> {
+        let (Some(key), Some(assignee)) = (
+            &self.config.write_key,
+            assignee_for(&self.config.assignees, run_id),
+        ) else {
             return Err("write-back is not configured".into());
         };
         let (url, body) = assign_request(self.config, issue_id, assignee);
@@ -85,6 +90,14 @@ impl IssueWriter for PostHogWriter<'_> {
         let excerpt: String = body.chars().take(200).collect();
         Err(format!("PostHog assign failed: {status} {excerpt}"))
     }
+}
+
+/// The reviewer whose turn run `run_id` is.
+pub fn assignee_for(assignees: &[Assignee], run_id: u64) -> Option<&Assignee> {
+    let count = u64::try_from(assignees.len())
+        .ok()
+        .filter(|count| *count > 0)?;
+    assignees.get(usize::try_from(run_id % count).ok()?)
 }
 
 /// `PATCH /api/projects/{project}/error_tracking/issues/{id}/assign/`, from
@@ -124,6 +137,15 @@ mod tests {
         ] {
             assert_eq!(Assignee::parse(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn reviewers_take_turns_by_run() {
+        let two = [Assignee::User(1), Assignee::User(2)];
+        assert_eq!(assignee_for(&two, 10), Some(&Assignee::User(1)));
+        assert_eq!(assignee_for(&two, 11), Some(&Assignee::User(2)));
+        assert_eq!(assignee_for(&two[..1], 11), Some(&Assignee::User(1)));
+        assert_eq!(assignee_for(&[], 11), None);
     }
 
     #[test]

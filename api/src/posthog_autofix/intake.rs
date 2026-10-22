@@ -423,7 +423,7 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         for (id, issue_id) in
             ledger::opened_unassigned(&mut *self.conn, since, ASSIGN_BATCH).await?
         {
-            if let Err(error) = self.deps.writer.assign(&issue_id).await {
+            if let Err(error) = self.deps.writer.assign(id, &issue_id).await {
                 self.failed(&format!("assign run {id}"), &error);
                 continue;
             }

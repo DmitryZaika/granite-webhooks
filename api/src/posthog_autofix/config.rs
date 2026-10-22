@@ -100,8 +100,8 @@ pub struct Config {
     pub callback_secret: Option<String>,
     /// Personal API key with `error_tracking:write`, for the write-back.
     pub write_key: Option<String>,
-    /// Who the PostHog issues of opened fixes are assigned to.
-    pub assignee: Option<Assignee>,
+    /// Who the PostHog issues of opened fixes are assigned to, in turn.
+    pub assignees: Vec<Assignee>,
 }
 
 impl Default for Config {
@@ -129,7 +129,7 @@ impl Default for Config {
             github_token: None,
             callback_secret: None,
             write_key: None,
-            assignee: None,
+            assignees: Vec::new(),
         }
     }
 }
@@ -161,7 +161,7 @@ impl fmt::Debug for Config {
             .field("github_token", &set(&self.github_token))
             .field("callback_secret", &set(&self.callback_secret))
             .field("write_key", &set(&self.write_key))
-            .field("assignee", &self.assignee)
+            .field("assignees", &self.assignees)
             .finish()
     }
 }
@@ -253,15 +253,21 @@ impl Config {
         config.github_token = read("GITHUB_TOKEN");
         config.callback_secret = read("CALLBACK_SECRET");
         config.write_key = read("WRITE_KEY");
-        config.assignee = read("ASSIGNEE").and_then(|value| {
-            Assignee::parse(&value).or_else(|| {
-                tracing::warn!(
-                    value,
-                    "POSTHOG_AUTOFIX_ASSIGNEE is not user:<id> or role:<uuid>"
-                );
-                None
-            })
-        });
+        if let Some(assignees) = read("ASSIGNEE") {
+            config.assignees = list(&assignees, [',', ';'])
+                .iter()
+                .filter_map(|value| {
+                    let parsed = Assignee::parse(value);
+                    if parsed.is_none() {
+                        tracing::warn!(
+                            value,
+                            "POSTHOG_AUTOFIX_ASSIGNEE entry is not user:<id> or role:<uuid>"
+                        );
+                    }
+                    parsed
+                })
+                .collect();
+        }
         config
     }
 
@@ -423,13 +429,13 @@ mod tests {
     }
 
     #[test]
-    fn write_back_needs_a_key_and_a_valid_assignee() {
-        let config = config(&[("WRITE_KEY", "phx_w"), ("ASSIGNEE", "user:42")]);
-        assert_eq!(config.assignee, Some(Assignee::User(42)));
+    fn write_back_takes_a_key_and_one_or_more_assignees() {
+        let config = config(&[("WRITE_KEY", "phx_w"), ("ASSIGNEE", "user:42, user:7")]);
+        assert_eq!(config.assignees, [Assignee::User(42), Assignee::User(7)]);
         assert!(!format!("{config:?}").contains("phx_w"));
-        assert_eq!(super::Config::from_lookup(|_| None).assignee, None);
-        let typo = config_with("ASSIGNEE", "dima");
-        assert_eq!(typo.assignee, None);
+        assert!(super::Config::from_lookup(|_| None).assignees.is_empty());
+        let typo = config_with("ASSIGNEE", "dima, user:7");
+        assert_eq!(typo.assignees, [Assignee::User(7)]);
     }
 
     fn config_with(name: &str, value: &str) -> Config {

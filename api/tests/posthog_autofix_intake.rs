@@ -147,7 +147,7 @@ impl IssueWriter for FakeWriter {
         self.enabled.load(Ordering::SeqCst)
     }
 
-    async fn assign(&self, issue_id: &str) -> Result<(), String> {
+    async fn assign(&self, _run_id: u64, issue_id: &str) -> Result<(), String> {
         if self.fail.load(Ordering::SeqCst) {
             return Err("PostHog assign failed: 503".into());
         }
