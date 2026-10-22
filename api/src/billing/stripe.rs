@@ -287,15 +287,18 @@ impl Stripe {
         .await
     }
 
-    /// A billing portal page; `payment_method_update` opens the card form.
+    /// A billing portal page with `configuration`; `payment_method_update`
+    /// opens the card form.
     pub async fn create_portal_session(
         &self,
         customer: &str,
+        configuration: &str,
         return_url: &str,
         payment_method_update: bool,
     ) -> Result<Value, StripeError> {
         let mut form = vec![
             ("customer", customer.to_string()),
+            ("configuration", configuration.to_string()),
             ("return_url", return_url.to_string()),
         ];
         if payment_method_update {
@@ -335,6 +338,97 @@ impl Stripe {
             )
             .await?;
         Ok(data(list))
+    }
+}
+
+impl Stripe {
+    /// The API base: one Stripe account per base, so per-container caches key on it.
+    pub fn base_url(&self) -> &str {
+        &self.base
+    }
+
+    /// Active billing portal configurations (up to 100).
+    pub async fn list_portal_configurations(&self) -> Result<Vec<Value>, StripeError> {
+        let list = self
+            .get(
+                "/v1/billing_portal/configurations",
+                &[("active", "true".into()), ("limit", "100".into())],
+            )
+            .await?;
+        Ok(data(list))
+    }
+
+    /// A portal configuration tagged `metadata[app] = tag`: cards, invoices and
+    /// customer details, but no cancelling or plan changes.
+    pub async fn create_portal_configuration(
+        &self,
+        name: &str,
+        tag: &str,
+    ) -> Result<Value, StripeError> {
+        self.post(
+            "/v1/billing_portal/configurations",
+            &[
+                ("name", name.into()),
+                ("metadata[app]", tag.into()),
+                ("features[payment_method_update][enabled]", "true".into()),
+                ("features[invoice_history][enabled]", "true".into()),
+                ("features[customer_update][enabled]", "true".into()),
+                (
+                    "features[customer_update][allowed_updates][0]",
+                    "email".into(),
+                ),
+                (
+                    "features[customer_update][allowed_updates][1]",
+                    "address".into(),
+                ),
+                (
+                    "features[customer_update][allowed_updates][2]",
+                    "name".into(),
+                ),
+                ("features[subscription_cancel][enabled]", "false".into()),
+                ("features[subscription_update][enabled]", "false".into()),
+            ],
+        )
+        .await
+    }
+
+    pub async fn price(&self, id: &str) -> Result<Value, StripeError> {
+        self.get(&format!("/v1/prices/{}", path_part(id)), &[])
+            .await
+    }
+
+    /// The invoice with its payment's confirmation secret for the browser.
+    pub async fn invoice_with_confirmation_secret(&self, id: &str) -> Result<Value, StripeError> {
+        self.get(
+            &format!("/v1/invoices/{}", path_part(id)),
+            &[("expand[]", "confirmation_secret".into())],
+        )
+        .await
+    }
+
+    /// The customer with its default card expanded.
+    pub async fn customer_with_default_payment_method(
+        &self,
+        id: &str,
+    ) -> Result<Value, StripeError> {
+        self.get(
+            &format!("/v1/customers/{}", path_part(id)),
+            &[("expand[]", "invoice_settings.default_payment_method".into())],
+        )
+        .await
+    }
+
+    /// Charges the subscription to `payment_method` from now on.
+    pub async fn set_subscription_payment_method(
+        &self,
+        id: &str,
+        payment_method: &str,
+    ) -> Result<Value, StripeError> {
+        self.post(
+            &format!("/v1/subscriptions/{}", path_part(id)),
+            &[("default_payment_method", payment_method.into())],
+        )
+        .await
     }
 }
 
@@ -500,6 +594,7 @@ pub fn invoice_snapshot(invoice: &Value) -> InvoiceSnapshot {
         hosted_invoice_url: text(&invoice["hosted_invoice_url"]),
         invoice_pdf: text(&invoice["invoice_pdf"]),
         paid_at: unix_date(&invoice["status_transitions"]["paid_at"]),
+        live_subscription_status: None,
     }
 }
 
@@ -553,7 +648,8 @@ pub fn normalize_event(event: &Value) -> Option<BillingEvent> {
 /// The event with Stripe's current state.
 ///
 /// Webhooks can arrive late or out of order. A failed invoice that has since been paid becomes `invoice.paid`;
-/// a voided one is dropped (`None`). Without a client the event is used as sent.
+/// a voided one is dropped (`None`). A paid invoice carries its subscription's live status, so it restores access
+/// only once no other invoice of it is unpaid. Without a client the event is used as sent.
 pub async fn latest_event(
     stripe: &Stripe,
     event: BillingEvent,
@@ -588,6 +684,20 @@ pub async fn latest_event(
                     invoice: invoice_snapshot(&live),
                 })),
             }
+        }
+        BillingEvent::Invoice {
+            id,
+            paid: true,
+            mut invoice,
+        } if invoice.subscription_id.is_some() => {
+            let subscription_id = invoice.subscription_id.as_deref().unwrap_or_default();
+            let live = stripe.subscription(subscription_id).await?;
+            invoice.live_subscription_status = live["status"].as_str().map(str::to_string);
+            Ok(Some(BillingEvent::Invoice {
+                id,
+                paid: true,
+                invoice,
+            }))
         }
         other => Ok(Some(other)),
     }

@@ -11,22 +11,22 @@
 //! action, and the root loader's billing gate.
 
 use crate::auth::{BillingManager, CurrentUser};
-use crate::billing::account::{self, Card};
-use crate::billing::machine::BillingNotice;
-use crate::billing::reactivation::{self, reactivation_plan};
+use crate::billing::account::{self, Card, PageInvoice, SyncOptions};
+use crate::billing::gate::{self, BillingNotice};
+use crate::billing::reactivation::{load_billing_plans, reactivation_plan};
 use crate::billing::store::{BillingStore, MySqlBillingStore};
 use crate::billing::{
-    BillingInvoice, CompanyBilling, MANAGER_POSITION, can_start_checkout, needs_new_subscription,
+    CompanyBilling, MANAGER_POSITION, can_start_checkout, needs_new_subscription,
 };
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::state::{AppState, origin_allowed};
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -54,10 +54,13 @@ pub struct BillingGate {
 
 /// Get the billing gate
 ///
-/// Whether the company's access is paused for an unpaid subscription
-/// (`restricted`: only the billing pages work) and whether managers see the
-/// past-due warning with the grace days left. Checks Stripe now and then
-/// (throttled); errors keep access.
+/// Whether the company's access is paused (`restricted`: other routes answer
+/// 402 `payment_required`, only billing, sign-in, the app shell, `GET /v1/me`
+/// and notifications work) and whether managers see a warning with the days
+/// left. `reason` says why: `payment_failed` (a payment failed, 7 days of
+/// grace) or `subscription_required` (payment was turned on and the company
+/// has not subscribed, 7 days to do so); `pauses_at` is when access pauses.
+/// Checks Stripe now and then (throttled); errors keep access.
 #[utoipa::path(
     get,
     path = "/v1/billing/gate",
@@ -74,8 +77,13 @@ pub async fn gate(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
 ) -> ApiResult<Json<BillingGate>> {
-    let notice =
-        reactivation::billing_gate(&state.stripe, &state.pool, user.company_id, user.id).await;
+    let notice = Box::pin(gate::billing_gate(
+        &state.stripe,
+        &state.pool,
+        user.company_id,
+        user.id,
+    ))
+    .await;
     let can_manage: bool = sqlx::query_scalar(
         "SELECT COUNT(*) > 0 FROM users_positions WHERE user_id = ? AND company_id = ? AND position_id = ?",
     )
@@ -94,7 +102,8 @@ pub struct Plan {
     pub price_id: String,
     /// Plan name to show.
     pub name: String,
-    /// Monthly price in cents, when configured.
+    /// Monthly price in cents: what Stripe charges for the price, else the
+    /// configured amount; null when neither is known.
     pub monthly_price_cents: Option<i64>,
 }
 
@@ -115,6 +124,9 @@ pub struct Subscription {
     pub current_period_end: Option<DateTime<Utc>>,
     /// Last successful payment (ISO 8601), or null.
     pub last_successful_payment_at: Option<DateTime<Utc>>,
+    /// When the payment of the current dunning cycle failed (ISO 8601); null
+    /// when no payment is failing.
+    pub failed_payment_at: Option<DateTime<Utc>>,
     /// Sum of open invoices, in cents.
     pub outstanding_balance_cents: i64,
 }
@@ -124,7 +136,11 @@ pub struct Subscription {
 pub struct Invoice {
     /// Stripe invoice id (`in_...`).
     pub stripe_invoice_id: String,
-    /// `paid` or `open`.
+    /// Stripe's invoice number to show (e.g. `GM-0001`); null when Stripe
+    /// could not be reached (the stored copy has none).
+    pub number: Option<String>,
+    /// `paid`, `open`, `void` or `uncollectible` (the stored copy, used when
+    /// Stripe cannot be reached, has `paid` and `open` only).
     pub status: String,
     /// What is still owed, in cents (0 once paid).
     pub amount_due_cents: i64,
@@ -136,18 +152,23 @@ pub struct Invoice {
     pub invoice_pdf: Option<String>,
     /// When it was paid (ISO 8601), or null.
     pub paid_at: Option<DateTime<Utc>>,
+    /// When Stripe issued it (ISO 8601); null when Stripe could not be
+    /// reached. Show `paid_at` for paid invoices, else this.
+    pub created_at: Option<DateTime<Utc>>,
 }
 
-impl From<BillingInvoice> for Invoice {
-    fn from(invoice: BillingInvoice) -> Self {
+impl From<PageInvoice> for Invoice {
+    fn from(invoice: PageInvoice) -> Self {
         Self {
             stripe_invoice_id: invoice.stripe_invoice_id,
+            number: invoice.number,
             status: invoice.status,
             amount_due_cents: invoice.amount_due_cents,
             amount_paid_cents: invoice.amount_paid_cents,
             hosted_invoice_url: invoice.hosted_invoice_url,
             invoice_pdf: invoice.invoice_pdf,
             paid_at: utc(invoice.paid_at),
+            created_at: utc(invoice.created_at),
         }
     }
 }
@@ -161,17 +182,18 @@ fn subscription(record: &CompanyBilling) -> Subscription {
         subscription_status: record.subscription_status.clone(),
         current_period_end: utc(record.current_period_end),
         last_successful_payment_at: utc(record.last_successful_payment_at),
+        failed_payment_at: utc(record.failed_payment_at),
         outstanding_balance_cents: record.outstanding_balance_cents,
     }
 }
 
-fn plans(state: &AppState) -> Vec<Plan> {
-    state
-        .billing_plans
-        .iter()
+async fn plans(state: &AppState) -> Vec<Plan> {
+    load_billing_plans(&state.stripe, &state.billing_plans)
+        .await
+        .into_iter()
         .map(|plan| Plan {
-            price_id: plan.price_id.clone(),
-            name: plan.name.clone(),
+            price_id: plan.price_id,
+            name: plan.name,
             monthly_price_cents: plan.monthly_price_cents,
         })
         .collect()
@@ -182,9 +204,10 @@ fn plans(state: &AppState) -> Vec<Plan> {
 pub struct BillingOverview {
     /// The subscription, or null when the company never had one.
     pub subscription: Option<Subscription>,
-    /// The card subscriptions are charged to, or null.
+    /// The card renewals are charged to (the subscription's, else the
+    /// customer's default), or null.
     pub card: Option<Card>,
-    /// Paid and open invoices, newest payment first.
+    /// The latest invoices (up to 24, no drafts), newest first.
     pub invoices: Vec<Invoice>,
     /// Plans to subscribe or switch to.
     pub plans: Vec<Plan>,
@@ -200,16 +223,28 @@ pub struct BillingOverview {
     pub billing_configured: bool,
 }
 
+/// Query of `GET /v1/billing`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct OverviewQuery {
+    /// `success` when Stripe Checkout sent the manager back: the
+    /// subscription is read from Stripe now, as its webhook may still be on
+    /// the way. Any other value is ignored.
+    pub checkout: Option<String>,
+}
+
 /// Get the company's billing
 ///
-/// The subscription (refreshed from Stripe first), the card on file, the
-/// plans and the invoices. Managers only; other users read
-/// `GET /v1/billing/gate`.
+/// The subscription (refreshed from Stripe at most every 5 minutes, or now
+/// with `checkout=success`), the card on file, the plans with Stripe's
+/// prices and the invoices (read live from Stripe, else the stored copy).
+/// Managers only; other users read `GET /v1/billing/gate`.
 #[utoipa::path(
     get,
     path = "/v1/billing",
     operation_id = "get_billing",
     tag = "billing",
+    params(OverviewQuery),
     responses(
         (status = 200, description = "The company's billing", body = BillingOverview),
         (status = 401, description = "No valid session", body = ErrorBody),
@@ -221,31 +256,36 @@ pub struct BillingOverview {
 pub async fn overview(
     State(state): State<AppState>,
     BillingManager(user): BillingManager,
+    Query(query): Query<OverviewQuery>,
 ) -> ApiResult<Json<BillingOverview>> {
-    let record = account::sync_from_stripe(&state.stripe, &state.pool, user.company_id).await?;
-    let gate =
-        reactivation::billing_gate(&state.stripe, &state.pool, user.company_id, user.id).await;
-    let store = MySqlBillingStore(&state.pool);
+    let options = SyncOptions {
+        force: query.checkout.as_deref() == Some("success"),
+        ..SyncOptions::default()
+    };
+    let record =
+        account::sync_from_stripe(&state.stripe, &state.pool, user.company_id, options).await?;
+    let gate = Box::pin(gate::billing_gate(
+        &state.stripe,
+        &state.pool,
+        user.company_id,
+        user.id,
+    ))
+    .await;
     let record = match record {
         Some(record) => Some(record),
-        None => store.by_company(user.company_id).await?,
+        None => {
+            MySqlBillingStore(&state.pool)
+                .by_company(user.company_id)
+                .await?
+        }
     };
-    let invoices = match &record {
-        Some(_) => store.invoices(user.company_id).await?,
-        None => Vec::new(),
-    };
-    let card = account::default_card(
-        &state.stripe,
-        record
-            .as_ref()
-            .and_then(|r| r.stripe_payment_method_id.as_deref()),
-    )
-    .await;
+    let invoices = account::page_invoices(&state.stripe, &state.pool, record.as_ref()).await?;
+    let card = account::default_card(&state.stripe, record.as_ref()).await;
     Ok(Json(BillingOverview {
         subscription: record.as_ref().map(subscription),
         card,
         invoices: invoices.into_iter().map(Invoice::from).collect(),
-        plans: plans(&state),
+        plans: plans(&state).await,
         restricted: gate.restricted,
         starts_checkout: can_start_checkout(record.as_ref()),
         needs_new_subscription: gate.restricted && needs_new_subscription(record.as_ref()),
@@ -285,8 +325,10 @@ pub struct PlanChoice {
 /// Subscribe through Stripe Checkout
 ///
 /// A Stripe Checkout link that subscribes the company to the plan; Stripe
-/// returns to `/admin/billing?checkout=success` (or `cancel`). Only while the
-/// company has no running subscription (400 otherwise: change the plan).
+/// returns to `/admin/billing?checkout=success` (or `cancel`), whose page
+/// then calls `GET /v1/billing?checkout=success`. Only while the company has
+/// no running subscription, here or at Stripe (400 otherwise: change the
+/// plan with `PUT /v1/billing/subscription`).
 #[utoipa::path(
     post,
     path = "/v1/billing/checkout",
@@ -342,7 +384,8 @@ pub struct PortalChoice {
 /// Open the Stripe billing portal
 ///
 /// A Stripe billing portal link for the company's customer, returning to
-/// `/admin/billing`.
+/// `/admin/billing`. The portal updates cards and customer details and lists
+/// invoices; it cannot cancel or change the plan.
 #[utoipa::path(
     post,
     path = "/v1/billing/portal",
@@ -457,9 +500,20 @@ pub async fn reactivation_quote(
     State(state): State<AppState>,
     BillingManager(user): BillingManager,
 ) -> ApiResult<Json<ReactivationQuote>> {
-    let record = account::sync_from_stripe(&state.stripe, &state.pool, user.company_id).await?;
-    let gate =
-        reactivation::billing_gate(&state.stripe, &state.pool, user.company_id, user.id).await;
+    let record = account::sync_from_stripe(
+        &state.stripe,
+        &state.pool,
+        user.company_id,
+        SyncOptions::default(),
+    )
+    .await?;
+    let gate = Box::pin(gate::billing_gate(
+        &state.stripe,
+        &state.pool,
+        user.company_id,
+        user.id,
+    ))
+    .await;
     let needed = gate.restricted && needs_new_subscription(record.as_ref());
     if !needed {
         return Ok(Json(ReactivationQuote {
@@ -470,16 +524,15 @@ pub async fn reactivation_quote(
         }));
     }
     let key = std::env::var("STRIPE_PUBLIC_KEY").unwrap_or_default();
+    let plans = load_billing_plans(&state.stripe, &state.billing_plans).await;
     Ok(Json(ReactivationQuote {
         needed,
         cards: account::saved_cards(&state.stripe, record.as_ref()).await,
-        plan: reactivation_plan(record.as_ref(), &state.billing_plans).map(|plan| {
-            ReactivationPlan {
-                price_id: plan.price_id,
-                plan_name: plan.plan_name,
-                quantity: plan.quantity,
-                monthly_cents: plan.monthly_cents,
-            }
+        plan: reactivation_plan(record.as_ref(), &plans).map(|plan| ReactivationPlan {
+            price_id: plan.price_id,
+            plan_name: plan.plan_name,
+            quantity: plan.quantity,
+            monthly_cents: plan.monthly_cents,
         }),
         publishable_key: Some(key.trim().to_string()).filter(|key| key.starts_with("pk_")),
     }))

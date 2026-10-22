@@ -1,6 +1,7 @@
 //! Port of `getUser` + `handlePermissions` from the Remix app's
 //! `app/utils/session.server.ts`. Keep the two in sync until Remix is gone.
 
+use crate::billing::FIRST_PAYMENT_DAYS;
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
 use utoipa::ToSchema;
@@ -62,14 +63,35 @@ pub fn valid_session_id(value: &str) -> bool {
         })
 }
 
-pub async fn find_session_user(
+/// `company.billing_required` is on and the company's access is paused: its
+/// payment is suspended, or it never paid and its first-payment window
+/// (`FIRST_PAYMENT_DAYS` from `billing_required_at`) ended. Expects `company`
+/// and a LEFT JOINed `company_billing`; binds the window's days.
+const BILLING_PAUSED: &str = r"
+    COALESCE(company.billing_required, 0) <> 0
+    AND (company_billing.payment_status = 'suspended'
+         OR (COALESCE(company_billing.payment_status, 'none')
+               NOT IN ('active', 'past_due', 'suspended')
+             AND company.billing_required_at IS NOT NULL
+             AND company.billing_required_at <= UTC_TIMESTAMP() - INTERVAL ? DAY))";
+
+/// A live session's user, and whether their own company's access is paused
+/// for billing.
+#[derive(Debug, Clone, FromRow)]
+pub struct SessionRow {
+    #[sqlx(flatten)]
+    pub user: SessionUser,
+    pub billing_paused: bool,
+}
+
+pub async fn find_session(
     pool: &MySqlPool,
     session_id: &str,
-) -> Result<Option<SessionUser>, sqlx::Error> {
+) -> Result<Option<SessionRow>, sqlx::Error> {
     if !valid_session_id(session_id) {
         return Ok(None);
     }
-    sqlx::query_as::<_, SessionUser>(
+    sqlx::query_as::<_, SessionRow>(sqlx::AssertSqlSafe(format!(
         r"
         SELECT users.id, users.email, users.name, users.phone_number,
                COALESCE(users.is_employee, 0) AS is_employee,
@@ -77,20 +99,52 @@ pub async fn find_session_user(
                COALESCE(users.is_superuser, 0) AS is_superuser,
                users.company_id, users.pined_bar, users.cloudtalk_agent_id,
                users.cloudtalk_phone_number, users.ringcentral_extension_id,
-               users.ringcentral_phone_number, users.is_signature_available
+               users.ringcentral_phone_number, users.is_signature_available,
+               COALESCE({BILLING_PAUSED}, 0) AS billing_paused
         FROM users
         JOIN sessions ON sessions.user_id = users.id
+        LEFT JOIN company ON company.id = users.company_id
+        LEFT JOIN company_billing ON company_billing.company_id = users.company_id
         WHERE sessions.id = ?
           AND sessions.expiration_date > CURRENT_TIMESTAMP
           AND sessions.created_date > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ? MONTH)
           AND sessions.is_deleted = 0
           AND users.is_deleted = 0
-        ",
-    )
+        "
+    )))
+    .bind(FIRST_PAYMENT_DAYS)
     .bind(session_id)
     .bind(SESSION_MAX_AGE_MONTHS)
     .fetch_optional(pool)
     .await
+}
+
+pub async fn find_session_user(
+    pool: &MySqlPool,
+    session_id: &str,
+) -> Result<Option<SessionUser>, sqlx::Error> {
+    Ok(find_session(pool, session_id).await?.map(|row| row.user))
+}
+
+/// Whether `company_id`'s access is paused for billing (a super admin acting
+/// in another company).
+pub async fn company_billing_paused(
+    pool: &MySqlPool,
+    company_id: i32,
+) -> Result<bool, sqlx::Error> {
+    let paused: Option<bool> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        r"
+        SELECT COALESCE({BILLING_PAUSED}, 0)
+        FROM company
+        LEFT JOIN company_billing ON company_billing.company_id = company.id
+        WHERE company.id = ?
+        "
+    )))
+    .bind(FIRST_PAYMENT_DAYS)
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(paused.unwrap_or(false))
 }
 
 /// All of a user's position rows, across every company.

@@ -22,7 +22,11 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         title = "Granite Manager API",
         description = "JSON API behind Granite Manager, a CRM for countertop and \
             stone fabrication companies. Every request acts as the signed-in user \
-            and only sees data of that user's company."
+            and only sees data of that user's company. While a company's access is \
+            paused for billing, session routes other than billing, sign-in, the app \
+            shell, `GET /v1/me` and notifications answer 402 \
+            `{\"error\": \"Payment required\", \"code\": \"payment_required\"}`: \
+            see `GET /v1/billing/gate`."
     ),
     components(schemas(ErrorBody)),
     modifiers(&SessionCookie),

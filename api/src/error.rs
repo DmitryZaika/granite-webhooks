@@ -43,6 +43,9 @@ pub enum ApiError {
     /// A service the route depends on is not available right now.
     #[error("{0}")]
     Unavailable(String),
+    /// The company's access is paused until it pays (`/admin/billing`).
+    #[error("Payment required")]
+    PaymentRequired,
 }
 
 /// What actually failed, kept on the response for the 5xx reporting in
@@ -70,6 +73,15 @@ impl IntoResponse for ApiError {
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            Self::PaymentRequired => {
+                let body = PaymentRequiredBody {
+                    error: self.to_string(),
+                    code: PAYMENT_REQUIRED_CODE.into(),
+                };
+                let mut response = (StatusCode::PAYMENT_REQUIRED, Json(body)).into_response();
+                response.extensions_mut().insert(detail);
+                return response;
+            }
             Self::Storage(crate::storage::StorageError::Disabled) => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
@@ -97,6 +109,17 @@ pub struct ErrorBody {
     /// Short reason: `unauthorized`, `forbidden`, `not found`, `database error`, or the
     /// bad-request message (e.g. `invalid sales_rep: abc`).
     pub error: String,
+}
+
+pub const PAYMENT_REQUIRED_CODE: &str = "payment_required";
+
+/// Body of a 402: the company's access is paused until it pays.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PaymentRequiredBody {
+    /// `Payment required`.
+    pub error: String,
+    /// Always `payment_required`: open `/admin/billing`.
+    pub code: String,
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;

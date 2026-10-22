@@ -1,5 +1,5 @@
 //! The billing state machine: Stripe events in, `company_billing` and the
-//! managers' notifications out, and the access gate a page load checks.
+//! managers' notifications out. The access gate is `gate`.
 // Generic over the store: the MySQL store's futures are `Send` (handlers
 // compile); the in-memory test store's are not, and need not be.
 #![allow(clippy::future_not_send)]
@@ -7,10 +7,10 @@
 use super::store::{BillingStore, StoreResult};
 use super::{
     BILLING_PATH, BillingEvent, BillingInvoice, BillingNotification, CompanyBilling,
-    InvoiceSnapshot, PAYMENT_REQUIRED_TITLE, PaymentStatus, StripeLiveState, SubscriptionSnapshot,
-    UPDATE_PAYMENT_LABEL, add_grace_days, days_remaining, has_live_other_subscription,
-    is_ended_subscription_status, is_paying_subscription_status, iso, outstanding_balance_cents,
-    payment_required_message, stripe_confirms_non_payment, with_grace_expiry,
+    InvoiceSnapshot, PAYMENT_REQUIRED_TITLE, PaymentStatus, SubscriptionSnapshot,
+    UPDATE_PAYMENT_LABEL, add_grace_days, has_live_other_subscription,
+    is_ended_subscription_status, is_overdue, is_paying_subscription_status, iso,
+    outstanding_balance_cents, payment_required_message, with_grace_expiry,
 };
 use chrono::NaiveDateTime;
 
@@ -88,16 +88,34 @@ fn mark_past_due(
     next.payment_status = PaymentStatus::PastDue;
     next.failed_payment_at = Some(now);
     next.grace_period_ends_at = Some(add_grace_days(now));
+    next.recovered_failed_at = None;
+    next.recovered_at = None;
     (next, Some(now))
 }
 
-fn restore_active(record: &CompanyBilling, paid_at: Option<NaiveDateTime>) -> CompanyBilling {
+/// The record paid up; an overdue one records which cycle recovered, and when.
+pub(super) fn restore_active(
+    record: &CompanyBilling,
+    paid_at: Option<NaiveDateTime>,
+    now: NaiveDateTime,
+) -> CompanyBilling {
+    let recovered = is_overdue(record) && record.failed_payment_at.is_some();
     CompanyBilling {
         subscription_status: "active".into(),
         payment_status: PaymentStatus::Active,
         failed_payment_at: None,
         grace_period_ends_at: None,
         last_successful_payment_at: paid_at.or(record.last_successful_payment_at),
+        recovered_failed_at: if recovered {
+            record.failed_payment_at
+        } else {
+            record.recovered_failed_at
+        },
+        recovered_at: if recovered {
+            Some(now)
+        } else {
+            record.recovered_at
+        },
         ..record.clone()
     }
 }
@@ -202,7 +220,7 @@ pub async fn apply_subscription_change<S: BillingStore>(
     }
     let merged = merge_subscription(&record, snapshot);
     if is_paying_subscription_status(status) {
-        let mut restored = restore_active(&merged, merged.last_successful_payment_at);
+        let mut restored = restore_active(&merged, merged.last_successful_payment_at, now);
         restored.subscription_status = status.to_string();
         let saved = save_with_outstanding(store, restored).await?;
         store.clear_payment_notifications(saved.company_id).await?;
@@ -267,8 +285,19 @@ pub async fn apply_invoice_change<S: BillingStore>(
         .await?;
     let other_subscription =
         has_live_other_subscription(&record, invoice.subscription_id.as_deref());
+    if paid
+        && matches!(
+            invoice.live_subscription_status.as_deref(),
+            Some("past_due" | "unpaid")
+        )
+    {
+        // An older invoice paid (or a late retry) while a newer one is still
+        // unpaid: record the payment, keep the grace period running.
+        save_with_outstanding(store, record).await?;
+        return Ok(Vec::new());
+    }
     if paid {
-        let mut restored = restore_active(&record, Some(invoice.paid_at.unwrap_or(now)));
+        let mut restored = restore_active(&record, Some(invoice.paid_at.unwrap_or(now)), now);
         if let Some(subscription_id) = &invoice.subscription_id
             && !other_subscription
         {
@@ -370,6 +399,36 @@ async fn apply_claimed<S: BillingStore>(
     }
 }
 
+/// The company an event belongs to, so it is applied under that company's
+/// lock; `None` when no company matches (the event then changes nothing).
+pub async fn event_company_id<S: BillingStore>(
+    store: &S,
+    event: &BillingEvent,
+) -> StoreResult<Option<i32>> {
+    let (company_id, customer_id, subscription_id) = match event {
+        BillingEvent::CheckoutCompleted { company_id, .. } => return Ok(Some(*company_id)),
+        BillingEvent::Subscription { subscription, .. } => (
+            subscription.company_id,
+            Some(subscription.customer_id.as_str()),
+            Some(subscription.id.as_str()),
+        ),
+        BillingEvent::Invoice { invoice, .. } => (
+            invoice.company_id,
+            Some(invoice.customer_id.as_str()),
+            invoice.subscription_id.as_deref(),
+        ),
+        BillingEvent::PaymentMethodUpdated { customer_id, .. } => {
+            (None, Some(customer_id.as_str()), None)
+        }
+    };
+    if company_id.is_some() {
+        return Ok(company_id);
+    }
+    Ok(load_record(store, None, customer_id, subscription_id)
+        .await?
+        .map(|record| record.company_id))
+}
+
 /// Applies a Stripe event once: a repeat delivery is a no-op, and an event
 /// that fails is released so Stripe's retry runs it again.
 pub async fn apply_event<S: BillingStore>(
@@ -397,215 +456,11 @@ pub async fn apply_event<S: BillingStore>(
     }
 }
 
-/// What a page shows about billing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
-pub struct BillingNotice {
-    /// Show the past-due banner (managers only).
-    pub show_warning: bool,
-    /// Days left in the grace period.
-    pub days_remaining: i64,
-    /// Access is paused: only billing pages work.
-    pub restricted: bool,
-}
-
-pub const NO_BILLING_NOTICE: BillingNotice = BillingNotice {
-    show_warning: false,
-    days_remaining: 0,
-    restricted: false,
-};
-
-/// Stripe as the gate sees it; both calls are throttled and swallow errors.
-#[allow(async_fn_in_trait)] // used with concrete types only
-pub trait GateStripe {
-    /// The record after applying Stripe's current subscription.
-    async fn refresh(&self, record: CompanyBilling) -> CompanyBilling;
-    /// Stripe's word on a company whose grace period ended; `None` when it
-    /// could not be asked.
-    async fn live_state(&self, record: &CompanyBilling) -> Option<StripeLiveState>;
-}
-
-/// Whether the company's access is paused, and the warning for `user_id`.
-pub async fn evaluate_gate<S: BillingStore, G: GateStripe>(
-    store: &S,
-    stripe: &G,
-    company_id: i32,
-    user_id: i32,
-    now: NaiveDateTime,
-) -> StoreResult<BillingNotice> {
-    if !store.billing_required(company_id).await? {
-        return Ok(NO_BILLING_NOTICE);
-    }
-    let Some(existing) = store.by_company(company_id).await? else {
-        return Ok(NO_BILLING_NOTICE);
-    };
-    let mut current = if matches!(
-        existing.payment_status,
-        PaymentStatus::PastDue | PaymentStatus::Suspended
-    ) {
-        stripe.refresh(existing).await
-    } else {
-        existing
-    };
-    let grace_ended = current.payment_status == PaymentStatus::PastDue
-        && with_grace_expiry(&current, now).payment_status == PaymentStatus::Suspended;
-    if grace_ended && let Some(live) = stripe.live_state(&current).await {
-        if stripe_confirms_non_payment(&live) {
-            current.payment_status = PaymentStatus::Suspended;
-            store.save(&current).await?;
-        } else {
-            current = restore_active(&current, current.last_successful_payment_at);
-            store.save(&current).await?;
-            store.clear_payment_notifications(company_id).await?;
-        }
-    }
-    if current.payment_status == PaymentStatus::Suspended {
-        return Ok(BillingNotice {
-            show_warning: false,
-            days_remaining: 0,
-            restricted: true,
-        });
-    }
-    if current.payment_status != PaymentStatus::PastDue {
-        return Ok(NO_BILLING_NOTICE);
-    }
-    Ok(BillingNotice {
-        show_warning: store.managers(company_id).await?.contains(&user_id),
-        days_remaining: current
-            .grace_period_ends_at
-            .map_or(0, |ends| days_remaining(ends, now)),
-        restricted: false,
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    //! Port of the CRM's `stripeBilling.test.ts` against an in-memory store.
+    //! Port of the CRM's `billingEvents.test.ts` against an in-memory store.
     use super::*;
-    use std::cell::RefCell;
-    use std::collections::{HashMap, HashSet};
-
-    #[derive(Default)]
-    struct Memory {
-        records: RefCell<HashMap<i32, CompanyBilling>>,
-        invoices: RefCell<Vec<BillingInvoice>>,
-        events: RefCell<HashSet<String>>,
-        /// (user id, company id, is manager)
-        users: RefCell<Vec<(i32, i32, bool)>>,
-        notifications: RefCell<Vec<(BillingNotification, bool)>>,
-        not_required: RefCell<HashSet<i32>>,
-    }
-
-    #[allow(clippy::unused_async_trait_impl)] // the trait's signature
-    impl BillingStore for Memory {
-        async fn by_company(&self, company_id: i32) -> StoreResult<Option<CompanyBilling>> {
-            Ok(self.records.borrow().get(&company_id).cloned())
-        }
-        async fn by_customer(&self, customer_id: &str) -> StoreResult<Option<CompanyBilling>> {
-            Ok(self
-                .records
-                .borrow()
-                .values()
-                .find(|r| r.stripe_customer_id.as_deref() == Some(customer_id))
-                .cloned())
-        }
-        async fn by_subscription(
-            &self,
-            subscription_id: &str,
-        ) -> StoreResult<Option<CompanyBilling>> {
-            Ok(self
-                .records
-                .borrow()
-                .values()
-                .find(|r| r.stripe_subscription_id.as_deref() == Some(subscription_id))
-                .cloned())
-        }
-        async fn save(&self, record: &CompanyBilling) -> StoreResult<()> {
-            self.records
-                .borrow_mut()
-                .insert(record.company_id, record.clone());
-            Ok(())
-        }
-        async fn claim_event(&self, event_id: &str, _: &str) -> StoreResult<bool> {
-            Ok(self.events.borrow_mut().insert(event_id.to_string()))
-        }
-        async fn release_event(&self, event_id: &str) -> StoreResult<()> {
-            self.events.borrow_mut().remove(event_id);
-            Ok(())
-        }
-        async fn upsert_invoice(&self, invoice: &BillingInvoice) -> StoreResult<()> {
-            let mut invoices = self.invoices.borrow_mut();
-            match invoices
-                .iter_mut()
-                .find(|i| i.stripe_invoice_id == invoice.stripe_invoice_id)
-            {
-                Some(existing) => *existing = invoice.clone(),
-                None => invoices.push(invoice.clone()),
-            }
-            Ok(())
-        }
-        async fn invoices(&self, company_id: i32) -> StoreResult<Vec<BillingInvoice>> {
-            Ok(self
-                .invoices
-                .borrow()
-                .iter()
-                .filter(|i| i.company_id == company_id)
-                .cloned()
-                .collect())
-        }
-        async fn managers(&self, company_id: i32) -> StoreResult<Vec<i32>> {
-            Ok(self
-                .users
-                .borrow()
-                .iter()
-                .filter(|(_, company, manager)| *company == company_id && *manager)
-                .map(|(id, _, _)| *id)
-                .collect())
-        }
-        async fn insert_notification(
-            &self,
-            notification: &BillingNotification,
-        ) -> StoreResult<bool> {
-            let mut rows = self.notifications.borrow_mut();
-            if rows.iter().any(|(row, _)| {
-                row.company_id == notification.company_id
-                    && row.user_id == notification.user_id
-                    && row.dedupe_key == notification.dedupe_key
-            }) {
-                return Ok(false);
-            }
-            rows.push((notification.clone(), false));
-            Ok(true)
-        }
-        async fn clear_payment_notifications(&self, company_id: i32) -> StoreResult<()> {
-            for (row, done) in self.notifications.borrow_mut().iter_mut() {
-                if row.company_id == company_id && row.dedupe_key.starts_with("payment_required:") {
-                    *done = true;
-                }
-            }
-            Ok(())
-        }
-        async fn billing_required(&self, company_id: i32) -> StoreResult<bool> {
-            Ok(!self.not_required.borrow().contains(&company_id))
-        }
-    }
-
-    impl Memory {
-        fn open_notifications(&self, company_id: i32) -> Vec<BillingNotification> {
-            self.notifications
-                .borrow()
-                .iter()
-                .filter(|(row, done)| row.company_id == company_id && !done)
-                .map(|(row, _)| row.clone())
-                .collect()
-        }
-        fn record(&self, company_id: i32) -> CompanyBilling {
-            self.records.borrow()[&company_id].clone()
-        }
-    }
-
-    fn at(text: &str) -> NaiveDateTime {
-        NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S").unwrap()
-    }
+    use crate::billing::test_store::{Memory, at};
 
     fn subscription_event(id: &str, company_id: i32, status: &str, deleted: bool) -> BillingEvent {
         BillingEvent::Subscription {
@@ -649,6 +504,7 @@ mod tests {
                 hosted_invoice_url: Some("https://pay.stripe.com/invoice/test".into()),
                 invoice_pdf: Some("https://pay.stripe.com/invoice/test/pdf".into()),
                 paid_at: paid.then(|| at("2026-09-01 00:00:00")),
+                live_subscription_status: None,
             },
         }
     }
@@ -725,7 +581,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_payment_starts_ten_days_of_grace() {
+    async fn a_failed_payment_starts_seven_days_of_grace() {
         let store = Memory::default();
         store.users.borrow_mut().push((10, 1, true));
         store.records.borrow_mut().insert(1, active(1));
@@ -963,163 +819,241 @@ mod tests {
         assert_eq!(record.stripe_subscription_id.as_deref(), Some("sub_new"));
     }
 
-    // ---- the access gate
-
-    struct FakeStripe {
-        live: Option<StripeLiveState>,
-        refresh_to: Option<PaymentStatus>,
+    fn paid_with_live_status(id: &str, company_id: i32, live: &str) -> BillingEvent {
+        let mut event = invoice_event(id, company_id, true, 30000);
+        if let BillingEvent::Invoice { invoice, .. } = &mut event {
+            invoice.live_subscription_status = Some(live.into());
+        }
+        event
     }
 
-    #[allow(clippy::unused_async_trait_impl)] // the trait's signature
-    impl GateStripe for FakeStripe {
-        async fn refresh(&self, record: CompanyBilling) -> CompanyBilling {
-            match self.refresh_to {
-                Some(status) => CompanyBilling {
-                    payment_status: status,
-                    ..record
-                },
-                None => record,
-            }
-        }
-        async fn live_state(&self, _: &CompanyBilling) -> Option<StripeLiveState> {
-            self.live.clone()
-        }
-    }
-
-    const NO_STRIPE: FakeStripe = FakeStripe {
-        live: None,
-        refresh_to: None,
-    };
-
-    fn past_due() -> CompanyBilling {
+    #[tokio::test]
+    async fn the_grace_period_is_seven_days_and_suspends_when_it_ends() {
         let failed_at = at("2026-09-01 00:00:00");
-        CompanyBilling {
-            stripe_customer_id: Some("cus_1".into()),
-            stripe_subscription_id: Some("sub_1".into()),
-            subscription_status: "past_due".into(),
+        let record = CompanyBilling {
             payment_status: PaymentStatus::PastDue,
+            subscription_status: "past_due".into(),
             failed_payment_at: Some(failed_at),
             grace_period_ends_at: Some(add_grace_days(failed_at)),
             ..CompanyBilling::empty(1)
-        }
-    }
-
-    fn after_grace() -> NaiveDateTime {
-        add_grace_days(at("2026-09-01 00:00:00")) + chrono::Duration::minutes(1)
-    }
-
-    fn live(status: &str, cents: i64) -> FakeStripe {
-        FakeStripe {
-            live: Some(StripeLiveState {
-                subscription_status: Some(status.into()),
-                open_invoice_cents: cents,
-            }),
-            refresh_to: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn switched_off_billing_never_restricts() {
-        let store = Memory::default();
-        store.not_required.borrow_mut().insert(1);
-        store.records.borrow_mut().insert(
-            1,
-            CompanyBilling {
-                payment_status: PaymentStatus::Suspended,
-                ..past_due()
-            },
-        );
-        let notice = evaluate_gate(&store, &NO_STRIPE, 1, 10, after_grace())
-            .await
-            .unwrap();
-        assert_eq!(notice, NO_BILLING_NOTICE);
-    }
-
-    #[tokio::test]
-    async fn grace_ended_but_stripe_shows_paid_restores_access() {
-        let store = Memory::default();
-        store.records.borrow_mut().insert(1, past_due());
-        let notice = evaluate_gate(&store, &live("active", 0), 1, 10, after_grace())
-            .await
-            .unwrap();
-        assert!(!notice.restricted);
-        assert_eq!(store.record(1).payment_status, PaymentStatus::Active);
-    }
-
-    #[tokio::test]
-    async fn grace_ended_and_stripe_unreachable_keeps_access() {
-        let store = Memory::default();
-        store.records.borrow_mut().insert(1, past_due());
-        let notice = evaluate_gate(&store, &NO_STRIPE, 1, 10, after_grace())
-            .await
-            .unwrap();
-        assert!(!notice.restricted);
-        assert_eq!(store.record(1).payment_status, PaymentStatus::PastDue);
-    }
-
-    #[tokio::test]
-    async fn grace_ended_and_unpaid_in_stripe_suspends() {
-        let store = Memory::default();
-        store.records.borrow_mut().insert(1, past_due());
-        let notice = evaluate_gate(&store, &live("past_due", 4900), 1, 10, after_grace())
-            .await
-            .unwrap();
-        assert!(notice.restricted);
-        assert_eq!(store.record(1).payment_status, PaymentStatus::Suspended);
-    }
-
-    #[tokio::test]
-    async fn a_suspended_company_that_paid_is_unlocked() {
-        let store = Memory::default();
-        store.records.borrow_mut().insert(
-            1,
-            CompanyBilling {
-                payment_status: PaymentStatus::Suspended,
-                ..past_due()
-            },
-        );
-        let stripe = FakeStripe {
-            live: None,
-            refresh_to: Some(PaymentStatus::Active),
         };
-        let notice = evaluate_gate(&store, &stripe, 1, 10, after_grace())
-            .await
-            .unwrap();
-        assert!(!notice.restricted);
+        assert_eq!(crate::billing::GRACE_PERIOD_DAYS, 7);
+        assert_eq!(add_grace_days(failed_at), at("2026-09-08 00:00:00"));
+        for day in 0..7 {
+            let now = failed_at + chrono::Duration::days(day) + chrono::Duration::minutes(1);
+            assert_eq!(
+                with_grace_expiry(&record, now).payment_status,
+                PaymentStatus::PastDue
+            );
+        }
+        assert_eq!(
+            with_grace_expiry(&record, add_grace_days(failed_at)).payment_status,
+            PaymentStatus::Suspended
+        );
     }
 
     #[tokio::test]
-    async fn during_grace_only_managers_see_the_warning() {
+    async fn sales_managers_admins_and_owners_get_no_notification() {
         let store = Memory::default();
         store
             .users
             .borrow_mut()
-            .extend([(10, 1, true), (12, 1, false)]);
-        store.records.borrow_mut().insert(1, past_due());
-        let during = at("2026-09-03 00:00:00");
-        let manager = evaluate_gate(&store, &NO_STRIPE, 1, 10, during)
-            .await
-            .unwrap();
-        let admin = evaluate_gate(&store, &NO_STRIPE, 1, 12, during)
-            .await
-            .unwrap();
-        assert_eq!(
-            manager,
-            BillingNotice {
-                show_warning: true,
-                days_remaining: 8,
-                restricted: false
-            }
-        );
-        assert!(!admin.show_warning);
+            .extend([(11, 1, false), (12, 1, false), (14, 1, false)]);
+        let result = apply_event(
+            &store,
+            &invoice_event("evt_fail_sales", 1, false, 1000),
+            at("2026-09-01 12:00:00"),
+        )
+        .await
+        .unwrap();
+        assert!(result.notified_user_ids.is_empty());
+        assert_eq!(store.open_notifications(1), []);
     }
 
     #[tokio::test]
-    async fn no_billing_record_is_never_restricted() {
+    async fn a_checkout_and_a_payment_for_the_same_company_do_not_overwrite_each_other() {
         let store = Memory::default();
-        let notice = evaluate_gate(&store, &NO_STRIPE, 1, 10, after_grace())
+        store.records.borrow_mut().insert(
+            1,
+            CompanyBilling {
+                stripe_customer_id: Some("cus_1".into()),
+                ..CompanyBilling::empty(1)
+            },
+        );
+        let mut paid = invoice_event("evt_paid", 1, true, 30000);
+        if let BillingEvent::Invoice { invoice, .. } = &mut paid {
+            invoice.subscription_id = None;
+        }
+        let checkout = BillingEvent::CheckoutCompleted {
+            id: "evt_checkout".into(),
+            company_id: 1,
+            customer_id: "cus_1".into(),
+            subscription_id: Some("sub_new".into()),
+        };
+        let now = at("2026-09-01 00:00:00");
+        // The company lock serialises these in production.
+        apply_event(&store, &paid, now).await.unwrap();
+        apply_event(&store, &checkout, now).await.unwrap();
+        let record = store.record(1);
+        assert_eq!(record.payment_status, PaymentStatus::Active);
+        assert_eq!(record.stripe_subscription_id.as_deref(), Some("sub_new"));
+    }
+
+    #[tokio::test]
+    async fn a_late_payment_of_an_old_invoice_keeps_the_grace_of_a_newer_unpaid_one() {
+        let store = Memory::default();
+        store.users.borrow_mut().push((10, 1, true));
+        let failed_at = at("2026-09-01 00:00:00");
+        apply_event(
+            &store,
+            &invoice_event("evt_failed", 1, false, 30000),
+            failed_at,
+        )
+        .await
+        .unwrap();
+        for live in ["past_due", "unpaid"] {
+            let result = apply_event(
+                &store,
+                &paid_with_live_status(&format!("evt_old_paid_{live}"), 1, live),
+                failed_at + chrono::Duration::days(1),
+            )
             .await
             .unwrap();
-        assert_eq!(notice, NO_BILLING_NOTICE);
+            assert!(result.notified_user_ids.is_empty());
+            let record = store.record(1);
+            assert_eq!(record.payment_status, PaymentStatus::PastDue);
+            assert_eq!(record.grace_period_ends_at, Some(add_grace_days(failed_at)));
+            assert_eq!(record.recovered_at, None);
+            assert_eq!(store.open_notifications(1).len(), 1);
+        }
+        let invoices = store.invoices.borrow();
+        let paid = invoices
+            .iter()
+            .find(|i| i.stripe_invoice_id == "in_evt_old_paid_past_due")
+            .unwrap();
+        assert_eq!(paid.status, "paid");
+    }
+
+    #[tokio::test]
+    async fn the_payment_that_settles_the_subscription_still_restores_access() {
+        let store = Memory::default();
+        let failed_at = at("2026-09-01 00:00:00");
+        apply_event(
+            &store,
+            &invoice_event("evt_failed", 1, false, 30000),
+            failed_at,
+        )
+        .await
+        .unwrap();
+        apply_event(
+            &store,
+            &paid_with_live_status("evt_paid", 1, "active"),
+            failed_at + chrono::Duration::days(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(store.record(1).payment_status, PaymentStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn the_save_that_restores_access_also_records_which_cycle_recovered() {
+        let store = Memory::default();
+        let failed_at = at("2026-09-01 00:00:00");
+        let paid_at = at("2026-09-03 00:00:00");
+        apply_event(
+            &store,
+            &invoice_event("evt_failed", 1, false, 30000),
+            failed_at,
+        )
+        .await
+        .unwrap();
+        apply_event(
+            &store,
+            &paid_with_live_status("evt_paid", 1, "active"),
+            paid_at,
+        )
+        .await
+        .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.payment_status, PaymentStatus::Active);
+        assert_eq!(record.recovered_failed_at, Some(failed_at));
+        assert_eq!(record.recovered_at, Some(paid_at));
+    }
+
+    #[tokio::test]
+    async fn an_update_of_an_already_active_subscription_keeps_the_last_recovery() {
+        let store = Memory::default();
+        let failed_at = at("2026-09-01 00:00:00");
+        let recovered_at = at("2026-09-02 00:00:00");
+        store.records.borrow_mut().insert(
+            1,
+            CompanyBilling {
+                stripe_subscription_id: Some("sub_1".into()),
+                recovered_failed_at: Some(failed_at),
+                recovered_at: Some(recovered_at),
+                ..active(1)
+            },
+        );
+        apply_event(
+            &store,
+            &subscription_event("evt_sub_active", 1, "active", false),
+            at("2026-09-05 00:00:00"),
+        )
+        .await
+        .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.recovered_failed_at, Some(failed_at));
+        assert_eq!(record.recovered_at, Some(recovered_at));
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_subscription_that_never_failed_is_not_a_recovery() {
+        let store = Memory::default();
+        store.records.borrow_mut().insert(
+            1,
+            CompanyBilling {
+                stripe_subscription_id: Some("sub_1".into()),
+                subscription_status: "canceled".into(),
+                payment_status: PaymentStatus::Suspended,
+                ..active(1)
+            },
+        );
+        apply_event(
+            &store,
+            &subscription_event("evt_sub_back", 1, "active", false),
+            at("2026-09-05 00:00:00"),
+        )
+        .await
+        .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.payment_status, PaymentStatus::Active);
+        assert_eq!(record.recovered_failed_at, None);
+        assert_eq!(record.recovered_at, None);
+    }
+
+    #[tokio::test]
+    async fn a_new_failure_starts_a_new_cycle_and_drops_the_old_recovery() {
+        let store = Memory::default();
+        store.records.borrow_mut().insert(
+            1,
+            CompanyBilling {
+                stripe_subscription_id: Some("sub_1".into()),
+                recovered_failed_at: Some(at("2026-09-01 00:00:00")),
+                recovered_at: Some(at("2026-09-02 00:00:00")),
+                ..active(1)
+            },
+        );
+        let again = at("2026-10-01 00:00:00");
+        apply_event(
+            &store,
+            &invoice_event("evt_failed_again", 1, false, 30000),
+            again,
+        )
+        .await
+        .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.failed_payment_at, Some(again));
+        assert_eq!(record.recovered_failed_at, None);
+        assert_eq!(record.recovered_at, None);
     }
 }

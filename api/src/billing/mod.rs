@@ -3,21 +3,29 @@
 //! Stripe tells us about payments through webhooks; this module keeps
 //! `company_billing` (one row per company), its invoices and the managers'
 //! "payment required" notifications in step, and decides whether the
-//! company's access is paused. A failed payment starts a 10 day grace period;
+//! company's access is paused. A failed payment starts a 7 day grace period;
 //! when it ends unpaid (Stripe confirms), the company is suspended until it
-//! pays. Companies only get warnings and pauses when `company.billing_required`
-//! is on. Port of the CRM's `stripeBilling.ts` / `stripeBilling.server.ts`.
+//! pays. A company asked to pay that never subscribed gets 7 days from
+//! `company.billing_required_at`, then pauses until it subscribes. Companies
+//! only get warnings and pauses when `company.billing_required` is on. Port of
+//! the CRM's `billing*.ts` on `fix/stripe-billing`.
 
 pub mod account;
+pub mod gate;
+pub mod lock;
 pub mod machine;
 pub mod reactivation;
 pub mod store;
 pub mod stripe;
+#[cfg(test)]
+mod test_store;
 
 use chrono::{DateTime, Duration, NaiveDateTime, SubsecRound, Utc};
 use serde::Serialize;
 
-pub const GRACE_PERIOD_DAYS: i64 = 10;
+pub const GRACE_PERIOD_DAYS: i64 = 7;
+/// Days a company has to subscribe after Stripe payment is first required.
+pub const FIRST_PAYMENT_DAYS: i64 = 7;
 pub const BILLING_PATH: &str = "/admin/billing";
 pub const PAYMENT_REQUIRED_TITLE: &str = "Payment required";
 pub const UPDATE_PAYMENT_LABEL: &str = "Update Payment Method";
@@ -76,6 +84,16 @@ pub struct CompanyBilling {
     pub monthly_price_cents: Option<i64>,
     pub user_count: Option<i64>,
     pub outstanding_balance_cents: i64,
+    /// The `failed_payment_at` of the last dunning cycle that recovered, and
+    /// when: written by the save that restores access, cleared by a new cycle.
+    pub recovered_failed_at: Option<NaiveDateTime>,
+    pub recovered_at: Option<NaiveDateTime>,
+    /// When the first charge is due (self-serve signup).
+    pub trial_end_at: Option<NaiveDateTime>,
+    /// The subscription item billing users beyond the included ones.
+    pub extra_user_item_id: Option<String>,
+    /// The billable user count last pushed to Stripe.
+    pub billable_users: Option<i64>,
 }
 
 impl CompanyBilling {
@@ -99,6 +117,11 @@ impl CompanyBilling {
             monthly_price_cents: None,
             user_count: None,
             outstanding_balance_cents: 0,
+            recovered_failed_at: None,
+            recovered_at: None,
+            trial_end_at: None,
+            extra_user_item_id: None,
+            billable_users: None,
         }
     }
 }
@@ -164,6 +187,9 @@ pub struct InvoiceSnapshot {
     pub hosted_invoice_url: Option<String>,
     pub invoice_pdf: Option<String>,
     pub paid_at: Option<NaiveDateTime>,
+    /// The invoice's subscription status read from Stripe when the event is
+    /// applied; `None` when it was not read.
+    pub live_subscription_status: Option<String>,
 }
 
 /// The Stripe events billing acts on.
@@ -300,6 +326,24 @@ pub fn stripe_confirms_non_payment(state: &StripeLiveState) -> bool {
             .is_some_and(is_unpaid_subscription_status)
 }
 
+/// No successful payment yet: no billing row, or a Stripe customer whose
+/// Checkout or first payment never completed.
+pub fn is_awaiting_first_payment(record: Option<&CompanyBilling>) -> bool {
+    record.is_none_or(|record| record.payment_status == PaymentStatus::None)
+}
+
+/// A failed or paused payment (the gate checks Stripe for these).
+pub fn is_overdue(record: &CompanyBilling) -> bool {
+    matches!(
+        record.payment_status,
+        PaymentStatus::PastDue | PaymentStatus::Suspended
+    )
+}
+
+pub fn first_payment_deadline(required_since: NaiveDateTime) -> NaiveDateTime {
+    required_since + Duration::days(FIRST_PAYMENT_DAYS)
+}
+
 /// The record names another subscription that is still alive.
 fn has_live_other_subscription(record: &CompanyBilling, subscription_id: Option<&str>) -> bool {
     match (subscription_id, record.stripe_subscription_id.as_deref()) {
@@ -376,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn grace_lasts_ten_days_then_suspends() {
+    fn grace_lasts_seven_days_then_suspends() {
         let failed_at = at("2026-09-01 00:00:00");
         let record = CompanyBilling {
             payment_status: PaymentStatus::PastDue,
@@ -385,7 +429,7 @@ mod tests {
             grace_period_ends_at: Some(add_grace_days(failed_at)),
             ..CompanyBilling::empty(1)
         };
-        for day in 1..=10 {
+        for day in 1..=7 {
             let now = failed_at + Duration::days(day - 1) + Duration::minutes(1);
             assert_eq!(
                 with_grace_expiry(&record, now).payment_status,
@@ -398,16 +442,17 @@ mod tests {
         );
         assert_eq!(
             days_remaining(add_grace_days(failed_at), at("2026-09-03 00:00:00")),
-            8
+            5
         );
         assert_eq!(
-            days_remaining(add_grace_days(failed_at), at("2026-09-10 23:00:00")),
+            days_remaining(add_grace_days(failed_at), at("2026-09-07 23:00:00")),
             1
         );
         assert_eq!(
-            days_remaining(add_grace_days(failed_at), at("2026-09-12 00:00:00")),
+            days_remaining(add_grace_days(failed_at), at("2026-09-08 00:00:00")),
             0
         );
+        assert_eq!(first_payment_deadline(failed_at), at("2026-09-08 00:00:00"));
     }
 
     #[test]

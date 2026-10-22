@@ -8,7 +8,9 @@
 //! routes. The billing page itself is `billing_account`.
 
 use crate::auth::BillingManager;
-use crate::billing::machine::apply_event;
+use crate::billing::gate::billing_gate;
+use crate::billing::lock::CompanyLock;
+use crate::billing::machine::{apply_event, event_company_id};
 use crate::billing::reactivation::{self, ReactivationError, Started};
 use crate::billing::store::MySqlBillingStore;
 use crate::billing::stripe::{latest_event, normalize_event, verify_signature};
@@ -86,8 +88,10 @@ const PAID: ReactivationStarted = ReactivationStarted {
 /// For a company whose subscription ended unpaid: creates a new subscription
 /// charged to the card (managers only). Answers `paid` when there is nothing
 /// to pay (the company is not restricted, or Stripe already has it paid),
-/// otherwise the payment for the browser to confirm. Stripe's refusals
-/// ("Your card was declined.") are 400s with Stripe's message.
+/// otherwise the payment for the browser to confirm. A retry for the same
+/// plan confirms the first payment still open instead of creating another
+/// subscription. Stripe's refusals ("Your card was declined.") are 400s
+/// with Stripe's message.
 #[utoipa::path(
     post,
     path = "/v1/billing/reactivation",
@@ -96,7 +100,7 @@ const PAID: ReactivationStarted = ReactivationStarted {
     request_body = StartReactivation,
     responses(
         (status = 200, description = "Paid, or a payment to confirm", body = ReactivationStarted),
-        (status = 400, description = "No card, or Stripe refused", body = ErrorBody),
+        (status = 400, description = "No card, Stripe refused, or another payment of the company is in progress", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a manager of the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -108,8 +112,13 @@ pub async fn start_reactivation(
     BillingManager(user): BillingManager,
     JsonBody(input): JsonBody<StartReactivation>,
 ) -> ApiResult<Json<ReactivationStarted>> {
-    let gate =
-        reactivation::billing_gate(&state.stripe, &state.pool, user.company_id, user.id).await;
+    let gate = Box::pin(billing_gate(
+        &state.stripe,
+        &state.pool,
+        user.company_id,
+        user.id,
+    ))
+    .await;
     if !gate.restricted {
         return Ok(Json(PAID));
     }
@@ -262,10 +271,26 @@ pub async fn stripe_webhook(
         else {
             return Ok(());
         };
-        apply_event(&MySqlBillingStore(&state.pool), &latest, billing::now())
+        let store = MySqlBillingStore(&state.pool);
+        let lock = match event_company_id(&store, &latest)
+            .await
+            .map_err(|err| err.to_string())?
+        {
+            Some(company_id) => Some(
+                CompanyLock::acquire(&state.pool, company_id)
+                    .await
+                    .map_err(|err| err.to_string())?,
+            ),
+            None => None,
+        };
+        let applied = apply_event(&store, &latest, billing::now())
             .await
             .map(|_| ())
-            .map_err(|err| err.to_string())
+            .map_err(|err| err.to_string());
+        if let Some(lock) = lock {
+            lock.release().await;
+        }
+        applied
     }
     .await;
     if let Err(err) = result {

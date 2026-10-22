@@ -1126,7 +1126,10 @@ pub async fn switch_feature(
 /// Require Stripe payment
 ///
 /// Whether the company's access depends on its Stripe subscription (off:
-/// it pays some other way).
+/// it pays some other way). Turning it on for a company that had it off
+/// starts the 7 day first-payment window: a company that has not subscribed
+/// by then has its access paused until it does. Turning it on again, or off,
+/// keeps the window's start.
 #[utoipa::path(
     put,
     path = "/v1/superuser/companies/{id}/billing-required",
@@ -1151,10 +1154,18 @@ pub async fn set_billing_required(
 ) -> ApiResult<StatusCode> {
     superuser(&user)?;
     company_exists(&state, id).await?;
-    sqlx::query("UPDATE company SET billing_required = ? WHERE id = ? AND deleted_at IS NULL")
-        .bind(i32::from(input.enabled))
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
+    // MySQL assigns left to right, so the IF still sees the old flag.
+    sqlx::query(
+        "UPDATE company
+            SET billing_required_at = IF(? = 1 AND billing_required = 0, UTC_TIMESTAMP(),
+                                         billing_required_at),
+                billing_required = ?
+          WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(i32::from(input.enabled))
+    .bind(i32::from(input.enabled))
+    .bind(id)
+    .execute(&state.pool)
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }

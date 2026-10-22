@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Granite Manager API",
-    "description": "JSON API behind Granite Manager, a CRM for countertop and stone fabrication companies. Every request acts as the signed-in user and only sees data of that user's company.",
+    "description": "JSON API behind Granite Manager, a CRM for countertop and stone fabrication companies. Every request acts as the signed-in user and only sees data of that user's company. While a company's access is paused for billing, session routes other than billing, sign-in, the app shell, `GET /v1/me` and notifications answer 402 `{\"error\": \"Payment required\", \"code\": \"payment_required\"}`: see `GET /v1/billing/gate`.",
     "version": "0.1.0"
   },
   "paths": {
@@ -25882,6 +25882,303 @@
         ]
       }
     },
+    "/v1/online-quote-options": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List online quote options",
+        "description": "The extras the company's online quote can offer, by sequence then name.\nA company that never had any gets Laminate tear out, Stone tear out and\n10 year sealer, all off.",
+        "operationId": "list_online_quote_options",
+        "responses": {
+          "200": {
+            "description": "Options",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OnlineQuoteOption"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Add an online quote option",
+        "description": "Adds an extra the online quote can offer.",
+        "operationId": "create_online_quote_option",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnlineQuoteOptionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnlineQuoteOption"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/online-quote-options/{id}": {
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Save an online quote option",
+        "description": "Saves the name, sequence and whether customers are offered it.",
+        "operationId": "update_online_quote_option",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Option id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnlineQuoteOptionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "No name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such option in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Delete an online quote option",
+        "description": "Removes the option; quotes keep the extras they got.",
+        "operationId": "delete_online_quote_option",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Option id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such option in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/quote-settings": {
       "get": {
         "tags": [
@@ -34795,6 +35092,66 @@
         ]
       }
     },
+    "/v1/schedule/unscheduled": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Events waiting for their day",
+        "description": "The company's unscheduled events (kept off the calendar until someone\npicks the date), oldest first, with the customer named by a numeric\ntitle. Events of calendars hidden for the caller are left out.",
+        "operationId": "list_unscheduled_events",
+        "responses": {
+          "200": {
+            "description": "Events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScheduleEvent"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/schedule": {
       "get": {
         "tags": [
@@ -40847,6 +41204,53 @@
         ]
       }
     },
+    "/v1/jobs/contact-sync": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Sync missing contacts",
+        "description": "Pushes a few customers without a `RingCentral` or `CloudTalk` contact to\ntheir company's provider.",
+        "operationId": "run_contact_sync",
+        "responses": {
+          "200": {
+            "description": "What was done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactSyncRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
     "/v1/me/call-coaching": {
       "get": {
         "tags": [
@@ -42623,7 +43027,7 @@
           "billing"
         ],
         "summary": "Start paying to restore access",
-        "description": "For a company whose subscription ended unpaid: creates a new subscription\ncharged to the card (managers only). Answers `paid` when there is nothing\nto pay (the company is not restricted, or Stripe already has it paid),\notherwise the payment for the browser to confirm. Stripe's refusals\n(\"Your card was declined.\") are 400s with Stripe's message.",
+        "description": "For a company whose subscription ended unpaid: creates a new subscription\ncharged to the card (managers only). Answers `paid` when there is nothing\nto pay (the company is not restricted, or Stripe already has it paid),\notherwise the payment for the browser to confirm. A retry for the same\nplan confirms the first payment still open instead of creating another\nsubscription. Stripe's refusals (\"Your card was declined.\") are 400s\nwith Stripe's message.",
         "operationId": "start_billing_reactivation",
         "requestBody": {
           "content": {
@@ -42647,7 +43051,7 @@
             }
           },
           "400": {
-            "description": "No card, or Stripe refused",
+            "description": "No card, Stripe refused, or another payment of the company is in progress",
             "content": {
               "application/json": {
                 "schema": {
@@ -42841,7 +43245,7 @@
           "billing"
         ],
         "summary": "Get the billing gate",
-        "description": "Whether the company's access is paused for an unpaid subscription\n(`restricted`: only the billing pages work) and whether managers see the\npast-due warning with the grace days left. Checks Stripe now and then\n(throttled); errors keep access.",
+        "description": "Whether the company's access is paused (`restricted`: other routes answer\n402 `payment_required`, only billing, sign-in, the app shell, `GET /v1/me`\nand notifications work) and whether managers see a warning with the days\nleft. `reason` says why: `payment_failed` (a payment failed, 7 days of\ngrace) or `subscription_required` (payment was turned on and the company\nhas not subscribed, 7 days to do so); `pauses_at` is when access pauses.\nChecks Stripe now and then (throttled); errors keep access.",
         "operationId": "get_billing_gate",
         "responses": {
           "200": {
@@ -42888,8 +43292,19 @@
           "billing"
         ],
         "summary": "Get the company's billing",
-        "description": "The subscription (refreshed from Stripe first), the card on file, the\nplans and the invoices. Managers only; other users read\n`GET /v1/billing/gate`.",
+        "description": "The subscription (refreshed from Stripe at most every 5 minutes, or now\nwith `checkout=success`), the card on file, the plans with Stripe's\nprices and the invoices (read live from Stripe, else the stored copy).\nManagers only; other users read `GET /v1/billing/gate`.",
         "operationId": "get_billing",
+        "parameters": [
+          {
+            "name": "checkout",
+            "in": "query",
+            "description": "`success` when Stripe Checkout sent the manager back: the\nsubscription is read from Stripe now, as its webhook may still be on\nthe way. Any other value is ignored.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "The company's billing",
@@ -42945,7 +43360,7 @@
           "billing"
         ],
         "summary": "Subscribe through Stripe Checkout",
-        "description": "A Stripe Checkout link that subscribes the company to the plan; Stripe\nreturns to `/admin/billing?checkout=success` (or `cancel`). Only while the\ncompany has no running subscription (400 otherwise: change the plan).",
+        "description": "A Stripe Checkout link that subscribes the company to the plan; Stripe\nreturns to `/admin/billing?checkout=success` (or `cancel`), whose page\nthen calls `GET /v1/billing?checkout=success`. Only while the company has\nno running subscription, here or at Stripe (400 otherwise: change the\nplan with `PUT /v1/billing/subscription`).",
         "operationId": "create_billing_checkout",
         "requestBody": {
           "content": {
@@ -43022,7 +43437,7 @@
           "billing"
         ],
         "summary": "Open the Stripe billing portal",
-        "description": "A Stripe billing portal link for the company's customer, returning to\n`/admin/billing`.",
+        "description": "A Stripe billing portal link for the company's customer, returning to\n`/admin/billing`. The portal updates cards and customer details and lists\ninvoices; it cannot cancel or change the plan.",
         "operationId": "create_billing_portal",
         "requestBody": {
           "content": {
@@ -44948,7 +45363,7 @@
           "superuser"
         ],
         "summary": "Require Stripe payment",
-        "description": "Whether the company's access depends on its Stripe subscription (off:\nit pays some other way).",
+        "description": "Whether the company's access depends on its Stripe subscription (off:\nit pays some other way). Turning it on for a company that had it off\nstarts the 7 day first-payment window: a company that has not subscribed\nby then has its access paused until it does. Turning it on again, or off,\nkeeps the window's start.",
         "operationId": "set_platform_company_billing_required",
         "parameters": [
           {
@@ -47508,18 +47923,45 @@
         "properties": {
           "show_warning": {
             "type": "boolean",
-            "description": "Show the past-due banner (managers only)."
+            "description": "Show the billing warning banner (managers only, while access still\nworks)."
           },
           "days_remaining": {
             "type": "integer",
             "format": "int64",
-            "description": "Days left in the grace period."
+            "description": "Whole days left before access pauses (rounded up); 0 when nothing\nruns or access is already paused."
           },
           "restricted": {
             "type": "boolean",
-            "description": "Access is paused: only billing pages work."
+            "description": "Access is paused: only the billing pages work, other API calls answer\n402."
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BillingNoticeReason",
+                "description": "Why the notice is shown; null when billing is in order."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pauses_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When access will pause (UTC), while a grace period or first-payment\nwindow runs; null otherwise."
           }
         }
+      },
+      "BillingNoticeReason": {
+        "type": "string",
+        "description": "Why a billing notice is shown.",
+        "enum": [
+          "payment_failed",
+          "subscription_required"
+        ]
       },
       "BillingOverview": {
         "type": "object",
@@ -47548,7 +47990,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Card",
-                "description": "The card subscriptions are charged to, or null."
+                "description": "The card renewals are charged to (the subscription's, else the\ncustomer's default), or null."
               },
               {
                 "type": "null"
@@ -47560,7 +48002,7 @@
             "items": {
               "$ref": "#/components/schemas/Invoice"
             },
-            "description": "Paid and open invoices, newest payment first."
+            "description": "The latest invoices (up to 24, no drafts), newest first."
           },
           "plans": {
             "type": "array",
@@ -50325,6 +50767,32 @@
           "unverified"
         ]
       },
+      "ContactSyncRun": {
+        "type": "object",
+        "description": "What a run did.",
+        "required": [
+          "processed",
+          "ringcentral",
+          "cloudtalk"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Customers synced, both providers.",
+            "minimum": 0
+          },
+          "ringcentral": {
+            "type": "integer",
+            "description": "Pushed to `RingCentral`.",
+            "minimum": 0
+          },
+          "cloudtalk": {
+            "type": "integer",
+            "description": "Pushed to `CloudTalk`.",
+            "minimum": 0
+          }
+        }
+      },
       "ContentInput": {
         "type": "object",
         "description": "Body creating a note or a comment.",
@@ -51754,6 +52222,27 @@
               "null"
             ],
             "description": "Billing address."
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "City of the address."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "State of the address."
+          },
+          "postal_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ZIP code."
           },
           "phone": {
             "type": [
@@ -54776,6 +55265,10 @@
             "type": "boolean",
             "description": "All-day event."
           },
+          "unscheduled": {
+            "type": "boolean",
+            "description": "Waiting for its day: off the calendar, in the unscheduled list. The\ndates may then be left empty (they become now)."
+          },
           "calendar_id": {
             "type": [
               "integer",
@@ -57409,9 +57902,16 @@
             "type": "string",
             "description": "Stripe invoice id (`in_...`)."
           },
+          "number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stripe's invoice number to show (e.g. `GM-0001`); null when Stripe\ncould not be reached (the stored copy has none)."
+          },
           "status": {
             "type": "string",
-            "description": "`paid` or `open`."
+            "description": "`paid`, `open`, `void` or `uncollectible` (the stored copy, used when\nStripe cannot be reached, has `paid` and `open` only)."
           },
           "amount_due_cents": {
             "type": "integer",
@@ -57444,6 +57944,14 @@
             ],
             "format": "date-time",
             "description": "When it was paid (ISO 8601), or null."
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When Stripe issued it (ISO 8601); null when Stripe could not be\nreached. Show `paid_at` for paid invoices, else this."
           }
         }
       },
@@ -60580,6 +61088,13 @@
               "$ref": "#/components/schemas/OnlineColorPick"
             },
             "description": "1 to 10 colors to compare."
+          },
+          "extras": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The builder's `extras` the customer wants, by name."
           }
         },
         "additionalProperties": false
@@ -60738,6 +61253,13 @@
             },
             "description": "1 to 10 colors, one quote option each."
           },
+          "extras": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The builder's `extras` the customer wants, by name; each goes on the\nquote as an extra."
+          },
           "website": {
             "type": [
               "string",
@@ -60755,6 +61277,62 @@
                 "type": "null"
               }
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "OnlineQuoteOption": {
+        "type": "object",
+        "description": "An extra the online quote can offer the customer.",
+        "required": [
+          "id",
+          "name",
+          "sequence",
+          "enabled"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Option id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name, e.g. \"Stone tear out\". A price list extra of the same name prices it."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Order on the customer's Extras step."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Offered to customers. When any is on, the online quote has an Extras step."
+          }
+        }
+      },
+      "OnlineQuoteOptionInput": {
+        "type": "object",
+        "description": "Body of creating or saving an online quote option.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name; required, at most 120 characters (longer is cut)."
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Order; 1 or more (default 1)."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Offered to customers (default false)."
           }
         },
         "additionalProperties": false
@@ -60794,7 +61372,8 @@
           "default_depth",
           "colors",
           "sinks",
-          "cooktop"
+          "cooktop",
+          "extras"
         ],
         "properties": {
           "company_name": {
@@ -60834,6 +61413,13 @@
           "cooktop": {
             "$ref": "#/components/schemas/OnlineCooktop",
             "description": "The cooktop cutout."
+          },
+          "extras": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extras the customer can add (Admin > Quotes > Customer Quote), in\norder. Empty: the builder has no Extras step."
           }
         }
       },
@@ -61959,7 +62545,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Monthly price in cents, when configured."
+            "description": "Monthly price in cents: what Stripe charges for the price, else the\nconfigured amount; null when neither is known."
           }
         }
       },
@@ -69831,6 +70417,14 @@
             ],
             "format": "date-time",
             "description": "Last successful payment (ISO 8601), or null."
+          },
+          "failed_payment_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the payment of the current dunning cycle failed (ISO 8601); null\nwhen no payment is failing."
           },
           "outstanding_balance_cents": {
             "type": "integer",

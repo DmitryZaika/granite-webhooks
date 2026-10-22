@@ -26,6 +26,8 @@ pub trait BillingStore {
     async fn clear_payment_notifications(&self, company_id: i32) -> StoreResult<()>;
     /// `company.billing_required`.
     async fn billing_required(&self, company_id: i32) -> StoreResult<bool>;
+    /// `company.billing_required_at`: when Stripe payment was last turned on.
+    async fn billing_required_since(&self, company_id: i32) -> StoreResult<Option<NaiveDateTime>>;
 }
 
 /// The MySQL tables.
@@ -50,6 +52,11 @@ struct BillingRow {
     monthly_price_cents: Option<i64>,
     user_count: Option<i64>,
     outstanding_balance_cents: Option<i64>,
+    recovered_failed_at: Option<NaiveDateTime>,
+    recovered_at: Option<NaiveDateTime>,
+    trial_end_at: Option<NaiveDateTime>,
+    extra_user_item_id: Option<String>,
+    billable_users: Option<i64>,
 }
 
 /// Blank strings read as missing, like the CRM's `readString`.
@@ -79,6 +86,11 @@ impl From<BillingRow> for CompanyBilling {
             monthly_price_cents: row.monthly_price_cents,
             user_count: row.user_count,
             outstanding_balance_cents: row.outstanding_balance_cents.unwrap_or_default(),
+            recovered_failed_at: row.recovered_failed_at,
+            recovered_at: row.recovered_at,
+            trial_end_at: row.trial_end_at,
+            extra_user_item_id: present(row.extra_user_item_id),
+            billable_users: row.billable_users,
         }
     }
 }
@@ -89,7 +101,9 @@ const BILLING_SELECT: &str =
         current_period_start, current_period_end, last_successful_payment_at, failed_payment_at,
         grace_period_ends_at, plan_name, CAST(monthly_price_cents AS SIGNED) AS monthly_price_cents,
         CAST(user_count AS SIGNED) AS user_count,
-        CAST(outstanding_balance_cents AS SIGNED) AS outstanding_balance_cents
+        CAST(outstanding_balance_cents AS SIGNED) AS outstanding_balance_cents,
+        recovered_failed_at, recovered_at, trial_end_at, extra_user_item_id,
+        CAST(billable_users AS SIGNED) AS billable_users
    FROM company_billing";
 
 #[derive(FromRow)]
@@ -148,8 +162,9 @@ impl BillingStore for MySqlBillingStore<'_> {
                stripe_subscription_item_id, stripe_payment_method_id, subscription_status,
                payment_status, current_period_start, current_period_end, last_successful_payment_at,
                failed_payment_at, grace_period_ends_at, plan_name, monthly_price_cents, user_count,
-               outstanding_balance_cents
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               outstanding_balance_cents, recovered_failed_at, recovered_at, trial_end_at,
+               extra_user_item_id, billable_users
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                stripe_customer_id = VALUES(stripe_customer_id),
                stripe_subscription_id = VALUES(stripe_subscription_id),
@@ -166,7 +181,12 @@ impl BillingStore for MySqlBillingStore<'_> {
                plan_name = VALUES(plan_name),
                monthly_price_cents = VALUES(monthly_price_cents),
                user_count = VALUES(user_count),
-               outstanding_balance_cents = VALUES(outstanding_balance_cents)",
+               outstanding_balance_cents = VALUES(outstanding_balance_cents),
+               recovered_failed_at = VALUES(recovered_failed_at),
+               recovered_at = VALUES(recovered_at),
+               trial_end_at = VALUES(trial_end_at),
+               extra_user_item_id = VALUES(extra_user_item_id),
+               billable_users = VALUES(billable_users)",
         )
         .bind(record.company_id)
         .bind(&record.stripe_customer_id)
@@ -185,6 +205,11 @@ impl BillingStore for MySqlBillingStore<'_> {
         .bind(record.monthly_price_cents)
         .bind(record.user_count)
         .bind(record.outstanding_balance_cents)
+        .bind(record.recovered_failed_at)
+        .bind(record.recovered_at)
+        .bind(record.trial_end_at)
+        .bind(&record.extra_user_item_id)
+        .bind(record.billable_users)
         .execute(self.0)
         .await?;
         Ok(())
@@ -327,5 +352,14 @@ impl BillingStore for MySqlBillingStore<'_> {
                 .fetch_optional(self.0)
                 .await?;
         Ok(required.unwrap_or(false))
+    }
+
+    async fn billing_required_since(&self, company_id: i32) -> StoreResult<Option<NaiveDateTime>> {
+        let since: Option<Option<NaiveDateTime>> =
+            sqlx::query_scalar("SELECT billing_required_at FROM company WHERE id = ? LIMIT 1")
+                .bind(company_id)
+                .fetch_optional(self.0)
+                .await?;
+        Ok(since.flatten())
     }
 }

@@ -145,7 +145,11 @@ is a port of the CRM's `stripeBilling.ts`, tested in memory in
 and against Stripe's test mode in `tests/billing_stripe_live.rs` when
 `STRIPE_TEST_SECRET_KEY=sk_test_...` is set). Env: `STRIPE_SECRET_KEY`,
 `STRIPE_WEBHOOK_SECRET`, `STRIPE_BILLING_PLANS` (`price|Name|cents,...`) or
-`STRIPE_PRICE_ID`.
+`STRIPE_PRICE_ID`. A failed payment gets 7 days of grace, a company asked to
+pay (`company.billing_required_at`) 7 days to subscribe; then session routes
+off the allow-list in `auth/mod.rs` answer 402 (decided by the session query).
+Each company's billing writes run under `billing/lock.rs` (a MySQL named lock
+on its own connection, since the Lambda pool has one).
 
 ### Uploads and storage
 

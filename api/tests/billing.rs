@@ -16,6 +16,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[path = "billing/account.rs"]
+mod account;
+#[path = "billing/events.rs"]
+mod events;
+#[path = "billing/gate.rs"]
+mod gate;
+
 const WEBHOOK_SECRET: &str = "whsec_test_secret";
 
 /// A stand-in for the Stripe API: objects by id and every request seen.
@@ -24,6 +31,9 @@ struct FakeStripe {
     subscriptions: HashMap<String, Value>,
     invoices: HashMap<String, Value>,
     payment_methods: HashMap<String, Value>,
+    prices: HashMap<String, Value>,
+    customers: HashMap<String, Value>,
+    portal_configurations: Vec<Value>,
     /// (method, path, form or query)
     requests: Vec<(String, String, String)>,
 }
@@ -88,8 +98,13 @@ async fn fake_stripe(state: Shared) -> String {
                 s.requests.push(("POST".into(), format!("/v1/subscriptions/{id}"), body.clone()));
                 let params = form(&body);
                 let sub = s.subscriptions.get_mut(&id).ok_or_else(not_found)?;
-                sub["items"]["data"][0]["price"] = json!({
-                    "id": params["items[0][price]"], "nickname": "Granite Manager Plus", "unit_amount": 9900 });
+                if let Some(price) = params.get("items[0][price]") {
+                    sub["items"]["data"][0]["price"] = json!({
+                        "id": price, "nickname": "Granite Manager Plus", "unit_amount": 9900 });
+                }
+                if let Some(method) = params.get("default_payment_method") {
+                    sub["default_payment_method"] = json!(method);
+                }
                 Ok::<_, (StatusCode, Json<Value>)>(Json(sub.clone()))
             })
             .delete(|State(s): State<Shared>, Path(id): Path<String>| async move {
@@ -102,9 +117,9 @@ async fn fake_stripe(state: Shared) -> String {
         )
         .route(
             "/v1/invoices/{id}",
-            get(|State(s): State<Shared>, Path(id): Path<String>| async move {
+            get(|State(s): State<Shared>, Path(id): Path<String>, query: axum::extract::RawQuery| async move {
                 let mut s = s.lock().unwrap();
-                s.requests.push(("GET".into(), format!("/v1/invoices/{id}"), String::new()));
+                s.requests.push(("GET".into(), format!("/v1/invoices/{id}"), query.0.unwrap_or_default()));
                 s.invoices.get(&id).cloned().map(Json).ok_or_else(not_found)
             }),
         )
@@ -115,7 +130,7 @@ async fn fake_stripe(state: Shared) -> String {
                 let query = query.0.unwrap_or_default();
                 s.requests.push(("GET".into(), "/v1/invoices".into(), query.clone()));
                 let params = form(&query);
-                let data: Vec<Value> = s
+                let mut data: Vec<Value> = s
                     .invoices
                     .values()
                     .filter(|invoice| {
@@ -124,6 +139,10 @@ async fn fake_stripe(state: Shared) -> String {
                     })
                     .cloned()
                     .collect();
+                // Newest first, like Stripe.
+                data.sort_by_key(|invoice| {
+                    std::cmp::Reverse((invoice["created"].as_i64(), invoice["id"].as_str().map(str::to_string)))
+                });
                 Json(json!({ "object": "list", "data": data }))
             }),
         )
@@ -158,6 +177,31 @@ async fn fake_stripe(state: Shared) -> String {
             }),
         )
         .route(
+            "/v1/billing_portal/configurations",
+            get(|State(s): State<Shared>, query: axum::extract::RawQuery| async move {
+                let mut s = s.lock().unwrap();
+                let query = query.0.unwrap_or_default();
+                s.requests.push(("GET".into(), "/v1/billing_portal/configurations".into(), query));
+                Json(json!({ "object": "list", "data": s.portal_configurations }))
+            })
+            .post(|State(s): State<Shared>, body: String| async move {
+                let mut s = s.lock().unwrap();
+                s.requests.push(("POST".into(), "/v1/billing_portal/configurations".into(), body.clone()));
+                let configuration = json!({ "id": "bpc_created", "active": true,
+                    "metadata": { "app": form(&body)["metadata[app]"] } });
+                s.portal_configurations.push(configuration.clone());
+                Json(configuration)
+            }),
+        )
+        .route(
+            "/v1/prices/{id}",
+            get(|State(s): State<Shared>, Path(id): Path<String>| async move {
+                let mut s = s.lock().unwrap();
+                s.requests.push(("GET".into(), format!("/v1/prices/{id}"), String::new()));
+                s.prices.get(&id).cloned().map(Json).ok_or_else(not_found)
+            }),
+        )
+        .route(
             "/v1/billing_portal/sessions",
             post(|State(s): State<Shared>, body: String| async move {
                 let mut s = s.lock().unwrap();
@@ -186,7 +230,21 @@ async fn fake_stripe(state: Shared) -> String {
         )
         .route(
             "/v1/customers/{id}",
-            post(|State(s): State<Shared>, Path(id): Path<String>, body: String| async move {
+            get(|State(s): State<Shared>, Path(id): Path<String>, query: axum::extract::RawQuery| async move {
+                let mut s = s.lock().unwrap();
+                let query = query.0.unwrap_or_default();
+                s.requests.push(("GET".into(), format!("/v1/customers/{id}"), query.clone()));
+                let mut customer = s.customers.get(&id).cloned().ok_or_else(not_found)?;
+                let default = &customer["invoice_settings"]["default_payment_method"];
+                if form(&query).get("expand[]").map(String::as_str)
+                    == Some("invoice_settings.default_payment_method")
+                    && let Some(method) = default.as_str().and_then(|id| s.payment_methods.get(id))
+                {
+                    customer["invoice_settings"]["default_payment_method"] = method.clone();
+                }
+                Ok::<_, (StatusCode, Json<Value>)>(Json(customer))
+            })
+            .post(|State(s): State<Shared>, Path(id): Path<String>, body: String| async move {
                 let mut s = s.lock().unwrap();
                 s.requests.push(("POST".into(), format!("/v1/customers/{id}"), body));
                 Json(json!({ "id": id, "object": "customer" }))
@@ -836,7 +894,9 @@ async fn the_billing_page_syncs_from_stripe(pool: MySqlPool) {
             "payment_status": "active",
             "subscription_status": "active",
             "current_period_end": "2026-10-02T00:00:00Z",
-            "last_successful_payment_at": null,
+            // Caught up from the paid invoice (no invoice.paid webhook came).
+            "last_successful_payment_at": "2026-09-01T00:00:00Z",
+            "failed_payment_at": null,
             "outstanding_balance_cents": 4900
         })
     );
@@ -923,7 +983,8 @@ async fn only_managers_see_billing_and_everyone_sees_the_gate(pool: MySqlPool) {
         .json();
     assert_eq!(
         rep,
-        json!({ "show_warning": false, "days_remaining": 0, "restricted": true, "can_manage": false })
+        json!({ "show_warning": false, "days_remaining": 0, "restricted": true,
+                "reason": "payment_failed", "pauses_at": null, "can_manage": false })
     );
     let manager: Value = server
         .get("/v1/billing/gate")
@@ -1099,4 +1160,26 @@ async fn the_portal_opens_the_card_form_or_the_subscription(pool: MySqlPool) {
         format!("{ALLOWED_ORIGIN}/admin/billing")
     );
     assert!(!portals[1].contains_key("flow_data[type]"));
+    // No tagged configuration yet: the no-cancel one is created once and
+    // used by every session.
+    assert!(portals.iter().all(|p| p["configuration"] == "bpc_created"));
+    let created: Vec<HashMap<String, String>> = stripe
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .filter(|r| r.0 == "POST" && r.1 == "/v1/billing_portal/configurations")
+        .map(|r| form(&r.2))
+        .collect();
+    assert_eq!(created.len(), 1);
+    let config = &created[0];
+    assert_eq!(config["metadata[app]"], "granite-manager-no-cancel-v1");
+    assert_eq!(config["features[subscription_cancel][enabled]"], "false");
+    assert_eq!(config["features[subscription_update][enabled]"], "false");
+    assert_eq!(config["features[payment_method_update][enabled]"], "true");
+    assert_eq!(config["features[invoice_history][enabled]"], "true");
+    assert_eq!(
+        config["features[customer_update][allowed_updates][1]"],
+        "address"
+    );
 }
