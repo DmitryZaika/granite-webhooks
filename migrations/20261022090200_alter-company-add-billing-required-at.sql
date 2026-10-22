@@ -1,9 +1,8 @@
 -- When Stripe payment was last required for a company.
 --
 -- A company that is asked to pay and has not subscribed gets 7 days from this
--- moment, then access pauses until it subscribes (general_datebase
--- stripeBilling.ts FIRST_PAYMENT_DAYS). The superuser toggle sets it when it
--- turns payment on.
+-- moment, then access pauses until it subscribes. The superuser toggle sets it
+-- when it turns payment on.
 --
 -- Companies that already require payment get the time of this migration, so
 -- their 7 days start at deploy rather than locking them out at once.

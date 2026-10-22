@@ -1,8 +1,6 @@
--- Hot-path indexes that only ever existed as one-off scripts
--- (general_datebase/scripts/add-hot-path-indexes.ts and
--- add-emails-company-folder-index.ts).
+-- Hot-path indexes that only ever existed as one-off scripts.
 --
--- idx_notifications_user_open: /api/notifications is polled every minute by every
+-- idx_notifications_user_open: GET /v1/notifications is polled every minute by every
 -- open tab and filtered on (user_id, is_done); without it the query scans all
 -- notifications.
 -- idx_emails_company_folder: unread, trash and badge counts filter emails by

@@ -1,5 +1,5 @@
--- Billing reminder emails (dunning), sent by the SPA's
--- api/subscription-reminders/process route on each time-triggered tick.
+-- Billing reminder emails (dunning), sent by POST /v1/jobs/billing-reminders
+-- on each time-triggered tick.
 --
 -- billing_reminder_emails: one row per recipient, per dunning cycle, per step.
 -- The unique key is the send claim: the row is inserted (status 'sending')
