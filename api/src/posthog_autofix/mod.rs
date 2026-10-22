@@ -21,6 +21,7 @@ pub mod intake;
 pub mod ledger;
 pub mod model;
 pub mod notify;
+pub mod parameter;
 pub mod policy;
 pub mod posthog;
 pub mod signature;
@@ -53,6 +54,31 @@ impl Autofix {
 
     pub fn from_env() -> Self {
         Self::new(Config::from_env())
+    }
+
+    /// The Lambda's settings: the environment, then the Parameter Store
+    /// parameter for whatever it leaves unset. Mode off fetches nothing; a
+    /// parameter that cannot be read leaves the auto-fix unconfigured.
+    pub async fn load() -> Self {
+        let env = |name: &str| std::env::var(name).ok();
+        if Config::from_lookup(env).mode == Mode::Off {
+            return Self::from_env();
+        }
+        let name = env("POSTHOG_AUTOFIX_PARAMETER")
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| parameter::DEFAULT_NAME.to_string());
+        let stored = match parameter::fetch(&name).await {
+            Ok(text) => parameter::parse(&text),
+            Err(error) => {
+                lambda_http::tracing::error!(
+                    error,
+                    parameter = name,
+                    "PostHog auto-fix settings not read; it stays unconfigured"
+                );
+                std::collections::HashMap::new()
+            }
+        };
+        Self::new(Config::from_lookup(parameter::lookup(env, &stored)))
     }
 
     /// Mode off, nothing configured.

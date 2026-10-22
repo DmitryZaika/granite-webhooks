@@ -87,9 +87,31 @@ The migration header has the full diagram.
 
 ## Configuration
 
-### api Lambda (`granite-api`) environment
+### api Lambda (`granite-api`) settings
 
-| Variable | Default | Meaning |
+The Lambda's environment is at AWS's 4 KB limit, so it holds only
+`POSTHOG_AUTOFIX_MODE` and `POSTHOG_AUTOFIX_START_AT`. Everything else goes,
+as `NAME=value` lines, in one **SecureString** parameter in Systems Manager
+Parameter Store, `/granite-manager/posthog-autofix` (us-east-2;
+`POSTHOG_AUTOFIX_PARAMETER` overrides the name). The api reads it once at cold
+start, only when the mode is not `off`; a variable set in the environment
+wins over the parameter. The Lambda's role needs:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "ssm:GetParameter",
+    "Resource": "arn:aws:ssm:us-east-2:741448943665:parameter/granite-manager/posthog-autofix"
+  }]
+}
+```
+
+A setting change takes effect on the next cold start (any save of the
+Lambda's configuration forces one).
+
+| Setting | Default | Meaning |
 |---|---|---|
 | `POSTHOG_AUTOFIX_MODE` | `off` | `off`, `dry_run` or `live`. The kill switch. |
 | `POSTHOG_AUTOFIX_START_AT` | none | RFC 3339 cutover, e.g. `2026-10-22T00:00:00Z`. Required unless off. |

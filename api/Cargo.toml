@@ -42,6 +42,8 @@ utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "preserve_ord
 utoipa-axum = "0.3.0"
 serde_html_form = "0.4.1"
 aws-sdk-s3 = { version = "1.127", features = ["behavior-version-latest"] }
+aws-config = { version = "1.8", features = ["behavior-version-latest"] }
+aws-sdk-ssm = { version = "1", features = ["behavior-version-latest"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 # Pure Rust: HEIC photos (iPhone) and PDF pages, no system libraries on Lambda.
 zune-heic = "0.5"
