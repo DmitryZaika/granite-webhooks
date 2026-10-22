@@ -16,7 +16,8 @@
 //! routes. Employees read the list of lists (to pick one on a quote).
 
 use crate::auth::{AdminUser, EmployeeUser};
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::quote_pricing::edit::{normalize, own_extras, validate};
 use crate::quote_pricing::js::{arr, get, truthy};
@@ -279,7 +280,7 @@ pub struct PriceLists {
     responses(
         (status = 200, description = "The lists", body = PriceLists),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -288,6 +289,7 @@ pub async fn list_price_lists(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<PriceLists>> {
+    user.plan.require(AddonKey::Quotes)?;
     let price_lists = list_rows(&state.pool, user.company_id).await?;
     let default_id = default_id(&state.pool, user.company_id, &price_lists).await?;
     Ok(Json(PriceLists {
@@ -317,7 +319,7 @@ pub struct NewPriceList {
         (status = 201, description = "Created", body = CreatedId),
         (status = 400, description = "No name", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 409, description = "The name is taken", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -328,6 +330,7 @@ pub async fn create_price_list(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<NewPriceList>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    user.plan.require(AddonKey::Quotes)?;
     let name = input.name.trim();
     if name.is_empty() {
         return Err(ApiError::BadRequest("Give the price list a name.".into()));
@@ -362,7 +365,7 @@ pub async fn create_price_list(
         (status = 201, description = "Created", body = CreatedId),
         (status = 400, description = "Nothing to copy", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -372,6 +375,7 @@ pub async fn copy_price_list(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    user.plan.require(AddonKey::Quotes)?;
     let Some((source, Some(info))) = find(&state.pool, id, user.company_id).await? else {
         return Err(ApiError::BadRequest(
             "That price list has nothing to copy yet.".into(),
@@ -409,7 +413,7 @@ pub struct DefaultPriceList {
     responses(
         (status = 204, description = "Saved"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such list", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -420,6 +424,7 @@ pub async fn set_default_price_list(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<DefaultPriceList>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let lists = list_rows(&state.pool, user.company_id).await?;
     if !lists.iter().any(|l| l.id == input.id) {
         return Err(ApiError::NotFound);
@@ -465,7 +470,7 @@ pub struct PriceListOrder {
     responses(
         (status = 204, description = "Saved"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -475,6 +480,7 @@ pub async fn reorder_price_lists(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<PriceListOrder>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let lists = list_rows(&state.pool, user.company_id).await?;
     let mut order: Vec<i32> = Vec::with_capacity(lists.len());
     for id in input.ids.into_iter().chain(lists.iter().map(|l| l.id)) {
@@ -559,7 +565,7 @@ async fn check_name(pool: &MySqlPool, id: i32, company_id: i32, name: &str) -> A
         (status = 204, description = "Saved"),
         (status = 400, description = "Empty name", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 409, description = "The name is taken", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -571,6 +577,7 @@ pub async fn update_price_list(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<PriceListMeta>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let name = input.name.as_deref().map(str::trim);
     if name == Some("") {
         return Err(ApiError::BadRequest("Give the price list a name.".into()));
@@ -601,7 +608,7 @@ pub async fn update_price_list(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -611,6 +618,7 @@ pub async fn delete_price_list(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     sqlx::query("UPDATE price_lists SET deleted_at = NOW() WHERE id = ? AND company_id = ?")
         .bind(id)
         .bind(user.company_id)
@@ -723,7 +731,7 @@ pub struct PriceListEditor {
     responses(
         (status = 200, description = "The list", body = PriceListEditor),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such list", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -734,6 +742,7 @@ pub async fn get_price_list(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<Json<PriceListEditor>> {
+    user.plan.require(AddonKey::Quotes)?;
     let (price_list, info) = find(&state.pool, id, user.company_id)
         .await?
         .ok_or(ApiError::NotFound)?;
@@ -891,7 +900,7 @@ async fn save_stone_display(pool: &MySqlPool, company_id: i32, info: &Value) -> 
         (status = 204, description = "Saved"),
         (status = 400, description = "No name, or the prices could not be read", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such list", body = ErrorBody),
         (status = 409, description = "The name is taken", body = ErrorBody),
         (status = 422, description = "The prices are ambiguous", body = PriceListProblems),
@@ -905,6 +914,7 @@ pub async fn save_price_list(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<SavedPriceList>,
 ) -> ApiResult<Response> {
+    user.plan.require(AddonKey::Quotes)?;
     let (current, _) = find(&state.pool, id, user.company_id)
         .await?
         .ok_or(ApiError::NotFound)?;
@@ -984,7 +994,7 @@ pub struct RestoredRevision {
     responses(
         (status = 200, description = "Restored", body = RestoredRevision),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such list or revision", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -995,6 +1005,7 @@ pub async fn restore_revision(
     AdminUser(user): AdminUser,
     Path((id, revision_id)): Path<(i32, i32)>,
 ) -> ApiResult<Json<RestoredRevision>> {
+    user.plan.require(AddonKey::Quotes)?;
     let revision: Option<(i32, i32, Option<String>)> = sqlx::query_as(
         "SELECT r.price_list_id, r.revision_number, CAST(r.info_json AS CHAR)
            FROM price_list_revisions r

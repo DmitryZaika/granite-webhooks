@@ -18103,11 +18103,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee",
+            "description": "Caller is not an employee, or sends documents for signature without the Signatures add-on (`addon`: `signatures`) or eSignature access",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -23212,11 +23212,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -23281,11 +23281,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -25321,11 +25321,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -25396,11 +25396,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -25478,11 +25478,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -25548,11 +25548,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -25618,11 +25618,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -25693,11 +25693,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -25775,11 +25775,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -25845,11 +25845,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -25915,11 +25915,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -25990,11 +25990,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26072,11 +26072,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26142,11 +26142,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26209,11 +26209,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26277,11 +26277,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26337,11 +26337,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26405,11 +26405,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26487,11 +26487,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26557,11 +26557,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26627,11 +26627,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26684,11 +26684,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26752,11 +26752,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26827,11 +26827,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26894,11 +26894,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -26983,11 +26983,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -27075,11 +27075,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -27145,11 +27145,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -27234,11 +27234,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -27306,11 +27306,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -27405,11 +27405,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -27475,11 +27475,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -27574,11 +27574,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -27666,11 +27666,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -27758,11 +27758,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -27837,11 +27837,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -27919,11 +27919,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -27976,11 +27976,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -28051,11 +28051,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -28133,11 +28133,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -28203,11 +28203,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -28260,11 +28260,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee",
+            "description": "Caller is not an employee, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -28337,11 +28337,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee",
+            "description": "Caller is not an employee, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -28508,7 +28508,7 @@
           "public"
         ],
         "summary": "Start an online quote",
-        "description": "What the company's online quote builder offers: the colors (stones in\nstock with a photo that its default price list prices, never their\nprices), the sinks on display with a photo, the cooktop cutout and the\ncounter depth to start with. `available` is false when the company has no\nprice list with prices or no color to offer. Next, price the drawing with\n`POST .../online-quote/prices`. No session needed.",
+        "description": "What the company's online quote builder offers: the colors (stones in\nstock with a photo that its default price list prices, never their\nprices), the sinks on display with a photo, the cooktop cutout and the\ncounter depth to start with. `available` is false when the company has no\nprice list with prices or no color to offer, or its plan lacks the Quotes\nadd-on. Next, price the drawing with\n`POST .../online-quote/prices`. No session needed.",
         "operationId": "get_online_quote_setup",
         "parameters": [
           {
@@ -28607,6 +28607,16 @@
               }
             }
           },
+          "403": {
+            "description": "The plan lacks the Quotes add-on (`addon`: `quotes`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddonRequiredBody"
+                }
+              }
+            }
+          },
           "404": {
             "description": "No such company",
             "content": {
@@ -28691,6 +28701,16 @@
               }
             }
           },
+          "403": {
+            "description": "The plan lacks the Quotes add-on (`addon`: `quotes`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddonRequiredBody"
+                }
+              }
+            }
+          },
           "404": {
             "description": "No such company",
             "content": {
@@ -28767,11 +28787,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -28842,11 +28862,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -28924,11 +28944,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -28994,11 +29014,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29051,11 +29071,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29109,11 +29129,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29187,11 +29207,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee, or not an admin for `company`",
+            "description": "Caller is not an employee, or not an admin for `company`, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29244,11 +29264,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29304,11 +29324,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29419,11 +29439,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29494,11 +29514,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29554,11 +29574,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29611,11 +29631,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29688,11 +29708,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29757,11 +29777,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29847,11 +29867,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29917,11 +29937,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -29987,11 +30007,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -30056,11 +30076,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -30123,11 +30143,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -30198,11 +30218,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -30268,11 +30288,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -30338,11 +30358,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -30407,11 +30427,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -30497,11 +30517,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -30587,11 +30607,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -30667,11 +30687,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -30756,11 +30776,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -30835,11 +30855,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -36592,11 +36612,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee",
+            "description": "Caller is not an employee, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -36667,11 +36687,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -36746,11 +36766,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -36816,11 +36836,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee",
+            "description": "Caller is not an employee, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -36906,11 +36926,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -36993,11 +37013,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or shop staff",
+            "description": "Caller is not an employee or shop staff, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -37070,11 +37090,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -40140,11 +40160,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -40238,11 +40258,11 @@
             }
           },
           "403": {
-            "description": "Not an invoice of this customer",
+            "description": "Not an invoice of this customer, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -40354,11 +40374,11 @@
             }
           },
           "403": {
-            "description": "Not an invoice of this customer",
+            "description": "Not an invoice of this customer, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -40467,11 +40487,11 @@
             }
           },
           "403": {
-            "description": "Not an invoice of this customer",
+            "description": "Not an invoice of this customer, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -40570,11 +40590,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -40667,11 +40687,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -40724,11 +40744,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -40781,11 +40801,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee or admin",
+            "description": "Caller is not an employee or admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -40858,11 +40878,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an admin",
+            "description": "Caller is not an admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -45357,6 +45377,107 @@
         ]
       }
     },
+    "/v1/superuser/companies/{id}/addons/{key}": {
+      "put": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Grant or take back a free add-on",
+        "description": "Gives the company the `signatures`, `quotes` or `quickbooks` add-on for\nfree (`enabled` true) or takes that free grant back (false). Only the\nfree (`comp`) grant is touched: an add-on the company pays for through\nStripe stays. Granting an add-on already granted changes nothing; granting\none that was taken back starts it again from now. Works for legacy\ncompanies too: the grant is stored and has no effect until the company\nmoves to a subscription plan, since legacy companies already have every\nadd-on. See `plan_source` and `comp_addons` on\n`GET /v1/superuser/companies/{id}`.",
+        "operationId": "switch_platform_company_addon",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "`signatures`, `quotes` or `quickbooks`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Switch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Unknown add-on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/superuser/companies/{id}/billing-required": {
       "put": {
         "tags": [
@@ -45587,7 +45708,7 @@
           "customers"
         ],
         "summary": "List documents sent for signature",
-        "description": "Newest first, with the customer and sender names. `mine` (default):\nwhat the caller sent; `company` (admins): the whole company. Open\n`SignWell` requests are checked with `SignWell` first.",
+        "description": "Newest first, with the customer and sender names. `mine` (default):\nwhat the caller sent; `company` (admins): the whole company. Open\n`SignWell` requests are checked with `SignWell` first. Needs the\nSignatures add-on; cancelling a request stays open without it.",
         "operationId": "list_signature_requests",
         "parameters": [
           {
@@ -45635,11 +45756,11 @@
             }
           },
           "403": {
-            "description": "Caller is not an employee, or not an admin for `company`",
+            "description": "Caller is not an employee, not an admin for `company`, or the plan lacks the Signatures add-on (`addon`: `signatures`)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/AddonRequiredBody"
                 }
               }
             }
@@ -46418,7 +46539,7 @@
           },
           "shows_email_signature": {
             "type": "boolean",
-            "description": "The signature applies (not for shop managers and workers)."
+            "description": "The signature applies: not for shop managers and workers, and only\nwhen the plan has the Signatures add-on (a legacy plan always does)."
           },
           "has_onboarding_feedback": {
             "type": "boolean",
@@ -46472,7 +46593,7 @@
               "string",
               "null"
             ],
-            "description": "The email signature (HTML, sanitized on save)."
+            "description": "The email signature (HTML, sanitized on save). Ignored, like a field\nleft out, when the plan lacks the Signatures add-on."
           },
           "cloudtalk_agent_id": {
             "type": [
@@ -47063,6 +47184,35 @@
         },
         "additionalProperties": false
       },
+      "AddonKey": {
+        "type": "string",
+        "description": "A paid add-on: `signatures`, `quotes` or `quickbooks`.",
+        "enum": [
+          "signatures",
+          "quotes",
+          "quickbooks"
+        ]
+      },
+      "AddonRequiredBody": {
+        "type": "object",
+        "description": "Body of a 403 that may be about the plan: `addon` names the add-on the\ncompany needs (`signatures`, `quotes` or `quickbooks`) and is absent when\nthe caller lacks a permission instead.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "E.g. `Quotes is an add-on for your plan.`, or `forbidden`."
+          },
+          "addon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The add-on to add to the plan; absent for other refusals."
+          }
+        }
+      },
       "Address": {
         "type": "object",
         "description": "An address of an invoice.",
@@ -47439,6 +47589,7 @@
           "is_template_maker",
           "user_signature_access",
           "company_features",
+          "plan",
           "feature_capabilities"
         ],
         "properties": {
@@ -47517,11 +47668,15 @@
           },
           "user_signature_access": {
             "type": "boolean",
-            "description": "May send documents for signature."
+            "description": "May send documents for signature: the user's own flag, or any user of\na subscription company whose plan has the Signatures add-on."
           },
           "company_features": {
             "$ref": "#/components/schemas/ShellFeatures",
-            "description": "The acting company's switches."
+            "description": "The acting company's switches, with the plan's add-ons applied."
+          },
+          "plan": {
+            "$ref": "#/components/schemas/ShellPlan",
+            "description": "The acting company's plan."
           },
           "feature_capabilities": {
             "$ref": "#/components/schemas/TeamCapabilities",
@@ -49802,6 +49957,8 @@
           "quickbooks_enabled",
           "signature_enabled",
           "billing_required",
+          "plan_source",
+          "comp_addons",
           "onboarding_enabled",
           "leaderboard_enabled"
         ],
@@ -49935,6 +50092,17 @@
             "type": "boolean",
             "description": "Stripe payment required."
           },
+          "plan_source": {
+            "type": "string",
+            "description": "`legacy` (every add-on included) or `subscription` (only bought or\ngranted add-ons)."
+          },
+          "comp_addons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Add-on keys (`signatures`, `quotes`, `quickbooks`) granted free by a\nsuperuser and in force now. Change with\n`PUT /v1/superuser/companies/{id}/addons/{key}`."
+          },
           "onboarding_enabled": {
             "type": "boolean",
             "description": "Guided tours switch (own setting, else the platform default)."
@@ -49954,6 +50122,8 @@
           "onboarding",
           "leaderboard",
           "e_signature",
+          "quotes",
+          "email_signature",
           "inbound_email",
           "cloudtalk",
           "ringcentral"
@@ -49961,7 +50131,7 @@
         "properties": {
           "quickbooks_enabled": {
             "type": "boolean",
-            "description": "The QuickBooks feature is switched on for the company (on unless a\nplatform admin turned it off)."
+            "description": "The QuickBooks feature is switched on for the company (on unless a\nplatform admin turned it off) and, on a subscription plan, the\ncompany has the QuickBooks add-on."
           },
           "quickbooks_connected": {
             "type": "boolean",
@@ -49977,7 +50147,15 @@
           },
           "e_signature": {
             "type": "boolean",
-            "description": "E-signatures: the company has a SignWell API key. Each user still needs\ntheir own `is_signature_available` flag."
+            "description": "E-signatures: the company has a SignWell API key (or its own switch is\non) and, on a subscription plan, the Signatures add-on. Each user still\nneeds their own `is_signature_available` flag."
+          },
+          "quotes": {
+            "type": "boolean",
+            "description": "Quotes: the company's plan includes the Quotes add-on (always true on a\nlegacy plan)."
+          },
+          "email_signature": {
+            "type": "boolean",
+            "description": "The users' email signature block: the company's plan includes the\nSignatures add-on (always true on a legacy plan)."
           },
           "inbound_email": {
             "type": "boolean",
@@ -64246,7 +64424,7 @@
         "properties": {
           "feature_enabled": {
             "type": "boolean",
-            "description": "The `QuickBooks` feature is on for the company."
+            "description": "The `QuickBooks` feature is on for the company and its plan has the\nQuickBooks add-on."
           },
           "credentials_source": {
             "$ref": "#/components/schemas/CredentialsSource",
@@ -68288,16 +68466,18 @@
           "quickbooks",
           "signature",
           "onboarding",
-          "leaderboard"
+          "leaderboard",
+          "quotes",
+          "email_signature"
         ],
         "properties": {
           "quickbooks": {
             "type": "boolean",
-            "description": "QuickBooks is switched on."
+            "description": "QuickBooks is switched on and in the plan."
           },
           "signature": {
             "type": "boolean",
-            "description": "E-signatures are set up."
+            "description": "E-signatures are set up and in the plan."
           },
           "onboarding": {
             "type": "boolean",
@@ -68306,6 +68486,40 @@
           "leaderboard": {
             "type": "boolean",
             "description": "The points leaderboard is on."
+          },
+          "quotes": {
+            "type": "boolean",
+            "description": "The plan includes the Quotes add-on (always true on a legacy plan)."
+          },
+          "email_signature": {
+            "type": "boolean",
+            "description": "The plan includes the Signatures add-on, so users' email signature\nblocks are offered (always true on a legacy plan)."
+          }
+        }
+      },
+      "ShellPlan": {
+        "type": "object",
+        "description": "The acting company's plan: what it pays for.",
+        "required": [
+          "source",
+          "addons",
+          "manage_url"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "`legacy` (every add-on included) or `subscription` (only the add-ons\nin `addons`)."
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddonKey"
+            },
+            "description": "The add-ons the company may use, in a fixed order (all of them on a\nlegacy plan)."
+          },
+          "manage_url": {
+            "type": "string",
+            "description": "Where a Manager buys or cancels add-ons (the payments app's account\npage)."
           }
         }
       },

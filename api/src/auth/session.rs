@@ -2,6 +2,7 @@
 //! `app/utils/session.server.ts`. Keep the two in sync until Remix is gone.
 
 use crate::billing::FIRST_PAYMENT_DAYS;
+use crate::entitlements::{Entitlements, plan_columns};
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
 use utoipa::ToSchema;
@@ -45,6 +46,10 @@ pub struct SessionUser {
     pub ringcentral_phone_number: Option<String>,
     /// Feature flag: the user may use e-signatures.
     pub is_signature_available: bool,
+    /// The add-ons the acting company's plan includes.
+    #[sqlx(flatten)]
+    #[serde(skip)]
+    pub plan: Entitlements,
 }
 
 #[derive(Debug, Clone, Copy, FromRow)]
@@ -100,6 +105,7 @@ pub async fn find_session(
                users.company_id, users.pined_bar, users.cloudtalk_agent_id,
                users.cloudtalk_phone_number, users.ringcentral_extension_id,
                users.ringcentral_phone_number, users.is_signature_available,
+               {plan},
                COALESCE({BILLING_PAUSED}, 0) AS billing_paused
         FROM users
         JOIN sessions ON sessions.user_id = users.id
@@ -110,7 +116,8 @@ pub async fn find_session(
           AND sessions.created_date > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ? MONTH)
           AND sessions.is_deleted = 0
           AND users.is_deleted = 0
-        "
+        ",
+        plan = plan_columns("company"),
     )))
     .bind(FIRST_PAYMENT_DAYS)
     .bind(session_id)
@@ -193,7 +200,7 @@ pub async fn find_user(
     user_id: i32,
     company_id: i32,
 ) -> Result<Option<SessionUser>, sqlx::Error> {
-    sqlx::query_as::<_, SessionUser>(
+    sqlx::query_as::<_, SessionUser>(sqlx::AssertSqlSafe(format!(
         r"
         SELECT users.id, users.email, users.name, users.phone_number,
                COALESCE(users.is_employee, 0) AS is_employee,
@@ -201,11 +208,14 @@ pub async fn find_user(
                COALESCE(users.is_superuser, 0) AS is_superuser,
                users.company_id, users.pined_bar, users.cloudtalk_agent_id,
                users.cloudtalk_phone_number, users.ringcentral_extension_id,
-               users.ringcentral_phone_number, users.is_signature_available
+               users.ringcentral_phone_number, users.is_signature_available,
+               {}
         FROM users
+        LEFT JOIN company ON company.id = users.company_id
         WHERE users.id = ? AND users.company_id = ? AND users.is_deleted = 0
         ",
-    )
+        plan_columns("company")
+    )))
     .bind(user_id)
     .bind(company_id)
     .fetch_optional(pool)
@@ -232,6 +242,7 @@ mod tests {
             ringcentral_extension_id: None,
             ringcentral_phone_number: None,
             is_signature_available: false,
+            plan: Entitlements::default(),
         }
     }
 

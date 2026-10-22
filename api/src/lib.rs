@@ -24,6 +24,7 @@ pub mod commissions;
 pub mod db;
 pub mod deliverability;
 pub mod email_signature;
+pub mod entitlements;
 pub mod error;
 pub mod extract;
 pub mod followups;

@@ -4,8 +4,10 @@
 //! back as `QuickBooks` sends it, with the company's classes.
 
 use crate::auth::AdminUser;
-use crate::error::{ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::qbo::QboError;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -69,7 +71,7 @@ fn day(value: &str) -> Option<&str> {
     responses(
         (status = 200, description = "The report, or why there is none", body = ClassSales),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the QuickBooks add-on (`addon`: `quickbooks`)", body = AddonRequiredBody),
     ),
     security(("session_cookie" = []))
 )]
@@ -87,6 +89,7 @@ pub async fn class_sales(
     };
     let access = match state.qbo.access(&state.pool, user.company_id).await {
         Ok(access) => access,
+        Err(QboError::AddonRequired) => return Err(ApiError::AddonRequired(AddonKey::Quickbooks)),
         Err(err) if err.is_not_connected() => return Ok(empty(ClassSalesStatus::NotConnected)),
         Err(err) => {
             tracing::warn!(error = %err, "QuickBooks access failed");
@@ -112,6 +115,7 @@ pub async fn class_sales(
     let report = match report {
         Ok(report) if report.get("Fault").is_none() => report,
         Ok(_) => return Ok(empty(ClassSalesStatus::Error)),
+        Err(QboError::AddonRequired) => return Err(ApiError::AddonRequired(AddonKey::Quickbooks)),
         Err(err) if err.is_not_connected() => return Ok(empty(ClassSalesStatus::NotConnected)),
         Err(err) => {
             tracing::warn!(error = %err, "QuickBooks class sales report failed");

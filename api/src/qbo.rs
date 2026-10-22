@@ -5,6 +5,7 @@
 //! holds the company row lock until the new tokens are saved, so two
 //! requests never spend the same refresh token.
 
+use crate::entitlements::{AddonKey, entitled_sql};
 use common::telephony::ringcentral_auth::{decrypt, encrypt, env_key};
 use lambda_http::tracing;
 use serde_json::Value;
@@ -46,6 +47,8 @@ pub enum QboError {
     NotConnected,
     #[error("QuickBooks needs to be reconnected")]
     Reconnect,
+    #[error("QuickBooks is an add-on the company's plan does not include")]
+    AddonRequired,
     #[error("QuickBooks request failed: {0}")]
     Request(String),
     #[error("QuickBooks returned {status}: {body}")]
@@ -64,6 +67,8 @@ impl QboError {
 #[derive(sqlx::FromRow)]
 struct ConnectionRow {
     quickbooks_enabled: bool,
+    /// The plan has the QuickBooks add-on.
+    entitled: bool,
     qbo_realm_id: Option<String>,
     qbo_access_token: Option<Vec<u8>>,
     qbo_refresh_token: Option<Vec<u8>>,
@@ -155,11 +160,13 @@ impl Qbo {
         lock: bool,
     ) -> Result<Option<ConnectionRow>, sqlx::Error> {
         let sql = format!(
-            "SELECT quickbooks_enabled <> 0 AS quickbooks_enabled, qbo_realm_id, qbo_access_token,
+            "SELECT quickbooks_enabled <> 0 AS quickbooks_enabled, {entitled} AS entitled,
+                    qbo_realm_id, qbo_access_token,
                     qbo_refresh_token, qbo_access_expires, qbo_refresh_expires, qbo_client_id,
                     qbo_client_secret
                FROM company WHERE id = ?{}",
-            if lock { " FOR UPDATE" } else { "" }
+            if lock { " FOR UPDATE" } else { "" },
+            entitled = entitled_sql("company", AddonKey::Quickbooks),
         );
         sqlx::query_as(sqlx::AssertSqlSafe(sql))
             .bind(company_id)
@@ -196,11 +203,14 @@ impl Qbo {
     }
 
     /// A valid access token for the company, refreshed when it is about to
-    /// expire.
+    /// expire. `AddonRequired` when the plan lacks the QuickBooks add-on.
     pub async fn access(&self, pool: &MySqlPool, company_id: i32) -> Result<Access, QboError> {
         let row = Self::row(pool, company_id, false)
             .await?
             .ok_or(QboError::NotConnected)?;
+        if !row.entitled {
+            return Err(QboError::AddonRequired);
+        }
         if !row.quickbooks_enabled {
             return Err(QboError::NotConnected);
         }

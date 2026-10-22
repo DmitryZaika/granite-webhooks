@@ -527,3 +527,37 @@ INSERT INTO email_attachments (id, email_id, content_type, content_subtype, file
 INSERT INTO email_reads (message_id, read_at) VALUES
   ('<m8801@other.test>', '2026-04-10 15:00:00'),
   ('<m8804@other.test>', '2026-04-06 12:00:01');
+
+-- Add-on plans (ids 20100-20199). Both companies are on a subscription plan
+-- with eSignatures and QuickBooks switched on, so only the plan decides.
+-- 20100 Quotes Only Stone: bought Quotes.
+-- 20101 Comp Signatures Stone: Signatures granted free by a superuser, plus a
+--   Quotes item that ended (does not count).
+-- Users: 20100 manager + 20101 rep of 20100; 20102 manager + 20103 rep of
+-- 20101. Sessions aaaaaaaa-0000-4000-8000-0000000<user id>.
+INSERT INTO company (id, name, plan_source, signature_enabled) VALUES
+  (20100, 'Quotes Only Stone', 'subscription', 1),
+  (20101, 'Comp Signatures Stone', 'subscription', 1);
+
+INSERT INTO company_addons (company_id, addon_key, source, stripe_subscription_item_id, granted_by, started_at, ended_at) VALUES
+  (20100, 'quotes',     'subscription', 'si_seed_quotes', NULL, '2026-10-01 00:00:00', NULL),
+  (20101, 'signatures', 'comp',         NULL,             NULL, '2026-10-01 00:00:00', NULL),
+  (20101, 'quotes',     'subscription', 'si_seed_ended',  NULL, '2026-01-01 00:00:00', '2026-02-01 00:00:00');
+
+INSERT INTO users (id, email, password, name, is_employee, is_admin, is_superuser, is_deleted, company_id) VALUES
+  (20100, 'manager@quotes-only.test', '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Quinn Manager', 1, 1, 0, 0, 20100),
+  (20101, 'rep@quotes-only.test',     '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Ray Rep',       1, 0, 0, 0, 20100),
+  (20102, 'manager@comp-sign.test',   '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Cora Manager',  1, 1, 0, 0, 20101),
+  (20103, 'rep@comp-sign.test',       '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Sid Rep',       1, 0, 0, 0, 20101);
+
+INSERT INTO users_positions (user_id, position_id, company_id) VALUES
+  (20100, 5, 20100),
+  (20101, 1, 20100),
+  (20102, 5, 20101),
+  (20103, 1, 20101);
+
+INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VALUES
+  ('aaaaaaaa-0000-4000-8000-000000020100', 20100, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020101', 20101, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020102', 20102, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020103', 20103, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);

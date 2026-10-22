@@ -151,6 +151,13 @@ off the allow-list in `auth/mod.rs` answer 402 (decided by the session query).
 Each company's billing writes run under `billing/lock.rs` (a MySQL named lock
 on its own connection, since the Lambda pool has one).
 
+Add-ons (`src/entitlements.rs`): Signatures, Quotes and QuickBooks are free
+for legacy companies (`company.plan_source = 'legacy'`, everyone before
+self-serve) and need an active `company_addons` row on a subscription plan.
+Session routes check `user.plan.require(AddonKey::...)` (the session query
+loads the plan); a refusal is 403 with `addon`. Superusers grant one free
+with `PUT /v1/superuser/companies/{id}/addons/{key}`.
+
 ### Uploads and storage
 
 Images go straight from the browser to the bucket with a presigned PUT

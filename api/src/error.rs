@@ -46,6 +46,9 @@ pub enum ApiError {
     /// The company's access is paused until it pays (`/admin/billing`).
     #[error("Payment required")]
     PaymentRequired,
+    /// The company's plan does not include this add-on.
+    #[error("{} is an add-on for your plan.", .0.label())]
+    AddonRequired(crate::entitlements::AddonKey),
 }
 
 /// What actually failed, kept on the response for the 5xx reporting in
@@ -79,6 +82,15 @@ impl IntoResponse for ApiError {
                     code: PAYMENT_REQUIRED_CODE.into(),
                 };
                 let mut response = (StatusCode::PAYMENT_REQUIRED, Json(body)).into_response();
+                response.extensions_mut().insert(detail);
+                return response;
+            }
+            Self::AddonRequired(key) => {
+                let body = AddonRequiredBody {
+                    error: self.to_string(),
+                    addon: Some(key.as_str().into()),
+                };
+                let mut response = (StatusCode::FORBIDDEN, Json(body)).into_response();
                 response.extensions_mut().insert(detail);
                 return response;
             }
@@ -122,6 +134,18 @@ pub struct PaymentRequiredBody {
     pub code: String,
 }
 
+/// Body of a 403 that may be about the plan: `addon` names the add-on the
+/// company needs (`signatures`, `quotes` or `quickbooks`) and is absent when
+/// the caller lacks a permission instead.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AddonRequiredBody {
+    /// E.g. `Quotes is an add-on for your plan.`, or `forbidden`.
+    pub error: String,
+    /// The add-on to add to the plan; absent for other refusals.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub addon: Option<String>,
+}
+
 pub type ApiResult<T> = Result<T, ApiError>;
 
 #[cfg(test)]
@@ -135,5 +159,19 @@ mod tests {
         let detail = response.extensions().get::<ErrorDetail>().expect("detail");
         assert_eq!(detail.kind, "ApiError");
         assert_eq!(detail.message, r#"Internal("quote half saved")"#);
+    }
+
+    #[tokio::test]
+    async fn a_missing_addon_is_a_403_naming_it() {
+        let response =
+            ApiError::AddonRequired(crate::entitlements::AddonKey::Quotes).into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .expect("body");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).expect("json"),
+            serde_json::json!({"error": "Quotes is an add-on for your plan.", "addon": "quotes"})
+        );
     }
 }

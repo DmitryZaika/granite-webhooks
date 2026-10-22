@@ -20,6 +20,7 @@
 pub mod cookie;
 pub mod session;
 
+use crate::entitlements::company_entitlements;
 use crate::error::ApiError;
 use crate::state::AppState;
 use axum::extract::FromRequestParts;
@@ -54,7 +55,11 @@ async fn authenticate_with_positions(
         .ok_or(ApiError::Unauthorized)?;
     let own_company_id = row.user.company_id;
     let positions = user_positions(&state.pool, row.user.id).await?;
-    let user = effective_user(row.user, &positions, session.active_company_id);
+    let mut user = effective_user(row.user, &positions, session.active_company_id);
+    if user.company_id != own_company_id {
+        // A super admin acting in another company: that company's plan.
+        user.plan = company_entitlements(&state.pool, user.company_id).await?;
+    }
     if !open_while_paused(&parts.method, parts.uri.path()) {
         let paused = if user.company_id == own_company_id {
             row.billing_paused

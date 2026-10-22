@@ -2,6 +2,7 @@
 
 use super::schemas::{Attachment, Participant, ThreadCustomer, ThreadDetail, ThreadMessage};
 use super::sql::{Arg, CLIENT_OPEN_MIN_DELAY, Mailbox, Sql, can_read_thread, normalize_address};
+use crate::entitlements::{AddonKey, entitled_sql};
 use crate::storage::Storage;
 use sqlx::MySqlPool;
 
@@ -254,12 +255,22 @@ fn mime(attachment: &Attachment) -> Option<String> {
     }
 }
 
-async fn user_signature(pool: &MySqlPool, user_id: i32) -> Result<Option<String>, sqlx::Error> {
-    let signature: Option<Option<String>> =
-        sqlx::query_scalar("SELECT email_signature FROM users WHERE id = ?")
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await?;
+/// The user's signature, none when the mailbox's company lacks the Signatures add-on.
+async fn user_signature(
+    pool: &MySqlPool,
+    user_id: i32,
+    company_id: i32,
+) -> Result<Option<String>, sqlx::Error> {
+    let signature: Option<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT CASE WHEN {} THEN u.email_signature END
+           FROM users u LEFT JOIN company c ON c.id = ?
+          WHERE u.id = ?",
+        entitled_sql("c", AddonKey::Signatures)
+    )))
+    .bind(company_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
     Ok(signature.flatten().filter(|s| !s.is_empty()))
 }
 
@@ -441,7 +452,7 @@ pub async fn thread_detail(
         }
         // A new conversation started from the deal.
         let addresses = customer_addresses(pool, customer_id).await?;
-        let signature = user_signature(pool, mailbox.user_id).await?;
+        let signature = user_signature(pool, mailbox.user_id, mailbox.company_id).await?;
         return Ok(Some(ThreadDetail {
             thread_id: thread_id.to_string(),
             deal_id: Some(deal_id),
@@ -460,7 +471,7 @@ pub async fn thread_detail(
             customer_addresses: addresses,
         }));
     }
-    let signature = user_signature(pool, mailbox.user_id).await?;
+    let signature = user_signature(pool, mailbox.user_id, mailbox.company_id).await?;
     let sending_email = sending_address(pool, mailbox.company_id, &mailbox.email).await?;
     let (deal_id, customer) = match (on_deal, deal_customer) {
         (Some(deal_id), Some((customer_id, name))) => {
