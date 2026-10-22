@@ -24,6 +24,7 @@ pub mod notify;
 pub mod policy;
 pub mod posthog;
 pub mod signature;
+pub mod writeback;
 
 pub use config::{Config, Mode};
 

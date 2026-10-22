@@ -72,7 +72,13 @@ api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
    A failed check never gives a ready pull request: it gives a draft labelled
    `ai-fix:unverified`, with the evidence.
 7. **Report.** The pull request is opened by the `granite-autofix` GitHub App.
-   The api records the result and emails `POSTHOG_AUTOFIX_RECIPIENTS`.
+   The api records the result and emails `POSTHOG_AUTOFIX_RECIPIENTS`. With
+   write-back configured, the next poll assigns the PostHog issue to the
+   fix's reviewer.
+
+Browser errors resolve to real files and functions once the SPA uploads its
+source maps at deploy (`general_datebase`, `docs/static-hosting.md`). Until
+then their frames are minified, and only the error text identifies the bug.
 
 Ledger states: `discovered → queued | skipped | duplicate`, `queued →
 dispatched | previewed (dry run) | failed`, `dispatched → running`, `running →
@@ -101,6 +107,8 @@ The migration header has the full diagram.
 | `POSTHOG_AUTOFIX_STORM_THRESHOLD` | `20` | More new issues than this in one storm window send one digest. |
 | `POSTHOG_AUTOFIX_STORM_WINDOW_MINUTES` | `30` | The storm window. |
 | `POSTHOG_AUTOFIX_EXCLUDE` | see `config.rs` `DEFAULT_EXCLUDE` | Newline- or `;`-separated, case-insensitive substrings of `<type>: <message>`. Replaces the defaults. |
+| `POSTHOG_AUTOFIX_WRITE_KEY` | none | Optional write-back: PostHog personal API key with `error_tracking:write`, project 141685. |
+| `POSTHOG_AUTOFIX_ASSIGNEE` | none | Optional write-back: `user:<PostHog user id>` or `role:<role uuid>`. When a fix's pull request opens, its issue is assigned to them, retried on the next poll if PostHog fails. Both write-back variables must be set. |
 | `POSTHOG_AUTOFIX_GITHUB_REPO` / `_WORKFLOW` / `_REF` | `DmitryZaika/granite-webhooks` / `posthog-autofix.yml` / `main` | Where the workflow lives. |
 
 An unparsable value keeps its default and is logged; secrets never appear in logs.

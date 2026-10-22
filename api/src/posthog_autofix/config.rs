@@ -4,6 +4,7 @@
 //! deployed without these variables does nothing. A value that does not parse
 //! keeps its default and is logged, so a typo cannot turn the caps off.
 
+use super::writeback::Assignee;
 use chrono::{DateTime, Utc};
 use lambda_http::tracing;
 use std::fmt;
@@ -30,9 +31,11 @@ impl Mode {
     }
 }
 
-/// Error messages that are noise, not bugs: matched case-insensitively
-/// against `<type>: <message>`. `POSTHOG_AUTOFIX_EXCLUDE` replaces this list.
-/// Each entry was seen in production PostHog issues (October 2026).
+/// Error messages that are noise, not bugs.
+///
+/// Matched case-insensitively against `<type>: <message>`;
+/// `POSTHOG_AUTOFIX_EXCLUDE` replaces this list. Each entry was seen in
+/// production PostHog issues (October 2026).
 pub const DEFAULT_EXCLUDE: &[&str] = &[
     // The network dropped or a deploy replaced a chunk mid-session.
     "TypeError: Failed to fetch",
@@ -95,6 +98,10 @@ pub struct Config {
     pub github_token: Option<String>,
     /// Bearer secret the workflow sends to the callbacks.
     pub callback_secret: Option<String>,
+    /// Personal API key with `error_tracking:write`, for the write-back.
+    pub write_key: Option<String>,
+    /// Who the PostHog issues of opened fixes are assigned to.
+    pub assignee: Option<Assignee>,
 }
 
 impl Default for Config {
@@ -121,6 +128,8 @@ impl Default for Config {
             github_ref: "main".into(),
             github_token: None,
             callback_secret: None,
+            write_key: None,
+            assignee: None,
         }
     }
 }
@@ -151,6 +160,8 @@ impl fmt::Debug for Config {
             .field("github_ref", &self.github_ref)
             .field("github_token", &set(&self.github_token))
             .field("callback_secret", &set(&self.callback_secret))
+            .field("write_key", &set(&self.write_key))
+            .field("assignee", &self.assignee)
             .finish()
     }
 }
@@ -241,6 +252,16 @@ impl Config {
         }
         config.github_token = read("GITHUB_TOKEN");
         config.callback_secret = read("CALLBACK_SECRET");
+        config.write_key = read("WRITE_KEY");
+        config.assignee = read("ASSIGNEE").and_then(|value| {
+            Assignee::parse(&value).or_else(|| {
+                tracing::warn!(
+                    value,
+                    "POSTHOG_AUTOFIX_ASSIGNEE is not user:<id> or role:<uuid>"
+                );
+                None
+            })
+        });
         config
     }
 
@@ -384,7 +405,7 @@ mod tests {
         }
         for bug in [
             r#"GraniteApiError: Granite API 500 on /v1/notifications/done: {"error":"database error"}"#,
-            r#"GraniteApiError: Granite API 400 on /v1/sms/all/sales-reps: Invalid URL: unknown variant `all`"#,
+            "GraniteApiError: Granite API 400 on /v1/sms/all/sales-reps: Invalid URL: unknown variant `all`",
             "TypeError: Cannot read properties of undefined (reading 'title')",
             "ApiError: Database(PoolTimedOut)",
             "HTTPError: Failed to build payload",
@@ -399,6 +420,20 @@ mod tests {
         let printed = format!("{config:?}");
         assert!(!printed.contains("s3cret") && !printed.contains("phx_key"));
         assert!(printed.contains("<set>"));
+    }
+
+    #[test]
+    fn write_back_needs_a_key_and_a_valid_assignee() {
+        let config = config(&[("WRITE_KEY", "phx_w"), ("ASSIGNEE", "user:42")]);
+        assert_eq!(config.assignee, Some(Assignee::User(42)));
+        assert!(!format!("{config:?}").contains("phx_w"));
+        assert_eq!(super::Config::from_lookup(|_| None).assignee, None);
+        let typo = config_with("ASSIGNEE", "dima");
+        assert_eq!(typo.assignee, None);
+    }
+
+    fn config_with(name: &str, value: &str) -> Config {
+        config(&[(name, value)])
     }
 
     #[test]

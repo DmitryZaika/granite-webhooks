@@ -7,6 +7,7 @@ use crate::error::{ApiResult, ErrorBody};
 use crate::posthog_autofix::github::GitHub;
 use crate::posthog_autofix::intake::{Deps, TickReport, tick};
 use crate::posthog_autofix::posthog::PostHog;
+use crate::posthog_autofix::writeback::PostHogWriter;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -18,8 +19,9 @@ use chrono::Utc;
 /// poll window, `POSTHOG_AUTOFIX_POLL_MINUTES`) records new PostHog error
 /// issues created since the cutover, emails one digest when they arrive in a
 /// storm, judges issues that have settled (skipped as noise, folded into an
-/// earlier run of the same bug, or queued) and emails when a fixed issue is
-/// reopened. Last, in live mode, it starts queued fix runs within the
+/// earlier run of the same bug, or queued), emails when a fixed issue is
+/// reopened, and (with `POSTHOG_AUTOFIX_WRITE_KEY` and `_ASSIGNEE` set)
+/// assigns the issues of opened fixes in PostHog. Last, in live mode, it starts queued fix runs within the
 /// concurrency and daily caps; in dry-run mode it emails the runs it would
 /// have started instead. With `POSTHOG_AUTOFIX_MODE` off it does nothing.
 /// When another tick is running it returns at once with `busy`. PostHog or
@@ -46,6 +48,7 @@ pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Js
         source: &PostHog { config, http },
         dispatcher: &GitHub { config, http },
         mailer: &state.webhooks,
+        writer: &PostHogWriter { config, http },
     };
     Ok(Json(tick(&deps, Utc::now()).await?))
 }

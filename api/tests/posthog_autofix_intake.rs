@@ -5,6 +5,7 @@ use api::posthog_autofix::github::{Dispatch, DispatchError, Dispatcher};
 use api::posthog_autofix::intake::{Deps, TickReport, tick};
 use api::posthog_autofix::notify::{Email, Mailer};
 use api::posthog_autofix::posthog::{Issue, IssueEvents, IssueSource, SourceError};
+use api::posthog_autofix::writeback::IssueWriter;
 use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
 use serde_json::json;
 use sqlx::MySqlPool;
@@ -133,11 +134,34 @@ impl Mailer for FakeMailer {
     }
 }
 
+/// Write-back off unless `enabled`; records the issues it assigned.
+#[derive(Default)]
+struct FakeWriter {
+    enabled: AtomicBool,
+    fail: AtomicBool,
+    assigned: Mutex<Vec<String>>,
+}
+
+impl IssueWriter for FakeWriter {
+    fn enabled(&self) -> bool {
+        self.enabled.load(Ordering::SeqCst)
+    }
+
+    async fn assign(&self, issue_id: &str) -> Result<(), String> {
+        if self.fail.load(Ordering::SeqCst) {
+            return Err("PostHog assign failed: 503".into());
+        }
+        self.assigned.lock().unwrap().push(issue_id.to_string());
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct World {
     source: FakeSource,
     dispatcher: FakeDispatcher,
     mailer: FakeMailer,
+    writer: FakeWriter,
 }
 
 impl World {
@@ -148,6 +172,7 @@ impl World {
             source: &self.source,
             dispatcher: &self.dispatcher,
             mailer: &self.mailer,
+            writer: &self.writer,
         };
         tick(&deps, now).await.unwrap()
     }
@@ -585,6 +610,34 @@ async fn a_reopened_fix_is_emailed_once(pool: MySqlPool) {
     let next_poll = world.tick(&pool, &config, minutes(20)).await;
     assert_eq!(next_poll.regressions, 0);
     assert_eq!(world.mailer.subjects().len(), 1);
+}
+
+#[test_db::test]
+async fn an_opened_fix_is_assigned_in_posthog_once(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let opened = |n: u32| {
+        insert_run(
+            &pool,
+            n,
+            "status, outcome, pr_url, finished_at",
+            "'succeeded', 'fixed_with_test', 'https://github.com/o/r/pull/1', '2026-10-20 12:00:00'",
+        )
+    };
+    opened(1).await;
+    // Write-back off: nothing is sent.
+    assert_eq!(world.tick(&pool, &config, minutes(10)).await.assigned, 0);
+
+    world.writer.enabled.store(true, Ordering::SeqCst);
+    world.writer.fail.store(true, Ordering::SeqCst);
+    let failed = world.tick(&pool, &config, minutes(20)).await;
+    assert_eq!(failed.assigned, 0);
+    assert_eq!(failed.errors.len(), 1);
+
+    world.writer.fail.store(false, Ordering::SeqCst);
+    assert_eq!(world.tick(&pool, &config, minutes(30)).await.assigned, 1);
+    assert_eq!(world.tick(&pool, &config, minutes(40)).await.assigned, 0);
+    assert_eq!(*world.writer.assigned.lock().unwrap(), [issue_id(1)]);
 }
 
 #[test_db::test]

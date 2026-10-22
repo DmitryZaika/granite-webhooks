@@ -322,6 +322,42 @@ pub async fn fixed_since(
     .await
 }
 
+/// Runs whose pull request opened since `since` and whose PostHog issue is not
+/// assigned yet: `(id, posthog_issue_id)`, oldest first.
+pub async fn opened_unassigned(
+    db: impl MySqlExecutor<'_>,
+    since: DateTime<Utc>,
+    limit: u32,
+) -> Result<Vec<(u64, String)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT id, posthog_issue_id FROM posthog_autofix_runs
+          WHERE status = 'succeeded' AND pr_url IS NOT NULL AND posthog_assigned_at IS NULL
+            AND finished_at >= ?
+          ORDER BY finished_at, id LIMIT ?",
+    )
+    .bind(since.naive_utc())
+    .bind(limit)
+    .fetch_all(db)
+    .await
+}
+
+pub async fn mark_assigned(
+    db: impl MySqlExecutor<'_>,
+    id: u64,
+    now: DateTime<Utc>,
+) -> Result<bool, sqlx::Error> {
+    let changed = sqlx::query(
+        "UPDATE posthog_autofix_runs SET posthog_assigned_at = ?
+          WHERE id = ? AND posthog_assigned_at IS NULL",
+    )
+    .bind(now.naive_utc())
+    .bind(id)
+    .execute(db)
+    .await?
+    .rows_affected();
+    Ok(changed == 1)
+}
+
 /// Claims a run's one regression email, storing the issue's status.
 pub async fn mark_regression(
     db: impl MySqlExecutor<'_>,

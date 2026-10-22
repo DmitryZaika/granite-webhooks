@@ -10,6 +10,7 @@ use super::notify::{self, Email, Mailer};
 use super::policy::{self, Candidate};
 use super::posthog::{Issue, IssueEvents, IssueSource};
 use super::signature::{self, Fingerprint};
+use super::writeback::IssueWriter;
 use chrono::{DateTime, Duration, Utc};
 use lambda_http::tracing;
 use serde::Serialize;
@@ -19,12 +20,13 @@ use std::fmt::Display;
 use utoipa::ToSchema;
 
 /// Everything a tick talks to.
-pub struct Deps<'a, S, D, M> {
+pub struct Deps<'a, S, D, M, W> {
     pub pool: &'a MySqlPool,
     pub config: &'a Config,
     pub source: &'a S,
     pub dispatcher: &'a D,
     pub mailer: &'a M,
+    pub writer: &'a W,
 }
 
 /// What a tick did.
@@ -48,6 +50,8 @@ pub struct TickReport {
     pub timed_out: usize,
     /// Fixed issues that PostHog reopened (emailed).
     pub regressions: usize,
+    /// PostHog issues of opened fixes assigned to their reviewer (write-back).
+    pub assigned: usize,
     /// A storm digest was emailed.
     pub storm_digest: bool,
     /// Another tick held the lock; this one did nothing.
@@ -69,14 +73,17 @@ const STORM_TOP: u32 = 5;
 /// A fix is watched for a regression this long after it finished.
 const REGRESSION_DAYS: i64 = 30;
 const REGRESSION_BATCH: u32 = 100;
+/// An opened fix's issue is assigned within this many days, or not at all.
+const ASSIGN_DAYS: i64 = 7;
+const ASSIGN_BATCH: u32 = 20;
 const PREVIEW_BATCH: u32 = 20;
 
 // Per database: dev and production share one MySQL server, and so do tests.
 const LOCK: &str = "SELECT GET_LOCK(CONCAT('posthog_autofix_tick:', DATABASE()), 0)";
 const UNLOCK: &str = "SELECT RELEASE_LOCK(CONCAT('posthog_autofix_tick:', DATABASE()))";
 
-pub async fn tick<S: IssueSource, D: Dispatcher, M: Mailer>(
-    deps: &Deps<'_, S, D, M>,
+pub async fn tick<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter>(
+    deps: &Deps<'_, S, D, M, W>,
     now: DateTime<Utc>,
 ) -> Result<TickReport, sqlx::Error> {
     let config = deps.config;
@@ -135,15 +142,15 @@ async fn unlock(conn: &mut MySqlConnection) -> Result<(), sqlx::Error> {
 }
 
 /// A tick in progress, holding the lock on `conn`.
-struct Tick<'t, S, D, M> {
-    deps: &'t Deps<'t, S, D, M>,
+struct Tick<'t, S, D, M, W> {
+    deps: &'t Deps<'t, S, D, M, W>,
     conn: &'t mut MySqlConnection,
     now: DateTime<Utc>,
     start_at: DateTime<Utc>,
     report: TickReport,
 }
 
-impl<S: IssueSource, D: Dispatcher, M: Mailer> Tick<'_, S, D, M> {
+impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M, W> {
     async fn run(&mut self) -> Result<(), sqlx::Error> {
         let config = self.deps.config;
         self.watchdog().await?;
@@ -154,6 +161,7 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer> Tick<'_, S, D, M> {
             self.storm().await?;
             self.judge_settled().await?;
             self.check_regressions().await?;
+            self.assign_opened_fixes().await?;
         }
         match config.mode {
             Mode::Live => self.dispatch().await,
@@ -399,6 +407,28 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer> Tick<'_, S, D, M> {
                     self.email(&emails::regression(&row.run, config)).await;
                 }
             } else if ledger::store_issue_status(&mut *self.conn, row.run.id, status).await? {
+                self.report.processed += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Write-back: assigns the PostHog issues of opened fixes to their
+    /// reviewer. A failure is retried on the next poll.
+    async fn assign_opened_fixes(&mut self) -> Result<(), sqlx::Error> {
+        if !self.deps.writer.enabled() {
+            return Ok(());
+        }
+        let since = self.now - Duration::days(ASSIGN_DAYS);
+        for (id, issue_id) in
+            ledger::opened_unassigned(&mut *self.conn, since, ASSIGN_BATCH).await?
+        {
+            if let Err(error) = self.deps.writer.assign(&issue_id).await {
+                self.failed(&format!("assign run {id}"), &error);
+                continue;
+            }
+            if ledger::mark_assigned(&mut *self.conn, id, self.now).await? {
+                self.report.assigned += 1;
                 self.report.processed += 1;
             }
         }
