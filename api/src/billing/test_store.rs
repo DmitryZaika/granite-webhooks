@@ -1,4 +1,5 @@
 //! An in-memory `BillingStore` for the state machine and gate tests.
+#![allow(clippy::future_not_send)]
 
 use super::store::{BillingStore, StoreResult};
 use super::{BillingInvoice, BillingNotification, CompanyBilling};

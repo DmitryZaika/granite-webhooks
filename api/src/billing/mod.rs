@@ -333,7 +333,7 @@ pub fn is_awaiting_first_payment(record: Option<&CompanyBilling>) -> bool {
 }
 
 /// A failed or paused payment (the gate checks Stripe for these).
-pub fn is_overdue(record: &CompanyBilling) -> bool {
+pub const fn is_overdue(record: &CompanyBilling) -> bool {
     matches!(
         record.payment_status,
         PaymentStatus::PastDue | PaymentStatus::Suspended
