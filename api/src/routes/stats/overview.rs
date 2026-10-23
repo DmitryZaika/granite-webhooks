@@ -449,7 +449,7 @@ async fn customers_by_rep(
                 CAST(SUM(CASE WHEN c.source = 'check-in' THEN 1 ELSE 0 END) AS SIGNED) AS walkin,
                 CAST(SUM(CASE WHEN c.source = 'call-in' THEN 1 ELSE 0 END) AS SIGNED) AS callin,
                 CAST(SUM(CASE WHEN c.source = 'leads' THEN 1 ELSE 0 END) AS SIGNED) AS leads,
-                CAST(SUM(CASE WHEN c.source IN ('other', 'user-input') THEN 1 ELSE 0 END) AS SIGNED) AS manual,
+                CAST(SUM(CASE WHEN c.source IN ('other', 'user-input') THEN 1 ELSE 0 END) AS SIGNED) AS `manual`,
                 COUNT(c.id) AS total
            FROM customers c
            JOIN users u ON c.sales_rep = u.id AND u.is_deleted = 0 AND u.company_id = c.company_id
