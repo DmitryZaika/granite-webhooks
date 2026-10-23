@@ -52,7 +52,7 @@ pub struct TickReport {
     pub regressions: usize,
     /// PostHog issues of opened fixes assigned to their reviewer (write-back).
     pub assigned: usize,
-    /// A storm digest was emailed.
+    /// A storm digest was sent.
     pub storm_digest: bool,
     /// Another tick held the lock; this one did nothing.
     pub busy: bool,
@@ -77,6 +77,10 @@ const REGRESSION_BATCH: u32 = 100;
 const ASSIGN_DAYS: i64 = 7;
 const ASSIGN_BATCH: u32 = 20;
 const PREVIEW_BATCH: u32 = 20;
+/// The api answers within 30 s (its Lambda timeout): no new PostHog or GitHub
+/// call starts after this, and the rest waits for the next tick.
+const OUT_OF_TIME: &str = "tick time budget reached";
+const TICK_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 
 // Per database: dev and production share one MySQL server, and so do tests.
 const LOCK: &str = "SELECT GET_LOCK(CONCAT('posthog_autofix_tick:', DATABASE()), 0)";
@@ -119,15 +123,23 @@ pub async fn tick<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter>(
         conn: &mut conn,
         now,
         start_at,
+        deadline: std::time::Instant::now() + TICK_BUDGET,
         report: TickReport::default(),
+        outbox: Vec::new(),
     };
     let outcome = tick.run().await;
-    let report = tick.report;
+    let Tick { report, outbox, .. } = tick;
     if let Err(error) = unlock(&mut conn).await {
         tracing::warn!(
             ?error,
             "could not release the auto-fix lock; closing the connection frees it"
         );
+    }
+    // Sent with the lock released: a slow mail server must not hold it, nor
+    // keep the connection idle past the database's wait_timeout.
+    drop(conn);
+    for email in &outbox {
+        notify::deliver(deps.mailer, &deps.config.recipients, email).await;
     }
     outcome.map(|()| report)
 }
@@ -147,7 +159,11 @@ struct Tick<'t, S, D, M, W> {
     conn: &'t mut MySqlConnection,
     now: DateTime<Utc>,
     start_at: DateTime<Utc>,
+    /// No new PostHog or GitHub call starts after this.
+    deadline: std::time::Instant,
     report: TickReport,
+    /// Emails to send once the lock is released.
+    outbox: Vec<Email>,
 }
 
 impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M, W> {
@@ -159,9 +175,18 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         if ledger::claim_notice(&mut *self.conn, "poll", poll).await? {
             self.discover().await?;
             self.storm().await?;
+            if self.out_of_time() {
+                return Ok(());
+            }
             self.judge_settled().await?;
+            if self.out_of_time() {
+                return Ok(());
+            }
             self.check_regressions().await?;
             self.assign_opened_fixes().await?;
+        }
+        if self.out_of_time() {
+            return Ok(());
         }
         match config.mode {
             Mode::Live => self.dispatch().await,
@@ -170,8 +195,26 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         }
     }
 
-    async fn email(&self, email: &Email) -> bool {
-        notify::deliver(self.deps.mailer, &self.deps.config.recipients, email).await
+    fn queue(&mut self, email: Email) {
+        self.outbox.push(email);
+    }
+
+    /// Past the tick's budget: noted once, and the caller stops starting
+    /// PostHog or GitHub calls.
+    fn out_of_time(&mut self) -> bool {
+        let out = std::time::Instant::now() >= self.deadline;
+        if out
+            && !self
+                .report
+                .errors
+                .iter()
+                .any(|error| error.starts_with(OUT_OF_TIME))
+        {
+            self.report
+                .errors
+                .push(format!("{OUT_OF_TIME}; the rest waits for the next tick"));
+        }
+        out
     }
 
     /// PostHog or GitHub failed: the step is retried on the next poll.
@@ -191,7 +234,7 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
             self.report.timed_out += 1;
             self.report.processed += 1;
             if let Some(run) = ledger::load_run(&mut *self.conn, id).await? {
-                self.email(&emails::run_timed_out(&run, config)).await;
+                self.queue(emails::run_timed_out(&run, config));
             }
         }
         Ok(())
@@ -254,7 +297,8 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
             &top,
             config,
         );
-        self.report.storm_digest = self.email(&email).await;
+        self.report.storm_digest = true;
+        self.queue(email);
         Ok(())
     }
 
@@ -404,7 +448,7 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
                 if ledger::mark_regression(&mut *self.conn, row.run.id, status, self.now).await? {
                     self.report.regressions += 1;
                     self.report.processed += 1;
-                    self.email(&emails::regression(&row.run, config)).await;
+                    self.queue(emails::regression(&row.run, config));
                 }
             } else if ledger::store_issue_status(&mut *self.conn, row.run.id, status).await? {
                 self.report.processed += 1;
@@ -423,6 +467,9 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         for (id, issue_id) in
             ledger::opened_unassigned(&mut *self.conn, since, ASSIGN_BATCH).await?
         {
+            if self.out_of_time() {
+                break;
+            }
             if let Err(error) = self.deps.writer.assign(id, &issue_id).await {
                 self.failed(&format!("assign run {id}"), &error);
                 continue;
@@ -446,6 +493,9 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
             return Ok(());
         }
         for run in ledger::due_queued(&mut *self.conn, self.now, slots).await? {
+            if self.out_of_time() {
+                break;
+            }
             if !ledger::claim_dispatch(&mut *self.conn, run.id, self.now).await? {
                 continue;
             }
@@ -482,8 +532,7 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
             return Ok(());
         }
         if let Some(failed) = ledger::load_run(&mut *self.conn, run.id).await? {
-            self.email(&emails::dispatch_failed(&failed, &message, config))
-                .await;
+            self.queue(emails::dispatch_failed(&failed, &message, config));
         }
         Ok(())
     }
@@ -503,8 +552,7 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
             }
         }
         if !previewed.is_empty() {
-            self.email(&emails::preview_digest(&previewed, config))
-                .await;
+            self.queue(emails::preview_digest(&previewed, config));
         }
         Ok(())
     }

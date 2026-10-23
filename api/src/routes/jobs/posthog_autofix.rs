@@ -40,7 +40,8 @@ use chrono::Utc;
     security(("job_key" = []))
 )]
 pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Json<TickReport>> {
-    let config = &*state.autofix.config;
+    let config = state.autofix.config().await;
+    let config = &*config;
     let http = &state.autofix.http;
     let deps = Deps {
         pool: &state.pool,

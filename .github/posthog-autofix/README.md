@@ -93,9 +93,10 @@ The Lambda's environment is at AWS's 4 KB limit, so it holds only
 `POSTHOG_AUTOFIX_MODE` and `POSTHOG_AUTOFIX_START_AT`. Everything else goes,
 as `NAME=value` lines, in one **SecureString** parameter in Systems Manager
 Parameter Store, `/granite-manager/posthog-autofix` (us-east-2;
-`POSTHOG_AUTOFIX_PARAMETER` overrides the name). The api reads it once at cold
-start, only when the mode is not `off`; a variable set in the environment
-wins over the parameter. The Lambda's role needs:
+`POSTHOG_AUTOFIX_PARAMETER` overrides the name). The api reads it on the
+first auto-fix request of each Lambda instance, never at start-up and never
+with the mode `off` (3 s limit; a failed read is retried on the next request).
+A variable set in the environment wins over the parameter. The Lambda's role needs:
 
 ```json
 {
@@ -110,6 +111,10 @@ wins over the parameter. The Lambda's role needs:
 
 A setting change takes effect on the next cold start (any save of the
 Lambda's configuration forces one).
+
+A tick stops starting PostHog or GitHub calls after 20 s, so it always answers
+within the api's 30 s limit; the rest waits for the next tick. Its emails are
+sent after it releases the database lock.
 
 | Setting | Default | Meaning |
 |---|---|---|

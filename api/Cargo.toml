@@ -35,7 +35,7 @@ sha2 = "0.11"
 unicode-normalization = "0.1"
 sqlx = { version = "0.9", features = ["runtime-tokio", "mysql", "chrono"] }
 thiserror = "2.0"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = "0.1"
 tower-http = { version = "0.6", features = ["catch-panic", "cors"] }
 utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "preserve_order", "preserve_path_order"] }

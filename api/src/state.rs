@@ -384,7 +384,8 @@ impl AppState {
             .with_ses(SesIdentities::Aws)
             .with_signing_session_secret(
                 &std::env::var("SIGNATURE_SESSION_SECRET").unwrap_or_default(),
-            ))
+            )
+            .with_autofix(crate::posthog_autofix::Autofix::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the

@@ -114,6 +114,9 @@ impl Dispatcher for FakeDispatcher {
 #[derive(Default)]
 struct FakeMailer {
     sent: Mutex<Vec<Email>>,
+    /// When set, each send records whether the tick's lock was free.
+    pool: std::sync::OnceLock<MySqlPool>,
+    lock_free: Mutex<Vec<bool>>,
 }
 
 impl FakeMailer {
@@ -129,6 +132,15 @@ impl FakeMailer {
 
 impl Mailer for FakeMailer {
     async fn send(&self, _to: &[String], email: &Email) -> Result<(), String> {
+        if let Some(pool) = self.pool.get() {
+            let free: Option<i64> = sqlx::query_scalar(
+                "SELECT IS_FREE_LOCK(CONCAT('posthog_autofix_tick:', DATABASE()))",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            self.lock_free.lock().unwrap().push(free == Some(1));
+        }
         self.sent.lock().unwrap().push(email.clone());
         Ok(())
     }
@@ -485,6 +497,23 @@ async fn a_refused_dispatch_backs_off_then_fails_with_one_email(pool: MySqlPool)
     world.tick(&pool, &config, minutes(600)).await;
     assert_eq!(world.dispatcher.attempts().len(), 3);
     assert_eq!(world.mailer.subjects().len(), 1);
+}
+
+#[test_db::test]
+async fn emails_go_out_after_the_tick_releases_its_lock(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    world.mailer.pool.set(pool.clone()).unwrap();
+    insert_run(
+        &pool,
+        1,
+        "status, attempts, dispatched_at",
+        "'dispatched', 1, '2026-10-20 21:00:00'",
+    )
+    .await;
+    let report = world.tick(&pool, &config, minutes(10)).await;
+    assert_eq!(report.timed_out, 1);
+    assert_eq!(*world.mailer.lock_free.lock().unwrap(), [true]);
 }
 
 #[test_db::test]

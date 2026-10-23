@@ -31,58 +31,113 @@ pub use config::{Config, Mode};
 
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::OnceCell;
 
 /// The auto-fix settings and the HTTP client for PostHog and GitHub.
+///
+/// The settings are read on the first auto-fix request, not at start-up, so
+/// a slow or unreachable Parameter Store never delays the rest of the api.
 #[derive(Clone)]
 pub struct Autofix {
-    pub config: Arc<Config>,
+    settings: Arc<OnceCell<Arc<Config>>>,
     pub http: reqwest::Client,
 }
 
+/// Parameter Store gets this long; past it the request runs unconfigured and
+/// the next one tries again.
+const PARAMETER_TIMEOUT: Duration = Duration::from_secs(3);
+
 impl Autofix {
+    /// With fixed settings (tests, local runs).
     pub fn new(config: Config) -> Self {
+        Self::with_settings(OnceCell::new_with(Some(Arc::new(config))))
+    }
+
+    /// Settings read from the environment and Parameter Store when first
+    /// needed.
+    pub fn from_env() -> Self {
+        Self::with_settings(OnceCell::new())
+    }
+
+    /// Mode off, nothing configured.
+    pub fn disabled() -> Self {
+        Self::new(Config::default())
+    }
+
+    fn with_settings(settings: OnceCell<Arc<Config>>) -> Self {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .user_agent("granite-manager-posthog-autofix")
             .build()
             .unwrap_or_default();
         Self {
-            config: Arc::new(config),
+            settings: Arc::new(settings),
             http,
         }
     }
 
-    pub fn from_env() -> Self {
-        Self::new(Config::from_env())
-    }
-
-    /// The Lambda's settings: the environment, then the Parameter Store
-    /// parameter for whatever it leaves unset. Mode off fetches nothing; a
-    /// parameter that cannot be read leaves the auto-fix unconfigured.
-    pub async fn load() -> Self {
-        let env = |name: &str| std::env::var(name).ok();
-        if Config::from_lookup(env).mode == Mode::Off {
-            return Self::from_env();
+    /// The settings, read once per Lambda instance. A read that failed is not
+    /// kept, so the next request tries Parameter Store again.
+    pub async fn config(&self) -> Arc<Config> {
+        if let Some(config) = self.settings.get() {
+            return Arc::clone(config);
         }
-        let name = env("POSTHOG_AUTOFIX_PARAMETER")
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| parameter::DEFAULT_NAME.to_string());
-        let stored = match parameter::fetch(&name).await {
-            Ok(text) => parameter::parse(&text),
-            Err(error) => {
-                lambda_http::tracing::error!(
-                    error,
-                    parameter = name,
-                    "PostHog auto-fix settings not read; it stays unconfigured"
-                );
-                std::collections::HashMap::new()
-            }
-        };
-        Self::new(Config::from_lookup(parameter::lookup(env, &stored)))
+        match load().await {
+            Ok(config) => Arc::clone(
+                self.settings
+                    .get_or_init(|| async { Arc::new(config) })
+                    .await,
+            ),
+            Err(partial) => Arc::new(*partial),
+        }
     }
+}
 
-    /// Mode off, nothing configured.
-    pub fn disabled() -> Self {
-        Self::new(Config::default())
+/// The environment, then the Parameter Store parameter for whatever it leaves
+/// unset. Mode off reads nothing. `Err` holds the environment's settings
+/// alone, when the parameter could not be read.
+async fn load() -> Result<Config, Box<Config>> {
+    let env = |name: &str| std::env::var(name).ok();
+    if Config::from_lookup(env).mode == Mode::Off {
+        return Ok(Config::from_lookup(env));
+    }
+    let name = env("POSTHOG_AUTOFIX_PARAMETER")
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| parameter::DEFAULT_NAME.to_string());
+    let read = tokio::time::timeout(PARAMETER_TIMEOUT, parameter::fetch(&name))
+        .await
+        .unwrap_or_else(|_| Err("timed out".into()));
+    match read {
+        Ok(text) => Ok(Config::from_lookup(parameter::lookup(
+            env,
+            &parameter::parse(&text),
+        ))),
+        Err(error) => {
+            lambda_http::tracing::error!(
+                error,
+                parameter = name,
+                "PostHog auto-fix settings not read; retried on the next request"
+            );
+            Err(Box::new(Config::from_lookup(env)))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fixed_settings_are_served_without_reading_anything() {
+        let autofix = Autofix::new(Config {
+            max_per_day: 9,
+            ..Config::default()
+        });
+        assert_eq!(autofix.config().await.max_per_day, 9);
+        assert!(Arc::ptr_eq(
+            &autofix.config().await,
+            &autofix.config().await
+        ));
+        assert_eq!(Autofix::disabled().config().await.mode, Mode::Off);
     }
 }

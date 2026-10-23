@@ -1,6 +1,5 @@
 use api::app;
 use api::db::lambda_pool;
-use api::posthog_autofix::Autofix;
 use api::state::AppState;
 use lambda_http::{Error, run, run_with_streaming_response, tracing};
 use std::env::set_var;
@@ -13,7 +12,7 @@ async fn main() -> Result<(), Error> {
     }
     let url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL must be set")?;
     let pool = lambda_pool(url.parse()?);
-    let state = AppState::from_env(pool)?.with_autofix(Autofix::load().await);
+    let state = AppState::from_env(pool)?;
     // The same API behind a Function URL in RESPONSE_STREAM mode, for the
     // answers that stream (the AI chat) or outlast API Gateway's 30 s.
     if std::env::var("LAMBDA_RESPONSE_STREAMING").as_deref() == Ok("1") {

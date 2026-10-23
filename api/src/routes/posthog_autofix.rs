@@ -119,7 +119,7 @@ pub async fn result(
     record_result(
         &state.pool,
         &state.webhooks,
-        &state.autofix.config,
+        &*state.autofix.config().await,
         id,
         &report,
         Utc::now(),
@@ -146,7 +146,7 @@ impl FromRequestParts<AppState> for Workflow {
             .headers
             .get(AUTHORIZATION)
             .and_then(|value| value.to_str().ok());
-        if authorized(&state.autofix.config, sent) {
+        if authorized(&*state.autofix.config().await, sent) {
             Ok(Self)
         } else {
             Err(ApiError::Unauthorized)

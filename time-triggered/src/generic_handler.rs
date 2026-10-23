@@ -4,16 +4,16 @@ use common::crud::notifications::{
     get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
     unmark_deadline_reminder_telegram_sent,
 };
-use common::crud::outbound_email::{record_outbound_scheduled_email, OutboundScheduledEmail};
+use common::crud::outbound_email::{OutboundScheduledEmail, record_outbound_scheduled_email};
 use common::crud::scheduled_emails::{
-    cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
+    ScheduledEmail, cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
     get_ready_scheduled_emails, mark_scheduled_email_as_sent,
-    mark_scheduled_email_failed_with_reason, ScheduledEmail,
+    mark_scheduled_email_failed_with_reason,
 };
 use common::crud::template::fetch_template_variable_data;
 use common::utils::email_send_window::automated_email_send_window_is_open_now;
 use common::utils::template::replace_template_variables;
-use lambda_runtime::{tracing, Error, LambdaEvent};
+use lambda_runtime::{Error, LambdaEvent, tracing};
 use reqwest::Client;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
@@ -110,6 +110,15 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
 
 /// Runs a scheduled job of the API (`POST <API_URL>/v1/jobs/<job>`).
 async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
+    post_api_job_within(job, label, None).await
+}
+
+/// [`post_api_job`], giving up after `timeout`.
+async fn post_api_job_within(
+    job: &str,
+    label: &str,
+    timeout: Option<std::time::Duration>,
+) -> Result<usize, Error> {
     let api_url = match std::env::var("API_URL") {
         Ok(value) => value,
         Err(error) => {
@@ -125,9 +134,11 @@ async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
         }
     };
     let url = format!("{}/v1/jobs/{job}", api_url.trim_end_matches('/'));
-    let response = Client::new()
-        .post(url)
-        .header("Authorization", lambda_key)
+    let mut request = Client::new().post(url).header("Authorization", lambda_key);
+    if let Some(timeout) = timeout {
+        request = request.timeout(timeout);
+    }
+    let response = request
         .send()
         .await
         .map_err(|error| Error::from(error.to_string()))?;
@@ -169,8 +180,14 @@ async fn process_signature_reminders() -> Result<usize, Error> {
     post_api_job("signature-reminders", "e-signature reminders").await
 }
 
+/// The api answers within its 30 s; a call that hangs must not hold the tick.
 async fn process_posthog_autofix() -> Result<usize, Error> {
-    post_api_job("posthog-autofix", "PostHog auto-fix").await
+    post_api_job_within(
+        "posthog-autofix",
+        "PostHog auto-fix",
+        Some(std::time::Duration::from_secs(25)),
+    )
+    .await
 }
 
 async fn process_checklist_surveys() -> Result<usize, Error> {
