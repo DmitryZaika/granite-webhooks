@@ -1,0 +1,39 @@
+//! `POST /v1/jobs/subscription-maintenance`: self-serve signups and
+//! subscription seats. See `crate::signup::maintenance`.
+
+use super::JobCaller;
+use crate::error::{ApiResult, ErrorBody};
+use crate::signup::maintenance::{self, MaintenanceRun};
+use crate::state::AppState;
+use axum::Json;
+use axum::extract::State;
+
+/// Resume stuck signups, expire abandoned ones and reconcile seats
+///
+/// One run, which starts no new work after 40 seconds:
+/// 1. Resumes up to 5 signups stuck in provisioning for 10 minutes or more
+///    (oldest first; a signup is given up after 10 failed runs).
+/// 2. Expires up to 50 abandoned signups (24 hours after they started, or 11
+///    days waiting for bank verification) and deletes their Stripe customers.
+/// 3. Once every 23 hours, pushes each subscription company's extra-user
+///    quantity to Stripe where it differs from its billable users.
+///
+/// Returns the counts; `processed` is `resumed` + `expired`.
+#[utoipa::path(
+    post,
+    path = "/v1/jobs/subscription-maintenance",
+    operation_id = "run_subscription_maintenance",
+    tag = "jobs",
+    responses(
+        (status = 200, description = "What the run did", body = MaintenanceRun),
+        (status = 401, description = "Missing or wrong job key", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("job_key" = []))
+)]
+pub async fn run(
+    State(state): State<AppState>,
+    _caller: JobCaller,
+) -> ApiResult<Json<MaintenanceRun>> {
+    Ok(Json(maintenance::run(&state).await?))
+}

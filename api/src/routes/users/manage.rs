@@ -13,6 +13,7 @@
 
 use crate::auth::UserManager;
 use crate::auth::session::SessionUser;
+use crate::billing::seats::{self, COUNTS_TOWARD_LIMIT};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::routes::company::queries::company_features;
@@ -113,14 +114,9 @@ const PROTECTED: &str = "(u.is_superuser = 1 OR EXISTS (SELECT 1 FROM users_posi
 
 /// Users counting toward `max_users` (`COUNTS_TOWARD_COMPANY_USER_LIMIT_SQL`).
 async fn user_limit(pool: &MySqlPool, company_id: i32) -> Result<UserLimit, sqlx::Error> {
-    let current_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users u
-          WHERE u.company_id = ? AND u.is_deleted = 0
-            AND (EXISTS (SELECT 1 FROM users_positions up WHERE up.user_id = u.id
-                          AND up.company_id = u.company_id AND up.position_id <> 8)
-                 OR NOT EXISTS (SELECT 1 FROM users_positions up WHERE up.user_id = u.id
-                          AND up.company_id = u.company_id))",
-    )
+    let current_count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT COUNT(*) FROM users u WHERE u.company_id = ? AND {COUNTS_TOWARD_LIMIT}"
+    )))
     .bind(company_id)
     .fetch_one(pool)
     .await?;
@@ -262,7 +258,7 @@ fn checked_phone(phone: Option<&str>) -> ApiResult<Option<String>> {
     }
 }
 
-fn checked_email(email: &str) -> ApiResult<String> {
+pub(crate) fn checked_email(email: &str) -> ApiResult<String> {
     let email = email.trim().to_lowercase();
     let valid = email.split_once('@').is_some_and(|(local, domain)| {
         !local.is_empty()
@@ -406,6 +402,7 @@ pub async fn create(
         .await?;
     }
     tx.commit().await?;
+    seats::after_user_change(&state, company_id).await;
     Ok((
         StatusCode::CREATED,
         Json(CreatedUser {
@@ -886,6 +883,8 @@ pub async fn update(
         removed.push(row.id);
     }
     let added: Vec<(i32, i32)> = next.into_iter().filter(|key| !kept.contains(key)).collect();
+    let seats_may_change =
+        !removed.is_empty() || !added.is_empty() || company_id != existing_company;
 
     let mut tx = pool.begin().await?;
     sqlx::query(
@@ -925,6 +924,12 @@ pub async fn update(
         .await?;
     }
     tx.commit().await?;
+    if seats_may_change {
+        seats::after_user_change(&state, company_id).await;
+        if company_id != existing_company {
+            seats::after_user_change(&state, existing_company).await;
+        }
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -951,11 +956,12 @@ pub async fn delete(
     UserManager(user): UserManager,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
-    target(&state.pool, &user, id).await?;
+    let company_id = target(&state.pool, &user, id).await?;
     sqlx::query("UPDATE users SET is_deleted = 1 WHERE id = ? AND is_deleted = 0")
         .bind(id)
         .execute(&state.pool)
         .await?;
+    seats::after_user_change(&state, company_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

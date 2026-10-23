@@ -12,6 +12,8 @@
 //! - `POST /v1/jobs/supplier-files` → supplier price files into chunks
 //! - `POST /v1/jobs/contact-sync` → customers into `RingCentral` and
 //!   `CloudTalk` contacts
+//! - `POST /v1/jobs/subscription-maintenance` → stuck signups resumed,
+//!   abandoned ones expired, the daily seat reconcile
 //!
 //! Replaces the Remix `api.*.process` cron routes.
 
@@ -21,6 +23,7 @@ pub mod contact_sync;
 pub mod maintenance_reminders;
 pub mod signature_reminders;
 pub mod sms_followups;
+pub mod subscription_maintenance;
 pub mod supplier_files;
 pub mod survey_notifications;
 
@@ -40,6 +43,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(sms_followups::run))
         .routes(routes!(supplier_files::run))
         .routes(routes!(contact_sync::run))
+        .routes(routes!(subscription_maintenance::run))
 }
 
 /// The `time-triggered` Lambda, by its key.

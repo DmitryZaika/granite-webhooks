@@ -60,12 +60,16 @@ fn merge_subscription(record: &CompanyBilling, snapshot: &SubscriptionSnapshot) 
     merged.current_period_start = snapshot.period_start.or(merged.current_period_start);
     merged.current_period_end = snapshot.period_end.or(merged.current_period_end);
     merged.plan_name = snapshot.plan_name.clone().or(merged.plan_name);
-    merged.user_count = snapshot.quantity.or(merged.user_count);
-    merged.monthly_price_cents = total_monthly(
-        snapshot.unit_amount_cents,
-        snapshot.quantity,
-        record.monthly_price_cents,
-    );
+    if let Some(total) = snapshot.monthly_total_cents {
+        merged.monthly_price_cents = Some(total);
+    } else {
+        merged.user_count = snapshot.quantity.or(merged.user_count);
+        merged.monthly_price_cents = total_monthly(
+            snapshot.unit_amount_cents,
+            snapshot.quantity,
+            record.monthly_price_cents,
+        );
+    }
     merged
 }
 
@@ -484,6 +488,8 @@ mod tests {
                 unit_amount_cents: Some(4900),
                 company_id: Some(company_id),
                 deleted,
+                items: Vec::new(),
+                monthly_total_cents: None,
             },
         }
     }

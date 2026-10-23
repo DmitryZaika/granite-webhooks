@@ -105,7 +105,7 @@ fn random_token() -> Result<String, ApiError> {
 
 /// The client address: the first `X-Forwarded-For` entry (API Gateway and
 /// CloudFront set it), else "unknown".
-fn client_ip(headers: &HeaderMap) -> String {
+pub(crate) fn client_ip(headers: &HeaderMap) -> String {
     headers
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())
@@ -146,7 +146,7 @@ pub(crate) fn request_session_id(headers: &HeaderMap, secret: &str) -> Option<St
         .and_then(|session| session.session_id)
 }
 
-fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
+pub(crate) fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
     for cookie in cookies {
         if let Ok(value) = HeaderValue::from_str(&cookie) {
             response.headers_mut().append(SET_COOKIE, value);
@@ -369,6 +369,21 @@ pub async fn login(
         .bind(&email_hash)
         .execute(pool)
         .await?;
+    let started = start_session(&state, user_id).await?;
+    let body = auth_session(pool, started.user).await?;
+    Ok(with_cookies(Json(body).into_response(), started.cookies))
+}
+
+/// A new session and the `Set-Cookie` values that carry it.
+pub(crate) struct StartedSession {
+    pub user: SessionUser,
+    pub cookies: Vec<String>,
+}
+
+/// Signs `user_id` in: a 60-day `sessions` row and its `__session` cookie
+/// (put it on the response with [`with_cookies`]).
+pub(crate) async fn start_session(state: &AppState, user_id: i32) -> ApiResult<StartedSession> {
+    let pool = &state.pool;
     let session_id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO sessions (id, user_id, expiration_date)
@@ -382,7 +397,6 @@ pub async fn login(
     let user = find_session_user(pool, &session_id)
         .await?
         .ok_or_else(|| ApiError::Internal("Failed to create session. Please try again.".into()))?;
-    let body = auth_session(pool, user).await?;
     let cookie = encode_session(
         &SessionData {
             session_id: Some(session_id),
@@ -390,10 +404,10 @@ pub async fn login(
         },
         &state.session_secret,
     );
-    Ok(with_cookies(
-        Json(body).into_response(),
-        state.cookie.set_session(&cookie),
-    ))
+    Ok(StartedSession {
+        user,
+        cookies: state.cookie.set_session(&cookie),
+    })
 }
 
 /// Sign out

@@ -9,12 +9,14 @@
 
 use crate::auth::BillingManager;
 use crate::billing::gate::billing_gate;
+use crate::billing::items::sync_items;
 use crate::billing::lock::CompanyLock;
 use crate::billing::machine::{apply_event, event_company_id};
 use crate::billing::reactivation::{self, ReactivationError, Started};
+use crate::billing::store::BillingStore;
 use crate::billing::store::MySqlBillingStore;
 use crate::billing::stripe::{latest_event, normalize_event, verify_signature};
-use crate::billing::{self, PaymentStatus};
+use crate::billing::{self, BillingEvent, PaymentStatus, SubscriptionSnapshot};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::state::AppState;
@@ -272,10 +274,10 @@ pub async fn stripe_webhook(
             return Ok(());
         };
         let store = MySqlBillingStore(&state.pool);
-        let lock = match event_company_id(&store, &latest)
+        let company_id = event_company_id(&store, &latest)
             .await
-            .map_err(|err| err.to_string())?
-        {
+            .map_err(|err| err.to_string())?;
+        let lock = match company_id {
             Some(company_id) => Some(
                 CompanyLock::acquire(&state.pool, company_id)
                     .await
@@ -283,10 +285,18 @@ pub async fn stripe_webhook(
             ),
             None => None,
         };
-        let applied = apply_event(&store, &latest, billing::now())
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_string());
+        let applied = async {
+            apply_event(&store, &latest, billing::now())
+                .await
+                .map_err(|err| err.to_string())?;
+            if let (Some(company_id), BillingEvent::Subscription { subscription, .. }) =
+                (company_id, &latest)
+            {
+                sync_subscription_items(&state, &store, company_id, subscription).await?;
+            }
+            Ok::<(), String>(())
+        }
+        .await;
         if let Some(lock) = lock {
             lock.release().await;
         }
@@ -298,4 +308,30 @@ pub async fn stripe_webhook(
         return Err(ApiError::Internal("Webhook processing failed".into()));
     }
     Ok(Json(WebhookReceived { received: true }))
+}
+
+/// Syncs a subscription event's items into the company's add-ons, when it is
+/// the company's current subscription (an old one ending changes nothing).
+/// Runs for a repeated delivery too: the sync is idempotent, and a retry
+/// after a failed sync must not be lost to the event's claim.
+async fn sync_subscription_items(
+    state: &AppState,
+    store: &MySqlBillingStore<'_>,
+    company_id: i32,
+    snapshot: &SubscriptionSnapshot,
+) -> Result<(), String> {
+    let current = store
+        .by_company(company_id)
+        .await
+        .map_err(|err| err.to_string())?;
+    if current
+        .and_then(|record| record.stripe_subscription_id)
+        .as_deref()
+        != Some(&snapshot.id)
+    {
+        return Ok(());
+    }
+    sync_items(&state.pool, company_id, snapshot, billing::now())
+        .await
+        .map_err(|err| err.to_string())
 }

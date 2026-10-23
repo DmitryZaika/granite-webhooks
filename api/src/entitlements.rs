@@ -12,12 +12,12 @@
 //! [`entitled_sql`].
 
 use crate::error::{ApiError, ApiResult};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
 use utoipa::ToSchema;
 
 /// A paid add-on: `signatures`, `quotes` or `quickbooks`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AddonKey {
     /// eSignatures and the users' email signature block.

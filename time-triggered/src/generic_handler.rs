@@ -177,6 +177,21 @@ async fn process_contact_sync() -> Result<usize, Error> {
     post_api_job("contact-sync", "contact sync").await
 }
 
+async fn process_subscription_maintenance() -> Result<usize, Error> {
+    post_api_job("subscription-maintenance", "subscription maintenance").await
+}
+
+/// Self-serve signups and seats; a failure never aborts the tick.
+async fn run_subscription_maintenance() {
+    match process_subscription_maintenance().await {
+        Ok(0) => {}
+        Ok(count) => tracing::info!("Processed {count} signups in subscription maintenance"),
+        Err(error) => {
+            tracing::error!(?error, "Failed to run subscription maintenance; continuing");
+        }
+    }
+}
+
 /// Starts the supplier price file job without waiting for it: a big PDF takes
 /// minutes, and the API Lambda keeps working after this request gives up.
 /// Sent to the long-running deployment (`API_STREAM_URL`) when there is one.
@@ -331,6 +346,7 @@ pub(crate) async fn function_handler(
             0
         }
     };
+    run_subscription_maintenance().await;
     let estimate_reminder_count = process_estimate_appointment_reminders().await?;
     let maintenance_reminder_count = process_maintenance_due_reminders().await?;
     let sms_followup_count = process_sms_followups().await?;

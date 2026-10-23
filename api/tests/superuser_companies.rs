@@ -180,6 +180,33 @@ async fn creating_a_company_seeds_it(pool: MySqlPool) {
         walk_in,
         ("Walk-in".into(), "walk-in@granite-new.com".into())
     );
+    let (is_system, password): (i32, String) = sqlx::query_as(
+        "SELECT is_system, password FROM users WHERE company_id = ? AND email = 'walk-in@granite-new.com'",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(is_system, 1);
+    assert!(!bcrypt::verify("1111", &password).unwrap_or(false));
+    server
+        .post("/v1/auth/login")
+        .json(&json!({ "email": "walk-in@granite-new.com", "password": "1111" }))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    let bodies: Vec<String> = sqlx::query_scalar(
+        "SELECT template_body FROM email_templates WHERE company_id = ? AND user_id IS NULL",
+    )
+    .bind(id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        bodies
+            .iter()
+            .any(|b| b.contains("https://granite-manager.com/customer/{{company.id}}/stones"))
+    );
+    assert!(bodies.iter().all(|b| !b.contains("{{company.subdomain}}")));
     // A free mail domain is high risk without asking DNS.
     let trust: Value = server
         .get(&format!("/v1/superuser/companies/{id}/domain-trust"))
@@ -189,6 +216,77 @@ async fn creating_a_company_seeds_it(pool: MySqlPool) {
     assert_eq!(trust["domain"], "gmail.com");
     assert_eq!(trust["risk_level"], "HIGH_RISK");
     assert_eq!(trust["reputation_score"], 85);
+}
+
+#[test_db::test(seed)]
+async fn reserved_subdomains_are_refused_on_create_and_change(pool: MySqlPool) {
+    let server = server(&pool).await;
+    let response = server
+        .post("/v1/superuser/companies")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Pay", "subdomain": "payments" }))
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.json::<Value>()["error"],
+        "This subdomain is reserved for Granite Manager."
+    );
+    server
+        .put("/v1/superuser/companies/101")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Other", "subdomain": "www" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    // A company that already holds a reserved subdomain can still save.
+    sqlx::query("UPDATE company SET subdomain = 'docs' WHERE id = 101")
+        .execute(&pool)
+        .await
+        .unwrap();
+    server
+        .put("/v1/superuser/companies/101")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Renamed", "subdomain": "docs", "max_users": 5 }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    server
+        .put("/v1/superuser/companies/101")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Renamed", "subdomain": "api" }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+#[test_db::test(seed)]
+async fn only_a_self_serve_company_needs_no_subdomain_infra(pool: MySqlPool) {
+    sqlx::query("UPDATE company SET subdomain = NULL WHERE id = 101")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let server = server(&pool).await;
+    let infra = || async {
+        let checklist: Value = server
+            .get("/v1/superuser/companies/101/setup-checklist")
+            .with_session(sessions::ADMIN)
+            .await
+            .json();
+        checklist["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["key"] == "subdomain_infra")
+            .unwrap()
+            .clone()
+    };
+    let legacy = infra().await;
+    assert_eq!(legacy["done"], false);
+    assert_eq!(legacy["detail"], "Set subdomain first");
+    sqlx::query("UPDATE company SET plan_source = 'subscription' WHERE id = 101")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let self_serve = infra().await;
+    assert_eq!(self_serve["done"], true);
+    assert_eq!(self_serve["detail"], "Not needed: this company has no subdomain");
 }
 
 #[test_db::test(seed)]

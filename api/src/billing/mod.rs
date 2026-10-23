@@ -11,10 +11,13 @@
 //! the CRM's `billing*.ts` on `fix/stripe-billing`.
 
 pub mod account;
+pub mod catalog;
 pub mod gate;
+pub mod items;
 pub mod lock;
 pub mod machine;
 pub mod reactivation;
+pub mod seats;
 pub mod store;
 pub mod stripe;
 #[cfg(test)]
@@ -170,6 +173,23 @@ pub struct SubscriptionSnapshot {
     /// `metadata.company_id`.
     pub company_id: Option<i32>,
     pub deleted: bool,
+    /// Every item of the subscription.
+    pub items: Vec<ItemSnapshot>,
+    /// Sum of unit price x quantity over all items; `Some` only for a
+    /// multi-item (self-serve) subscription, whose `price_id`, `item_id`,
+    /// `plan_name`, `unit_amount_cents` and `quantity` are the base item's.
+    pub monthly_total_cents: Option<i64>,
+}
+
+/// One item of a Stripe subscription.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemSnapshot {
+    pub id: String,
+    pub price_id: String,
+    /// The price's lookup key.
+    pub lookup_key: Option<String>,
+    pub quantity: i64,
+    pub unit_amount_cents: Option<i64>,
 }
 
 /// What a Stripe invoice says.

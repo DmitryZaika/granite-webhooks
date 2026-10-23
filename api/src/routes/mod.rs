@@ -66,6 +66,7 @@ pub mod shop;
 pub mod signature_requests;
 pub mod signatures;
 pub mod signing;
+pub mod signup;
 pub mod signwell_webhook;
 pub mod sinks;
 pub mod slabs;
@@ -105,6 +106,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(checklists::router())
         .merge(uploads::router())
         .merge(public::router())
+        .merge(signup::router())
         .merge(company::router())
         .merge(stats::router())
         .merge(dashboard::router())

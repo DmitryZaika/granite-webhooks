@@ -49,6 +49,42 @@ pub enum ApiError {
     /// The company's plan does not include this add-on.
     #[error("{} is an add-on for your plan.", .0.label())]
     AddonRequired(crate::entitlements::AddonKey),
+    /// `{"error": "...", "code": "...", ...extra}` with any status: errors a
+    /// page tells apart by `code` (the public signup flow).
+    #[error("{}", .0.error)]
+    Coded(Box<CodedError>),
+}
+
+/// The body of [`ApiError::Coded`].
+#[derive(Debug, Clone)]
+pub struct CodedError {
+    pub status: StatusCode,
+    /// A sentence the page can show as is.
+    pub error: String,
+    /// Machine-readable, e.g. `email_taken`.
+    pub code: &'static str,
+    /// More fields merged into the body, e.g. `{"attempts_left": 3}`.
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl ApiError {
+    pub fn coded(status: StatusCode, code: &'static str, error: impl Into<String>) -> Self {
+        Self::Coded(Box::new(CodedError {
+            status,
+            error: error.into(),
+            code,
+            extra: serde_json::Map::new(),
+        }))
+    }
+
+    /// Adds a field to a [`ApiError::Coded`] body; other errors are unchanged.
+    #[must_use]
+    pub fn with_field(mut self, name: &str, value: impl Into<serde_json::Value>) -> Self {
+        if let Self::Coded(coded) = &mut self {
+            coded.extra.insert(name.to_string(), value.into());
+        }
+        self
+    }
 }
 
 /// What actually failed, kept on the response for the 5xx reporting in
@@ -91,6 +127,15 @@ impl IntoResponse for ApiError {
                     addon: Some(key.as_str().into()),
                 };
                 let mut response = (StatusCode::FORBIDDEN, Json(body)).into_response();
+                response.extensions_mut().insert(detail);
+                return response;
+            }
+            Self::Coded(coded) => {
+                let mut body = coded.extra.clone();
+                body.insert("error".into(), coded.error.clone().into());
+                body.insert("code".into(), coded.code.into());
+                let mut response =
+                    (coded.status, Json(serde_json::Value::Object(body))).into_response();
                 response.extensions_mut().insert(detail);
                 return response;
             }
@@ -137,6 +182,16 @@ pub struct PaymentRequiredBody {
 /// Body of a 403 that may be about the plan: `addon` names the add-on the
 /// company needs (`signatures`, `quotes` or `quickbooks`) and is absent when
 /// the caller lacks a permission instead.
+/// An error the page tells apart by `code`; some codes add fields
+/// (`attempts_left`, `retry_after_seconds`).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CodedErrorBody {
+    /// A sentence the page can show as is.
+    pub error: String,
+    /// Machine-readable reason, e.g. `email_taken`, `invalid_code`.
+    pub code: String,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AddonRequiredBody {
     /// E.g. `Quotes is an add-on for your plan.`, or `forbidden`.

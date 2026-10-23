@@ -94,6 +94,8 @@ pub struct AppState {
     /// `SIGNATURE_SESSION_SECRET`: keys the native signer's CSRF token
     /// (32+ bytes); unset, native signing links answer 503.
     pub signing_session_secret: Option<Arc<str>>,
+    /// Self-serve signup settings.
+    pub signup: crate::signup::SignupConfig,
 }
 
 /// Where the SES identity lists come from.
@@ -172,6 +174,7 @@ impl AppState {
             dns: crate::deliverability::AppDns::Fixed(Arc::default()),
             ses: SesIdentities::Fixed(None),
             signing_session_secret: None,
+            signup: crate::signup::SignupConfig::default(),
         }
     }
 
@@ -184,6 +187,12 @@ impl AppState {
     #[must_use]
     pub fn with_signature_app_origin(mut self, origin: &str) -> Self {
         self.signature_app_origin = Arc::from(origin.trim().trim_end_matches('/'));
+        self
+    }
+
+    #[must_use]
+    pub fn with_signup(mut self, signup: crate::signup::SignupConfig) -> Self {
+        self.signup = signup;
         self
     }
 
@@ -375,7 +384,8 @@ impl AppState {
             .with_ses(SesIdentities::Aws)
             .with_signing_session_secret(
                 &std::env::var("SIGNATURE_SESSION_SECRET").unwrap_or_default(),
-            ))
+            )
+            .with_signup(crate::signup::SignupConfig::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the

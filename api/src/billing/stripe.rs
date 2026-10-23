@@ -5,7 +5,8 @@
 //! the same shape (`invoice.parent.subscription_details`, periods on
 //! subscription items, `invoice.confirmation_secret`).
 
-use super::{BillingEvent, InvoiceSnapshot, SubscriptionSnapshot};
+use super::catalog::PriceKind;
+use super::{BillingEvent, InvoiceSnapshot, ItemSnapshot, SubscriptionSnapshot};
 use chrono::{DateTime, NaiveDateTime};
 use hmac::{Hmac, KeyInit, Mac};
 use serde_json::Value;
@@ -27,8 +28,22 @@ pub enum StripeError {
     /// (e.g. "Your card was declined.").
     #[error("{0}")]
     Api(String),
+    /// The object does not exist (404, e.g. a customer already deleted).
+    #[error("{0}")]
+    Missing(String),
+    /// Stripe failed or throttled (5xx, 429): the same request, under the
+    /// same idempotency key, may be retried.
+    #[error("Stripe request failed: {0}")]
+    Server(String),
     #[error("Stripe request failed: {0}")]
     Request(String),
+}
+
+impl StripeError {
+    /// Worth retrying later with the same idempotency key.
+    pub const fn is_retryable(&self) -> bool {
+        matches!(self, Self::Server(_) | Self::Request(_))
+    }
 }
 
 /// A Stripe client; disabled without `STRIPE_SECRET_KEY`.
@@ -73,6 +88,18 @@ impl Stripe {
         path: &str,
         form: &[(&str, String)],
     ) -> Result<Value, StripeError> {
+        self.send_keyed(method, path, form, None).await
+    }
+
+    /// `idempotency_key`: Stripe answers a repeat of the same request with
+    /// the first response, so a retry never creates or charges twice.
+    async fn send_keyed(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        form: &[(&str, String)],
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, StripeError> {
         let key = self.key.as_ref().ok_or(StripeError::NotConfigured)?;
         let encoded = serde_html_form::to_string(form)
             .map_err(|err| StripeError::Request(err.to_string()))?;
@@ -88,6 +115,10 @@ impl Stripe {
             .bearer_auth(&**key)
             .header("Stripe-Version", API_VERSION)
             .timeout(Duration::from_secs(30));
+        let request = match idempotency_key {
+            Some(key) => request.header("Idempotency-Key", key),
+            None => request,
+        };
         let request = if get {
             request
         } else {
@@ -100,19 +131,29 @@ impl Stripe {
             .await
             .map_err(|err| StripeError::Request(err.without_url().to_string()))?;
         let status = response.status();
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|err| StripeError::Request(err.without_url().to_string()))?;
+        let body: Value = match response.json().await {
+            Ok(body) => body,
+            Err(_) if status.is_server_error() => {
+                return Err(StripeError::Server(status.to_string()));
+            }
+            Err(err) => return Err(StripeError::Request(err.without_url().to_string())),
+        };
         if status.is_success() {
-            Ok(body)
-        } else {
-            let message = body["error"]["message"]
-                .as_str()
-                .unwrap_or("Stripe request failed")
-                .to_string();
-            Err(StripeError::Api(message))
+            return Ok(body);
         }
+        let message = body["error"]["message"]
+            .as_str()
+            .unwrap_or("Stripe request failed")
+            .to_string();
+        Err(
+            if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                StripeError::Server(message)
+            } else if status == reqwest::StatusCode::NOT_FOUND {
+                StripeError::Missing(message)
+            } else {
+                StripeError::Api(message)
+            },
+        )
     }
 
     async fn get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, StripeError> {
@@ -121,6 +162,16 @@ impl Stripe {
 
     async fn post(&self, path: &str, form: &[(&str, String)]) -> Result<Value, StripeError> {
         self.send(reqwest::Method::POST, path, form).await
+    }
+
+    async fn post_keyed(
+        &self,
+        path: &str,
+        form: &[(&str, String)],
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.send_keyed(reqwest::Method::POST, path, form, Some(idempotency_key))
+            .await
     }
 
     /// The customer's subscriptions, any status, newest first (up to 20).
@@ -432,6 +483,287 @@ impl Stripe {
     }
 }
 
+/// The Stripe customer of a self-serve signup.
+#[derive(Debug, Clone)]
+pub struct SignupCustomer<'a> {
+    pub signup_id: &'a str,
+    pub company_name: &'a str,
+    pub email: &'a str,
+    pub phone: &'a str,
+    pub line1: &'a str,
+    pub city: &'a str,
+    pub state: &'a str,
+    pub postal_code: &'a str,
+}
+
+/// A self-serve subscription (03-stripe.md section 4.4).
+#[derive(Debug, Clone)]
+pub struct NewSubscription<'a> {
+    pub signup_id: &'a str,
+    pub company_id: i32,
+    pub customer: &'a str,
+    pub payment_method: &'a str,
+    /// Quantity 1 each: the base price first, then the add-ons.
+    pub price_ids: &'a [String],
+    /// When the free period ends (Unix seconds, UTC).
+    pub trial_end: i64,
+    pub automatic_tax: bool,
+}
+
+/// Self-serve signup, subscription items and seats. Every POST that creates
+/// or changes billing sends an idempotency key built from our ids.
+impl Stripe {
+    /// Whether the key is a test-mode key (`sk_test_...`).
+    pub fn is_test_mode(&self) -> bool {
+        self.key.as_deref().is_some_and(|key| key.starts_with("sk_test_"))
+    }
+
+    /// Active prices by lookup key (up to 10 keys).
+    pub async fn prices_by_lookup_keys(&self, keys: &[&str]) -> Result<Vec<Value>, StripeError> {
+        let mut query: Vec<(&str, String)> = keys
+            .iter()
+            .map(|key| ("lookup_keys[]", (*key).to_string()))
+            .collect();
+        query.push(("active", "true".into()));
+        query.push(("limit", "10".into()));
+        Ok(data(self.get("/v1/prices", &query).await?))
+    }
+
+    /// Idempotency key `signup:<id>:customer`.
+    pub async fn create_signup_customer(
+        &self,
+        customer: &SignupCustomer<'_>,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            "/v1/customers",
+            &[
+                ("name", customer.company_name.into()),
+                ("email", customer.email.into()),
+                ("phone", customer.phone.into()),
+                ("address[line1]", customer.line1.into()),
+                ("address[city]", customer.city.into()),
+                ("address[state]", customer.state.into()),
+                ("address[postal_code]", customer.postal_code.into()),
+                ("address[country]", "US".into()),
+                ("metadata[signup_id]", customer.signup_id.into()),
+            ],
+            &format!("signup:{}:customer", customer.signup_id),
+        )
+        .await
+    }
+
+    /// Links the customer to the new company and makes `payment_method` its
+    /// default. Idempotency key `signup:<id>:customer-company`.
+    pub async fn link_signup_customer(
+        &self,
+        customer: &str,
+        signup_id: &str,
+        company_id: i32,
+        payment_method: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/customers/{}", path_part(customer)),
+            &[
+                ("metadata[company_id]", company_id.to_string()),
+                (
+                    "invoice_settings[default_payment_method]",
+                    payment_method.into(),
+                ),
+            ],
+            &format!("signup:{signup_id}:customer-company"),
+        )
+        .await
+    }
+
+    /// Deletes a customer (an abandoned signup's); `Missing` when already gone.
+    pub async fn delete_customer(&self, id: &str) -> Result<Value, StripeError> {
+        self.send(
+            reqwest::Method::DELETE,
+            &format!("/v1/customers/{}", path_part(id)),
+            &[],
+        )
+        .await
+    }
+
+    /// A SetupIntent for card or bank account, confirmed by the browser.
+    /// Idempotency key `signup:<id>:si:<attempt>`.
+    pub async fn create_signup_setup_intent(
+        &self,
+        customer: &str,
+        signup_id: &str,
+        attempt: u8,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            "/v1/setup_intents",
+            &[
+                ("customer", customer.into()),
+                ("usage", "off_session".into()),
+                ("payment_method_types[]", "card".into()),
+                ("payment_method_types[]", "us_bank_account".into()),
+                (
+                    "payment_method_options[us_bank_account][verification_method]",
+                    "automatic".into(),
+                ),
+                (
+                    "payment_method_options[us_bank_account][financial_connections][permissions][]",
+                    "payment_method".into(),
+                ),
+                ("metadata[signup_id]", signup_id.into()),
+                ("metadata[purpose]", "signup".into()),
+            ],
+            &format!("signup:{signup_id}:si:{attempt}"),
+        )
+        .await
+    }
+
+    /// The test seam: a card SetupIntent confirmed server-side with a test
+    /// payment method (`pm_card_visa`). Only for `sk_test_` keys.
+    pub async fn create_confirmed_test_setup_intent(
+        &self,
+        customer: &str,
+        signup_id: &str,
+        attempt: u8,
+        payment_method: &str,
+    ) -> Result<Value, StripeError> {
+        if !self.is_test_mode() {
+            return Err(StripeError::Api(
+                "Test payment methods need a test-mode key".into(),
+            ));
+        }
+        self.post_keyed(
+            "/v1/setup_intents",
+            &[
+                ("customer", customer.into()),
+                ("usage", "off_session".into()),
+                ("payment_method_types[]", "card".into()),
+                ("payment_method", payment_method.into()),
+                ("confirm", "true".into()),
+                ("metadata[signup_id]", signup_id.into()),
+                ("metadata[purpose]", "signup".into()),
+            ],
+            &format!("signup:{signup_id}:si:{attempt}"),
+        )
+        .await
+    }
+
+    pub async fn setup_intent(&self, id: &str) -> Result<Value, StripeError> {
+        self.get(
+            &format!("/v1/setup_intents/{}", path_part(id)),
+            &[("expand[]", "payment_method".into())],
+        )
+        .await
+    }
+
+    /// The self-serve subscription, nothing charged until `trial_end`.
+    /// Idempotency key `signup:<id>:subscription`.
+    pub async fn create_self_serve_subscription(
+        &self,
+        subscription: &NewSubscription<'_>,
+    ) -> Result<Value, StripeError> {
+        let mut form: Vec<(String, String)> = vec![
+            ("customer".into(), subscription.customer.into()),
+            (
+                "default_payment_method".into(),
+                subscription.payment_method.into(),
+            ),
+            ("trial_end".into(), subscription.trial_end.to_string()),
+            ("billing_mode[type]".into(), "flexible".into()),
+            (
+                "trial_settings[end_behavior][missing_payment_method]".into(),
+                "create_invoice".into(),
+            ),
+            (
+                "payment_settings[payment_method_types][]".into(),
+                "card".into(),
+            ),
+            (
+                "payment_settings[payment_method_types][]".into(),
+                "us_bank_account".into(),
+            ),
+            (
+                "collection_method".into(),
+                "charge_automatically".into(),
+            ),
+            (
+                "metadata[company_id]".into(),
+                subscription.company_id.to_string(),
+            ),
+            ("metadata[signup_id]".into(), subscription.signup_id.into()),
+            ("metadata[plan]".into(), SELF_SERVE_PLAN.into()),
+        ];
+        for (index, price) in subscription.price_ids.iter().enumerate() {
+            form.push((format!("items[{index}][price]"), price.clone()));
+            form.push((format!("items[{index}][quantity]"), "1".into()));
+        }
+        if subscription.automatic_tax {
+            form.push(("automatic_tax[enabled]".into(), "true".into()));
+        }
+        let form: Vec<(&str, String)> = form
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.clone()))
+            .collect();
+        self.post_keyed(
+            "/v1/subscriptions",
+            &form,
+            &format!("signup:{}:subscription", subscription.signup_id),
+        )
+        .await
+    }
+
+    /// Adds a priced item to the subscription (prorated).
+    pub async fn create_subscription_item(
+        &self,
+        subscription: &str,
+        price_id: &str,
+        quantity: i64,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            "/v1/subscription_items",
+            &[
+                ("subscription", subscription.into()),
+                ("price", price_id.into()),
+                ("quantity", quantity.to_string()),
+                ("proration_behavior", "create_prorations".into()),
+            ],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Sets an item's quantity (prorated); never sends `price`, which would
+    /// reset the quantity.
+    pub async fn update_subscription_item_quantity(
+        &self,
+        item_id: &str,
+        quantity: i64,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/subscription_items/{}", path_part(item_id)),
+            &[
+                ("quantity", quantity.to_string()),
+                ("proration_behavior", "create_prorations".into()),
+            ],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Removes an item (prorated); `Missing` when already gone.
+    pub async fn delete_subscription_item(&self, item_id: &str) -> Result<Value, StripeError> {
+        self.send(
+            reqwest::Method::DELETE,
+            &format!("/v1/subscription_items/{}", path_part(item_id)),
+            &[("proration_behavior", "create_prorations".into())],
+        )
+        .await
+    }
+}
+
+/// `metadata[plan]` of self-serve subscriptions.
+pub const SELF_SERVE_PLAN: &str = "self_serve_v1";
+
 fn data(list: Value) -> Vec<Value> {
     match list {
         Value::Object(mut map) => match map.remove("data") {
@@ -558,8 +890,35 @@ fn non_empty(value: &Value) -> Option<String> {
 }
 
 pub fn subscription_snapshot(subscription: &Value) -> SubscriptionSnapshot {
-    let item = &subscription["items"]["data"][0];
+    let items: Vec<ItemSnapshot> = subscription["items"]["data"]
+        .as_array()
+        .map(|items| items.iter().map(item_snapshot).collect())
+        .unwrap_or_default();
+    let multi_item = items.iter().any(|item| {
+        item.lookup_key
+            .as_deref()
+            .is_some_and(|key| PriceKind::from_lookup_key(key).is_some())
+    });
+    let first = &subscription["items"]["data"][0];
+    let item = if multi_item {
+        subscription["items"]["data"]
+            .as_array()
+            .and_then(|raw| {
+                raw.iter().find(|item| {
+                    item["price"]["lookup_key"].as_str() == Some(super::catalog::BASE_LOOKUP_KEY)
+                })
+            })
+            .unwrap_or(first)
+    } else {
+        first
+    };
     let price = &item["price"];
+    let monthly_total_cents = multi_item.then(|| {
+        items
+            .iter()
+            .filter_map(|item| Some(item.unit_amount_cents? * item.quantity))
+            .sum()
+    });
     SubscriptionSnapshot {
         id: subscription["id"].as_str().unwrap_or_default().to_string(),
         customer_id: stripe_id(&subscription["customer"]).unwrap_or_default(),
@@ -577,6 +936,19 @@ pub fn subscription_snapshot(subscription: &Value) -> SubscriptionSnapshot {
         unit_amount_cents: price["unit_amount"].as_i64(),
         company_id: positive_int(&subscription["metadata"]["company_id"]),
         deleted: false,
+        items,
+        monthly_total_cents,
+    }
+}
+
+fn item_snapshot(item: &Value) -> ItemSnapshot {
+    let price = &item["price"];
+    ItemSnapshot {
+        id: text(&item["id"]).unwrap_or_default(),
+        price_id: text(&price["id"]).unwrap_or_default(),
+        lookup_key: non_empty(&price["lookup_key"]),
+        quantity: item["quantity"].as_i64().unwrap_or(1),
+        unit_amount_cents: price["unit_amount"].as_i64(),
     }
 }
 

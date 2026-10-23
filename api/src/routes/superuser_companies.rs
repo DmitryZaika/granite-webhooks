@@ -19,6 +19,10 @@
 
 use crate::auth::CurrentUser;
 use crate::auth::session::SessionUser;
+use crate::billing::seats::COUNTS_TOWARD_LIMIT;
+use crate::company_create::{
+    CompanyInit, PlanSource, RESERVED_SUBDOMAINS, create_company_tx, valid_subdomain,
+};
 use crate::deliverability::{self, DomainTrust};
 use crate::entitlements::{ACTIVE_ADDON, AddonKey};
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -61,12 +65,6 @@ const fn superuser(user: &SessionUser) -> ApiResult<()> {
         Err(ApiError::Forbidden)
     }
 }
-
-/// Active users that count toward `max_users` (walk-in-only accounts do not).
-const COUNTS_TOWARD_LIMIT: &str = "u.is_deleted = 0 AND (
-    EXISTS (SELECT 1 FROM users_positions up WHERE up.user_id = u.id AND up.company_id = u.company_id
-                                              AND up.position_id <> 8)
-    OR NOT EXISTS (SELECT 1 FROM users_positions up WHERE up.user_id = u.id AND up.company_id = u.company_id))";
 
 /// Users who can run the guided tours (not installer or walk-in accounts).
 const RUNS_ONBOARDING: &str = "(u.is_superuser = 1 OR NOT EXISTS (
@@ -411,15 +409,11 @@ fn text(value: Option<&String>) -> Option<String> {
         .map(str::to_string)
 }
 
-fn valid_subdomain(value: &str) -> bool {
-    !value.is_empty()
-        && value.split('-').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-        })
+fn is_reserved(subdomain: &str) -> bool {
+    RESERVED_SUBDOMAINS.contains(&subdomain)
 }
+
+const RESERVED_MESSAGE: &str = "This subdomain is reserved for Granite Manager.";
 
 struct Clean {
     name: String,
@@ -433,7 +427,7 @@ fn validate(input: &CompanyInput) -> ApiResult<Clean> {
         return Err(ApiError::BadRequest("Company name is required".into()));
     }
     let subdomain = input.subdomain.trim().to_lowercase();
-    if !valid_subdomain(&subdomain) {
+    if !is_reserved(&subdomain) && !valid_subdomain(&subdomain) {
         return Err(ApiError::BadRequest(
             "Subdomain must contain only lowercase letters, numbers, and hyphens".into(),
         ));
@@ -472,19 +466,6 @@ async fn subdomain_taken(state: &AppState, subdomain: &str, except: i32) -> ApiR
     Ok(taken.is_some())
 }
 
-static DEFAULT_TEMPLATES: std::sync::LazyLock<Vec<DefaultTemplate>> =
-    std::sync::LazyLock::new(|| {
-        serde_json::from_str(include_str!("../../data/default_email_templates.json"))
-            .expect("valid default templates")
-    });
-
-#[derive(Deserialize)]
-struct DefaultTemplate {
-    name: String,
-    subject: String,
-    body: String,
-}
-
 /// Create a company
 ///
 /// Creates the company with its system calendars, the default company email
@@ -499,7 +480,7 @@ struct DefaultTemplate {
     request_body = CompanyInput,
     responses(
         (status = 201, description = "Created", body = CreatedId),
-        (status = 400, description = "Missing name, bad subdomain or tax", body = ErrorBody),
+        (status = 400, description = "Missing name, bad or reserved subdomain, or bad tax", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a superuser", body = ErrorBody),
         (status = 409, description = "Subdomain already in use", body = ErrorBody),
@@ -514,73 +495,28 @@ pub async fn create_company(
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
     superuser(&user)?;
     let clean = validate(&input)?;
+    if is_reserved(&clean.subdomain) {
+        return Err(ApiError::BadRequest(RESERVED_MESSAGE.into()));
+    }
     if subdomain_taken(&state, &clean.subdomain, 0).await? {
         return Err(ApiError::Conflict("Subdomain is already in use".into()));
     }
-    let password = bcrypt::hash("1111", 10).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let init = CompanyInit {
+        name: clean.name,
+        subdomain: Some(clean.subdomain),
+        address: text(input.address.as_ref()),
+        state_taxes: clean.tax,
+        domain: text(input.domain.as_ref()),
+        cloudtalk_access_key: text(input.cloudtalk_access_key.as_ref()),
+        cloudtalk_access_secret: text(input.cloudtalk_access_secret.as_ref()),
+        ringcentral_client_id: text(input.ringcentral_client_id.as_ref()),
+        ringcentral_client_secret: text(input.ringcentral_client_secret.as_ref()),
+        ringcentral_jwt: text(input.ringcentral_jwt.as_ref()),
+        ringcentral_server_url: text(input.ringcentral_server_url.as_ref()),
+        plan_source: PlanSource::Legacy,
+    };
     let mut tx = state.pool.begin().await?;
-    let id = sqlx::query(
-        "INSERT INTO company (name, subdomain, address, state_taxes, domain, cloudtalk_access_key,
-                              cloudtalk_access_secret, ringcentral_client_id, ringcentral_client_secret,
-                              ringcentral_jwt, ringcentral_server_url, statistics_widgets_hidden)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
-    )
-    .bind(&clean.name)
-    .bind(&clean.subdomain)
-    .bind(text(input.address.as_ref()))
-    .bind(&clean.tax)
-    .bind(text(input.domain.as_ref()))
-    .bind(text(input.cloudtalk_access_key.as_ref()))
-    .bind(text(input.cloudtalk_access_secret.as_ref()))
-    .bind(text(input.ringcentral_client_id.as_ref()))
-    .bind(text(input.ringcentral_client_secret.as_ref()))
-    .bind(text(input.ringcentral_jwt.as_ref()))
-    .bind(text(input.ringcentral_server_url.as_ref()))
-    .execute(&mut *tx)
-    .await?
-    .last_insert_id();
-    let id = i32::try_from(id).map_err(|_| ApiError::Internal("company id out of range".into()))?;
-    for (slug, name, color) in crate::routes::calendars::queries::SYSTEM_CALENDARS {
-        sqlx::query("INSERT INTO calendars (company_id, name, color, slug, created_by) VALUES (?, ?, ?, ?, NULL)")
-            .bind(id)
-            .bind(name)
-            .bind(color)
-            .bind(slug)
-            .execute(&mut *tx)
-            .await?;
-    }
-    for template in DEFAULT_TEMPLATES.iter() {
-        sqlx::query(
-            "INSERT INTO email_templates (template_name, template_subject, template_body, company_id, user_id)
-             VALUES (?, ?, ?, ?, NULL)",
-        )
-        .bind(&template.name)
-        .bind(&template.subject)
-        .bind(&template.body)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    sqlx::query(
-        "INSERT INTO users (name, email, password, company_id, is_employee, is_admin, is_system)
-         VALUES ('Walk-in', ?, ?, ?, 1, 0, 1)",
-    )
-    .bind(format!("walk-in@{}.com", clean.subdomain))
-    .bind(password)
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "INSERT INTO customer_sources (company_id, source_key, label, is_system) VALUES
-           (?, 'check-in', 'Walk-in', 1), (?, 'leads', 'Leads', 1),
-           (?, 'call-in', 'Call-in', 1), (?, 'other', 'Other', 1)",
-    )
-    .bind(id)
-    .bind(id)
-    .bind(id)
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
+    let id = create_company_tx(&mut tx, &init).await?;
     tx.commit().await?;
     deliverability::ensure_company_trust(&state.pool, &state.dns, id, input.domain.as_deref())
         .await?;
@@ -600,7 +536,7 @@ pub async fn create_company(
     request_body = CompanyInput,
     responses(
         (status = 204, description = "Saved"),
-        (status = 400, description = "Missing name, bad subdomain, tax, limit or logo", body = ErrorBody),
+        (status = 400, description = "Missing name, bad or newly reserved subdomain, tax, limit or logo", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a superuser", body = ErrorBody),
         (status = 404, description = "No such company", body = ErrorBody),
@@ -618,6 +554,16 @@ pub async fn update_company(
     superuser(&user)?;
     company_exists(&state, id).await?;
     let clean = validate(&input)?;
+    if is_reserved(&clean.subdomain) {
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT subdomain FROM company WHERE id = ?")
+                .bind(id)
+                .fetch_one(&state.pool)
+                .await?;
+        if stored.as_deref() != Some(clean.subdomain.as_str()) {
+            return Err(ApiError::BadRequest(RESERVED_MESSAGE.into()));
+        }
+    }
     if subdomain_taken(&state, &clean.subdomain, id).await? {
         return Err(ApiError::Conflict("Subdomain is already in use".into()));
     }

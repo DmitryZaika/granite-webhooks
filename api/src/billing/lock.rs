@@ -85,3 +85,46 @@ where
     lock.release().await;
     result
 }
+
+/// A MySQL named lock on its own connection, like [`CompanyLock`]:
+/// `<name>:<database>`, capped at MySQL's 64 characters.
+pub struct NamedLock {
+    conn: MySqlConnection,
+    name: String,
+}
+
+const NAMED_LOCK: &str = "LEFT(CONCAT(?, ':', COALESCE(DATABASE(), '')), 64)";
+
+impl NamedLock {
+    pub async fn acquire(pool: &MySqlPool, name: &str, timeout_secs: u32) -> Result<Self, LockError> {
+        let mut conn = MySqlConnection::connect_with(&pool.connect_options()).await?;
+        let acquired: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT GET_LOCK({NAMED_LOCK}, ?)"
+        )))
+        .bind(name)
+        .bind(timeout_secs)
+        .fetch_one(&mut conn)
+        .await?;
+        if acquired != Some(1) {
+            let _ = conn.close().await;
+            return Err(LockError::Busy);
+        }
+        Ok(Self {
+            conn,
+            name: name.to_string(),
+        })
+    }
+
+    pub async fn release(mut self) {
+        let released = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT RELEASE_LOCK({NAMED_LOCK})"
+        )))
+        .bind(&self.name)
+        .execute(&mut self.conn)
+        .await;
+        if let Err(err) = released {
+            lambda_http::tracing::warn!(error = %err, "named lock release failed");
+        }
+        let _ = self.conn.close().await;
+    }
+}
