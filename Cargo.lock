@@ -150,6 +150,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
+ "tower",
  "tower-http",
  "unicode-normalization",
  "url",
