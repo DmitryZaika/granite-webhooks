@@ -192,11 +192,13 @@ pub async fn board(
     .await?;
     // NO_SEMIJOIN: probe each deal's customer through the
     // email_participants.customer_id index (a semijoin was ~12x slower).
+    // FORCE INDEX: with stale stats MySQL scanned emails instead (15 s timeout).
     with_emails.extend(
         deal_id_set(
             pool,
             "SELECT CAST(d.id AS SIGNED) FROM deals d WHERE EXISTS (
                SELECT /*+ NO_SEMIJOIN() */ 1 FROM email_participants ep
+               FORCE INDEX (fk_email_participants_customer)
                JOIN emails e ON e.id = ep.email_id AND e.deleted_at IS NULL
                WHERE ep.customer_id = d.customer_id)",
             "d.id",

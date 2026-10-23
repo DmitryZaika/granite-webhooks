@@ -175,10 +175,13 @@ pub fn build_message(email: &OutgoingEmail, files: Vec<Vec<u8>>) -> Vec<u8> {
     };
     let mut message = MessageBuilder::new()
         .from(from)
-        .to(email.to.clone())
         .subject(email.subject.clone())
         .text_body(bodies.text)
         .html_body(bodies.html);
+    // SES refuses an empty To header, so a Bcc-only message goes without one.
+    if !email.to.is_empty() {
+        message = message.to(email.to.clone());
+    }
     if !email.cc.is_empty() {
         message = message.cc(email.cc.clone());
     }
@@ -317,6 +320,20 @@ mod tests {
         let message = String::from_utf8(build_message(&notice, vec![Vec::new()])).unwrap();
         assert!(message.contains("Your estimate is booked."));
         assert!(!message.contains("rather not receive"));
+    }
+
+    #[test]
+    fn a_bcc_only_email_has_no_to_header() {
+        // Automation notices go to the reps by Bcc; SES refused the empty To.
+        let notice = OutgoingEmail {
+            to: Vec::new(),
+            cc: Vec::new(),
+            attachments: Vec::new(),
+            ..email()
+        };
+        let message = String::from_utf8(build_message(&notice, Vec::new())).unwrap();
+        assert!(!message.contains("\nTo:") && !message.starts_with("To:"));
+        assert!(!message.contains("hidden@example.com"));
     }
 
     #[tokio::test]

@@ -176,6 +176,8 @@ impl SignWell {
                     FieldKind::Date => "date",
                     FieldKind::Text => "text",
                     FieldKind::AutofillDateSigned => "autofill_date_signed",
+                    // Always printed before sending: filtered out above.
+                    FieldKind::Checkmark => "checkbox",
                 };
                 let mut value = json!({
                     "type": kind,

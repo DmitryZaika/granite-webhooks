@@ -617,7 +617,10 @@ async fn the_customer_adds_the_extras_the_company_offers(pool: MySqlPool) {
     .await
     .unwrap();
     let setup = server.get("/v1/public/companies/100/online-quote").await;
-    assert_eq!(setup.json::<Value>()["extras"], json!(["Stone tear out", "Haul away"]));
+    assert_eq!(
+        setup.json::<Value>()["extras"],
+        json!(["Stone tear out", "Haul away"])
+    );
 
     // One that is off is turned away.
     let mut body = quote_body("jane@new.example", "(317) 555-0199");
@@ -637,7 +640,7 @@ async fn the_customer_adds_the_extras_the_company_offers(pool: MySqlPool) {
         .await;
     res.assert_status(StatusCode::CREATED);
     let doc: String = sqlx::query_scalar(
-        "SELECT draft_drawing_json FROM quotes WHERE email = 'jane@new.example'",
+        "SELECT CAST(draft_drawing_json AS CHAR) FROM quotes WHERE email = 'jane@new.example'",
     )
     .fetch_one(&pool)
     .await
@@ -649,5 +652,8 @@ async fn the_customer_adds_the_extras_the_company_offers(pool: MySqlPool) {
         .iter()
         .map(|i| (i["kind"].as_str().unwrap(), i["name"].as_str().unwrap()))
         .collect();
-    assert_eq!(items, [("priceList", "Haul away"), ("misc", "Stone tear out")]);
+    assert_eq!(
+        items,
+        [("priceList", "Haul away"), ("misc", "Stone tear out")]
+    );
 }

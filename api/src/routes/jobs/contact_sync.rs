@@ -15,7 +15,6 @@ use serde::Serialize;
 use sqlx::MySqlPool;
 use utoipa::ToSchema;
 
-
 /// What a run did.
 #[derive(Debug, Default, Serialize, ToSchema)]
 pub struct ContactSyncRun {
@@ -156,7 +155,10 @@ async fn sync_provider(state: &AppState, provider: Provider) -> Result<usize, sq
     ),
     security(("job_key" = []))
 )]
-pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Json<ContactSyncRun>> {
+pub async fn run(
+    State(state): State<AppState>,
+    _job: JobCaller,
+) -> ApiResult<Json<ContactSyncRun>> {
     let (ringcentral, cloudtalk) = tokio::join!(
         sync_provider(&state, Provider::Ringcentral),
         sync_provider(&state, Provider::Cloudtalk)

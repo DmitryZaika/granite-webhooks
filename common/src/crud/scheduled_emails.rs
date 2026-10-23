@@ -3,6 +3,9 @@ use sqlx::MySqlPool;
 use sqlx::mysql::MySqlQueryResult;
 
 use crate::crud::email_template::{EmailTemplate, get_templates_for_list_id};
+use crate::crud::scheduled_sms::{
+    cancel_pending_scheduled_sms_for_deal, schedule_sms_templates_for_deal_list,
+};
 use crate::utils::email_send_window::clamp_automated_email_send_at;
 
 pub struct ScheduledEmail {
@@ -159,23 +162,23 @@ pub async fn schedule_templates_for_deal_list(
     if new_deal && customer_has_other_deals(pool, customer_id, deal_id).await? {
         return Ok(());
     }
-    if !is_lead_customer(pool, customer_id).await? {
-        return Ok(());
+    if is_lead_customer(pool, customer_id).await? {
+        let templates = get_templates_for_list_id(pool, list_id, company_id).await?;
+        for template in templates {
+            insert_scheduled_email(
+                pool,
+                template,
+                deal_id,
+                customer_id,
+                user_id,
+                company_id,
+                Some(list_id),
+            )
+            .await?;
+        }
     }
-    let templates = get_templates_for_list_id(pool, list_id, company_id).await?;
-    for template in templates {
-        insert_scheduled_email(
-            pool,
-            template,
-            deal_id,
-            customer_id,
-            user_id,
-            company_id,
-            Some(list_id),
-        )
-        .await?;
-    }
-    Ok(())
+    schedule_sms_templates_for_deal_list(pool, list_id, company_id, deal_id, customer_id, user_id)
+        .await
 }
 
 pub async fn reschedule_templates_for_deal_list(
@@ -188,6 +191,7 @@ pub async fn reschedule_templates_for_deal_list(
     new_deal: bool,
 ) -> Result<(), sqlx::Error> {
     cancel_pending_scheduled_emails_for_deal(pool, deal_id).await?;
+    cancel_pending_scheduled_sms_for_deal(pool, deal_id).await?;
     schedule_templates_for_deal_list(
         pool,
         list_id,

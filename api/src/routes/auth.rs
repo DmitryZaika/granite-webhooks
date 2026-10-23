@@ -105,7 +105,7 @@ fn random_token() -> Result<String, ApiError> {
 
 /// The client address: the first `X-Forwarded-For` entry (API Gateway and
 /// CloudFront set it), else "unknown".
-fn client_ip(headers: &HeaderMap) -> String {
+pub(crate) fn client_ip(headers: &HeaderMap) -> String {
     headers
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())

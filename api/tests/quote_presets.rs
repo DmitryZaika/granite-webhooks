@@ -203,11 +203,20 @@ async fn online_quote_options_start_with_three_defaults_all_off(pool: MySqlPool)
         .as_array()
         .unwrap()
         .iter()
-        .map(|row| (row["name"].as_str().unwrap(), row["enabled"].as_bool().unwrap()))
+        .map(|row| {
+            (
+                row["name"].as_str().unwrap(),
+                row["enabled"].as_bool().unwrap(),
+            )
+        })
         .collect();
     assert_eq!(
         rows,
-        [("Laminate tear out", false), ("Stone tear out", false), ("10 year sealer", false)]
+        [
+            ("Laminate tear out", false),
+            ("Stone tear out", false),
+            ("10 year sealer", false)
+        ]
     );
     let laminate = list[0]["id"].as_i64().unwrap();
     let sealer = list[2]["id"].as_i64().unwrap();
@@ -238,10 +247,19 @@ async fn online_quote_options_start_with_three_defaults_all_off(pool: MySqlPool)
         .as_array()
         .unwrap()
         .iter()
-        .map(|row| (row["name"].as_str().unwrap(), row["enabled"].as_bool().unwrap()))
+        .map(|row| {
+            (
+                row["name"].as_str().unwrap(),
+                row["enabled"].as_bool().unwrap(),
+            )
+        })
         .collect();
     assert_eq!(
         rows,
-        [("Stone tear out", false), ("10 year sealer", true), ("Plumbing", false)]
+        [
+            ("Stone tear out", false),
+            ("10 year sealer", true),
+            ("Plumbing", false)
+        ]
     );
 }

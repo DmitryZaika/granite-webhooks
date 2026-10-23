@@ -467,14 +467,14 @@ pub async fn create(
 }
 
 /// History lines of an edit, besides date, label and location.
-fn change_messages(
-    event: &Checked<'_>,
-    unscheduled: bool,
-    existing: &StoredEvent,
-) -> Vec<String> {
+fn change_messages(event: &Checked<'_>, unscheduled: bool, existing: &StoredEvent) -> Vec<String> {
     let mut messages = Vec::new();
     if unscheduled != existing.unscheduled {
-        let message = if unscheduled { "Moved to unscheduled" } else { "Scheduled" };
+        let message = if unscheduled {
+            "Moved to unscheduled"
+        } else {
+            "Scheduled"
+        };
         messages.push(message.into());
     }
     if event.title != existing.title {
