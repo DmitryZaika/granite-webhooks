@@ -6171,7 +6171,7 @@
           "stones"
         ],
         "summary": "Fetch a stone image through the API",
-        "description": "Returns the bytes of an image in the storage bucket so the browser can\ndraw it on a canvas (the bucket sends no CORS headers). Other URLs and\nfiles that are not images are refused.",
+        "description": "Returns the bytes of an image in the storage bucket so the browser can\ndraw it on a canvas (the bucket sends no CORS headers). Other URLs and\nfiles that are not images (or are SVG) are refused.",
         "operationId": "proxy_stone_image",
         "parameters": [
           {
@@ -10249,7 +10249,7 @@
           "uploads"
         ],
         "summary": "Start an upload",
-        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`),\n`POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route\nalso makes the thumbnail. Inventory folders are for admins; `deals` for\n(and `events`) any employee and also take documents; `quotes` and\n`template-images` any employee, images only; `emails` for any employee, any\nfile, and the response has the `token` `POST /v1/emails` asks for.",
+        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`),\n`POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route\nalso makes the thumbnail. Inventory folders are for admins; `deals` for\n(and `events`) any employee and also take documents; `quotes` and\n`template-images` any employee, images only; `emails` for any employee, any\nfile, and the response has the `token` `POST /v1/emails` asks for. Types a\nbrowser runs script in (HTML, SVG, XML, JavaScript) are refused everywhere.",
         "operationId": "create_upload",
         "requestBody": {
           "content": {
@@ -10273,7 +10273,7 @@
             }
           },
           "400": {
-            "description": "Content type not allowed for the folder, or a malformed body",
+            "description": "Content type not allowed for the folder (HTML, SVG, XML and JavaScript never are), or a malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -10336,7 +10336,7 @@
           "uploads"
         ],
         "summary": "Fetch a stored file through the API",
-        "description": "Returns the bytes of an image or document in the storage bucket, for the\nbrowser to attach it to an email (the bucket sends no CORS headers).\nOther URLs and other file types are refused.",
+        "description": "Returns the bytes of an image or document in the storage bucket, for the\nbrowser to attach it to an email (the bucket sends no CORS headers).\nOther URLs and other file types (SVG included) are refused. The file is\nsent as a download that never renders as a page.",
         "operationId": "fetch_uploaded_file",
         "parameters": [
           {

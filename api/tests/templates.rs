@@ -320,6 +320,68 @@ async fn employees_read_stored_files_through_the_api(pool: MySqlPool) {
         .assert_status(StatusCode::BAD_REQUEST);
 }
 
+#[test_db::test(seed)]
+async fn files_that_run_script_are_never_uploaded_or_served(pool: MySqlPool) {
+    let (server, storage) = common::server_with_storage(pool);
+    for (folder, content_type) in [
+        ("emails", "image/svg+xml"),
+        ("emails", "text/html"),
+        ("bug-reports", "application/xhtml+xml"),
+        ("email-templates", "text/javascript"),
+        ("quotes", "image/svg+xml"),
+    ] {
+        let res = server
+            .post("/v1/uploads")
+            .with_session(sessions::ADMIN)
+            .json(&json!({ "folder": folder, "file_name": "x", "content_type": content_type }))
+            .await;
+        assert_eq!(res.status_code(), StatusCode::BAD_REQUEST, "{folder} {content_type}");
+    }
+
+    // An SVG already in the bucket is refused; images come back as downloads
+    // that cannot render as a page of the API.
+    storage
+        .put(
+            "emails/x.svg",
+            b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>".to_vec(),
+            "image/svg+xml",
+        )
+        .await
+        .unwrap();
+    storage
+        .put("emails/x.png", b"png".to_vec(), "image/png")
+        .await
+        .unwrap();
+    let svg = storage.public_url("emails/x.svg").unwrap();
+    server
+        .get(&format!("/v1/uploads/file?url={}", urlencoding(&svg)))
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    server
+        .get(&format!("/v1/stones/image-proxy?url={}", urlencoding(&svg)))
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    let png = storage.public_url("emails/x.png").unwrap();
+    for res in [
+        server
+            .get(&format!("/v1/uploads/file?url={}", urlencoding(&png)))
+            .with_session(sessions::REP)
+            .await,
+        server
+            .get(&format!("/v1/stones/image-proxy?url={}", urlencoding(&png)))
+            .with_session(sessions::ADMIN)
+            .await,
+    ] {
+        res.assert_status_ok();
+        assert_eq!(res.header("content-type"), "image/png");
+        assert_eq!(res.header("x-content-type-options"), "nosniff");
+        assert_eq!(res.header("content-security-policy"), "default-src 'none'; sandbox");
+        assert_eq!(res.header("content-disposition"), "attachment");
+    }
+}
+
 fn urlencoding(value: &str) -> String {
     percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
 }

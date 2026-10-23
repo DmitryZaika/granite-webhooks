@@ -120,3 +120,40 @@ async fn another_customers_mail_in_a_shared_thread_is_not_shown(pool: MySqlPool)
     assert!(emails.contains(&98002), "{emails:?}");
     assert!(!emails.contains(&98001), "{emails:?}");
 }
+
+#[test_db::test(seed)]
+async fn another_companys_mail_is_not_shown_for_its_address(pool: MySqlPool) {
+    // A rep of company 100 saves company 101's inbox address on a customer.
+    let server = server(pool.clone());
+    let created = server
+        .post("/v1/customers")
+        .with_session(sessions::REP)
+        .json(&serde_json::json!({
+            "name": "Planted", "emails": ["rep@other.test"], "source": "other"
+        }))
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let id = created.json::<Value>()["id"].as_i64().unwrap();
+    // Unstamped inbound mail to that address is not the rep's either.
+    sqlx::query(
+        "INSERT INTO emails (id, subject, body, sent_at, message_id, thread_id,
+           sender_email, receiver_email, company_id, is_draft) VALUES
+         (98101, 'Unstamped inbound', 'b', '2026-04-03 10:00:00', '<m98101@x.test>',
+          'bbbbbbbb-3333-4000-8000-000000000001', 'buyer@x.test', 'rep@other.test', NULL, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let body: Value = server
+        .get(&format!("/v1/customers/{id}/history"))
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(
+        ids(&body["emails"]),
+        Vec::<i64>::new(),
+        "{}",
+        body["emails"]
+    );
+}

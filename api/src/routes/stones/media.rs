@@ -11,7 +11,7 @@ use crate::routes::uploads::{self, schemas::UploadFolder};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
@@ -729,7 +729,7 @@ pub struct ImageProxyQuery {
 ///
 /// Returns the bytes of an image in the storage bucket so the browser can
 /// draw it on a canvas (the bucket sends no CORS headers). Other URLs and
-/// files that are not images are refused.
+/// files that are not images (or are SVG) are refused.
 #[utoipa::path(
     get,
     path = "/v1/stones/image-proxy",
@@ -759,18 +759,15 @@ pub async fn image_proxy(
         .ok_or_else(disallowed)?;
     let key = percent_decode_str(&key).decode_utf8_lossy().into_owned();
     let object = state.storage.get(&key).await?.ok_or(ApiError::NotFound)?;
-    if !object
+    let mime = object
         .content_type
-        .to_ascii_lowercase()
-        .starts_with("image/")
-    {
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !mime.starts_with("image/") || uploads::executes_in_browser(&mime) {
         return Err(disallowed());
     }
-    Ok((
-        [
-            (header::CONTENT_TYPE, object.content_type),
-            (header::CACHE_CONTROL, "private, max-age=3600".to_string()),
-        ],
-        object.bytes,
-    ))
+    Ok((uploads::stored_file_headers(mime), object.bytes))
 }

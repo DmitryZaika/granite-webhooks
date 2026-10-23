@@ -60,7 +60,8 @@ pub mod voicemail;
 pub mod webhooks_client;
 
 use axum::extract::{Request, State};
-use axum::http::header::{CONTENT_TYPE, ORIGIN};
+use axum::http::HeaderValue;
+use axum::http::header::{CONTENT_TYPE, ORIGIN, X_CONTENT_TYPE_OPTIONS};
 use axum::http::{Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -97,6 +98,16 @@ async fn check_origin(State(state): State<AppState>, request: Request, next: Nex
             .into_response();
     }
     next.run(request).await
+}
+
+/// No response is ever content-sniffed into a type it was not sent as (a
+/// JSON or text body read as HTML would run script on the API's origin).
+async fn no_sniff(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    response
 }
 
 /// Every 5xx the API answers goes to `PostHog`'s Error Tracking with what
@@ -162,6 +173,7 @@ pub fn app(state: AppState) -> Router {
             report_server_errors,
         ))
         .layer(middleware::from_fn_with_state(state.clone(), check_origin))
+        .layer(middleware::from_fn(no_sniff))
         .layer(cors)
         .with_state(state)
 }
