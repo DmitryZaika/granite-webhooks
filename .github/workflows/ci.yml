@@ -51,6 +51,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci
+          cache-on-failure: true
 
       - name: Format
         run: cargo fmt --all --check
@@ -70,4 +71,4 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked
 
       - name: Test
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
