@@ -28,6 +28,7 @@ pub fn source_of(distinct_id: Option<&str>, lib: Option<&str>) -> Source {
     match (distinct_id, lib) {
         (Some("granite-api"), _) => Source::Api,
         (Some("server-webhooks"), _) => Source::Webhooks,
+        (Some("server-time-triggered"), _) => Source::TimeTriggered,
         (_, Some("web")) => Source::Web,
         (_, Some("posthog-node")) => Source::LegacyNode,
         _ => Source::Unknown,
@@ -135,6 +136,12 @@ mod tests {
         let cases = [
             (Some("granite-api"), Some("web"), Source::Api),
             (Some("server-webhooks"), None, Source::Webhooks),
+            (Some("server-time-triggered"), None, Source::TimeTriggered),
+            (
+                Some("server-time-triggered"),
+                Some("web"),
+                Source::TimeTriggered,
+            ),
             (Some("user-1"), Some("web"), Source::Web),
             (None, Some("posthog-node"), Source::LegacyNode),
             (Some("user-1"), Some("other"), Source::Unknown),

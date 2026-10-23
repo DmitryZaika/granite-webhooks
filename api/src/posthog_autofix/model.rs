@@ -133,6 +133,9 @@ pub enum Source {
     /// The `webhooks` Lambda (`distinct_id` = `server-webhooks`).
     #[serde(rename = "server-webhooks")]
     Webhooks,
+    /// The `time-triggered` scheduler Lambda (`distinct_id` = `server-time-triggered`).
+    #[serde(rename = "server-time-triggered")]
+    TimeTriggered,
     /// The Remix server removed on 2026-10-13 (`$lib` = `posthog-node`).
     #[serde(rename = "legacy-node")]
     LegacyNode,
@@ -146,6 +149,7 @@ impl Source {
             Self::Web => "web",
             Self::Api => "granite-api",
             Self::Webhooks => "server-webhooks",
+            Self::TimeTriggered => "server-time-triggered",
             Self::LegacyNode => "legacy-node",
             Self::Unknown => "unknown",
         }
@@ -156,6 +160,7 @@ impl Source {
             Self::Web,
             Self::Api,
             Self::Webhooks,
+            Self::TimeTriggered,
             Self::LegacyNode,
             Self::Unknown,
         ]
