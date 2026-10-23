@@ -21395,6 +21395,8 @@
         "tags": [
           "sms"
         ],
+        "summary": "Store an inbound MMS's files",
+        "description": "Called by the `webhooks` Lambda (job key), not by the CRM: after it saved an\ninbound `RingCentral` text, it sends the message's file ids. Each file is\ndownloaded with the company's `RingCentral` login, stored under\n`sms-attachments/<company id>/` and shown with the text in the conversation.\nReturns how many were stored; 404 when the text is not the company's.",
         "operationId": "store_ringcentral_inbound_media",
         "requestBody": {
           "content": {
@@ -41484,6 +41486,53 @@
         ]
       }
     },
+    "/v1/jobs/posthog-autofix": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Run one tick of the PostHog auto-fix intake",
+        "description": "Gives up on fix runs that never reported back, then (at most once per\npoll window, `POSTHOG_AUTOFIX_POLL_MINUTES`) records new PostHog error\nissues created since the cutover, emails one digest when they arrive in a\nstorm, judges issues that have settled (skipped as noise, folded into an\nearlier run of the same bug, or queued), emails when a fixed issue is\nreopened, and (with `POSTHOG_AUTOFIX_WRITE_KEY` and `_ASSIGNEE` set)\nassigns the issues of opened fixes in PostHog. Last, in live mode, it starts queued fix runs within the\nconcurrency and daily caps; in dry-run mode it emails the runs it would\nhave started instead. With `POSTHOG_AUTOFIX_MODE` off it does nothing.\nWhen another tick is running it returns at once with `busy`. PostHog or\nGitHub failures do not fail the call: they are listed in `errors` and\nretried on the next tick.",
+        "operationId": "run_posthog_autofix",
+        "responses": {
+          "200": {
+            "description": "What the tick did",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TickReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
     "/v1/me/call-coaching": {
       "get": {
         "tags": [
@@ -46565,6 +46614,206 @@
           }
         }
       }
+    },
+    "/v1/posthog-autofix/runs/{id}/started": {
+      "post": {
+        "tags": [
+          "posthog-autofix"
+        ],
+        "summary": "Record that a fix run started",
+        "description": "Called once by the `posthog-autofix` GitHub workflow when it begins,\nbefore the agent runs. Moves the run from `dispatched` to `running` and\nstores the GitHub run link. `issue_id` must be the run's PostHog issue id.\nRepeating the same call (same `github_run_url`) answers 200 with\n`changed: false`. Any other status (for example a run the intake never\ndispatched) answers 409, and the workflow must stop. Uses the callback\nsecret, not a session.",
+        "operationId": "start_posthog_autofix_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Ledger run id, passed to the workflow as an input",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartedReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded, or already recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallbackApplied"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body, issue id or GitHub link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong callback secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such run, or its issue id differs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run is not dispatched; the workflow must stop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "autofix_callback": []
+          }
+        ]
+      }
+    },
+    "/v1/posthog-autofix/runs/{id}/result": {
+      "post": {
+        "tags": [
+          "posthog-autofix"
+        ],
+        "summary": "Record a fix run's result",
+        "description": "Called once by the `posthog-autofix` GitHub workflow when it ends. Closes\nthe run as `succeeded` (`conclusion` completed, with the agent's answer in\n`agent`) or `failed`, stores the outcome, pull request, verification and\ncost, and emails the developers. A `usage_limited` conclusion puts the run\nback in the queue to be retried in an hour, with no email, until its\nattempts run out; then it fails. A late result for a run the watchdog\ntimed out is still recorded. Repeating a result answers 200 with\n`changed: false` and sends no second email. A result for a run that never\nstarted answers 409. Uses the callback secret, not a session.",
+        "operationId": "finish_posthog_autofix_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Ledger run id, passed to the workflow as an input",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded, or already recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallbackApplied"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body, issue id or link, or a completed run without `agent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong callback secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such run, or its issue id differs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run is in a status that cannot take a result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "autofix_callback": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -47521,6 +47770,76 @@
               "$ref": "#/components/schemas/AnswerChoice"
             },
             "description": "Their answers, by question."
+          }
+        }
+      },
+      "AgentResult": {
+        "type": "object",
+        "description": "The agent's structured result (`.github/posthog-autofix/result.schema.json`).\nIt is the agent's claim; [`RunReport::verification`] is what the workflow\nproved.",
+        "required": [
+          "outcome",
+          "summary",
+          "root_cause",
+          "fix_summary",
+          "risk",
+          "test"
+        ],
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/Outcome",
+            "description": "What the agent concluded."
+          },
+          "target_repo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TargetRepo",
+                "description": "The repository it changed, if any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "description": "One line: what went wrong."
+          },
+          "root_cause": {
+            "type": "string",
+            "description": "Why it happened, in a few sentences."
+          },
+          "fix_summary": {
+            "type": "string",
+            "description": "What changed and why that fixes it; empty without a fix."
+          },
+          "risk": {
+            "type": "string",
+            "description": "What the fix could break, and how likely."
+          },
+          "test": {
+            "$ref": "#/components/schemas/TestReport",
+            "description": "The test, or why there is none."
+          },
+          "recommendation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The next step for a person (a suppression rule, a migration to apply)."
+          },
+          "duplicate_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pull request or commit that already covers the issue."
+          },
+          "pr_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pull request title."
           }
         }
       },
@@ -49146,6 +49465,19 @@
           "text": {
             "type": "string",
             "description": "What was said."
+          }
+        }
+      },
+      "CallbackApplied": {
+        "type": "object",
+        "description": "What a callback did.",
+        "required": [
+          "changed"
+        ],
+        "properties": {
+          "changed": {
+            "type": "boolean",
+            "description": "True when this call moved the run; false when the same report had\nalready been recorded (a retry), which is also a success."
           }
         }
       },
@@ -51037,6 +51369,15 @@
             "description": "The deal the composer is on."
           }
         }
+      },
+      "Conclusion": {
+        "type": "string",
+        "description": "How the workflow run ended.",
+        "enum": [
+          "completed",
+          "failed",
+          "usage_limited"
+        ]
       },
       "Condition": {
         "type": "object",
@@ -57850,7 +58191,8 @@
         "properties": {
           "company_id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "The company the message belongs to: its `RingCentral` login is used."
           },
           "sms_id": {
             "type": "integer",
@@ -57873,7 +58215,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/InboundMediaFile"
-            }
+            },
+            "description": "The message's pictures and files, in the order the customer sent them."
           }
         }
       },
@@ -57890,7 +58233,8 @@
             "description": "The attachment id under the message's `content/`."
           },
           "content_type": {
-            "type": "string"
+            "type": "string",
+            "description": "MIME type `RingCentral` gives the file (e.g. `image/jpeg`); it picks the\nstored file's extension."
           }
         }
       },
@@ -57903,6 +58247,7 @@
         "properties": {
           "stored": {
             "type": "integer",
+            "description": "Files downloaded and attached; a file that failed is left out.",
             "minimum": 0
           }
         }
@@ -61953,6 +62298,18 @@
         "enum": [
           "automatic",
           "custom"
+        ]
+      },
+      "Outcome": {
+        "type": "string",
+        "description": "What the agent concluded about the issue.",
+        "enum": [
+          "fixed_with_test",
+          "fixed_without_test",
+          "not_a_code_bug",
+          "not_reproducible",
+          "duplicate",
+          "needs_human"
         ]
       },
       "OutcomeBody": {
@@ -66850,6 +67207,74 @@
         },
         "additionalProperties": false
       },
+      "RunReport": {
+        "type": "object",
+        "description": "Body of `POST /v1/posthog-autofix/runs/{id}/result`.",
+        "required": [
+          "issue_id",
+          "conclusion",
+          "verification"
+        ],
+        "properties": {
+          "issue_id": {
+            "type": "string",
+            "description": "The run's PostHog issue id, checked against the ledger row."
+          },
+          "conclusion": {
+            "$ref": "#/components/schemas/Conclusion",
+            "description": "How the workflow run ended."
+          },
+          "agent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentResult",
+                "description": "The agent's result; absent when the run broke before it answered."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verification": {
+            "$ref": "#/components/schemas/Verification",
+            "description": "What the workflow proved about the commits."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why verification failed, or what broke the run."
+          },
+          "pr_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pull request, when one was opened."
+          },
+          "pr_draft": {
+            "type": "boolean",
+            "description": "The pull request is a draft (unverified)."
+          },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The agent's cost as Claude Code estimated it, in US dollars."
+          },
+          "github_run_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The GitHub Actions run."
+          }
+        },
+        "additionalProperties": false
+      },
       "Sale": {
         "type": "object",
         "description": "The option sold.",
@@ -70013,6 +70438,25 @@
           }
         }
       },
+      "StartedReport": {
+        "type": "object",
+        "description": "Body of `POST /v1/posthog-autofix/runs/{id}/started`.",
+        "required": [
+          "issue_id",
+          "github_run_url"
+        ],
+        "properties": {
+          "issue_id": {
+            "type": "string",
+            "description": "The run's PostHog issue id, checked against the ledger row."
+          },
+          "github_run_url": {
+            "type": "string",
+            "description": "The GitHub Actions run, e.g. `https://github.com/<owner>/<repo>/actions/runs/<id>`."
+          }
+        },
+        "additionalProperties": false
+      },
       "StepChannel": {
         "type": "string",
         "description": "How a step is delivered.",
@@ -71712,6 +72156,14 @@
           }
         }
       },
+      "TargetRepo": {
+        "type": "string",
+        "description": "The repository a run changed.",
+        "enum": [
+          "granite-webhooks",
+          "general_datebase"
+        ]
+      },
       "TaskProgress": {
         "type": "object",
         "description": "A feature tour's saved progress.",
@@ -72194,6 +72646,56 @@
           }
         }
       },
+      "TestReport": {
+        "type": "object",
+        "description": "The agent's test, as it reported it.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/TestStatus",
+            "description": "Whether a test was written."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Test files, relative to the target repository."
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The command that runs it, e.g. `cargo test -p api --test sms tts_reply`."
+          },
+          "why_not_possible": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why no automated test was possible."
+          },
+          "manual_test_steps": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How a person checks the fix by hand."
+          }
+        }
+      },
+      "TestStatus": {
+        "type": "string",
+        "description": "Whether the agent wrote a test.",
+        "enum": [
+          "written",
+          "not_possible",
+          "not_applicable"
+        ]
+      },
       "ThreadCustomer": {
         "type": "object",
         "description": "Who the conversation is with.",
@@ -72512,6 +73014,92 @@
           "checked": {
             "type": "boolean",
             "description": "Ticked by hand."
+          }
+        }
+      },
+      "TickReport": {
+        "type": "object",
+        "description": "What a tick did.",
+        "required": [
+          "processed",
+          "discovered",
+          "queued",
+          "skipped",
+          "duplicates",
+          "dispatched",
+          "previewed",
+          "timed_out",
+          "regressions",
+          "assigned",
+          "storm_digest",
+          "busy",
+          "errors"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Ledger rows this tick changed (the time-triggered Lambda logs it).",
+            "minimum": 0
+          },
+          "discovered": {
+            "type": "integer",
+            "description": "New issues recorded.",
+            "minimum": 0
+          },
+          "queued": {
+            "type": "integer",
+            "description": "Issues judged eligible and queued.",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "integer",
+            "description": "Issues skipped as noise, resolved, suppressed or not production.",
+            "minimum": 0
+          },
+          "duplicates": {
+            "type": "integer",
+            "description": "Issues folded into an earlier run of the same bug.",
+            "minimum": 0
+          },
+          "dispatched": {
+            "type": "integer",
+            "description": "Fix runs started.",
+            "minimum": 0
+          },
+          "previewed": {
+            "type": "integer",
+            "description": "Runs a dry run would have started (emailed instead).",
+            "minimum": 0
+          },
+          "timed_out": {
+            "type": "integer",
+            "description": "Runs given up by the watchdog.",
+            "minimum": 0
+          },
+          "regressions": {
+            "type": "integer",
+            "description": "Fixed issues that PostHog reopened (emailed).",
+            "minimum": 0
+          },
+          "assigned": {
+            "type": "integer",
+            "description": "PostHog issues of opened fixes assigned to their reviewer (write-back).",
+            "minimum": 0
+          },
+          "storm_digest": {
+            "type": "boolean",
+            "description": "A storm digest was sent."
+          },
+          "busy": {
+            "type": "boolean",
+            "description": "Another tick held the lock; this one did nothing."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Steps that failed (PostHog or GitHub unreachable); retried next tick."
           }
         }
       },
@@ -73449,6 +74037,15 @@
           }
         }
       },
+      "Verification": {
+        "type": "string",
+        "description": "What the workflow proved about the agent's commits.",
+        "enum": [
+          "verified",
+          "unverified",
+          "not_applicable"
+        ]
+      },
       "ViewGate": {
         "type": "object",
         "description": "Whether the visitor may see the page, and where a code would go.",
@@ -73731,6 +74328,11 @@
       }
     },
     "securitySchemes": {
+      "autofix_callback": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "`POSTHOG_AUTOFIX_CALLBACK_SECRET`, sent by the posthog-autofix GitHub workflow."
+      },
       "job_key": {
         "type": "apiKey",
         "in": "header",
@@ -73893,6 +74495,10 @@
     {
       "name": "jobs",
       "description": "Scheduled jobs the time-triggered Lambda runs (job key, no session)"
+    },
+    {
+      "name": "posthog-autofix",
+      "description": "Callbacks of the PostHog auto-fix GitHub workflow (callback secret, no session)"
     }
   ]
 }
