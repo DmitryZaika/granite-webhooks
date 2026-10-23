@@ -1,0 +1,73 @@
+name: CI
+
+# Runs on every pull request into main. Branch protection requires the `check`
+# job to pass before a pull request can be merged, so keep its name stable and
+# never add a path filter: a required check that does not run blocks the merge.
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # sqlx's query! macros check every query against this schema at compile
+      # time, and the tests take their databases from the same server.
+      # .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local.
+      # Same flags as docker-compose.local.yml; started in the background so
+      # MySQL initializes while the toolchain is set up.
+      - name: Start database
+        run: |
+          docker run -d --name mysql -p 3307:3306 \
+            -e MYSQL_ROOT_PASSWORD=granite -e MYSQL_DATABASE=granite_local \
+            mysql:8.0 \
+            --default-authentication-plugin=mysql_native_password \
+            --log-bin-trust-function-creators=1 \
+            --skip-log-bin \
+            --innodb-flush-log-at-trx-commit=0 \
+            --sync-binlog=0 \
+            --innodb-doublewrite=0 \
+            --innodb-flush-method=nosync
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Apply migrations
+        run: |
+          for _ in $(seq 120); do
+            docker exec mysql mysqladmin ping -h 127.0.0.1 -pgranite --silent 2>/dev/null && break
+            sleep 1
+          done
+          for f in migrations/*.sql; do
+            mysql -h 127.0.0.1 -P 3307 -uroot -pgranite granite_local < "$f" \
+              || { echo "::error::Migration $f failed"; exit 1; }
+          done
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked
+
+      - name: Test
+        run: cargo test --workspace --locked
