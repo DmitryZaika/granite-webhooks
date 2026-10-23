@@ -445,9 +445,22 @@ async fn intuits_disconnect_link_clears_the_realm(pool: MySqlPool) {
         .await
         .unwrap();
     let Setup { server, .. } = setup(&pool, false, false).await;
-    for realm in ["abc", "' OR 1=1 --", ""] {
+    // Knowing the realm id is not enough: signed out, nothing happens.
+    server
+        .post("/v1/quickbooks/disconnected")
+        .json(&json!({ "realm_id": "777" }))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    for (session, realm) in [
+        (sessions::OTHER_COMPANY_REP, "abc"),
+        (sessions::OTHER_COMPANY_REP, "' OR 1=1 --"),
+        (sessions::OTHER_COMPANY_REP, ""),
+        // Another company's user cannot disconnect it either.
+        (sessions::REP, "777"),
+    ] {
         server
-            .post("/v1/public/quickbooks/disconnect")
+            .post("/v1/quickbooks/disconnected")
+            .with_session(session)
             .json(&json!({ "realm_id": realm }))
             .await
             .assert_status(StatusCode::NO_CONTENT);
@@ -459,7 +472,8 @@ async fn intuits_disconnect_link_clears_the_realm(pool: MySqlPool) {
             .unwrap();
     assert_eq!(realm.as_deref(), Some("777"));
     server
-        .post("/v1/public/quickbooks/disconnect")
+        .post("/v1/quickbooks/disconnected")
+        .with_session(sessions::OTHER_COMPANY_REP)
         .json(&json!({ "realm_id": "777" }))
         .await
         .assert_status(StatusCode::NO_CONTENT);

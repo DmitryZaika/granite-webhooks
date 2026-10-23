@@ -253,6 +253,8 @@ async fn store_outbound_sms(
 ) -> BasicResponse {
     match insert_outbound_sms(pool, form, company_id).await {
         Ok(_) => OK_RESPONSE,
+        // Two pushes for the same text raced; the other one stored it.
+        Err(sqlx::Error::Database(error)) if error.is_unique_violation() => OK_RESPONSE,
         Err(error) => {
             tracing::error!("Error inserting sms sent into the database: {}", error);
             internal_error(ERR_DB)

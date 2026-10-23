@@ -125,9 +125,12 @@ async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
         }
     };
     let url = format!("{}/v1/jobs/{job}", api_url.trim_end_matches('/'));
+    // The API answers within its 30 s limit; a hung connection must not use
+    // up the whole run and starve the jobs after it.
     let response = Client::new()
         .post(url)
         .header("Authorization", lambda_key)
+        .timeout(std::time::Duration::from_secs(35))
         .send()
         .await
         .map_err(|error| Error::from(error.to_string()))?;
@@ -147,6 +150,15 @@ async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
         .and_then(|value| value.as_u64())
         .unwrap_or(0);
     Ok(usize::try_from(processed).unwrap_or(0))
+}
+
+/// The job's count, or 0 after logging: one failing job must not stop the
+/// jobs after it.
+fn or_logged(result: Result<usize, Error>, label: &str) -> usize {
+    result.unwrap_or_else(|error| {
+        tracing::error!(?error, "Failed to process {label}; continuing");
+        0
+    })
 }
 
 async fn process_estimate_appointment_reminders() -> Result<usize, Error> {
@@ -331,10 +343,17 @@ pub(crate) async fn function_handler(
             0
         }
     };
-    let estimate_reminder_count = process_estimate_appointment_reminders().await?;
-    let maintenance_reminder_count = process_maintenance_due_reminders().await?;
-    let sms_followup_count = process_sms_followups().await?;
-    let checklist_survey_count = process_checklist_surveys().await?;
+    let estimate_reminder_count = or_logged(
+        process_estimate_appointment_reminders().await,
+        "estimate reminders",
+    );
+    let maintenance_reminder_count = or_logged(
+        process_maintenance_due_reminders().await,
+        "maintenance due reminders",
+    );
+    let sms_followup_count = or_logged(process_sms_followups().await, "sms follow-ups");
+    let checklist_survey_count =
+        or_logged(process_checklist_surveys().await, "checklist surveys");
     start_supplier_files_job().await;
     let call_points_count = match process_call_points().await {
         Ok(count) => count,

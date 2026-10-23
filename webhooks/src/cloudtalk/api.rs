@@ -165,8 +165,7 @@ pub async fn sync_customer_to_cloud_talk(
             "Customer has no usable phone number",
         );
     };
-    upsert_contact(pool, client, &mapping, &clean_payload, clean_company_id).await;
-    OK_RESPONSE
+    upsert_contact(pool, client, &mapping, &clean_payload, clean_company_id).await
 }
 
 pub async fn create_cloudtalk_contact(
@@ -252,7 +251,7 @@ pub async fn find_cloudtalk_contact_by_phone(
 ) -> Result<Option<i32>, Box<dyn std::error::Error + Send + Sync>> {
     for phone in e164_phones {
         if let Some(id) = find_contact_by_one_phone(pool, client, company_id, phone).await? {
-            return Ok(Some(id.try_into().unwrap()));
+            return Ok(Some(i32::try_from(id)?));
         }
     }
     Ok(None)

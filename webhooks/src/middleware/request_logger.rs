@@ -14,7 +14,7 @@ use crate::libs::constants::internal_error;
 use crate::libs::types::BasicResponse;
 use crate::posthog::{PostHogEvent, client};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 // middleware that shows how to consume the request body upfront
 pub async fn print_request_body(
@@ -51,29 +51,14 @@ async fn log_request_body(request: Request, uri: &Uri) -> Result<Request, BasicR
         .map_err(|_| internal_error("Middleware could not parse request body"))?
         .to_bytes();
 
-    // Redact body for SMS routes — they contain customer phone numbers and message text (PII)
+    // Only the shape of a body is logged, never its values: bodies carry
+    // customer names, phone numbers, emails and message text (PII).
+    let body_schema = body_schema(&bytes);
     if uri.path() == "/cloudtalk/sms" || uri.path().starts_with("/cloudtalk/sms/") {
         // Empty rejected posts have no phone number. The Lambda source IP and user agent
         // are what identify the caller. Do not log the Authorization header.
         let (source_ip, user_agent) = sms_caller(&parts);
-        // Attempt to parse bytes as JSON to extract metadata
-        if let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(&bytes) {
-            // Map each key to its corresponding data type string
-            let body_schema: HashMap<&str, &str> = map
-                .iter()
-                .map(|(key, value)| {
-                    let type_name = match value {
-                        Value::Null => "Null",
-                        Value::Bool(_) => "Bool",
-                        Value::Number(_) => "Number",
-                        Value::String(_) => "String",
-                        Value::Array(_) => "Array",
-                        Value::Object(_) => "Object",
-                    };
-                    (key.as_str(), type_name)
-                })
-                .collect();
-
+        if let Some(body_schema) = body_schema {
             tracing::info!(
                 body_schema = ?body_schema,
                 path = %uri.path(),
@@ -90,11 +75,36 @@ async fn log_request_body(request: Request, uri: &Uri) -> Result<Request, BasicR
                 note = "Body is not a valid JSON object"
             );
         }
+    } else if let Some(body_schema) = body_schema {
+        tracing::info!(body_schema = ?body_schema, body_size = bytes.len(), path = %uri.path());
     } else {
-        tracing::info!(body = ?bytes);
+        tracing::info!(body_size = bytes.len(), path = %uri.path());
     }
 
     Ok(Request::from_parts(parts, Body::from(bytes)))
+}
+
+/// Each top-level key of a JSON object body and the type of its value (lists
+/// with their length), or None when the body is not a JSON object.
+fn body_schema(bytes: &Bytes) -> Option<BTreeMap<String, String>> {
+    let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(bytes) else {
+        return None;
+    };
+    Some(
+        map.iter()
+            .map(|(key, value)| {
+                let type_name = match value {
+                    Value::Null => "Null".to_string(),
+                    Value::Bool(_) => "Bool".to_string(),
+                    Value::Number(_) => "Number".to_string(),
+                    Value::String(_) => "String".to_string(),
+                    Value::Array(items) => format!("Array({})", items.len()),
+                    Value::Object(_) => "Object".to_string(),
+                };
+                (key.clone(), type_name)
+            })
+            .collect(),
+    )
 }
 
 fn sms_caller(parts: &axum::http::request::Parts) -> (String, String) {
@@ -174,8 +184,10 @@ mod tests {
         let result = log_request_body(request, &uri).await;
         assert!(result.is_ok());
 
-        // Verify that the body was logged exactly as-is (raw bytes/debug format)
-        assert!(logs_contain("body="));
+        // Only the shape is logged, never the values.
+        assert!(logs_contain(r#""username": "String""#));
+        assert!(!logs_contain("john_doe"));
+        assert!(!logs_contain("secret_password"));
 
         // Ensure the request body was reconstructed perfectly
         let mut returned_req = result.unwrap();
@@ -263,5 +275,23 @@ mod tests {
         assert!(logs_contain("source_ip=203.0.113.10"));
         assert!(logs_contain("user_agent=CloudTalk-Webhook"));
         assert!(logs_contain("body_schema={}"));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_log_request_body_email_route_keeps_list_sizes_not_addresses() {
+        let uri: Uri = "/email/send".parse().unwrap();
+        let json_data =
+            r#"{"to": [], "bcc": ["pat@example.com", "sam@example.com"], "body": "Hi Pat"}"#;
+        let request = Request::builder()
+            .uri(&uri)
+            .body(Body::from(json_data))
+            .unwrap();
+
+        assert!(log_request_body(request, &uri).await.is_ok());
+        assert!(logs_contain(r#""to": "Array(0)""#));
+        assert!(logs_contain(r#""bcc": "Array(2)""#));
+        assert!(!logs_contain("pat@example.com"));
+        assert!(!logs_contain("Hi Pat"));
     }
 }

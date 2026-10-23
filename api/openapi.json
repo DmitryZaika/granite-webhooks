@@ -21165,7 +21165,7 @@
           "sms"
         ],
         "summary": "Prepare files for a text",
-        "description": "Turns files uploaded to `sms-uploads/` into attachments ready to send:\npictures upright, at most 1600 px and about 480 KB (HEIC, WebP become\nJPEG; PNG and GIF stay), documents (PDF, Word, Excel, text, CSV) as they\nare. The uploads are removed. Each file succeeds or fails on its own.",
+        "description": "Turns files uploaded to `sms-uploads/` into attachments ready to send:\npictures upright, at most 1600 px and about 480 KB (HEIC, WebP and PNG\nphotos become JPEG; PNGs that fit or are see-through, and GIF, stay),\ndocuments (PDF, Word, Excel, text, CSV) as they are. The uploads are\nremoved. Each file succeeds or fails on its own.",
         "operationId": "prepare_sms_attachments",
         "requestBody": {
           "content": {
@@ -43683,13 +43683,13 @@
         ]
       }
     },
-    "/v1/public/quickbooks/disconnect": {
+    "/v1/quickbooks/disconnected": {
       "post": {
         "tags": [
           "company"
         ],
         "summary": "QuickBooks was disconnected at Intuit",
-        "description": "Intuit sends users who disconnect the app to `/quickbooks/disconnect`\nwith the `realmId`; the page posts it here and the company holding that\n`QuickBooks` company loses its connection. No session; always 204 (it\nnever tells whether a company matched).",
+        "description": "Intuit sends users who disconnect the app to `/quickbooks/disconnect`\nwith the `realmId`; the page posts it here and the caller's company loses\nits connection when it holds that `QuickBooks` company. A session is\nrequired: anyone could otherwise disconnect a company knowing its realm id\n(a signed-out visitor loses nothing: the app asks to reconnect once Intuit\nrefuses the tokens). Always 204 (it never tells whether it matched).",
         "operationId": "quickbooks_disconnected",
         "requestBody": {
           "content": {
@@ -43703,7 +43703,27 @@
         },
         "responses": {
           "204": {
-            "description": "Done (whether or not a company matched)"
+            "description": "Done (whether or not the company matched)"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "500": {
             "description": "Database error",
@@ -43715,7 +43735,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/superuser/companies/{id}/quickbooks-app": {
@@ -65077,7 +65102,7 @@
       },
       "RealmDisconnect": {
         "type": "object",
-        "description": "Body of `POST /v1/public/quickbooks/disconnect`.",
+        "description": "Body of `POST /v1/quickbooks/disconnected`.",
         "properties": {
           "realm_id": {
             "type": "string",

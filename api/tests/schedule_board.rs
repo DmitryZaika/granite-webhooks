@@ -185,7 +185,10 @@ async fn activity_lists_the_latest_changed_events_first(pool: MySqlPool) {
         .iter()
         .map(|line| line["message"].as_str().unwrap())
         .collect();
-    assert_eq!(messages, ["Date updated", "Label updated", "Event commented"]);
+    assert_eq!(
+        messages,
+        ["Date updated", "Label updated", "Event commented"]
+    );
     assert_eq!(body["events"][1]["event"]["id"], 9713);
 
     let page = server

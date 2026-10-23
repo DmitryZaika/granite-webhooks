@@ -343,3 +343,139 @@ async fn emails_batch_requires_a_session(pool: MySqlPool) {
         .await
         .assert_status_unauthorized();
 }
+
+// ---- GET /v1/customers/page -------------------------------------------------
+
+async fn page(pool: MySqlPool, params: &[(&str, &str)]) -> Value {
+    let mut request = server(pool).get("/v1/customers/page");
+    for (key, value) in params {
+        request = request.add_query_param(key, value);
+    }
+    request.with_session(sessions::REP).await.json()
+}
+
+#[test_db::test(seed)]
+async fn page_sorts_newest_first_by_the_tabs_date_and_hides_the_sample(pool: MySqlPool) {
+    let all = page(pool.clone(), &[("tab", "all")]).await;
+    // Leads by assigned date (Nina, unassigned, by created); no 1009/990000021.
+    assert_eq!(
+        ids(&all["rows"]),
+        vec![8695, 1011, 1010, 1008, 1006, 1005, 1004, 1001, 1000]
+    );
+    assert_eq!(all["total"], 9);
+    assert_eq!(all["page"], 1);
+
+    let leads = page(pool.clone(), &[("tab", "leads")]).await;
+    assert_eq!(ids(&leads["rows"]), vec![8695, 1010, 1006, 1000]);
+
+    // Walk-ins are the default tab.
+    let walkins = page(pool, &[]).await;
+    assert_eq!(ids(&walkins["rows"]), vec![1001]);
+}
+
+#[test_db::test(seed)]
+async fn page_tab_filters_follow_the_list_filters(pool: MySqlPool) {
+    let other = page(pool.clone(), &[("tab", "other")]).await;
+    assert_eq!(ids(&other["rows"]), vec![1011, 1008, 1005]);
+
+    let with_invalid = page(pool.clone(), &[("tab", "other"), ("show_invalid", "1")]).await;
+    assert_eq!(ids(&with_invalid["rows"]), vec![1011, 1008, 1007, 1005]);
+
+    let ritas = page(pool.clone(), &[("tab", "all"), ("sales_rep", "100")]).await;
+    assert_eq!(ids(&ritas["rows"]), vec![8695, 1011, 1008, 1000]);
+
+    let unknown = page(pool, &[("tab", "nope")]).await;
+    assert_eq!(ids(&unknown["rows"]), Vec::<i64>::new());
+    assert_eq!(unknown["total"], 0);
+}
+
+#[test_db::test(seed)]
+async fn page_pages_and_clamps_past_the_end(pool: MySqlPool) {
+    let second = page(pool.clone(), &[("tab", "all"), ("page_size", "4"), ("page", "2")]).await;
+    assert_eq!(ids(&second["rows"]), vec![1008, 1006, 1005, 1004]);
+    assert_eq!(second["total"], 9);
+
+    let past = page(pool.clone(), &[("tab", "all"), ("page_size", "4"), ("page", "9")]).await;
+    assert_eq!(ids(&past["rows"]), vec![1000]);
+    assert_eq!(past["page"], 3);
+
+    // Junk paging falls back to page 1 of 20.
+    let junk = page(pool, &[("tab", "all"), ("page_size", "0"), ("page", "x")]).await;
+    assert_eq!(ids(&junk["rows"]).len(), 9);
+    assert_eq!(junk["page"], 1);
+}
+
+#[test_db::test(seed)]
+async fn page_sorts_by_a_column(pool: MySqlPool) {
+    let by_name = page(pool.clone(), &[("tab", "all"), ("sort_by", "name")]).await;
+    assert_eq!(
+        ids(&by_name["rows"]),
+        vec![1000, 1001, 1004, 1005, 1006, 1008, 1011, 8695, 1010]
+    );
+
+    let oldest = page(
+        pool.clone(),
+        &[("tab", "all"), ("sort_by", "created_date"), ("order", "asc")],
+    )
+    .await;
+    assert_eq!(
+        ids(&oldest["rows"]),
+        vec![1000, 1001, 1004, 1005, 1006, 1008, 1010, 1011, 8695]
+    );
+
+    // Not a column: the default order.
+    let unknown = page(pool, &[("tab", "leads"), ("sort_by", "id; DROP TABLE x")]).await;
+    assert_eq!(ids(&unknown["rows"]), vec![8695, 1010, 1006, 1000]);
+}
+
+#[test_db::test(seed)]
+async fn page_carries_its_customers_emails(pool: MySqlPool) {
+    let leads = page(pool, &[("tab", "leads"), ("page_size", "3")]).await;
+    assert_eq!(ids(&leads["rows"]), vec![8695, 1010, 1006]);
+    assert_eq!(leads["emails"]["8695"], json!(["nina@example.com"]));
+    assert_eq!(leads["emails"]["1010"], json!(["zoe@example.com"]));
+    // Off this page.
+    assert!(leads["emails"].get("1000").is_none());
+}
+
+#[test_db::test(seed)]
+async fn page_companies_view_has_totals(pool: MySqlPool) {
+    let companies = page(
+        pool,
+        &[("view", "companies"), ("tab", "all"), ("sort_by", "projects_count")],
+    )
+    .await;
+    assert_eq!(sorted(ids(&companies["rows"])), vec![1004, 1007]);
+    assert!(companies["rows"][0].get("projects_count").is_some());
+    assert_eq!(companies["month_rows"], json!([]));
+}
+
+#[test_db::test(seed)]
+async fn page_month_rows_are_this_months_customers_of_the_tab(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO customers (id, name, company_id, source, sales_rep, created_date) VALUES
+           (1100, 'Walk-in Today', 100, 'check-in', 100, UTC_TIMESTAMP()),
+           (1101, 'Call-in Today', 100, 'call-in', 101, UTC_TIMESTAMP())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let walkins = page(pool.clone(), &[("tab", "walkin")]).await;
+    assert_eq!(ids(&walkins["month_rows"]), vec![1100]);
+    assert_eq!(ids(&walkins["rows"]), vec![1100, 1001]);
+
+    let all = page(pool.clone(), &[("tab", "all")]).await;
+    assert_eq!(sorted(ids(&all["month_rows"])), vec![1100, 1101]);
+
+    let other = page(pool, &[("tab", "other")]).await;
+    assert_eq!(other["month_rows"], json!([]));
+}
+
+#[test_db::test(seed)]
+async fn page_requires_a_session(pool: MySqlPool) {
+    server(pool)
+        .get("/v1/customers/page")
+        .await
+        .assert_status_unauthorized();
+}

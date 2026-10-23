@@ -5,7 +5,7 @@ use crate::cloudtalk::schemas::{CloudTalkCountry, ContactSearchHit};
 use crate::crud::cloudtalk::CustomerWithMapping;
 use crate::crud::cloudtalk::{find_local_cloudtalk_id_by_phone, update_cloudtalk_phone};
 use crate::google::maps::get_first_address_autocomplete;
-use crate::libs::constants::OK_RESPONSE;
+use crate::libs::constants::{OK_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
 use lambda_http::tracing;
 use reqwest::Client;
@@ -146,9 +146,15 @@ pub async fn build_payload(
         Some(external_urls)
     };
 
+    // CloudTalk refuses a blank name ("Invalid input data").
+    let name = match customer.name.as_deref() {
+        Some(name) if !name.trim().is_empty() => name.to_string(),
+        _ => "Customer".to_string(),
+    };
+
     // Initialize payload with required fields
     let mut payload = ContactPayload {
-        name: customer.name.clone(),
+        name: Some(name),
         contact_number: numbers,
         contact_email: build_emails(customer),
         external_url,
@@ -216,41 +222,50 @@ pub async fn upsert_contact(
     if let Some(cloudtalk_id) = customer.cloudtalk_id
         && let Some(_cloudtalk_contact_id) = customer.cloudtalk_contact_id
     {
-        update_cloudtalk_contact(pool, client, company_id, cloudtalk_id, payload)
-            .await
-            .unwrap();
-
-        update_cloudtalk_phone(pool, phone1, phone2, cloudtalk_id)
-            .await
-            .unwrap();
-
+        if let Err(error) =
+            update_cloudtalk_contact(pool, client, company_id, cloudtalk_id, payload).await
+        {
+            return sync_failed(customer.id, "update contact", &error);
+        }
+        if let Err(error) = update_cloudtalk_phone(pool, phone1, phone2, cloudtalk_id).await {
+            return sync_failed(customer.id, "save phones", &error);
+        }
         return OK_RESPONSE;
     }
 
-    let mut existing_id = find_local_cloudtalk_id_by_phone(pool, company_id, &phone_array)
-        .await
-        .unwrap();
+    let mut existing_id =
+        match find_local_cloudtalk_id_by_phone(pool, company_id, &phone_array).await {
+            Ok(id) => id,
+            Err(error) => return sync_failed(customer.id, "find local contact", &error),
+        };
 
     if existing_id.is_none() {
-        existing_id = find_cloudtalk_contact_by_phone(pool, client, company_id, &phone_array)
-            .await
-            .unwrap();
-    }
-
-    if let Some(id) = existing_id {
-        update_cloudtalk_contact(pool, client, company_id, id.into(), payload)
-            .await
-            .unwrap();
+        existing_id =
+            match find_cloudtalk_contact_by_phone(pool, client, company_id, &phone_array).await {
+                Ok(id) => id,
+                Err(error) => return sync_failed(customer.id, "search contacts", &error),
+            };
     }
 
     let cloudtalk_id: u64 = match existing_id {
-        Some(id) => id.try_into().unwrap(),
-        None => create_cloudtalk_contact(pool, client, company_id, payload)
-            .await
-            .unwrap(),
+        Some(id) => {
+            if let Err(error) =
+                update_cloudtalk_contact(pool, client, company_id, id.into(), payload).await
+            {
+                return sync_failed(customer.id, "update contact", &error);
+            }
+            match u64::try_from(id) {
+                Ok(id) => id,
+                Err(error) => return sync_failed(customer.id, "contact id", &error),
+            }
+        }
+        None => match create_cloudtalk_contact(pool, client, company_id, payload).await {
+            Ok(id) => id,
+            Err(error) => return sync_failed(customer.id, "create contact", &error),
+        },
     };
 
-    sqlx::query!(
+    let saved = sqlx::query!(
         "INSERT INTO cloudtalk_contacts (customer_id, company_id, cloudtalk_id, phone_e164_1, phone_e164_2)
          VALUES (?, ?, ?, ?, ?)",
         customer.id,
@@ -260,9 +275,24 @@ pub async fn upsert_contact(
         phone2
     )
     .execute(pool)
-    .await.unwrap();
+    .await;
+    if let Err(error) = saved {
+        return sync_failed(customer.id, "save mapping", &error);
+    }
 
     OK_RESPONSE
+}
+
+/// Logs a failed step of a contact sync and answers 500 (a panic took the
+/// Lambda down instead).
+fn sync_failed(customer_id: i32, step: &'static str, error: &dyn std::fmt::Debug) -> BasicResponse {
+    tracing::error!(
+        customer_id,
+        step,
+        ?error,
+        "Failed to sync CloudTalk contact"
+    );
+    internal_error("Failed to sync CloudTalk contact")
 }
 
 pub fn find_contact_id(json: &serde_json::Value) -> Option<u64> {

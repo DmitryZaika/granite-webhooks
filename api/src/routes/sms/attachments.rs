@@ -196,9 +196,10 @@ async fn prepare(
 /// Prepare files for a text
 ///
 /// Turns files uploaded to `sms-uploads/` into attachments ready to send:
-/// pictures upright, at most 1600 px and about 480 KB (HEIC, WebP become
-/// JPEG; PNG and GIF stay), documents (PDF, Word, Excel, text, CSV) as they
-/// are. The uploads are removed. Each file succeeds or fails on its own.
+/// pictures upright, at most 1600 px and about 480 KB (HEIC, WebP and PNG
+/// photos become JPEG; PNGs that fit or are see-through, and GIF, stay),
+/// documents (PDF, Word, Excel, text, CSV) as they are. The uploads are
+/// removed. Each file succeeds or fails on its own.
 #[utoipa::path(
     post,
     path = "/v1/sms/attachments",
