@@ -10,7 +10,8 @@
 //! layout upload to the `quotes` folder (`POST /v1/uploads`).
 
 use crate::auth::{EmployeeUser, ShopOrEmployeeUser};
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::routes::quote_editor::STONE_IN_STOCK_SQL;
 use crate::state::AppState;
 use axum::Json;
@@ -102,7 +103,7 @@ pub struct QuoteList {
     responses(
         (status = 200, description = "Quotes", body = QuoteList),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -112,6 +113,7 @@ pub async fn list_quotes(
     EmployeeUser(user): EmployeeUser,
     Query(query): Query<QuoteListQuery>,
 ) -> ApiResult<Json<QuoteList>> {
+    user.plan.require(AddonKey::Quotes)?;
     let quotes: Vec<QuoteListRow> = sqlx::query_as(
         "SELECT q.id, q.quote_name, c.name AS customer_name, q.quote_type, q.status,
                 DATE_FORMAT(q.created_date, '%Y-%m-%dT%H:%i:%sZ') AS created_date,
@@ -163,7 +165,7 @@ pub async fn list_quotes(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote in the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -174,6 +176,7 @@ pub async fn delete_quote(
     EmployeeUser(user): EmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let done = sqlx::query(
         "UPDATE quotes SET deleted_at = NOW()
           WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
@@ -263,7 +266,7 @@ fn picture(url: Option<String>) -> Option<String> {
     responses(
         (status = 200, description = "Slabs", body = InventorySlabs),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or shop staff", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or shop staff, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -273,6 +276,7 @@ pub async fn inventory_slabs(
     ShopOrEmployeeUser(user): ShopOrEmployeeUser,
     Query(query): Query<InventorySlabsQuery>,
 ) -> ApiResult<Json<InventorySlabs>> {
+    user.plan.require(AddonKey::Quotes)?;
     let name = query.name.trim().to_lowercase();
     if name.is_empty() {
         return Ok(Json(InventorySlabs {
@@ -381,16 +385,17 @@ fn valid_print_name(name: &str) -> Option<&str> {
         (status = 201, description = "Upload and open links", body = PrintPreview),
         (status = 400, description = "Not a PDF file name", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 503, description = "No bucket configured", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn print_preview(
     State(state): State<AppState>,
-    EmployeeUser(_user): EmployeeUser,
+    EmployeeUser(user): EmployeeUser,
     crate::extract::JsonBody(input): crate::extract::JsonBody<PrintPreviewInput>,
 ) -> ApiResult<(StatusCode, Json<PrintPreview>)> {
+    user.plan.require(AddonKey::Quotes)?;
     let filename = valid_print_name(&input.filename)
         .ok_or_else(|| ApiError::BadRequest("Invalid preview".into()))?;
     let key = format!("quote-previews/{}.pdf", uuid::Uuid::new_v4());

@@ -9,6 +9,7 @@
 //! so a retried request reuses the same documents and links. The signing
 //! pages (`/sign/...`) stay in the CRM and read what is written here.
 
+use crate::entitlements::{AddonKey, Entitlements, entitled_sql, plan_columns};
 use crate::native_signing::{MailReceipt, MailSnapshot, NativeSigning, sha256_hex};
 use crate::signing_pdf::{FieldKind, SignatureField, prepare_native};
 use crate::state::AppState;
@@ -127,23 +128,47 @@ pub fn frozen_settings_valid(settings: &Value) -> bool {
         && crate::native_signing::FrozenSettings::parse(settings).is_some()
 }
 
+/// The company, plan and user rows behind the right to send for signature.
+#[derive(sqlx::FromRow)]
+struct Owner {
+    signature_enabled: Option<i8>,
+    signwell_api_key: Option<String>,
+    is_signature_available: i8,
+    /// The plan has the Signatures add-on.
+    entitled: bool,
+    #[sqlx(flatten)]
+    plan: Entitlements,
+}
+
+impl Owner {
+    /// The company switch is on and the plan has the add-on; then a user may
+    /// send when granted individually, or on a subscription plan through the
+    /// add-on.
+    fn may_send(&self) -> bool {
+        signature_enabled(self.signature_enabled, self.signwell_api_key.as_deref())
+            && self.entitled
+            && (self.is_signature_available != 0 || self.plan.subscription)
+    }
+}
+
 /// The company may sign and the user may send (`authorize`).
 async fn authorize<'e, E>(executor: E, company_id: i32, user_id: i32) -> Result<(), NativeError>
 where
     E: sqlx::Executor<'e, Database = MySql>,
 {
-    let owner: Option<(Option<i8>, Option<String>, i8)> = sqlx::query_as(
-        "SELECT c.signature_enabled, c.signwell_api_key, u.is_signature_available
+    let owner: Option<Owner> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT c.signature_enabled, c.signwell_api_key, u.is_signature_available,
+                {entitled} AS entitled, {plan}
            FROM company c INNER JOIN users u ON u.company_id = c.id
           WHERE c.id = ? AND c.deleted_at IS NULL AND u.id = ? AND u.is_deleted = 0",
-    )
+        entitled = entitled_sql("c", AddonKey::Signatures),
+        plan = plan_columns("c"),
+    )))
     .bind(company_id)
     .bind(user_id)
     .fetch_optional(executor)
     .await?;
-    let allowed = owner.is_some_and(|(enabled, key, available)| {
-        signature_enabled(enabled, key.as_deref()) && available != 0
-    });
+    let allowed = owner.is_some_and(|owner| owner.may_send());
     if allowed {
         Ok(())
     } else {
@@ -492,19 +517,20 @@ async fn insert_request(
     {
         return Err(refused("Signed date must be supplied by the server"));
     }
-    let owner: Option<(Option<i8>, Option<String>, i8)> = sqlx::query_as(
-        "SELECT c.signature_enabled, c.signwell_api_key, u.is_signature_available
+    let owner: Option<Owner> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT c.signature_enabled, c.signwell_api_key, u.is_signature_available,
+                {entitled} AS entitled, {plan}
            FROM company c INNER JOIN users u ON u.company_id = c.id
           WHERE c.id = ? AND c.deleted_at IS NULL AND u.id = ? AND u.is_deleted = 0
           FOR SHARE",
-    )
+        entitled = entitled_sql("c", AddonKey::Signatures),
+        plan = plan_columns("c"),
+    )))
     .bind(value.company_id)
     .bind(value.user_id)
     .fetch_optional(&mut **tx)
     .await?;
-    if !owner.is_some_and(|(enabled, key, available)| {
-        signature_enabled(enabled, key.as_deref()) && available != 0
-    }) {
+    if !owner.is_some_and(|owner| owner.may_send()) {
         return Err(refused("Signature access denied"));
     }
     if let Some(customer_id) = value.customer_id {
@@ -868,6 +894,29 @@ mod tests {
         assert!(key_valid("delayed:12"));
         assert!(!key_valid("delayed:012"));
         assert!(!key_valid("composer:nope"));
+    }
+
+    fn owner(enabled: i8, entitled: bool, granted: i8, subscription: bool) -> Owner {
+        Owner {
+            signature_enabled: Some(enabled),
+            signwell_api_key: None,
+            is_signature_available: granted,
+            entitled,
+            plan: if subscription {
+                Entitlements::subscription(&[AddonKey::Signatures])
+            } else {
+                Entitlements::default()
+            },
+        }
+    }
+
+    #[test]
+    fn sending_needs_switch_plan_and_a_grant_or_subscription() {
+        assert!(owner(1, true, 1, false).may_send());
+        assert!(!owner(1, true, 0, false).may_send());
+        assert!(owner(1, true, 0, true).may_send());
+        assert!(!owner(1, false, 1, false).may_send());
+        assert!(!owner(0, true, 1, true).may_send());
     }
 
     #[test]

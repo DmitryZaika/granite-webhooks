@@ -1,4 +1,5 @@
 use super::schemas::CompanyFeatures;
+use crate::entitlements::{AddonKey, entitled_sql};
 use crate::routes::stats::schemas::SmsProvider;
 use sqlx::{AssertSqlSafe, FromRow, MySqlPool};
 
@@ -9,6 +10,8 @@ struct FeatureRow {
     onboarding: bool,
     leaderboard: bool,
     e_signature: bool,
+    quotes: bool,
+    email_signature: bool,
     domain: Option<String>,
     cloudtalk: bool,
     ringcentral: bool,
@@ -49,14 +52,16 @@ pub async fn company_features(
     company_id: i32,
 ) -> Result<CompanyFeatures, sqlx::Error> {
     let sql = format!(
-        "SELECT c.quickbooks_enabled <> 0 AS quickbooks_enabled,
+        "SELECT (c.quickbooks_enabled <> 0 AND {qbo_entitled}) AS quickbooks_enabled,
                 ({qbo_realm} AND c.qbo_access_token IS NOT NULL
                  AND c.qbo_refresh_token IS NOT NULL
                  AND c.qbo_access_expires IS NOT NULL
                  AND c.qbo_refresh_expires IS NOT NULL) AS quickbooks_connected,
                 {ONBOARDING_ON} AS onboarding,
                 {LEADERBOARD_ON} AS leaderboard,
-                {signature} AS e_signature,
+                ({signature} AND {signatures_entitled}) AS e_signature,
+                {quotes_entitled} AS quotes,
+                {signatures_entitled} AS email_signature,
                 c.domain,
                 ({ct_key} AND {ct_secret}) AS cloudtalk,
                 ((c.ringcentral_access_token IS NOT NULL
@@ -69,6 +74,9 @@ pub async fn company_features(
           WHERE c.id = ?",
         qbo_realm = filled("c.qbo_realm_id"),
         signature = signature_on(),
+        qbo_entitled = entitled_sql("c", AddonKey::Quickbooks),
+        signatures_entitled = entitled_sql("c", AddonKey::Signatures),
+        quotes_entitled = entitled_sql("c", AddonKey::Quotes),
         ct_key = filled("c.cloudtalk_access_key"),
         ct_secret = filled("c.cloudtalk_access_secret"),
         rc_id = filled("c.ringcentral_client_id"),
@@ -87,6 +95,8 @@ pub async fn company_features(
             onboarding: false,
             leaderboard: false,
             e_signature: false,
+            quotes: true,
+            email_signature: true,
             inbound_email: false,
             cloudtalk: false,
             ringcentral: false,
@@ -97,6 +107,8 @@ pub async fn company_features(
             onboarding: row.onboarding,
             leaderboard: row.leaderboard,
             e_signature: row.e_signature,
+            quotes: row.quotes,
+            email_signature: row.email_signature,
             inbound_email: mail_domain(row.domain.as_deref()).is_some(),
             cloudtalk: row.cloudtalk,
             ringcentral: row.ringcentral,

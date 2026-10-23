@@ -21,6 +21,7 @@
 //! `superuser.add-qbo` routes.
 
 use crate::auth::{EmployeeUser, UserManager};
+use crate::entitlements::{AddonKey, entitled_sql};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::oauth_state;
@@ -92,7 +93,8 @@ fn redirect_uri(state: &AppState, path: &str) -> String {
 /// `QuickBooks` as company settings show it.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct QuickbooksSettings {
-    /// The `QuickBooks` feature is on for the company.
+    /// The `QuickBooks` feature is on for the company and its plan has the
+    /// QuickBooks add-on.
     pub feature_enabled: bool,
     /// Which app connecting uses: `company-app`, `shared-app`, or `none`
     /// (connecting is not set up).
@@ -170,11 +172,12 @@ pub async fn get_settings(
     Query(query): Query<TargetCompany>,
 ) -> ApiResult<Json<CompanySettings>> {
     let company_id = target(&user, &query);
-    let row: SettingsRow = sqlx::query_as(
+    let row: SettingsRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT name, address, logo_url, logo_height, CAST(state_taxes AS CHAR) AS state_taxes,
-                COALESCE(quickbooks_enabled, 1) <> 0 AS quickbooks_enabled
+                (COALESCE(quickbooks_enabled, 1) <> 0 AND {}) AS quickbooks_enabled
            FROM company WHERE id = ?",
-    )
+        entitled_sql("company", AddonKey::Quickbooks)
+    )))
     .bind(company_id)
     .fetch_optional(&state.pool)
     .await?
@@ -418,11 +421,13 @@ pub struct QuickbooksConnection {
 }
 
 async fn can_connect_quickbooks(state: &AppState, company_id: i32) -> ApiResult<bool> {
-    let enabled: Option<bool> =
-        sqlx::query_scalar("SELECT COALESCE(quickbooks_enabled, 1) <> 0 FROM company WHERE id = ?")
-            .bind(company_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    let enabled: Option<bool> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT (COALESCE(quickbooks_enabled, 1) <> 0 AND {}) FROM company WHERE id = ?",
+        entitled_sql("company", AddonKey::Quickbooks)
+    )))
+    .bind(company_id)
+    .fetch_optional(&state.pool)
+    .await?;
     Ok(enabled.unwrap_or(false)
         && state
             .qbo

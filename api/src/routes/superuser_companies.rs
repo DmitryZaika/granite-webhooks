@@ -11,6 +11,7 @@
 //! - `GET    /v1/superuser/companies/{id}/setup-checklist`    → the setup checklist
 //! - `PUT    /v1/superuser/companies/{id}/setup-checklist/items/{key}` → tick an item by hand
 //! - `PUT    /v1/superuser/companies/{id}/features/{feature}` → switch a feature
+//! - `PUT    /v1/superuser/companies/{id}/addons/{key}`      → grant or take back a free add-on
 //! - `PUT    /v1/superuser/companies/{id}/billing-required`   → require Stripe payment
 //!
 //! Superusers only. Replaces the Remix `admin.superuser-dashboard.companies*`
@@ -19,6 +20,7 @@
 use crate::auth::CurrentUser;
 use crate::auth::session::SessionUser;
 use crate::deliverability::{self, DomainTrust};
+use crate::entitlements::{ACTIVE_ADDON, AddonKey};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::routes::created::CreatedId;
@@ -44,6 +46,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(setup_checklist))
         .routes(routes!(tick_setup_item))
         .routes(routes!(switch_feature))
+        .routes(routes!(switch_addon))
         .routes(routes!(set_billing_required))
 }
 
@@ -262,6 +265,14 @@ pub struct CompanyDetails {
     pub signature_enabled: bool,
     /// Stripe payment required.
     pub billing_required: bool,
+    /// `legacy` (every add-on included) or `subscription` (only bought or
+    /// granted add-ons).
+    pub plan_source: String,
+    /// Add-on keys (`signatures`, `quotes`, `quickbooks`) granted free by a
+    /// superuser and in force now. Change with
+    /// `PUT /v1/superuser/companies/{id}/addons/{key}`.
+    #[sqlx(skip)]
+    pub comp_addons: Vec<String>,
     /// Guided tours switch (own setting, else the platform default).
     #[sqlx(skip)]
     pub onboarding_enabled: bool,
@@ -302,6 +313,7 @@ pub async fn get_company(
                 c.qbo_realm_id, c.signwell_api_key,
                 COALESCE(c.quickbooks_enabled, 1) <> 0 AS quickbooks_enabled,
                 {} AS signature_enabled, COALESCE(c.billing_required, 0) <> 0 AS billing_required,
+                c.plan_source AS plan_source,
                 {} AS onboarding, {} AS leaderboard
            FROM company c {}
           WHERE c.id = ? AND c.deleted_at IS NULL",
@@ -318,6 +330,14 @@ pub async fn get_company(
     let mut details = row.details;
     details.onboarding_enabled = row.onboarding;
     details.leaderboard_enabled = row.leaderboard;
+    details.comp_addons = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT ca.addon_key FROM company_addons ca
+          WHERE ca.company_id = ? AND ca.source = 'comp' AND {ACTIVE_ADDON}
+          ORDER BY ca.addon_key"
+    )))
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await?;
     Ok(Json(details))
 }
 
@@ -542,8 +562,8 @@ pub async fn create_company(
         .await?;
     }
     sqlx::query(
-        "INSERT INTO users (name, email, password, company_id, is_employee, is_admin)
-         VALUES ('Walk-in', ?, ?, ?, 1, 0)",
+        "INSERT INTO users (name, email, password, company_id, is_employee, is_admin, is_system)
+         VALUES ('Walk-in', ?, ?, ?, 1, 0, 1)",
     )
     .bind(format!("walk-in@{}.com", clean.subdomain))
     .bind(password)
@@ -1118,6 +1138,80 @@ pub async fn switch_feature(
         "company_feature_toggled",
         &user.id.to_string(),
         serde_json::json!({ "company_id": id, "feature": feature, "value": input.enabled, "superuser_id": user.id }),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Grant or take back a free add-on
+///
+/// Gives the company the `signatures`, `quotes` or `quickbooks` add-on for
+/// free (`enabled` true) or takes that free grant back (false). Only the
+/// free (`comp`) grant is touched: an add-on the company pays for through
+/// Stripe stays. Granting an add-on already granted changes nothing; granting
+/// one that was taken back starts it again from now. Works for legacy
+/// companies too: the grant is stored and has no effect until the company
+/// moves to a subscription plan, since legacy companies already have every
+/// add-on. See `plan_source` and `comp_addons` on
+/// `GET /v1/superuser/companies/{id}`.
+#[utoipa::path(
+    put,
+    path = "/v1/superuser/companies/{id}/addons/{key}",
+    operation_id = "switch_platform_company_addon",
+    tag = "superuser",
+    params(("id" = i32, Path, description = "Company id"), ("key" = String, Path, description = "`signatures`, `quotes` or `quickbooks`")),
+    request_body = Switch,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 400, description = "Unknown add-on", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a superuser", body = ErrorBody),
+        (status = 404, description = "No such company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn switch_addon(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path((id, key)): Path<(i32, String)>,
+    JsonBody(input): JsonBody<Switch>,
+) -> ApiResult<StatusCode> {
+    superuser(&user)?;
+    let addon =
+        AddonKey::parse(&key).ok_or_else(|| ApiError::BadRequest("Invalid add-on".into()))?;
+    company_exists(&state, id).await?;
+    if input.enabled {
+        sqlx::query(
+            "INSERT INTO company_addons (company_id, addon_key, source, granted_by, started_at)
+             VALUES (?, ?, 'comp', ?, UTC_TIMESTAMP())
+             ON DUPLICATE KEY UPDATE
+               granted_by = VALUES(granted_by),
+               started_at = IF(ended_at IS NOT NULL AND ended_at <= UTC_TIMESTAMP(),
+                               UTC_TIMESTAMP(), started_at),
+               ended_at = NULL",
+        )
+        .bind(id)
+        .bind(addon.as_str())
+        .bind(user.id)
+        .execute(&state.pool)
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE company_addons SET ended_at = UTC_TIMESTAMP()
+              WHERE company_id = ? AND addon_key = ? AND source = 'comp'
+                AND (ended_at IS NULL OR ended_at > UTC_TIMESTAMP())",
+        )
+        .bind(id)
+        .bind(addon.as_str())
+        .execute(&state.pool)
+        .await?;
+    }
+    crate::posthog::capture(
+        &state.telephony_http,
+        "company_addon_toggled",
+        &user.id.to_string(),
+        serde_json::json!({ "company_id": id, "addon": addon.as_str(), "value": input.enabled, "superuser_id": user.id }),
     )
     .await;
     Ok(StatusCode::NO_CONTENT)

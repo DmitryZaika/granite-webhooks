@@ -32,6 +32,8 @@ async fn features_of_each_company(pool: MySqlPool) {
             "onboarding": false,
             "leaderboard": true,
             "e_signature": false,
+            "quotes": true,
+            "email_signature": true,
             "inbound_email": false,
             "cloudtalk": false,
             "ringcentral": false
@@ -45,6 +47,8 @@ async fn features_of_each_company(pool: MySqlPool) {
             "onboarding": false,
             "leaderboard": false,
             "e_signature": false,
+            "quotes": true,
+            "email_signature": true,
             "inbound_email": true,
             "cloudtalk": true,
             "ringcentral": false
@@ -102,6 +106,8 @@ async fn integrations_count_once_set_up(pool: MySqlPool) {
             "onboarding": false,
             "leaderboard": true,
             "e_signature": true,
+            "quotes": true,
+            "email_signature": true,
             "inbound_email": true,
             "cloudtalk": false,
             "ringcentral": true

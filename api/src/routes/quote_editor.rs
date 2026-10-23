@@ -22,7 +22,8 @@
 //! drawing with the price lists given here, as the editor always did.
 
 use crate::auth::EmployeeUser;
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::{
@@ -381,7 +382,7 @@ mod full_address_tests {
         (status = 201, description = "Created", body = CreatedId),
         (status = 400, description = "No customer", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -403,6 +404,7 @@ pub async fn create_quote(
         phone_2: Option<String>,
         email: Option<String>,
     }
+    user.plan.require(AddonKey::Quotes)?;
     let customer: Option<Customer> = sqlx::query_as(
         "SELECT c.name, c.address, c.city, c.state, c.postal_code, c.phone, c.phone_2, ce.email
            FROM customers c
@@ -1210,7 +1212,7 @@ async fn revision_doc(
     responses(
         (status = 200, description = "The quote", body = QuoteDetail),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -1222,6 +1224,7 @@ pub async fn get_quote(
     Path(id): Path<i32>,
     Query(query): Query<RevisionQuery>,
 ) -> ApiResult<Json<QuoteDetail>> {
+    user.plan.require(AddonKey::Quotes)?;
     let row = quote_or_404(&state, id, user.company_id).await?;
     let pricing = pricing_quote(&state, id, user.company_id).await?;
     let revision = match query.revision {
@@ -1366,7 +1369,7 @@ fn blank_is_null(value: Option<String>) -> Option<Option<String>> {
         (status = 204, description = "Saved"),
         (status = 400, description = "Customer not found", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -1383,6 +1386,7 @@ pub async fn update_quote(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<QuoteChanges>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let quote = quote_or_404(&state, id, user.company_id).await?;
     let mut sets: Vec<(&str, Value)> = Vec::new();
     if let Some(name) = input
@@ -1542,7 +1546,7 @@ fn readable(doc: &Value) -> ApiResult<QuoteDoc> {
         (status = 200, description = "Saved", body = SavedRevision),
         (status = 400, description = "Not a drawing", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -1554,6 +1558,7 @@ pub async fn save_drawing(
     Path(id): Path<i32>,
     JsonBody(mut input): JsonBody<SavedDrawing>,
 ) -> ApiResult<Json<SavedRevision>> {
+    user.plan.require(AddonKey::Quotes)?;
     let row = quote_or_404(&state, id, user.company_id).await?;
     if row.signed_at.is_none() {
         drop_unavailable_slab_pictures(&state.pool, user.company_id, &mut input.doc).await?;
@@ -1641,7 +1646,7 @@ pub struct UnsavedDrawing {
         (status = 204, description = "Kept"),
         (status = 400, description = "Not a drawing", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -1653,6 +1658,7 @@ pub async fn save_autosave(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<UnsavedDrawing>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     quote_or_404(&state, id, user.company_id).await?;
     readable(&input.doc)?;
     sqlx::query(
@@ -1679,7 +1685,7 @@ pub async fn save_autosave(
     responses(
         (status = 204, description = "Dropped"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -1690,6 +1696,7 @@ pub async fn discard_autosave(
     EmployeeUser(user): EmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     quote_or_404(&state, id, user.company_id).await?;
     sqlx::query("DELETE FROM quote_autosaves WHERE quote_id = ? AND user_id = ?")
         .bind(id)
@@ -1722,7 +1729,7 @@ pub struct RevisionDrawing {
     responses(
         (status = 200, description = "The drawing", body = RevisionDrawing),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote or revision", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -1733,6 +1740,7 @@ pub async fn revision_drawing(
     EmployeeUser(user): EmployeeUser,
     Path((id, revision_id)): Path<(i32, i32)>,
 ) -> ApiResult<Json<RevisionDrawing>> {
+    user.plan.require(AddonKey::Quotes)?;
     quote_or_404(&state, id, user.company_id).await?;
     let doc = revision_doc(&state.pool, id, revision_id)
         .await?
@@ -1754,7 +1762,7 @@ pub async fn revision_drawing(
     responses(
         (status = 204, description = "Updated"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -1765,6 +1773,7 @@ pub async fn update_prices(
     EmployeeUser(user): EmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let row = quote_or_404(&state, id, user.company_id).await?;
     if let Some(list_id) = row.price_list_id
         && let Some((list, _)) = find_price_list(&state.pool, list_id, user.company_id).await?
@@ -1828,7 +1837,7 @@ pub struct SaleResult {
         (status = 200, description = "Sold", body = SaleResult),
         (status = 400, description = "Not an option of the quote", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -1840,6 +1849,7 @@ pub async fn mark_sold(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<Sale>,
 ) -> ApiResult<Json<SaleResult>> {
+    user.plan.require(AddonKey::Quotes)?;
     if input.option < 0 {
         return Err(ApiError::BadRequest(
             "Pick the option that was sold.".into(),
@@ -1871,7 +1881,7 @@ pub async fn mark_sold(
     responses(
         (status = 204, description = "Undone"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -1882,6 +1892,7 @@ pub async fn undo_sale(
     EmployeeUser(user): EmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let row = quote_or_404(&state, id, user.company_id).await?;
     sqlx::query(
         "UPDATE quotes SET status = 'active', customer_accepted_option_id = NULL,
@@ -1942,7 +1953,7 @@ pub struct QuoteCopy {
         (status = 201, description = "Created", body = CreatedId),
         (status = 400, description = "No name", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -1954,6 +1965,7 @@ pub async fn copy_quote(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<QuoteCopy>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    user.plan.require(AddonKey::Quotes)?;
     let quote = quote_or_404(&state, id, user.company_id).await?;
     let name = input.quote_name.trim();
     if name.is_empty() {
@@ -2082,7 +2094,7 @@ pub struct PortalToken {
     responses(
         (status = 200, description = "The token", body = PortalToken),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -2093,6 +2105,7 @@ pub async fn portal_token(
     EmployeeUser(user): EmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<Json<PortalToken>> {
+    user.plan.require(AddonKey::Quotes)?;
     let quote = quote_or_404(&state, id, user.company_id).await?;
     Ok(Json(PortalToken {
         token: ensure_portal_token(&state.pool, &quote).await?,
@@ -2218,7 +2231,7 @@ fn link_tags(text: &str, with: &str) -> String {
         (status = 204, description = "Sent"),
         (status = 400, description = "No recipient or subject, or a `{{quote.*}}`/`{{deal.*}}` variable the quote or its deal has no value for yet (the message names it)", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
         (status = 502, description = "The email could not be sent", body = ErrorBody),
     ),
@@ -2231,6 +2244,7 @@ pub async fn email_quote(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<QuoteEmail>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let quote = quote_or_404(&state, id, user.company_id).await?;
     let clean = |list: Vec<String>| -> Vec<String> {
         list.iter()
@@ -2421,7 +2435,7 @@ pub struct EmailLink {
     responses(
         (status = 204, description = "Saved"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -2433,6 +2447,7 @@ pub async fn set_email_link(
     Path((id, email_id)): Path<(i32, i32)>,
     JsonBody(input): JsonBody<EmailLink>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     quote_or_404(&state, id, user.company_id).await?;
     sqlx::query(
         "UPDATE quote_emails SET deactivated_at = IF(?, NULL, NOW()) WHERE id = ? AND quote_id = ?",
@@ -2468,7 +2483,7 @@ pub struct QuotePrint {
     responses(
         (status = 204, description = "Recorded"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "No such quote", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -2479,6 +2494,7 @@ pub async fn record_print(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<QuotePrint>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let quote = quote_or_404(&state, id, user.company_id).await?;
     let label: String = input.form_label.trim().chars().take(100).collect();
     if let Err(error) = sqlx::query(
@@ -2540,7 +2556,7 @@ pub struct MyEmailTemplates {
     responses(
         (status = 200, description = "The templates", body = MyEmailTemplates),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -2549,6 +2565,7 @@ pub async fn my_email_templates(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<MyEmailTemplates>> {
+    user.plan.require(AddonKey::Quotes)?;
     let mut templates: Vec<EmailTemplate> = sqlx::query_as(
         "SELECT id, user_id IS NOT NULL AS personal, name, subject, body, sequence
            FROM quote_email_templates
@@ -2653,7 +2670,7 @@ fn my_template(input: &MyTemplateInput) -> ApiResult<(String, String, String)> {
         (status = 201, description = "Saved", body = CreatedId),
         (status = 400, description = "No name or subject", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -2663,6 +2680,7 @@ pub async fn create_my_email_template(
     EmployeeUser(user): EmployeeUser,
     JsonBody(input): JsonBody<MyTemplateInput>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    user.plan.require(AddonKey::Quotes)?;
     let (name, subject, body) = my_template(&input)?;
     let id = sqlx::query(
         "INSERT INTO quote_email_templates (company_id, user_id, name, subject, body, sequence, created_by)
@@ -2699,7 +2717,7 @@ pub async fn create_my_email_template(
         (status = 204, description = "Saved"),
         (status = 400, description = "No name or subject", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 404, description = "Not one of the caller's templates", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -2711,6 +2729,7 @@ pub async fn update_my_email_template(
     Path(id): Path<i32>,
     JsonBody(input): JsonBody<MyTemplateInput>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let (name, subject, body) = my_template(&input)?;
     let updated = sqlx::query(
         "UPDATE quote_email_templates SET name = ?, subject = ?, body = ?
@@ -2753,7 +2772,7 @@ pub async fn update_my_email_template(
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -2763,6 +2782,7 @@ pub async fn delete_my_email_template(
     EmployeeUser(user): EmployeeUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     sqlx::query(
         "UPDATE quote_email_templates SET deleted_at = NOW()
           WHERE id = ? AND company_id = ? AND user_id = ? AND deleted_at IS NULL",

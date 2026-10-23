@@ -9,6 +9,7 @@
 use super::schemas::{SendAttachment, SignatureRequestInput};
 use super::send::Cleaned;
 use crate::auth::session::SessionUser;
+use crate::entitlements::AddonKey;
 use crate::error::{ApiError, ApiResult};
 use crate::native_delivery::{self, NativeError, NativeItem, NativeSend, PreparedNative};
 use crate::native_signing::NativeSigning;
@@ -219,7 +220,8 @@ impl Created {
 
 /// The caller may send documents for signature here.
 pub async fn check_access(state: &AppState, user: &SessionUser) -> ApiResult<()> {
-    if !user.is_signature_available {
+    user.plan.require(AddonKey::Signatures)?;
+    if !(user.is_signature_available || user.plan.subscription) {
         return Err(ApiError::Denied(
             "You do not have access to send documents for signature. Ask a superuser to turn on eSignatures for you in Superuser › Feature access."
                 .into(),

@@ -10,7 +10,8 @@
 //! Port of `crud/quoteExtras.server.ts` and the `admin.quotes.extras` route.
 
 use crate::auth::AdminUser;
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::quote_pricing::edit::{
     catalog_items_to_create, list_after_move, own_extras, with_extra_ids, without_catalog_id,
@@ -127,7 +128,7 @@ pub struct ExtrasCatalog {
     responses(
         (status = 200, description = "The catalog", body = ExtrasCatalog),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -136,6 +137,7 @@ pub async fn list_extras(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
 ) -> ApiResult<Json<ExtrasCatalog>> {
+    user.plan.require(AddonKey::Quotes)?;
     let catalog = load_catalog(&state.pool, user.company_id).await?;
     let mut list_only = 0;
     for list in list_rows(&state.pool, user.company_id).await? {
@@ -172,7 +174,7 @@ pub struct NewExtra {
         (status = 201, description = "Added", body = CreatedId),
         (status = 400, description = "No name", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 409, description = "The name is taken", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -183,6 +185,7 @@ pub async fn create_extra(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<NewExtra>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    user.plan.require(AddonKey::Quotes)?;
     let name = name_of(&input.item);
     if name.is_empty() || !input.item.is_object() {
         return Err(ApiError::BadRequest("Give the extra a name.".into()));
@@ -256,7 +259,7 @@ pub struct EditedCatalog {
         (status = 204, description = "Saved"),
         (status = 400, description = "A name is listed twice", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -266,6 +269,7 @@ pub async fn save_extras(
     AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<EditedCatalog>,
 ) -> ApiResult<StatusCode> {
+    user.plan.require(AddonKey::Quotes)?;
     let names: Vec<String> = input
         .extras
         .iter()
@@ -332,7 +336,7 @@ pub struct MovedExtras {
     responses(
         (status = 200, description = "Moved", body = MovedExtras),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin, or the plan lacks the Quotes add-on (`addon`: `quotes`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -341,6 +345,7 @@ pub async fn move_list_extras(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
 ) -> ApiResult<Json<MovedExtras>> {
+    user.plan.require(AddonKey::Quotes)?;
     let mut lists: Vec<(i32, Value)> = Vec::new();
     for row in list_rows(&state.pool, user.company_id).await? {
         if let Some((_, Some(info))) = find(&state.pool, row.id, user.company_id).await? {

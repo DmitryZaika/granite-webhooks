@@ -7,7 +7,8 @@
 //! loaders and the cancel action (`cancelSignatureRequest`).
 
 use crate::auth::EmployeeUser;
-use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::entitlements::AddonKey;
+use crate::error::{AddonRequiredBody, ApiError, ApiResult, ErrorBody};
 use crate::routes::customers::signatures::{RefreshScope, refresh};
 use crate::signwell::SignWell;
 use crate::state::AppState;
@@ -82,7 +83,8 @@ struct Row {
 ///
 /// Newest first, with the customer and sender names. `mine` (default):
 /// what the caller sent; `company` (admins): the whole company. Open
-/// `SignWell` requests are checked with `SignWell` first.
+/// `SignWell` requests are checked with `SignWell` first. Needs the
+/// Signatures add-on; cancelling a request stays open without it.
 #[utoipa::path(
     get,
     path = "/v1/signature-requests",
@@ -93,7 +95,7 @@ struct Row {
         (status = 200, description = "The requests", body = [SentRequest]),
         (status = 400, description = "Unknown scope", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee, or not an admin for `company`", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee, not an admin for `company`, or the plan lacks the Signatures add-on (`addon`: `signatures`)", body = AddonRequiredBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -103,6 +105,7 @@ pub async fn list_requests(
     EmployeeUser(user): EmployeeUser,
     Query(query): Query<ListScope>,
 ) -> ApiResult<Json<Vec<SentRequest>>> {
+    user.plan.require(AddonKey::Signatures)?;
     let sent_by = match query.scope.as_deref() {
         None | Some("mine") => Some(user.id),
         Some("company") if user.is_admin || user.is_superuser => None,
