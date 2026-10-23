@@ -151,6 +151,13 @@ off the allow-list in `auth/mod.rs` answer 402 (decided by the session query).
 Each company's billing writes run under `billing/lock.rs` (a MySQL named lock
 on its own connection, since the Lambda pool has one).
 
+`POST /v1/jobs/billing-reminders` prunes old webhook event ids (daily) and
+reconciles with Stripe (6-hourly), both throttled through `job_runs`, then
+emails Managers (`billing/reminders.rs`, deduped in `billing_reminder_emails`):
+the dunning countdown and, 7 days before `trial_end_at`, the first charge.
+`GET /v1/superuser/billing/setup` checks the env and the Stripe webhook and
+prices. Optional env: `BILLING_EMAIL_FROM_ADDRESS`.
+
 Add-ons (`src/entitlements.rs`): Signatures, Quotes and QuickBooks are free
 for legacy companies (`company.plan_source = 'legacy'`, everyone before
 self-serve) and need an active `company_addons` row on a subscription plan.

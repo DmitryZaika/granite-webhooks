@@ -177,6 +177,10 @@ async fn process_contact_sync() -> Result<usize, Error> {
     post_api_job("contact-sync", "contact sync").await
 }
 
+async fn process_billing_reminders() -> Result<usize, Error> {
+    post_api_job("billing-reminders", "billing reminders").await
+}
+
 /// Starts the supplier price file job without waiting for it: a big PDF takes
 /// minutes, and the API Lambda keeps working after this request gives up.
 /// Sent to the long-running deployment (`API_STREAM_URL`) when there is one.
@@ -331,6 +335,14 @@ pub(crate) async fn function_handler(
             0
         }
     };
+    // Before the jobs that abort the tick with `?`.
+    let billing_reminder_count = match process_billing_reminders().await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(?error, "Failed to process billing reminders; continuing");
+            0
+        }
+    };
     let estimate_reminder_count = process_estimate_appointment_reminders().await?;
     let maintenance_reminder_count = process_maintenance_due_reminders().await?;
     let sms_followup_count = process_sms_followups().await?;
@@ -361,9 +373,10 @@ pub(crate) async fn function_handler(
         }
     };
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, and {} contact syncs",
+        "Successfully processed {} emails, {} activity deadline reminders, {} billing reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, and {} contact syncs",
         processed_email_count,
         reminder_count,
+        billing_reminder_count,
         estimate_reminder_count,
         maintenance_reminder_count,
         sms_followup_count,
@@ -389,6 +402,26 @@ mod tests {
         assert!(!activity_reminder_needs_telegram(true, None));
         assert!(!activity_reminder_needs_telegram(false, Some(1)));
         assert!(activity_reminder_needs_telegram(true, Some(1)));
+    }
+
+    #[test]
+    fn billing_reminders_run_before_fallible_jobs_and_do_not_abort_the_tick() {
+        let source = include_str!("generic_handler.rs");
+        let start = source
+            .find("pub(crate) async fn function_handler")
+            .expect("function_handler");
+        let end = source.find("#[cfg(test)]").expect("test module");
+        let handler = &source[start..end];
+        assert!(source[..end].contains("post_api_job(\"billing-reminders\""));
+        assert!(handler.contains("Failed to process billing reminders; continuing"));
+        let billing = handler
+            .find("process_billing_reminders().await")
+            .expect("billing reminders call");
+        let estimate = handler
+            .find("process_estimate_appointment_reminders().await?")
+            .expect("estimate reminders call");
+        assert!(billing < estimate, "billing must run before the `?` jobs");
+        assert!(!handler.contains("process_billing_reminders().await?"));
     }
 
     #[test]

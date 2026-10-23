@@ -50,6 +50,10 @@ pub struct OutgoingEmail {
     /// HTML sent as is, without the signature block or the opt-out line.
     #[serde(default)]
     pub transactional: bool,
+    /// The plain-text part of a transactional email; derived from `body`
+    /// when missing.
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -159,7 +163,11 @@ fn bare_message_id(id: &str) -> String {
 /// recipients are only in the envelope.
 pub fn build_message(email: &OutgoingEmail, files: Vec<Vec<u8>>) -> Vec<u8> {
     let bodies = if email.transactional {
-        body::transactional_bodies(&email.body)
+        let mut bodies = body::transactional_bodies(&email.body);
+        if let Some(text) = email.text.as_deref().filter(|text| !text.trim().is_empty()) {
+            bodies.text = text.to_string();
+        }
+        bodies
     } else {
         outgoing_bodies(&email.body, email.signature.as_deref())
     };
@@ -304,6 +312,7 @@ mod tests {
                 url: "https://bucket.s3.us-east-2.amazonaws.com/emails/a%20b.pdf".into(),
             }],
             transactional: false,
+            text: None,
         }
     }
 
@@ -317,6 +326,19 @@ mod tests {
         let message = String::from_utf8(build_message(&notice, vec![Vec::new()])).unwrap();
         assert!(message.contains("Your estimate is booked."));
         assert!(!message.contains("rather not receive"));
+    }
+
+    #[test]
+    fn a_transactional_email_keeps_its_own_text_part() {
+        let notice = OutgoingEmail {
+            body: "<ul><li>Base plan</li><li>Quotes add-on</li></ul>".into(),
+            text: Some("- Base plan\n- Quotes add-on".into()),
+            transactional: true,
+            ..email()
+        };
+        let message = String::from_utf8(build_message(&notice, vec![Vec::new()])).unwrap();
+        assert!(message.contains("- Base plan"));
+        assert!(message.contains("<li>Quotes add-on</li>"));
     }
 
     #[tokio::test]
