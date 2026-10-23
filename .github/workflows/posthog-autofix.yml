@@ -164,6 +164,15 @@ jobs:
         working-directory: /srv/autofix/tools
         run: python3 -m autofix validate-inputs
 
+      # Best effort: the issue's summary and latest event go into the agent's
+      # first message. It never fails the step; without it the agent pulls the
+      # issue through the PostHog tools itself.
+      - name: Fetch the issue context
+        working-directory: /srv/autofix/tools
+        env:
+          POSTHOG_AUTOFIX_MCP_KEY: ${{ secrets.POSTHOG_AUTOFIX_MCP_KEY }}
+        run: python3 -m autofix issue-context
+
       # Fails the job unless the api accepts the run: only runs the ledger
       # dispatched go further.
       - name: Report started

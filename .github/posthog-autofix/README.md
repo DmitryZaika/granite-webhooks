@@ -14,7 +14,8 @@ time-triggered (every minute) ── POST /v1/jobs/posthog-autofix ──▶ api
 GitHub Actions: posthog-autofix.yml, three jobs
   prepare  trusted: warms and saves the Rust build cache, never runs agent code
   fix      both repos · MySQL 8 · isolate the agent (own user, egress firewall)
-           · claude -p (fixer-prompt.md) · verify red/green + checks · bundle
+           · fetch the issue's summary · claude -p (fixer-prompt.md)
+           · verify red/green + checks · bundle
   report   fresh runner: re-check the bundle · push · open the PR · report back
                                      │
 api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
@@ -75,6 +76,11 @@ api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
    The api records the result and emails `POSTHOG_AUTOFIX_RECIPIENTS`. With
    write-back configured, the next poll assigns the PostHog issue to the
    fix's reviewer.
+
+Before the agent starts, `python3 -m autofix issue-context` queries PostHog's
+HogQL API (same read-only key as the MCP) and puts the issue's summary and
+latest stack in the agent's first message, fenced as untrusted. It is best
+effort: on any failure the agent fetches the issue through the MCP tools.
 
 Browser errors resolve to real files and functions once the SPA uploads its
 source maps at deploy (`general_datebase`, `docs/static-hosting.md`). Until

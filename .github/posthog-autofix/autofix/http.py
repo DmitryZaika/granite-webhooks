@@ -29,13 +29,17 @@ Transport = Callable[[str, str, dict[str, str], bytes | None], Response]
 
 
 def urllib_transport(
-    method: str, url: str, headers: dict[str, str], body: bytes | None
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes | None,
+    timeout: float = TIMEOUT_SECONDS,
 ) -> Response:
     if not url.startswith("https://"):
         raise HttpError(None, "refusing a non-HTTPS URL")
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return Response(response.status, _decode(response.read()))
     except urllib.error.HTTPError as error:
         return Response(error.code, _decode(error.read()))

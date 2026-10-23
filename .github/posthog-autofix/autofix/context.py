@@ -81,6 +81,10 @@ class RunContext:
         return self.out_dir / "agent-stderr.log"
 
     @property
+    def issue_context(self) -> Path:
+        return self.out_dir / "issue-context.json"
+
+    @property
     def verification_json(self) -> Path:
         return self.out_dir / "verification.json"
 

@@ -46,7 +46,7 @@ Never use `bun test`: it ignores the vitest config and mocks. Use `bunx vitest r
 <investigate>
 Understand before you change anything.
 
-1. Read the issue and up to 20 recent events through the PostHog tools. Note the exception type and message, when it started, how often it happens, how many users it affects, the release, and the properties listed below.
+1. Start from the issue summary and latest event in your first message, if it has one: title, counts, release, properties and the latest stack. Fetch more through the PostHog tools only when needed: up to 20 recent events, to check that they all share one cause, or the breakdown. Without that summary, read the issue and up to 20 recent events through the tools. Note the exception type and message, when it started, how often it happens, how many users it affects, the release, and the properties listed below.
 2. Map the error to code using the guide for its source.
 3. Read the code path end to end: the handler or component, what it calls, the SQL, and the data shapes. Check `git log` for the files involved. A recent commit may have caused it, or may already have fixed it.
 4. Form one concrete hypothesis that explains every event you saw, not just the first one. If the events disagree, there may be two bugs. Fix only the one that matches the issue, and mention the other.
@@ -63,6 +63,7 @@ Browser app: `$lib` is `web`.
   - `query_key`: the React Query key, which you can find in `app/lib/api/*.ts`;
   - `component_stack`, `error_status`;
   - and for failed API calls, `api_method`, `api_path` and `api_status`.
+- `release` is the full git SHA of the deployed SPA build. Use `git log <release>..HEAD -- <files>` to see whether `main` has changed the file since.
 - Browser stack frames resolve to source files when the deploy uploaded its source maps (`make deploy` with `POSTHOG_CLI_API_KEY`). A frame still shown as `assets/<Chunk>-<hash>.js` came from a build without them: its line numbers are useless, but the chunk name usually names the module, for example `DelayedSendButton-…js`.
 - `GraniteApiError` with the message `Granite API <status> on <path>: <body>` means the browser received an error from the Rust `api`.
   - A 5xx is almost always a backend bug: fix it in `granite-webhooks/api`.
@@ -70,8 +71,22 @@ Browser app: `$lib` is `web`.
 - `TypeError: Failed to fetch`, `Load failed` and similar network errors are normally connectivity noise, not bugs.
 
 `granite-api`: the `api` Lambda.
-- Properties: `api_method`, `api_path` (the concrete path with ids) and `api_status`. The type is `ApiError` or `Panic`, and the message is the Rust debug form of the error, for example `Database(...)` or `Internal("...")`.
-- Find the handler by searching `api/src/routes` for its path template, for example `path = "/v1/slabs/{id}"`.
+- Properties:
+  - `api_method`;
+  - `api_path`: the concrete path with ids;
+  - `api_route`: the route template, for example `/v1/customers/{id}`;
+  - `api_status`;
+  - `release`: the git short SHA of the deployed build. Use `git log <release>..HEAD -- <files>` to see whether `main` has changed the code since;
+  - `lambda_function` and `lambda_version`.
+- The type is `ApiError` or `Panic`. For `ApiError` the message is the Rust debug form of the error, for example `Database(ColumnDecode {...})` or `Internal("...")`.
+- Find the handler by searching `api/src/routes` for `api_route`, for example `path = "/v1/slabs/{id}"`, or by looking it up in `api/openapi.json`.
+
+`server-time-triggered`: the `time-triggered/` scheduler Lambda (`error_source` is `time-triggered`).
+- Properties:
+  - `job`: the failing step in `time-triggered/src/generic_handler.rs`;
+  - `release`, `lambda_function` and `lambda_version`.
+- The type is `JobError` and the message is `<job>: <error>`.
+- Many steps call the api's `/v1/jobs/*` endpoints. A failure inside the api is reported by the api itself, so look there for the cause and here for the caller.
 
 `server-webhooks`: the `webhooks` Lambda.
 - Properties:
