@@ -467,3 +467,24 @@ async fn billing_address_under_three_characters_is_rejected(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NO_CONTENT);
 }
+
+#[test_db::test(seed)]
+async fn custom_company_sources_are_accepted(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO customer_sources (company_id, source_key, label, is_system)
+         VALUES (100, 'yelp', 'Yelp', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool);
+    create(&server, RITA, customer("From Yelp", "yelp"))
+        .await
+        .assert_status(StatusCode::CREATED);
+    server
+        .put("/v1/customers/1001")
+        .with_session(RITA)
+        .json(&json!({ "name": "Bob Yelp", "source": "yelp" }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+}

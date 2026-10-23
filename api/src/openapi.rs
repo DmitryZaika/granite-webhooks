@@ -9,7 +9,7 @@ use crate::routes;
 use crate::state::AppState;
 use axum::Router;
 use utoipa::openapi::OpenApi as OpenApiDoc;
-use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
+use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 use utoipa_axum::router::OpenApiRouter;
 
@@ -64,6 +64,7 @@ pub const SESSION_SECURITY: &str = "session_cookie";
         (name = "followups", description = "AI follow-ups: the company rule they obey, timelines and enrollments"),
         (name = "billing", description = "The company's Granite Manager subscription (Stripe)"),
         (name = "jobs", description = "Scheduled jobs the time-triggered Lambda runs (job key, no session)"),
+        (name = "posthog-autofix", description = "Callbacks of the PostHog auto-fix GitHub workflow (callback secret, no session)"),
     )
 )]
 struct ApiDoc;
@@ -89,6 +90,12 @@ impl Modify for SessionCookie {
                 "`LAMBDA_KEY`, sent by the time-triggered Lambda.",
             ))),
         );
+        let mut callback = Http::new(HttpAuthScheme::Bearer);
+        callback.description = Some(
+            "`POSTHOG_AUTOFIX_CALLBACK_SECRET`, sent by the posthog-autofix GitHub workflow."
+                .into(),
+        );
+        components.add_security_scheme("autofix_callback", SecurityScheme::Http(callback));
     }
 }
 
