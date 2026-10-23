@@ -1,4 +1,6 @@
-//! Paid add-ons. A legacy company (`company.plan_source = 'legacy'`, every
+//! Paid add-ons.
+//!
+//! A legacy company (`company.plan_source = 'legacy'`, every
 //! company before self-serve) has them all, as today; a subscription company
 //! only those with an active `company_addons` row (bought, or granted free by
 //! a superuser). Existing switches (`quickbooks_enabled`, `signature_enabled`)
