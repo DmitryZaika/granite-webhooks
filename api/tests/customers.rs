@@ -391,11 +391,19 @@ async fn page_tab_filters_follow_the_list_filters(pool: MySqlPool) {
 
 #[test_db::test(seed)]
 async fn page_pages_and_clamps_past_the_end(pool: MySqlPool) {
-    let second = page(pool.clone(), &[("tab", "all"), ("page_size", "4"), ("page", "2")]).await;
+    let second = page(
+        pool.clone(),
+        &[("tab", "all"), ("page_size", "4"), ("page", "2")],
+    )
+    .await;
     assert_eq!(ids(&second["rows"]), vec![1008, 1006, 1005, 1004]);
     assert_eq!(second["total"], 9);
 
-    let past = page(pool.clone(), &[("tab", "all"), ("page_size", "4"), ("page", "9")]).await;
+    let past = page(
+        pool.clone(),
+        &[("tab", "all"), ("page_size", "4"), ("page", "9")],
+    )
+    .await;
     assert_eq!(ids(&past["rows"]), vec![1000]);
     assert_eq!(past["page"], 3);
 
@@ -415,7 +423,11 @@ async fn page_sorts_by_a_column(pool: MySqlPool) {
 
     let oldest = page(
         pool.clone(),
-        &[("tab", "all"), ("sort_by", "created_date"), ("order", "asc")],
+        &[
+            ("tab", "all"),
+            ("sort_by", "created_date"),
+            ("order", "asc"),
+        ],
     )
     .await;
     assert_eq!(
@@ -442,7 +454,11 @@ async fn page_carries_its_customers_emails(pool: MySqlPool) {
 async fn page_companies_view_has_totals(pool: MySqlPool) {
     let companies = page(
         pool,
-        &[("view", "companies"), ("tab", "all"), ("sort_by", "projects_count")],
+        &[
+            ("view", "companies"),
+            ("tab", "all"),
+            ("sort_by", "projects_count"),
+        ],
     )
     .await;
     assert_eq!(sorted(ids(&companies["rows"])), vec![1004, 1007]);

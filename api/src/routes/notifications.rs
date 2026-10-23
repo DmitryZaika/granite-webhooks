@@ -1,7 +1,7 @@
 //! The notification bell.
 //!
 //! - `GET /v1/notifications` → unread mail, activity and billing
-//!   notifications, and missed `CloudTalk` calls, newest first
+//!   notifications, and missed `CloudTalk` and `RingCentral` calls, newest first
 //! - `POST /v1/notifications/done` → dismiss notifications, or all of them
 //!
 //! Replaces the Remix `api.notifications` loader and `api.notifications.done`
@@ -226,7 +226,8 @@ const TELEGRAM_SENT_MARKER: &str = "__telegram_sent__";
 /// A notification of the bell.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct NotificationItem {
-    /// `notif-<id>`, `billing-<id>`, `call-<id>`, or the email thread id.
+    /// `notif-<id>`, `billing-<id>`, `call-<id>` (`CloudTalk`), `rc-call-<id>`
+    /// (`RingCentral`), or the email thread id.
     pub id: String,
     /// Usually the customer's name.
     pub title: String,
@@ -489,102 +490,107 @@ async fn billing(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem>
 }
 
 /// Missed calls and voicemail of the last three days on the caller's
-/// `CloudTalk` line (`RingCentral` has none yet).
+/// `CloudTalk` line and `RingCentral` extension.
 async fn missed_calls(state: &AppState, user: &SessionUser) -> Vec<NotificationItem> {
-    let Some(agent) = user
-        .cloudtalk_agent_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|agent| !agent.is_empty())
-    else {
-        return Vec::new();
+    use crate::routes::users::call_activity::{
+        CallActivity, activity, agent_calls, company_ringcentral_calls, ringcentral_activity,
     };
-    let from = (chrono::Utc::now() - chrono::Duration::days(3))
-        .format("%Y-%m-%d")
-        .to_string();
-    let calls =
-        crate::routes::users::call_activity::agent_calls(state, user.company_id, agent, &from)
-            .await;
-    calls
-        .iter()
-        .filter(|item| {
-            let cdr = &item["Cdr"];
-            cdr["type"] == "incoming"
-                && (cdr["is_voicemail"] == true || number(&cdr["talking_time"]) == 0.0)
-        })
+    let present = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let since = chrono::Utc::now() - chrono::Duration::days(3);
+    let cloudtalk = async {
+        let Some(agent) = present(&user.cloudtalk_agent_id) else {
+            return Vec::new();
+        };
+        let from = since.format("%Y-%m-%d").to_string();
+        agent_calls(state, user.company_id, &agent, &from)
+            .await
+            .iter()
+            .map(|item| activity(item, user.id, ""))
+            .collect::<Vec<CallActivity>>()
+    };
+    let ringcentral = async {
+        let Some(extension) = present(&user.ringcentral_extension_id) else {
+            return Vec::new();
+        };
+        let from = since.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        company_ringcentral_calls(state, user.company_id, Some(&extension), &from)
+            .await
+            .iter()
+            .map(|record| ringcentral_activity(record, user.id, ""))
+            .collect::<Vec<CallActivity>>()
+    };
+    let (cloudtalk, ringcentral) = tokio::join!(cloudtalk, ringcentral);
+    cloudtalk
+        .into_iter()
+        .chain(ringcentral)
+        .filter(|call| call.action == "Missed a call")
         .take(30)
-        .filter_map(|item| {
-            let cdr = &item["Cdr"];
-            let id = match &cdr["id"] {
-                serde_json::Value::String(id) => id.clone(),
-                serde_json::Value::Number(id) => id.to_string(),
-                _ => return None,
-            };
-            let contact = item["Contact"]["name"]
-                .as_str()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_string);
-            let external = match &cdr["public_external"] {
-                serde_json::Value::String(phone) => phone.clone(),
-                serde_json::Value::Number(phone) => phone.to_string(),
-                _ => String::new(),
-            };
-            let digits: String = external.chars().filter(char::is_ascii_digit).collect();
-            let digits = &digits[digits.len().saturating_sub(10)..];
-            let voicemail = cdr["is_voicemail"] == true;
-            let started = cdr["started_at"].as_str().unwrap_or("");
-            Some(NotificationItem {
-                id: format!("call-{id}"),
-                title: contact.clone().unwrap_or_else(|| {
-                    if external.is_empty() {
-                        "Unknown caller".into()
-                    } else {
-                        external.clone()
-                    }
-                }),
-                message: if voicemail {
-                    "New voicemail"
-                } else {
-                    "Missed call"
-                }
-                .into(),
-                href: if digits.len() >= 10 {
-                    format!("/employee/cloudtalk/thread/{digits}")
-                } else {
-                    "/employee/cloudtalk".into()
-                },
-                sent_at: chrono::NaiveDateTime::parse_from_str(started, "%Y-%m-%d %H:%M:%S")
-                    .map_or_else(
-                        |_| started.to_string(),
-                        |at| {
-                            at.and_utc()
-                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-                        },
-                    ),
-                kind: NotificationKind::Call,
-                notification_type: None,
-                actor_name: None,
-                customer_name: contact,
-                type_title: Some(
-                    if voicemail {
-                        "CloudTalk voicemail"
-                    } else {
-                        "Missed CloudTalk call"
-                    }
-                    .into(),
-                ),
-                action_label: None,
-            })
-        })
+        .map(|call| missed_call_item(&call))
         .collect()
 }
 
-fn number(value: &serde_json::Value) -> f64 {
-    match value {
-        serde_json::Value::Number(number) => number.as_f64().unwrap_or(0.0),
-        serde_json::Value::String(text) => text.trim().parse().unwrap_or(0.0),
-        _ => 0.0,
+fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) -> NotificationItem {
+    let ringcentral = call.source == "ringcentral_call";
+    let (provider, path) = if ringcentral {
+        ("RingCentral", "ringcentral")
+    } else {
+        ("CloudTalk", "cloudtalk")
+    };
+    let external = call.contact.clone().unwrap_or_default();
+    let digits: String = external.chars().filter(char::is_ascii_digit).collect();
+    let digits = &digits[digits.len().saturating_sub(10)..];
+    let started = call.created_at.as_str();
+    // CloudTalk sends `2026-05-01 10:00:00` (UTC), RingCentral RFC 3339.
+    let sent_at = chrono::NaiveDateTime::parse_from_str(started, "%Y-%m-%d %H:%M:%S")
+        .map(|at| at.and_utc())
+        .or_else(|_| {
+            chrono::DateTime::parse_from_rfc3339(started).map(|at| at.with_timezone(&chrono::Utc))
+        })
+        .map_or_else(
+            |_| started.to_string(),
+            |at| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        );
+    NotificationItem {
+        id: if ringcentral {
+            format!("rc-call-{}", call.call_id)
+        } else {
+            format!("call-{}", call.call_id)
+        },
+        title: call.customer_name.clone().unwrap_or_else(|| {
+            if external.is_empty() {
+                "Unknown caller".into()
+            } else {
+                external.clone()
+            }
+        }),
+        message: if call.is_voicemail {
+            "New voicemail"
+        } else {
+            "Missed call"
+        }
+        .into(),
+        href: if digits.len() >= 10 {
+            format!("/employee/{path}/thread/{digits}")
+        } else {
+            format!("/employee/{path}")
+        },
+        sent_at,
+        kind: NotificationKind::Call,
+        notification_type: None,
+        actor_name: None,
+        customer_name: call.customer_name.clone(),
+        type_title: Some(if call.is_voicemail {
+            format!("{provider} voicemail")
+        } else {
+            format!("Missed {provider} call")
+        }),
+        action_label: None,
     }
 }
 
@@ -593,7 +599,7 @@ fn number(value: &serde_json::Value) -> f64 {
 /// Unread incoming mail of the last 14 days (one per conversation), due
 /// notifications on live deals (signature status is emailed to the sender
 /// instead, so it is left out), open billing notices and missed
-/// `CloudTalk` calls, newest first. The onboarding tour's sample
+/// `CloudTalk` and `RingCentral` calls, newest first. The onboarding tour's sample
 /// notifications are left out unless `samples` is set.
 #[utoipa::path(
     get,

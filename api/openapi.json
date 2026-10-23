@@ -4824,7 +4824,7 @@
           "users"
         ],
         "summary": "List reps' calls",
-        "description": "The `CloudTalk` calls of the given users of the caller's company over the\nlast 90 days, newest first. Users without a `CloudTalk` agent, and\ncompanies without `CloudTalk`, have none.",
+        "description": "The `CloudTalk` and `RingCentral` calls of the given users of the caller's\ncompany over the last 90 days, newest first. Users without a `CloudTalk`\nagent or `RingCentral` extension, and companies without either, have none.",
         "operationId": "list_user_call_activity",
         "parameters": [
           {
@@ -40221,7 +40221,7 @@
           "notifications"
         ],
         "summary": "List notifications",
-        "description": "Unread incoming mail of the last 14 days (one per conversation), due\nnotifications on live deals (signature status is emailed to the sender\ninstead, so it is left out), open billing notices and missed\n`CloudTalk` calls, newest first. The onboarding tour's sample\nnotifications are left out unless `samples` is set.",
+        "description": "Unread incoming mail of the last 14 days (one per conversation), due\nnotifications on live deals (signature status is emailed to the sender\ninstead, so it is left out), open billing notices and missed\n`CloudTalk` and `RingCentral` calls, newest first. The onboarding tour's sample\nnotifications are left out unless `samples` is set.",
         "operationId": "list_notifications",
         "parameters": [
           {
@@ -41559,7 +41559,7 @@
           "me"
         ],
         "summary": "Get my call coaching",
-        "description": "The caller's last three real `CloudTalk` calls with their scores, when\nthey have a `CloudTalk` line.",
+        "description": "The caller's last three real `CloudTalk` and `RingCentral` calls with\ntheir scores, when they have either line.",
         "operationId": "get_my_call_coaching",
         "responses": {
           "200": {
@@ -49161,6 +49161,7 @@
         "description": "One call, as a row of the users-activity feed.",
         "required": [
           "id",
+          "call_id",
           "source",
           "user_id",
           "user_name",
@@ -49176,11 +49177,15 @@
           "id": {
             "type": "integer",
             "format": "int64",
-            "description": "The `CloudTalk` call id."
+            "description": "The `CloudTalk` call id; 0 for `RingCentral`, whose ids are not numbers."
+          },
+          "call_id": {
+            "type": "string",
+            "description": "The provider's call id as text."
           },
           "source": {
             "type": "string",
-            "description": "Always `cloudtalk_call`."
+            "description": "`cloudtalk_call` or `ringcentral_call`."
           },
           "user_id": {
             "type": "integer",
@@ -49204,7 +49209,15 @@
               "string",
               "null"
             ],
-            "description": "The `CloudTalk` contact's name."
+            "description": "The `CloudTalk` contact's name, or for `RingCentral` the customer with\nthat number (else the caller-ID name)."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The customer with that number (`RingCentral` only)."
           },
           "contact": {
             "type": [
@@ -49240,7 +49253,7 @@
               "string",
               "null"
             ],
-            "description": "`CloudTalk`'s recording link."
+            "description": "`CloudTalk`'s recording link, or a `RingCentral` media token (`rec_<id>`)."
           },
           "is_voicemail": {
             "type": "boolean",
@@ -50071,7 +50084,7 @@
         "properties": {
           "eligible": {
             "type": "boolean",
-            "description": "The caller has a `CloudTalk` line (agent and number)."
+            "description": "The caller has a `CloudTalk` line (agent and number) or a\n`RingCentral` line (extension and number)."
           },
           "analyzing": {
             "type": "boolean",
@@ -50100,14 +50113,14 @@
         "properties": {
           "call_id": {
             "type": "string",
-            "description": "`CloudTalk` call id."
+            "description": "`CloudTalk` or `RingCentral` call id."
           },
           "status": {
             "$ref": "#/components/schemas/CoachingStatus"
           },
           "started_at": {
             "type": "string",
-            "description": "When it started (`CloudTalk` time)."
+            "description": "When it started (`CloudTalk` time, or RFC 3339 for `RingCentral`)."
           },
           "talking_time": {
             "type": "number",
@@ -50123,7 +50136,7 @@
               "string",
               "null"
             ],
-            "description": "The customer, from the CRM or `CloudTalk`."
+            "description": "The customer, from the CRM or the phone system."
           },
           "phone_display": {
             "type": "string",
@@ -61198,7 +61211,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "`notif-<id>`, `billing-<id>`, `call-<id>`, or the email thread id."
+            "description": "`notif-<id>`, `billing-<id>`, `call-<id>` (`CloudTalk`), `rc-call-<id>`\n(`RingCentral`), or the email thread id."
           },
           "title": {
             "type": "string",

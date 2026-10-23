@@ -616,7 +616,12 @@ async fn send_step(state: &AppState, due: &Due, now: Instant) -> Result<Outcome,
     };
     let sent = match provider {
         None => send_email(state, due, &rep, customer_id, &subject, &body).await?,
-        Some(provider) => send_sms(state, due, &rep, provider, current.position, &body).await?,
+        Some(company) => {
+            let provider = rep_sms_provider(state, due.company_id, &rep)
+                .await?
+                .unwrap_or(company);
+            send_sms(state, due, &rep, provider, current.position, &body).await?
+        }
     };
     if let Err(outcome) = sent {
         return Ok(outcome);
@@ -815,6 +820,35 @@ pub async fn company_sms_provider(
         Configured::Ringcentral => SmsProvider::Ringcentral,
         Configured::Cloudtalk => SmsProvider::Cloudtalk,
     }))
+}
+
+/// The provider `rep` texts through, as their inbox picks it
+/// (`prefersRingcentralInbox`): a linked `RingCentral` line wins, then a
+/// `CloudTalk` agent, then `RingCentral` when both are connected.
+pub async fn rep_sms_provider(
+    state: &AppState,
+    company_id: i32,
+    rep: &SessionUser,
+) -> Result<Option<SmsProvider>, sqlx::Error> {
+    let features =
+        crate::routes::company::queries::company_features(&state.pool, company_id).await?;
+    Ok(rep_provider(features.cloudtalk, features.ringcentral, rep))
+}
+
+fn rep_provider(cloudtalk: bool, ringcentral: bool, rep: &SessionUser) -> Option<SmsProvider> {
+    if !ringcentral {
+        return cloudtalk.then_some(SmsProvider::Cloudtalk);
+    }
+    let ringcentral_line = SmsProvider::Ringcentral.agent_of(rep).is_some()
+        || rep
+            .ringcentral_phone_number
+            .as_deref()
+            .is_some_and(|phone| !phone.trim().is_empty());
+    if cloudtalk && !ringcentral_line && SmsProvider::Cloudtalk.agent_of(rep).is_some() {
+        Some(SmsProvider::Cloudtalk)
+    } else {
+        Some(SmsProvider::Ringcentral)
+    }
 }
 
 /// Sends the step of one due enrollment now (a rep started a flow or the
