@@ -1,0 +1,3 @@
+# sqlx checksums migration bytes; CRLF from autocrlf reads as "modified".
+migrations/** text eol=lf
+migrations-pending/** text eol=lf
