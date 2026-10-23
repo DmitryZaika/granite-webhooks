@@ -220,9 +220,9 @@ impl TryFrom<PageQuery> for PageRequest {
         };
         let companies = filter.view == CustomersView::Companies;
         let sort = match query.sort_by.as_deref() {
-            Some(
-                column @ ("name" | "phone" | "email" | "sales_rep_name" | "company_name"),
-            ) => PageSort::Text(column_name(column)),
+            Some(column @ ("name" | "phone" | "email" | "sales_rep_name" | "company_name")) => {
+                PageSort::Text(column_name(column))
+            }
             Some("created_date") => PageSort::Created,
             Some("assigned_date") => PageSort::Assigned,
             Some(column @ ("revenue_generated" | "projects_count")) if companies => {

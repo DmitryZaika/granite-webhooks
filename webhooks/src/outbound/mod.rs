@@ -339,7 +339,10 @@ mod tests {
             ..email()
         };
         let message = String::from_utf8(build_message(&notice, Vec::new())).unwrap();
-        assert!(message.contains("To: undisclosed-recipients:;\r\n"), "{message}");
+        assert!(
+            message.contains("To: undisclosed-recipients:;\r\n"),
+            "{message}"
+        );
         assert!(!message.contains("hidden@example.com"));
     }
 

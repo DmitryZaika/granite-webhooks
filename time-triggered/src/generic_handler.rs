@@ -5,16 +5,16 @@ use common::crud::notifications::{
     get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
     unmark_deadline_reminder_telegram_sent,
 };
-use common::crud::outbound_email::{OutboundScheduledEmail, record_outbound_scheduled_email};
+use common::crud::outbound_email::{record_outbound_scheduled_email, OutboundScheduledEmail};
 use common::crud::scheduled_emails::{
-    ScheduledEmail, cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
+    cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
     get_ready_scheduled_emails, mark_scheduled_email_as_sent,
-    mark_scheduled_email_failed_with_reason,
+    mark_scheduled_email_failed_with_reason, ScheduledEmail,
 };
 use common::crud::template::fetch_template_variable_data;
 use common::utils::email_send_window::automated_email_send_window_is_open_now;
 use common::utils::template::replace_template_variables;
-use lambda_runtime::{Error, LambdaEvent, tracing};
+use lambda_runtime::{tracing, Error, LambdaEvent};
 use reqwest::Client;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
