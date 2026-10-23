@@ -3797,7 +3797,7 @@
           "customer-view"
         ],
         "summary": "Email a login code",
-        "description": "Sends a one-time code (10 minutes) to the customer's email.",
+        "description": "Sends a one-time code (10 minutes) to the customer's email. An address\ngets at most one code every 45 seconds and 5 an hour; a new code\nreplaces the previous one.",
         "operationId": "send_customer_view_code",
         "parameters": [
           {
@@ -3845,7 +3845,7 @@
             }
           },
           "429": {
-            "description": "A code was just sent",
+            "description": "A code was just sent, or 5 this hour",
             "content": {
               "application/json": {
                 "schema": {
@@ -3873,7 +3873,7 @@
           "customer-view"
         ],
         "summary": "Enter a login code",
-        "description": "Unlocks the page for this browser for 7 days.",
+        "description": "Unlocks the page for this browser for 7 days. A code takes 8 attempts at\nmost.",
         "operationId": "verify_customer_view_code",
         "parameters": [
           {
@@ -4305,6 +4305,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -4315,7 +4325,7 @@
           "customer-view"
         ],
         "summary": "Email a code to an account's address",
-        "description": "Sends a code when a customer of the company has that email. The answer\nis the same either way, so it does not reveal who is a customer.",
+        "description": "Sends a code when a customer of the company has that email. The answer\nis the same either way, so it does not reveal who is a customer. Same\nlimits as `send_customer_view_code`.",
         "operationId": "send_customer_view_login_code",
         "parameters": [
           {
@@ -4354,7 +4364,7 @@
             }
           },
           "429": {
-            "description": "A code was just sent",
+            "description": "A code was just sent, or 5 this hour",
             "content": {
               "application/json": {
                 "schema": {
@@ -4382,7 +4392,7 @@
           "customer-view"
         ],
         "summary": "Enter an account sign-in code",
-        "description": "Verifies the code sent to the account's address; answers the page it\nunlocks.",
+        "description": "Verifies the code sent to the account's address (8 attempts at most);\nanswers the page it unlocks.",
         "operationId": "verify_customer_view_login_code",
         "parameters": [
           {
@@ -18170,7 +18180,7 @@
             }
           },
           "400": {
-            "description": "No subject and no note, or an unknown deal",
+            "description": "No subject and no note, an unknown deal, or a file the caller may not attach",
             "content": {
               "application/json": {
                 "schema": {
@@ -18878,7 +18888,7 @@
             }
           },
           "400": {
-            "description": "No subject and no note, or an unknown deal",
+            "description": "No subject and no note, an unknown deal, or a file the caller may not attach",
             "content": {
               "application/json": {
                 "schema": {
@@ -25856,6 +25866,303 @@
           },
           "404": {
             "description": "No such payment terms in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/online-quote-options": {
+      "get": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "List online quote options",
+        "description": "The extras the company's online quote can offer, by sequence then name.\nA company that never had any gets Laminate tear out, Stone tear out and\n10 year sealer, all off.",
+        "operationId": "list_online_quote_options",
+        "responses": {
+          "200": {
+            "description": "Options",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OnlineQuoteOption"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Add an online quote option",
+        "description": "Adds an extra the online quote can offer.",
+        "operationId": "create_online_quote_option",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnlineQuoteOptionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnlineQuoteOption"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/online-quote-options/{id}": {
+      "put": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Save an online quote option",
+        "description": "Saves the name, sequence and whether customers are offered it.",
+        "operationId": "update_online_quote_option",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Option id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnlineQuoteOptionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "No name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such option in the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "quotes"
+        ],
+        "summary": "Delete an online quote option",
+        "description": "Removes the option; quotes keep the extras they got.",
+        "operationId": "delete_online_quote_option",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Option id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such option in the company",
             "content": {
               "application/json": {
                 "schema": {
@@ -34795,6 +35102,66 @@
         ]
       }
     },
+    "/v1/schedule/unscheduled": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Events waiting for their day",
+        "description": "The company's unscheduled events (kept off the calendar until someone\npicks the date), oldest first, with the customer named by a numeric\ntitle. Events of calendars hidden for the caller are left out.",
+        "operationId": "list_unscheduled_events",
+        "responses": {
+          "200": {
+            "description": "Events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScheduleEvent"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/schedule": {
       "get": {
         "tags": [
@@ -39161,7 +39528,7 @@
             }
           },
           "400": {
-            "description": "No customer, or an invalid phone",
+            "description": "No customer, not a customer of the company, or an invalid phone",
             "content": {
               "application/json": {
                 "schema": {
@@ -39475,7 +39842,7 @@
           "ai"
         ],
         "summary": "Ask the AI chat",
-        "description": "Answers a question in instructions mode (company instructions and the\nCRM manual), price lists mode (supplier price files, special orders) or\nassistant mode (the company's records), streamed as server-sent events.\nThe conversation is kept per user; `isNew` starts it over.",
+        "description": "Answers a question in instructions mode (company instructions and the\nCRM manual), price lists mode (supplier price files, special orders) or\nassistant mode (the company's records, employees only), streamed as\nserver-sent events. The conversation is kept per user; `isNew` starts it\nover.",
         "operationId": "ask_chat",
         "requestBody": {
           "content": {
@@ -39510,6 +39877,16 @@
           },
           "401": {
             "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Assistant mode asked for by a user who is not an employee",
             "content": {
               "application/json": {
                 "schema": {
@@ -40815,6 +41192,53 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SupplierFilesRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
+    "/v1/jobs/contact-sync": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Sync missing contacts",
+        "description": "Pushes a few customers without a `RingCentral` or `CloudTalk` contact to\ntheir company's provider.",
+        "operationId": "run_contact_sync",
+        "responses": {
+          "200": {
+            "description": "What was done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactSyncRun"
                 }
               }
             }
@@ -48509,7 +48933,7 @@
               "string",
               "null"
             ],
-            "description": "`instructions` (default), `priceLists` or `assistant`. A question\nabout the company's records goes to the assistant anyway."
+            "description": "`instructions` (default), `priceLists` or `assistant`. A question\nabout the company's records goes to the assistant anyway. The\nassistant reads customers, deals and notes: employees only (403 for\nothers, whose record questions are answered from the instructions)."
           },
           "isNew": {
             "type": "boolean",
@@ -50325,6 +50749,32 @@
           "unverified"
         ]
       },
+      "ContactSyncRun": {
+        "type": "object",
+        "description": "What a run did.",
+        "required": [
+          "processed",
+          "ringcentral",
+          "cloudtalk"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Customers synced, both providers.",
+            "minimum": 0
+          },
+          "ringcentral": {
+            "type": "integer",
+            "description": "Pushed to `RingCentral`.",
+            "minimum": 0
+          },
+          "cloudtalk": {
+            "type": "integer",
+            "description": "Pushed to `CloudTalk`.",
+            "minimum": 0
+          }
+        }
+      },
       "ContentInput": {
         "type": "object",
         "description": "Body creating a note or a comment.",
@@ -51754,6 +52204,27 @@
               "null"
             ],
             "description": "Billing address."
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "City of the address."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "State of the address."
+          },
+          "postal_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ZIP code."
           },
           "phone": {
             "type": [
@@ -54775,6 +55246,10 @@
           "all_day": {
             "type": "boolean",
             "description": "All-day event."
+          },
+          "unscheduled": {
+            "type": "boolean",
+            "description": "Waiting for its day: off the calendar, in the unscheduled list. The\ndates may then be left empty (they become now)."
           },
           "calendar_id": {
             "type": [
@@ -60580,6 +61055,13 @@
               "$ref": "#/components/schemas/OnlineColorPick"
             },
             "description": "1 to 10 colors to compare."
+          },
+          "extras": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The builder's `extras` the customer wants, by name."
           }
         },
         "additionalProperties": false
@@ -60738,6 +61220,13 @@
             },
             "description": "1 to 10 colors, one quote option each."
           },
+          "extras": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The builder's `extras` the customer wants, by name; each goes on the\nquote as an extra."
+          },
           "website": {
             "type": [
               "string",
@@ -60755,6 +61244,62 @@
                 "type": "null"
               }
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "OnlineQuoteOption": {
+        "type": "object",
+        "description": "An extra the online quote can offer the customer.",
+        "required": [
+          "id",
+          "name",
+          "sequence",
+          "enabled"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Option id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name, e.g. \"Stone tear out\". A price list extra of the same name prices it."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Order on the customer's Extras step."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Offered to customers. When any is on, the online quote has an Extras step."
+          }
+        }
+      },
+      "OnlineQuoteOptionInput": {
+        "type": "object",
+        "description": "Body of creating or saving an online quote option.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name; required, at most 120 characters (longer is cut)."
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Order; 1 or more (default 1)."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Offered to customers (default false)."
           }
         },
         "additionalProperties": false
@@ -60794,7 +61339,8 @@
           "default_depth",
           "colors",
           "sinks",
-          "cooktop"
+          "cooktop",
+          "extras"
         ],
         "properties": {
           "company_name": {
@@ -60834,6 +61380,13 @@
           "cooktop": {
             "$ref": "#/components/schemas/OnlineCooktop",
             "description": "The cooktop cutout."
+          },
+          "extras": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extras the customer can add (Admin > Quotes > Customer Quote), in\norder. Empty: the builder has no Extras step."
           }
         }
       },

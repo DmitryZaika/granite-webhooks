@@ -256,7 +256,7 @@ pub async fn add_images(
     let mut tx = state.pool.begin().await?;
     require_stone(&mut tx, user.company_id, id).await?;
     for url in &body.urls {
-        uploads::attach(&state.storage, url, UploadFolder::Stones).await?;
+        uploads::attach(&state.storage, url, UploadFolder::Stones, user.company_id).await?;
     }
     let mut added = Vec::with_capacity(body.urls.len());
     for url in body.urls {
@@ -316,7 +316,7 @@ pub async fn delete_image(
         .await?;
     tx.commit().await?;
     if let Some(url) = url {
-        uploads::remove(&state.storage, &url).await;
+        uploads::remove(&state.storage, &url, user.company_id).await;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -691,7 +691,7 @@ pub async fn add_slab(
         width = f64::from(stone_width.unwrap_or(0.0));
     }
     if let Some(url) = &image_url {
-        uploads::attach(&state.storage, url, UploadFolder::Stones).await?;
+        uploads::attach(&state.storage, url, UploadFolder::Stones, user.company_id).await?;
     }
     let (length, width) = (length.to_string(), width.to_string());
     let result = sqlx::query(

@@ -335,7 +335,11 @@ async fn files_that_run_script_are_never_uploaded_or_served(pool: MySqlPool) {
             .with_session(sessions::ADMIN)
             .json(&json!({ "folder": folder, "file_name": "x", "content_type": content_type }))
             .await;
-        assert_eq!(res.status_code(), StatusCode::BAD_REQUEST, "{folder} {content_type}");
+        assert_eq!(
+            res.status_code(),
+            StatusCode::BAD_REQUEST,
+            "{folder} {content_type}"
+        );
     }
 
     // An SVG already in the bucket is refused; images come back as downloads
@@ -377,7 +381,10 @@ async fn files_that_run_script_are_never_uploaded_or_served(pool: MySqlPool) {
         res.assert_status_ok();
         assert_eq!(res.header("content-type"), "image/png");
         assert_eq!(res.header("x-content-type-options"), "nosniff");
-        assert_eq!(res.header("content-security-policy"), "default-src 'none'; sandbox");
+        assert_eq!(
+            res.header("content-security-policy"),
+            "default-src 'none'; sandbox"
+        );
         assert_eq!(res.header("content-disposition"), "attachment");
     }
 }

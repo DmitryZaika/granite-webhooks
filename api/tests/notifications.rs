@@ -192,3 +192,218 @@ async fn deadline_reminders_stay_until_dismissed(pool: MySqlPool) {
         .unwrap();
     assert_eq!(listed_ids(&server).await, Vec::<String>::new());
 }
+
+/// Mail reaches the bell by the user's exact address, and only their
+/// company's: an address that is a SQL pattern (`%@%.%`) matched every
+/// company's mail, and clearing marked it read for them.
+#[test_db::test(seed)]
+async fn other_companies_mail_never_reaches_the_bell(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO emails (id, thread_id, subject, body, sender_email, receiver_email, sent_at, company_id, message_id) VALUES
+           (9761, 'other-1', 'Their deal', 'x', 'bob@example.com', 'Olga <rep@other.test>', NOW(), 101, '<o1@x>'),
+           (9762, 'other-2', 'Their deal', 'x', 'bob@example.com', 'rep@acme.test', NOW(), 101, '<o2@x>'),
+           (9763, 'own-1', 'Mine', 'x', 'alice@example.com', 'rep@acme.test', NOW(), 100, '<o3@x>');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool.clone());
+    assert_eq!(listed_ids(&server).await, ["own-1"]);
+
+    sqlx::query("UPDATE users SET email = '%@%.%' WHERE id = 100")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(listed_ids(&server).await.is_empty());
+    server
+        .post("/v1/notifications/done")
+        .with_session(sessions::REP)
+        .json(&json!({ "clear_all": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let read: Vec<i64> = sqlx::query_scalar(
+        "SELECT CAST(id AS SIGNED) FROM emails WHERE id IN (9761, 9762, 9763) AND employee_read_at IS NOT NULL",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(read.is_empty(), "{read:?}");
+}
+
+// Who reaches Rita's (100, rep@acme.test, company 100) bell. Mark (101) is
+// her coworker; Olga (106) is of company 101. Each thread id names its case.
+const ADDRESSED: &str = "
+    INSERT INTO emails (id, thread_id, subject, body, sender_email, sender_user_id, receiver_email,
+                        receiver_user_id, deal_id, sent_at, employee_read_at, deleted_at, company_id, message_id) VALUES
+      (9801, 'bare',          's', 'x', 'alice@example.com', NULL, 'rep@acme.test',                    NULL, NULL, NOW(), NULL, NULL, 100,  '<a1@x>'),
+      (9802, 'named',         's', 'x', 'alice@example.com', NULL, 'Rita <rep@acme.test>',             NULL, NULL, NOW(), NULL, NULL, 100,  '<a2@x>'),
+      (9803, 'cased',         's', 'x', 'alice@example.com', NULL, '  REP@Acme.Test ',                 NULL, NULL, NOW(), NULL, NULL, 100,  '<a3@x>'),
+      (9804, 'named-cased',   's', 'x', 'alice@example.com', NULL, 'Rita < Rep@ACME.test >',           NULL, NULL, NOW(), NULL, NULL, 100,  '<a4@x>'),
+      (9805, 'list-last',     's', 'x', 'alice@example.com', NULL, 'Bob <b@x.test>, Rita <rep@acme.test>', NULL, NULL, NOW(), NULL, NULL, 100, '<a5@x>'),
+      (9806, 'by-id',         's', 'x', 'alice@example.com', NULL, 'someone@else.test',                100,  NULL, NOW(), NULL, NULL, 100,  '<a6@x>'),
+      (9807, 'her-deal',      's', 'x', 'alice@example.com', NULL, 'sales@acme.test',                  NULL, 8000, NOW(), NULL, NULL, 100,  '<a7@x>'),
+      (9808, 'coworker',      's', 'x', 'manager@acme.test', 101,  'rep@acme.test',                    NULL, NULL, NOW(), NULL, NULL, NULL, '<a8@x>'),
+      (9811, 'other-co',      's', 'x', 'bob@example.com',   NULL, 'rep@acme.test',                    NULL, NULL, NOW(), NULL, NULL, 101,  '<b1@x>'),
+      (9812, 'other-named',   's', 'x', 'bob@example.com',   NULL, 'Rita <rep@acme.test>',             NULL, NULL, NOW(), NULL, NULL, 101,  '<b2@x>'),
+      (9813, 'other-coworker','s', 'x', 'rep@other.test',    106,  'rep@acme.test',                    NULL, NULL, NOW(), NULL, NULL, NULL, '<b3@x>'),
+      (9814, 'unstamped',     's', 'x', 'bob@example.com',   NULL, 'rep@acme.test',                    NULL, NULL, NOW(), NULL, NULL, NULL, '<b4@x>'),
+      (9815, 'longer-local',  's', 'x', 'alice@example.com', NULL, 'Rita <xrep@acme.test>',            NULL, NULL, NOW(), NULL, NULL, 100,  '<b5@x>'),
+      (9816, 'longer-domain', 's', 'x', 'alice@example.com', NULL, 'rep@acme.test.evil',               NULL, NULL, NOW(), NULL, NULL, 100,  '<b6@x>'),
+      (9817, 'list-first',    's', 'x', 'alice@example.com', NULL, 'Rita <rep@acme.test>, Bob <b@x.test>', NULL, NULL, NOW(), NULL, NULL, 100, '<b7@x>'),
+      (9818, 'her-own',       's', 'x', 'rep@acme.test',     100,  'alice@example.com',                NULL, NULL, NOW(), NULL, NULL, 100,  '<b8@x>'),
+      (9819, 'read',          's', 'x', 'alice@example.com', NULL, 'rep@acme.test',                    NULL, NULL, NOW(), NOW(), NULL, 100, '<b9@x>'),
+      (9820, 'old',           's', 'x', 'alice@example.com', NULL, 'rep@acme.test',                    NULL, NULL, NOW() - INTERVAL 15 DAY, NULL, NULL, 100, '<c1@x>'),
+      (9821, 'deleted',       's', 'x', 'alice@example.com', NULL, 'rep@acme.test',                    NULL, NULL, NOW(), NULL, NOW(), 100, '<c2@x>');";
+
+/// The threads `ADDRESSED` puts in Rita's bell: her address however it is
+/// written (bare, `Name <address>`, any case, the last of a list), mail to
+/// her by id or on her deal, and a coworker's legacy mail to her. Never
+/// another company's mail, nor mail whose company is unknown.
+const RITAS: [&str; 8] = [
+    "bare",
+    "by-id",
+    "cased",
+    "coworker",
+    "her-deal",
+    "list-last",
+    "named",
+    "named-cased",
+];
+
+async fn read_threads(pool: &MySqlPool) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT thread_id FROM emails WHERE id BETWEEN 9801 AND 9821 AND employee_read_at IS NOT NULL
+            AND thread_id <> 'read' ORDER BY thread_id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+async fn sorted_ids(server: &axum_test::TestServer) -> Vec<String> {
+    let mut ids = listed_ids(server).await;
+    ids.sort();
+    ids
+}
+
+/// The bell lists exactly the user's own mail of their company, and
+/// clearing it marks exactly those threads read.
+#[test_db::test(seed)]
+async fn the_bell_matches_the_users_address_in_their_company(pool: MySqlPool) {
+    sqlx::raw_sql(ADDRESSED).execute(&pool).await.unwrap();
+    let server = server(pool.clone());
+    assert_eq!(sorted_ids(&server).await, RITAS);
+    server
+        .post("/v1/notifications/done")
+        .with_session(sessions::REP)
+        .json(&json!({ "clear_all": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    // Clearing marks all of her unread mail read, older than the bell's
+    // 14 days too, as before.
+    let mut cleared = RITAS.to_vec();
+    cleared.push("old");
+    cleared.sort_unstable();
+    assert_eq!(read_threads(&pool).await, cleared);
+    assert!(listed_ids(&server).await.is_empty());
+}
+
+/// An address that is a SQL pattern matches nothing but mail to the user by
+/// id or on their deal, and clearing marks nothing else read (the attack
+/// read and cleared every company's mail).
+#[test_db::test(seed)]
+async fn pattern_addresses_match_no_ones_mail(pool: MySqlPool) {
+    sqlx::raw_sql(ADDRESSED).execute(&pool).await.unwrap();
+    let server = server(pool.clone());
+    for pattern in [
+        "%@%.%",
+        "%",
+        "%rep@acme.test",
+        "rep@acme.tes_",
+        "_ep@acme.test",
+        "%<rep@acme.test>",
+    ] {
+        sqlx::query("UPDATE users SET email = ? WHERE id = 100")
+            .bind(pattern)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            sorted_ids(&server).await,
+            ["by-id", "her-deal"],
+            "{pattern}"
+        );
+    }
+    server
+        .post("/v1/notifications/done")
+        .with_session(sessions::REP)
+        .json(&json!({ "clear_all": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(read_threads(&pool).await, ["by-id", "her-deal"]);
+}
+
+/// Naming another company's thread dismisses nothing: neither marks it
+/// read nor hides it for the caller.
+#[test_db::test(seed)]
+async fn other_companies_threads_cannot_be_dismissed(pool: MySqlPool) {
+    sqlx::raw_sql(ADDRESSED).execute(&pool).await.unwrap();
+    let server = server(pool.clone());
+    let others = json!([
+        { "id": "other-co", "kind": "email" },
+        { "id": "other-named", "kind": "email" },
+        { "id": "other-coworker", "kind": "email" },
+        { "id": "unstamped", "kind": "email" },
+    ]);
+    server
+        .post("/v1/notifications/done")
+        .with_session(sessions::REP)
+        .json(&json!({ "items": others }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(read_threads(&pool).await.is_empty());
+
+    // Hiding everything hides only what the bell listed.
+    server
+        .post("/v1/notifications/done")
+        .with_session(sessions::REP)
+        .json(&json!({ "hide_only": true, "clear_all": true }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let mut hidden: Vec<String> =
+        sqlx::query_scalar("SELECT thread_id FROM notification_email_hides WHERE user_id = 100")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    hidden.sort();
+    assert_eq!(hidden, RITAS);
+    assert!(read_threads(&pool).await.is_empty());
+}
+
+/// The other company's rep gets her own company's mail to her address,
+/// never Acme's mail that names her address too.
+#[test_db::test(seed)]
+async fn each_company_sees_only_its_own_mail_to_an_address(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO emails (id, thread_id, subject, body, sender_email, receiver_email, sent_at, company_id, message_id) VALUES
+           (9831, 'olga-own', 's', 'x', 'bob@example.com', 'Olga <rep@other.test>', NOW(), 101, '<d1@x>'),
+           (9832, 'acme-to-olga', 's', 'x', 'alice@example.com', 'rep@other.test', NOW(), 100, '<d2@x>');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let body: serde_json::Value = server(pool)
+        .get("/v1/notifications")
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .await
+        .json();
+    let mail: Vec<&str> = body["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == "email")
+        .map(|item| item["id"].as_str().unwrap())
+        .collect();
+    assert!(mail.contains(&"olga-own"), "{mail:?}");
+    assert!(!mail.contains(&"acme-to-olga"), "{mail:?}");
+}

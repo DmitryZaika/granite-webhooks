@@ -608,7 +608,13 @@ pub async fn update_company(
         .filter(|u| !u.is_empty())
     {
         Some(url) => {
-            uploads::attach(&state.storage, url, UploadFolder::CompanyLogos).await?;
+            uploads::attach(
+                &state.storage,
+                url,
+                UploadFolder::CompanyLogos,
+                user.company_id,
+            )
+            .await?;
             Some(url.to_string())
         }
         None => None,

@@ -445,7 +445,7 @@ pub async fn add_photos(
         return Err(ApiError::BadRequest("No files".into()));
     }
     for url in &input.urls {
-        uploads::attach(&state.storage, url, UploadFolder::Events).await?;
+        uploads::attach(&state.storage, url, UploadFolder::Events, user.company_id).await?;
     }
     for url in &input.urls {
         sqlx::query(
@@ -474,7 +474,7 @@ async fn remove_if_unused(state: &AppState, company_id: i32, url: &str) -> Resul
     .fetch_one(&state.pool)
     .await?;
     if used == 0 {
-        uploads::remove(&state.storage, url).await;
+        uploads::remove(&state.storage, url, company_id).await;
     }
     Ok(())
 }
@@ -594,7 +594,13 @@ pub async fn add_attachments(
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map_or_else(|| last_segment(&file.url).to_string(), str::to_string);
-        uploads::attach(&state.storage, &file.url, UploadFolder::Events).await?;
+        uploads::attach(
+            &state.storage,
+            &file.url,
+            UploadFolder::Events,
+            user.company_id,
+        )
+        .await?;
         rows.push((
             file.url.as_str(),
             name.chars().take(255).collect::<String>(),

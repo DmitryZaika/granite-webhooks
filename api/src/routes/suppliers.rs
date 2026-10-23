@@ -326,7 +326,7 @@ pub async fn delete_supplier(
         Err(error) => return Err(error.into()),
     }
     for url in file_urls {
-        uploads::remove(&state.storage, &url).await;
+        uploads::remove(&state.storage, &url, user.company_id).await;
     }
     if let Err(error) = remove_from_cloudtalk(&state, user.company_id, id).await {
         tracing::warn!(
@@ -445,7 +445,13 @@ pub async fn add_file(
             ALLOWED_EXTENSIONS.join(", ")
         )));
     }
-    uploads::attach(&state.storage, &input.url, UploadFolder::SupplierFiles).await?;
+    uploads::attach(
+        &state.storage,
+        &input.url,
+        UploadFolder::SupplierFiles,
+        user.company_id,
+    )
+    .await?;
     let file_id = sqlx::query(
         "INSERT INTO supplier_files (name, supplier_id, url, status) VALUES (?, ?, ?, 'pending')",
     )
@@ -504,7 +510,7 @@ pub async fn delete_file(
     .bind(user.company_id)
     .execute(&state.pool)
     .await?;
-    uploads::remove(&state.storage, &url).await;
+    uploads::remove(&state.storage, &url, user.company_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

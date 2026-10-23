@@ -5,10 +5,11 @@
 
 mod common;
 
+use api::storage::MEMORY_PUBLIC_BASE;
 use axum::http::StatusCode;
 use axum_test::{TestResponse, TestServer};
-use common::{WithSession, sessions};
-use serde_json::json;
+use common::{WithSession, png, server_with_storage, sessions};
+use serde_json::{Value, json};
 use sqlx::MySqlPool;
 
 const FOLDERS: [&str; 18] = [
@@ -334,4 +335,101 @@ async fn no_response_may_be_sniffed_into_another_type(pool: MySqlPool) {
         let values: Vec<_> = res.iter_headers_by_name("x-content-type-options").collect();
         assert_eq!(values, ["nosniff"], "{}", res.status_code());
     }
+}
+
+// ---- Other companies' files
+
+/// Uploads land under the company (`<folder>/<company id>/...`), and records
+/// take, overwrite and delete only the company's own files. Their URLs are
+/// public (the showroom shows them), so a file of another company named in
+/// a body is refused, and an older upload whose key names no company may be
+/// linked but is never deleted.
+#[test_db::test(seed)]
+async fn records_take_and_delete_only_the_companys_files(pool: MySqlPool) {
+    let (server, storage) = server_with_storage(pool);
+    let res = server
+        .post("/v1/uploads")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "folder": "stones", "file_name": "a.png", "content_type": "image/png" }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let own = res.json::<Value>()["url"].as_str().unwrap().to_string();
+    assert!(
+        own.starts_with(&format!("{MEMORY_PUBLIC_BASE}/stones/100/")),
+        "{own}"
+    );
+    let theirs = format!("{MEMORY_PUBLIC_BASE}/stones/101/theirs.png");
+    let legacy = format!("{MEMORY_PUBLIC_BASE}/stones/legacy.png");
+    for url in [&own, &theirs, &legacy] {
+        let key = storage.key_for_url(url).unwrap();
+        storage.put(&key, png(40, 30), "image/png").await.unwrap();
+    }
+
+    let res = server
+        .post("/v1/stones/3000/images")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "urls": [theirs] }))
+        .await;
+    res.assert_status(StatusCode::BAD_REQUEST);
+    assert!(
+        res.json::<Value>()["error"]
+            .as_str()
+            .unwrap()
+            .contains("not an uploaded stones file"),
+    );
+
+    let added: Value = server
+        .post("/v1/stones/3000/images")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "urls": [own, legacy] }))
+        .await
+        .json();
+    for image in added.as_array().unwrap() {
+        server
+            .delete(&format!("/v1/stones/3000/images/{}", image["id"]))
+            .with_session(sessions::ADMIN)
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    let keys = storage.memory_keys();
+    assert!(!keys.contains(&storage.key_for_url(&own).unwrap()));
+    // Another company may show the same older file: it stays.
+    assert!(keys.contains(&"stones/legacy.png".to_string()));
+    assert!(keys.contains(&"stones/101/theirs.png".to_string()));
+}
+
+/// Trimming a quote form logo overwrites the file: never another
+/// company's.
+#[test_db::test(seed)]
+async fn quote_form_images_of_other_companies_are_left_alone(pool: MySqlPool) {
+    let (server, storage) = server_with_storage(pool);
+    for key in ["quote-forms/101/logo.png", "quote-forms/logo.png"] {
+        storage.put(key, png(40, 30), "image/png").await.unwrap();
+        server
+            .post("/v1/quote-forms/images")
+            .with_session(sessions::ADMIN)
+            .json(&json!({ "url": format!("{MEMORY_PUBLIC_BASE}/{key}"), "trim_border": true }))
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+        assert_eq!(storage.get(key).await.unwrap().unwrap().bytes, png(40, 30));
+    }
+}
+
+/// A text's picked file is deleted once copied: only the company's.
+#[test_db::test(seed)]
+async fn sms_uploads_of_other_companies_are_not_taken(pool: MySqlPool) {
+    let (server, storage) = server_with_storage(pool);
+    let key = "sms-uploads/101/note.pdf";
+    storage
+        .put(key, b"%PDF-1.4 theirs".to_vec(), "application/pdf")
+        .await
+        .unwrap();
+    let body: Value = server
+        .post("/v1/sms/attachments")
+        .with_session(sessions::REP)
+        .json(&json!({ "files": [{ "url": format!("{MEMORY_PUBLIC_BASE}/{key}"), "filename": "note.pdf" }] }))
+        .await
+        .json();
+    assert_eq!(body["uploaded"], json!([]), "{body}");
+    assert!(storage.memory_keys().contains(&key.to_string()));
 }

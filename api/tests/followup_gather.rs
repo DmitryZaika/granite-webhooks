@@ -235,3 +235,49 @@ async fn the_email_timeline_never_holds_another_companys_mail(pool: MySqlPool) {
         );
     }
 }
+
+/// A customer id of another company (it comes from request bodies) is no
+/// customer at all: nothing of theirs reaches the writer, neither their
+/// profile, deals, notes nor messages.
+#[test_db::test(seed)]
+async fn another_companys_customer_id_gathers_nothing_of_theirs(pool: MySqlPool) {
+    setup(&pool).await;
+    sqlx::raw_sql(
+        "INSERT INTO deals (id, customer_id, amount, title, list_id, position, user_id, created_at, updated_at)
+           VALUES (9901, 2000, 777.00, 'Their secret deal', 100, 0, 106, NOW(), NOW());
+         INSERT INTO emails (id, thread_id, subject, body, sender_email, receiver_email, sent_at, company_id, message_id)
+           VALUES (9902, 'theirs', 'Their quote', 'their secret body', 'rep@other.test', 'buyer@other-customer.test', NOW(), 101, '<t1@x>');
+         INSERT INTO email_participants (email_id, email, customer_id, type) VALUES (9902, 'buyer@other-customer.test', 2000, 'to');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for channel in [FollowupChannel::Sms, FollowupChannel::Email] {
+        let mut request = request(100, 100, Some(2000));
+        request.channel = channel;
+        let g = gather_followup_context(&pool, &request, clock())
+            .await
+            .unwrap();
+        assert_eq!(g.customer_id, None);
+        let everything = format!("{}\n{:?}", g.profile, g.timeline);
+        for secret in [
+            "Other Co",
+            "463-555-0200",
+            "Their secret deal",
+            "777",
+            "their secret body",
+            "#9901",
+        ] {
+            assert!(
+                !everything.contains(secret),
+                "{secret} leaked: {everything}"
+            );
+        }
+    }
+    // The company's own customer still resolves.
+    let own = gather_followup_context(&pool, &request(101, 106, Some(2000)), clock())
+        .await
+        .unwrap();
+    assert_eq!(own.customer_id, Some(2000));
+    assert!(own.profile.contains("Other Co Customer"), "{}", own.profile);
+}

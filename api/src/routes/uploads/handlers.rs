@@ -89,11 +89,10 @@ pub async fn create(
             "unsupported content type: {content_type}"
         )));
     }
-    let key = format!(
-        "{}/{}{}",
-        request.folder.as_str(),
-        uuid::Uuid::new_v4(),
-        extension(&request.file_name, &content_type)
+    let key = super::new_key(
+        request.folder,
+        user.company_id,
+        &extension(&request.file_name, &content_type),
     );
     let upload_url = state.storage.presign_put(&key, &content_type).await?;
     let url = state.storage.public_url(&key)?;

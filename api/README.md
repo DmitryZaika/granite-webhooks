@@ -150,9 +150,14 @@ and against Stripe's test mode in `tests/billing_stripe_live.rs` when
 ### Uploads and storage
 
 Images go straight from the browser to the bucket with a presigned PUT
-(`POST /v1/uploads`); routes that take an image URL call
-`routes::uploads::attach` (checks the file is in the folder, stores the
-`-icon` thumbnail) and `remove` when replacing or deleting. `Storage` is
+(`POST /v1/uploads`) under `<folder>/<company id>/`; routes that take an
+image URL call `routes::uploads::attach` (checks the file is the company's
+upload in the folder, or an older upload whose key names no company, and
+stores the `-icon` thumbnail) and `remove` when replacing or deleting.
+Bucket URLs are public, so `remove` (and anything that overwrites a file)
+touches only keys under the caller's company; older keys are never deleted.
+Stored URLs never reach `SIGNATURE_STORAGE_BUCKET`: `readable_url` does not
+sign it and `get_url` does not read it (`get_in` does, for signature code). `Storage` is
 S3 (`STORAGE_BUCKET`, `STORAGE_REGION`, `STORAGE_ACCESS_KEY`,
 `STORAGE_SECRET`, optional `STORAGE_ENDPOINT` / `STORAGE_PUBLIC_URL`),
 `Storage::memory()` in tests (`common::server_with_storage`), or disabled

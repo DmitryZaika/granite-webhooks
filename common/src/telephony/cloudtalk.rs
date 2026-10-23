@@ -116,9 +116,35 @@ pub async fn get_raw(api: Api<'_>, path: &str) -> Result<Raw, ApiError> {
     raw(call(api, Method::GET, path, None, None).await?).await
 }
 
+/// Whether `link` is `CloudTalk`'s: HTTPS on `cloudtalk.io` or a subdomain,
+/// or on the API's own origin (`base_url`, a stand-in in tests). Links come
+/// from request bodies too, and the company's key is sent to them.
+fn is_cloudtalk_link(base_url: &str, link: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(link.trim()) else {
+        return false;
+    };
+    if url.username() != "" || url.password().is_some() {
+        return false;
+    }
+    let same_origin = reqwest::Url::parse(base_url).is_ok_and(|base| base.origin() == url.origin());
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    same_origin
+        || (url.scheme() == "https"
+            && url.port().is_none()
+            && (host == "cloudtalk.io" || host.ends_with(".cloudtalk.io")))
+}
+
 /// A recording link `CloudTalk` gave: tried without credentials first, then
-/// with the company's key.
+/// with the company's key. Links that are not `CloudTalk`'s are refused
+/// (400) without being fetched.
 pub async fn get_link(api: Api<'_>, link: &str) -> Result<Raw, ApiError> {
+    if !is_cloudtalk_link(api.base_url, link) {
+        return Err(ApiError {
+            status: 400,
+            message: Some("Not a CloudTalk recording link".into()),
+        });
+    }
+    let link = link.trim();
     let failed = |err: reqwest::Error| ApiError {
         status: 502,
         message: Some(err.without_url().to_string()),
@@ -342,6 +368,38 @@ pub fn error_token(error: &ApiError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_cloudtalk_links_are_fetched() {
+        for link in [
+            "https://my.cloudtalk.io/r/1.wav",
+            "https://cloudtalk.io/r/1.wav",
+            "https://Recordings.CloudTalk.io/r/1.wav?x=1",
+        ] {
+            assert!(is_cloudtalk_link(BASE_URL, link), "{link}");
+        }
+        for link in [
+            "http://my.cloudtalk.io/r/1.wav",
+            "https://my.cloudtalk.io:8443/r/1.wav",
+            "https://cloudtalk.io.attacker.test/r.wav",
+            "https://attacker.test/my.cloudtalk.io/r.wav",
+            "https://notcloudtalk.io/r.wav",
+            "https://user:pw@my.cloudtalk.io/r.wav",
+            "https://169.254.169.254/latest/meta-data",
+            "file:///etc/passwd",
+            "not a url",
+        ] {
+            assert!(!is_cloudtalk_link(BASE_URL, link), "{link}");
+        }
+        assert!(is_cloudtalk_link(
+            "http://127.0.0.1:9123/api",
+            "http://127.0.0.1:9123/r/1.wav"
+        ));
+        assert!(!is_cloudtalk_link(
+            "http://127.0.0.1:9123/api",
+            "http://127.0.0.1:9124/r/1.wav"
+        ));
+    }
 
     #[test]
     fn reads_errors_from_200_answers() {

@@ -77,21 +77,35 @@ fn numbered(items: &[NotificationRef], kind: NotificationKind, prefix: &str) -> 
         .collect()
 }
 
+/// Mail addressed to the bound address (bare or `Name <address>`) of the
+/// bound company (stamped, else its sender's). Addresses are matched
+/// exactly: a pattern match would let an address like `%@%.%` see every
+/// company's mail. [`push_incoming`] pushes the same condition.
+fn addressed_sql(alias: &str) -> String {
+    format!(
+        "(COALESCE({alias}.company_id, (SELECT us.company_id FROM users us WHERE us.id = {alias}.sender_user_id)) = ?
+          AND (LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX({alias}.receiver_email, '<', -1), '>', 1))) = ?
+               OR ({alias}.receiver_email NOT LIKE '%<%' AND LOWER(TRIM({alias}.receiver_email)) = ?)))"
+    )
+}
+
 /// Pushes the CRM's `dismissIncomingEmailSql`: customer mail to the user or
 /// on their deal, and coworkers' mail addressed to them.
 fn push_incoming(builder: &mut QueryBuilder<MySql>, user: &SessionUser) {
     let email = user.email.trim().to_lowercase();
-    let like = format!("%<{email}>");
     let addressed = |builder: &mut QueryBuilder<MySql>| {
         builder
             .push("e.receiver_user_id = ")
             .push_bind(user.id)
-            .push(" OR LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(e.receiver_email, '<', -1), '>', 1))) = ")
+            .push(
+                " OR (COALESCE(e.company_id, (SELECT us.company_id FROM users us WHERE us.id = e.sender_user_id)) = ",
+            )
+            .push_bind(user.company_id)
+            .push(" AND (LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(e.receiver_email, '<', -1), '>', 1))) = ")
             .push_bind(email.clone())
             .push(" OR (e.receiver_email NOT LIKE '%<%' AND LOWER(TRIM(e.receiver_email)) = ")
             .push_bind(email.clone())
-            .push(") OR e.receiver_email LIKE ")
-            .push_bind(like.clone());
+            .push(")))");
     };
     builder
         .push("((e.sender_user_id IS NULL AND (d.user_id = ")
@@ -316,20 +330,16 @@ async fn unread_email(
     user: &SessionUser,
 ) -> Result<Vec<NotificationItem>, sqlx::Error> {
     let email = user.email.trim().to_lowercase();
-    let like = format!("%<{email}>");
-    let rows: Vec<EmailRow> = sqlx::query_as(
+    let rows: Vec<EmailRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT e.thread_id, CAST(COALESCE(e.deal_id, td.deal_id) AS SIGNED) AS deal_id, e.subject,
                 DATE_FORMAT(e.sent_at, '%Y-%m-%dT%H:%i:%sZ') AS sent_at, c.name AS customer_name
            FROM emails e
            JOIN (
-             SELECT thread_id, MAX(sent_at) AS max_sent_at FROM emails
-              WHERE deleted_at IS NULL AND thread_id IS NOT NULL AND sent_at > NOW() - INTERVAL 14 DAY
-                AND (sender_user_id IS NULL OR (sender_user_id <> ? AND (
-                      receiver_user_id = ?
-                      OR LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(receiver_email, '<', -1), '>', 1))) = ?
-                      OR (receiver_email NOT LIKE '%<%' AND LOWER(TRIM(receiver_email)) = ?)
-                      OR receiver_email LIKE ?)))
-              GROUP BY thread_id
+             SELECT e2.thread_id, MAX(e2.sent_at) AS max_sent_at FROM emails e2
+              WHERE e2.deleted_at IS NULL AND e2.thread_id IS NOT NULL AND e2.sent_at > NOW() - INTERVAL 14 DAY
+                AND (e2.sender_user_id IS NULL OR (e2.sender_user_id <> ? AND (
+                      e2.receiver_user_id = ? OR {inner})))
+              GROUP BY e2.thread_id
            ) last_e ON last_e.thread_id = e.thread_id AND last_e.max_sent_at = e.sent_at
            LEFT JOIN (
              SELECT thread_id, MAX(deal_id) AS deal_id FROM emails
@@ -342,26 +352,25 @@ async fn unread_email(
           WHERE e.deleted_at IS NULL AND e.thread_id IS NOT NULL AND e.employee_read_at IS NULL
             AND e.sent_at > NOW() - INTERVAL 14 DAY
             AND (e.sender_user_id IS NULL OR e.sender_user_id <> ?)
-            AND (e.receiver_user_id = ? OR d.user_id = ?
-                 OR LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(e.receiver_email, '<', -1), '>', 1))) = ?
-                 OR (e.receiver_email NOT LIKE '%<%' AND LOWER(TRIM(e.receiver_email)) = ?)
-                 OR e.receiver_email LIKE ?)
+            AND (e.receiver_user_id = ? OR d.user_id = ? OR {outer})
             AND NOT EXISTS (
                   SELECT 1 FROM notification_email_hides h
                    WHERE h.user_id = ? AND h.thread_id = e.thread_id AND h.hidden_at >= e.sent_at)
           ORDER BY e.sent_at DESC LIMIT 50",
-    )
+        inner = addressed_sql("e2"),
+        outer = addressed_sql("e"),
+    )))
     .bind(user.id)
     .bind(user.id)
+    .bind(user.company_id)
     .bind(&email)
     .bind(&email)
-    .bind(&like)
     .bind(user.id)
     .bind(user.id)
     .bind(user.id)
+    .bind(user.company_id)
     .bind(&email)
     .bind(&email)
-    .bind(&like)
     .bind(user.id)
     .fetch_all(&state.pool)
     .await?;

@@ -351,8 +351,7 @@ async fn schedule(
     Ok(())
 }
 
-/// The first attachment the caller may not use: neither uploaded by them
-/// (valid token) nor on a conversation of their company they may read.
+/// The first attachment the caller may not use (see [`may_attach`]).
 async fn unauthorized_attachment<'a>(
     pool: &MySqlPool,
     secret: &str,
@@ -360,36 +359,50 @@ async fn unauthorized_attachment<'a>(
     attachments: &'a [SendAttachment],
 ) -> ApiResult<Option<&'a str>> {
     for attachment in attachments {
-        if attachment_token::verify(
+        if !may_attach(
+            pool,
             secret,
+            user,
             &attachment.url,
-            user.id,
             attachment.token.as_deref(),
-        ) {
-            continue;
-        }
-        let row: Option<(Option<String>, Option<i32>)> = sqlx::query_as(
-            "SELECT e.thread_id, e.company_id FROM email_attachments ea
-             JOIN emails e ON e.id = ea.email_id
-             WHERE ea.url = ? LIMIT 1",
         )
-        .bind(&attachment.url)
-        .fetch_optional(pool)
-        .await?;
-        let allowed = match row {
-            Some((_, Some(company_id))) => company_id == user.company_id,
-            Some((Some(thread_id), None)) => can_read_thread(&thread_id, user.company_id)
-                .query()
-                .fetch_optional(pool)
-                .await?
-                .is_some(),
-            _ => false,
-        };
-        if !allowed {
+        .await?
+        {
             return Ok(Some(&attachment.filename));
         }
     }
     Ok(None)
+}
+
+/// Whether the caller may attach the file at `url`: uploaded by them (a
+/// valid `token`) or on a conversation of their company they may read.
+pub(super) async fn may_attach(
+    pool: &MySqlPool,
+    secret: &str,
+    user: &SessionUser,
+    url: &str,
+    token: Option<&str>,
+) -> ApiResult<bool> {
+    if attachment_token::verify(secret, url, user.id, token) {
+        return Ok(true);
+    }
+    let row: Option<(Option<String>, Option<i32>)> = sqlx::query_as(
+        "SELECT e.thread_id, e.company_id FROM email_attachments ea
+         JOIN emails e ON e.id = ea.email_id
+         WHERE ea.url = ? LIMIT 1",
+    )
+    .bind(url)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match row {
+        Some((_, Some(company_id))) => company_id == user.company_id,
+        Some((Some(thread_id), None)) => can_read_thread(&thread_id, user.company_id)
+            .query()
+            .fetch_optional(pool)
+            .await?
+            .is_some(),
+        _ => false,
+    })
 }
 
 /// The company's live customer with this address.

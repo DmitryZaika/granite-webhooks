@@ -296,7 +296,7 @@ pub async fn native_document(
     let Some(bucket) = state.signature_bucket.as_deref() else {
         return Ok(text(StatusCode::SERVICE_UNAVAILABLE, UNAVAILABLE));
     };
-    let object = match state.storage.get_url(&format!("s3://{bucket}/{key}")).await {
+    let object = match state.storage.get_in(bucket, &key).await {
         Ok(Some(object)) if sha256_hex(&object.bytes) == hash => object,
         Ok(_) => return Ok(text(StatusCode::SERVICE_UNAVAILABLE, UNAVAILABLE)),
         Err(err) => {

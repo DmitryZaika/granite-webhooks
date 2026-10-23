@@ -334,7 +334,7 @@ pub async fn create(
     let mut tx = state.pool.begin().await?;
     validate(&mut tx, kind, company_id, input).await?;
     if let Some(url) = &uploaded {
-        uploads::attach(&state.storage, url, kind.folder).await?;
+        uploads::attach(&state.storage, url, kind.folder, company_id).await?;
     }
     let (columns, values) = if kind.sized {
         (", length, width, depth", ", ?, ?, 0")
@@ -383,7 +383,7 @@ pub async fn update(
     validate(&mut tx, kind, company_id, input).await?;
     let new_url = image_url(input).filter(|url| *url != current.url);
     if let Some(url) = &new_url {
-        uploads::attach(&state.storage, url, kind.folder).await?;
+        uploads::attach(&state.storage, url, kind.folder, company_id).await?;
     }
     let size = if kind.sized {
         ", length = ?, width = ?"
@@ -415,7 +415,7 @@ pub async fn update(
     }
     tx.commit().await?;
     if new_url.is_some() && !current.url.is_empty() {
-        uploads::remove(&state.storage, &current.url).await;
+        uploads::remove(&state.storage, &current.url, company_id).await;
     }
     Ok(())
 }
@@ -485,7 +485,7 @@ pub async fn add_photos(
         .await?
         .ok_or(ApiError::NotFound)?;
     for url in &urls {
-        uploads::attach(&state.storage, url, kind.folder).await?;
+        uploads::attach(&state.storage, url, kind.folder, company_id).await?;
     }
     let mut added = Vec::with_capacity(urls.len());
     for url in urls {
@@ -537,7 +537,7 @@ pub async fn delete_photo(
     .await?;
     tx.commit().await?;
     if let Some(url) = url {
-        uploads::remove(&state.storage, &url).await;
+        uploads::remove(&state.storage, &url, company_id).await;
     }
     Ok(())
 }

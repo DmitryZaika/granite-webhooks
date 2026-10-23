@@ -127,13 +127,20 @@ impl Sender {
     }
 }
 
+/// Whether `user` may use the assistant, whose tools read the company's
+/// customers, deals and notes: employees only, like the CRM pages for them.
+pub const fn may_use_assistant(user: &SessionUser) -> bool {
+    user.is_employee || user.is_admin || user.is_superuser
+}
+
 /// The mode a question is answered in (`priceLists` and `assistant` are
-/// asked for; a question about the company's records goes to the assistant).
-pub fn mode_for(mode: Option<&str>, query: &str) -> Mode {
+/// asked for; a question about the company's records goes to the assistant
+/// when `records` allows it, see [`may_use_assistant`]).
+pub fn mode_for(mode: Option<&str>, query: &str, records: bool) -> Mode {
     match mode {
         Some("priceLists") => Mode::PriceLists,
-        Some("assistant") => Mode::Assistant,
-        _ if prompts::looks_like_assistant_query(query) => Mode::Assistant,
+        Some("assistant") if records => Mode::Assistant,
+        _ if records && prompts::looks_like_assistant_query(query) => Mode::Assistant,
         _ => Mode::Instructions,
     }
 }
@@ -374,7 +381,11 @@ pub async fn answer(state: AppState, user: SessionUser, request: Request, tx: mp
         out.send(Event::Ping).await;
     }
     out.send(Event::Info("Connecting to AI...".into())).await;
-    let mode = mode_for(request.mode.as_deref(), &request.query);
+    let mode = mode_for(
+        request.mode.as_deref(),
+        &request.query,
+        may_use_assistant(&user),
+    );
     if let Err(err) = run(&state, &user, &request, mode, &out).await {
         tracing::error!(error = %err, ?mode, "AI chat request failed");
         let message = if err.is_model_permission() {
@@ -791,7 +802,17 @@ pub fn short(query: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::DONE;
+    use super::{DONE, Mode, mode_for, prompts};
+
+    #[test]
+    fn only_employees_get_the_assistant() {
+        let query = "find customer Alice Lead";
+        assert!(prompts::looks_like_assistant_query(query));
+        assert_eq!(mode_for(None, query, true), Mode::Assistant);
+        assert_eq!(mode_for(None, query, false), Mode::Instructions);
+        assert_eq!(mode_for(Some("assistant"), "hi", false), Mode::Instructions);
+        assert_eq!(mode_for(Some("priceLists"), query, false), Mode::PriceLists);
+    }
 
     /// The browser stops streaming only on this exact string (`DONE_KEY` in
     /// `app/utils/constants.ts`). Any other marker shows up in the answer text.
