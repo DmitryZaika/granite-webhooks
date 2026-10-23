@@ -646,15 +646,17 @@ pub struct FinishedImage {
 )]
 pub async fn finish_image(
     State(state): State<AppState>,
-    AdminUser(_user): AdminUser,
+    AdminUser(user): AdminUser,
     JsonBody(input): JsonBody<FormImage>,
 ) -> ApiResult<Json<FinishedImage>> {
-    let folder = UploadFolder::QuoteForms.as_str();
-    let key = state
-        .storage
-        .key_for_url(&input.url)
-        .filter(|key| key.starts_with(&format!("{folder}/")))
-        .ok_or_else(|| ApiError::BadRequest("Upload failed.".into()))?;
+    // Trimming overwrites the file: only one the company uploaded.
+    let key = crate::routes::uploads::company_key(
+        &state.storage,
+        &input.url,
+        UploadFolder::QuoteForms,
+        user.company_id,
+    )
+    .ok_or_else(|| ApiError::BadRequest("Upload failed.".into()))?;
     let object = state
         .storage
         .get(&key)

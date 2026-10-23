@@ -246,7 +246,13 @@ pub async fn create_image(
     JsonBody(input): JsonBody<NewImage>,
 ) -> ApiResult<(StatusCode, Json<LibraryImage>)> {
     let name = checked_name(&input.name, 100)?;
-    uploads::attach(&state.storage, &input.url, UploadFolder::Images).await?;
+    uploads::attach(
+        &state.storage,
+        &input.url,
+        UploadFolder::Images,
+        user.company_id,
+    )
+    .await?;
     let folder_id = match input.folder_id {
         Some(id) => live_folder(&state.pool, user.company_id, id)
             .await?
@@ -316,7 +322,7 @@ pub async fn update_image(
     }
     let new_url = changes.url.filter(|url| Some(url) != old.url.as_ref());
     if let Some(url) = &new_url {
-        uploads::attach(&state.storage, url, UploadFolder::Images).await?;
+        uploads::attach(&state.storage, url, UploadFolder::Images, user.company_id).await?;
     }
     sqlx::query(
         "UPDATE images SET name = COALESCE(?, name), url = COALESCE(?, url),
@@ -331,7 +337,7 @@ pub async fn update_image(
     .execute(pool)
     .await?;
     if let (Some(_), Some(old_url)) = (&new_url, &old.url) {
-        uploads::remove(&state.storage, old_url).await;
+        uploads::remove(&state.storage, old_url, user.company_id).await;
     }
     Ok(Json(find_image(pool, user.company_id, id).await?))
 }

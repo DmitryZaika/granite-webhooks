@@ -3,7 +3,7 @@
 
 use super::schemas::{DraftAttachment, DraftInput, EmailDraft, SavedDraft};
 use super::send::{
-    insert_participants, is_empty_rich_text, normalize_recipients, split_content_type,
+    insert_participants, is_empty_rich_text, may_attach, normalize_recipients, split_content_type,
 };
 use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
@@ -136,6 +136,33 @@ async fn check_deal(pool: &MySqlPool, user: &SessionUser, deal_id: Option<i32>) 
         .ok_or_else(|| ApiError::BadRequest("Deal not found".to_string()))
 }
 
+/// Every file must be one the caller may send (see [`may_attach`]): a
+/// saved draft's files are trusted when it is sent or previewed.
+async fn check_attachments(
+    state: &AppState,
+    user: &SessionUser,
+    attachments: &[DraftAttachment],
+) -> ApiResult<()> {
+    for attachment in attachments {
+        let token = attachment.token.as_deref();
+        if !may_attach(
+            &state.pool,
+            &state.session_secret,
+            user,
+            &attachment.url,
+            token,
+        )
+        .await?
+        {
+            return Err(ApiError::BadRequest(format!(
+                "You cannot attach {}",
+                attachment.filename
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Get a draft
 ///
 /// One of the caller's drafts, to reopen in the compose page.
@@ -215,6 +242,7 @@ pub async fn get_draft(
                     Some(sub) => format!("{kind}/{sub}"),
                     None => kind,
                 },
+                token: None,
             })
             .collect(),
     }))
@@ -231,7 +259,7 @@ pub async fn get_draft(
     request_body = DraftInput,
     responses(
         (status = 201, description = "Saved", body = SavedDraft),
-        (status = 400, description = "No subject and no note, or an unknown deal", body = ErrorBody),
+        (status = 400, description = "No subject and no note, an unknown deal, or a file the caller may not attach", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -245,6 +273,7 @@ pub async fn create_draft(
 ) -> ApiResult<(StatusCode, Json<SavedDraft>)> {
     let draft = clean(&input)?;
     check_deal(&state.pool, &user, input.deal_id).await?;
+    check_attachments(&state, &user, &input.attachments).await?;
     let thread_id = uuid::Uuid::new_v4().to_string();
     let mut tx = state.pool.begin().await?;
     let id = sqlx::query(
@@ -283,7 +312,7 @@ pub async fn create_draft(
     request_body = DraftInput,
     responses(
         (status = 200, description = "Saved", body = SavedDraft),
-        (status = 400, description = "No subject and no note, or an unknown deal", body = ErrorBody),
+        (status = 400, description = "No subject and no note, an unknown deal, or a file the caller may not attach", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee", body = ErrorBody),
         (status = 404, description = "No such draft of the caller's", body = ErrorBody),
@@ -300,6 +329,7 @@ pub async fn update_draft(
     let draft = clean(&input)?;
     let thread_id = owned(&state.pool, &user, id).await?;
     check_deal(&state.pool, &user, input.deal_id).await?;
+    check_attachments(&state, &user, &input.attachments).await?;
     let mut tx = state.pool.begin().await?;
     sqlx::query(
         "UPDATE emails SET subject = ?, body = ?, receiver_email = ?, deal_id = ?,

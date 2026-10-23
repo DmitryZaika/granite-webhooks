@@ -567,3 +567,76 @@ async fn only_admins_get_the_admin_mailbox(pool: MySqlPool) {
             .assert_status(StatusCode::FORBIDDEN);
     }
 }
+
+fn all_history_ids(history: &Value) -> Vec<i64> {
+    ["emails", "customer_emails", "thread_emails"]
+        .iter()
+        .flat_map(|list| history[list].as_array().unwrap())
+        .map(|e| e["id"].as_i64().unwrap())
+        .collect()
+}
+
+#[test_db::test(seed)]
+async fn a_deals_history_never_holds_another_companys_mail(pool: MySqlPool) {
+    // Rita (company 100) saves the address of Olga's customer on Nina, whose
+    // deal 8600 has a conversation that mail from elsewhere was threaded into.
+    sqlx::raw_sql(
+        "INSERT INTO customers_emails (customer_id, email, created_at, created_by)
+           VALUES (8695, 'buyer@other-customer.test', '2026-04-01 08:00:00', 100);
+         INSERT INTO emails (id, subject, body, sent_at, message_id, thread_id, sender_user_id,
+           sender_email, receiver_email, deal_id, company_id, is_draft) VALUES
+         (98300, 'Quote', 'b', '2026-04-04 10:00:00', '<m98300@acme.test>',
+          'cccccccc-5555-4000-8000-000000000001', 100, 'rep@acme.test', 'nina@example.com', 8600, 100, 0),
+         (98301, 'Re: Quote', 'b', '2026-04-04 11:00:00', '<m98301@x.test>',
+          'cccccccc-5555-4000-8000-000000000001', NULL, 'buyer@x.test', 'rep@other.test', NULL, 101, 0),
+         (98302, 'Re: Quote', 'b', '2026-04-04 12:00:00', '<m98302@x.test>',
+          'cccccccc-5555-4000-8000-000000000001', NULL, 'buyer@x.test', 'nobody@x.test', NULL, NULL, 0);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let history = get(&pool, "/v1/deals/8600/emails", sessions::REP).await;
+    let thread: Vec<i64> = history["thread_emails"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_i64().unwrap())
+        .collect();
+    assert!(thread.contains(&98300), "{thread:?}");
+    let all = all_history_ids(&history);
+    for id in [98301, 98302, 8800, 8801, 8802, 8803, 8804, 8806] {
+        assert!(!all.contains(&id), "{id} in {all:?}");
+    }
+}
+
+#[test_db::test(seed)]
+async fn a_one_deal_customers_address_mail_is_the_companys_only(pool: MySqlPool) {
+    // Olga's customer 2000 has only deal 8009, so mail with her addresses is
+    // listed with the deal's. Olga adds Nina's address (company 100's customer).
+    sqlx::raw_sql(
+        "INSERT INTO customers_emails (customer_id, email, created_at, created_by)
+           VALUES (2000, 'nina@example.com', '2026-04-01 08:00:00', 106);
+         INSERT INTO emails (id, subject, body, sent_at, message_id, thread_id, sender_user_id,
+           sender_email, receiver_email, company_id, is_draft) VALUES
+         (98310, 'From Nina to 100', 'b', '2026-04-04 10:00:00', '<m98310@x.test>',
+          'cccccccc-6666-4000-8000-000000000001', NULL, 'nina@example.com', 'rep@acme.test', 100, 0),
+         (98311, 'Legacy from 100', 'b', '2026-04-04 11:00:00', '<m98311@x.test>',
+          'cccccccc-6666-4000-8000-000000000002', 100, 'rep@acme.test', 'nina@example.com', NULL, 0),
+         (98312, 'Unstamped from Nina', 'b', '2026-04-04 12:00:00', '<m98312@x.test>',
+          'cccccccc-6666-4000-8000-000000000003', NULL, 'nina@example.com', 'nobody@x.test', NULL, 0),
+         (98313, 'From Nina to 101', 'b', '2026-04-04 13:00:00', '<m98313@x.test>',
+          'cccccccc-6666-4000-8000-000000000004', NULL, 'nina@example.com', 'rep@other.test', 101, 0);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let history = get(&pool, "/v1/deals/8009/emails", OLGA).await;
+    let all = all_history_ids(&history);
+    for id in [98310, 98311, 98312] {
+        assert!(!all.contains(&id), "{id} in {all:?}");
+    }
+    // Company 101's own mail with that address is listed.
+    assert!(email_ids(&history).contains(&98313), "{all:?}");
+}

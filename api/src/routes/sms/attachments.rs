@@ -125,10 +125,14 @@ async fn prepare(
     file: &PickedFile,
 ) -> Result<PreparedAttachment, &'static str> {
     let storage = &state.storage;
-    let key = storage
-        .key_for_url(&file.url)
-        .filter(|key| key.starts_with("sms-uploads/"))
-        .ok_or("invalid_upload")?;
+    // The upload is deleted once copied: only one the company made.
+    let key = crate::routes::uploads::company_key(
+        storage,
+        &file.url,
+        crate::routes::uploads::schemas::UploadFolder::SmsUploads,
+        company_id,
+    )
+    .ok_or("invalid_upload")?;
     let object = storage
         .get(&key)
         .await

@@ -3951,7 +3951,7 @@
           "customer-view"
         ],
         "summary": "Email a login code",
-        "description": "Sends a one-time code (10 minutes) to the customer's email.",
+        "description": "Sends a one-time code (10 minutes) to the customer's email. An address\ngets at most one code every 45 seconds and 5 an hour; a new code\nreplaces the previous one.",
         "operationId": "send_customer_view_code",
         "parameters": [
           {
@@ -3999,7 +3999,7 @@
             }
           },
           "429": {
-            "description": "A code was just sent",
+            "description": "A code was just sent, or 5 this hour",
             "content": {
               "application/json": {
                 "schema": {
@@ -4027,7 +4027,7 @@
           "customer-view"
         ],
         "summary": "Enter a login code",
-        "description": "Unlocks the page for this browser for 7 days.",
+        "description": "Unlocks the page for this browser for 7 days. A code takes 8 attempts at\nmost.",
         "operationId": "verify_customer_view_code",
         "parameters": [
           {
@@ -4459,6 +4459,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -4469,7 +4479,7 @@
           "customer-view"
         ],
         "summary": "Email a code to an account's address",
-        "description": "Sends a code when a customer of the company has that email. The answer\nis the same either way, so it does not reveal who is a customer.",
+        "description": "Sends a code when a customer of the company has that email. The answer\nis the same either way, so it does not reveal who is a customer. Same\nlimits as `send_customer_view_code`.",
         "operationId": "send_customer_view_login_code",
         "parameters": [
           {
@@ -4508,7 +4518,7 @@
             }
           },
           "429": {
-            "description": "A code was just sent",
+            "description": "A code was just sent, or 5 this hour",
             "content": {
               "application/json": {
                 "schema": {
@@ -4536,7 +4546,7 @@
           "customer-view"
         ],
         "summary": "Enter an account sign-in code",
-        "description": "Verifies the code sent to the account's address; answers the page it\nunlocks.",
+        "description": "Verifies the code sent to the account's address (8 attempts at most);\nanswers the page it unlocks.",
         "operationId": "verify_customer_view_login_code",
         "parameters": [
           {
@@ -6325,7 +6335,7 @@
           "stones"
         ],
         "summary": "Fetch a stone image through the API",
-        "description": "Returns the bytes of an image in the storage bucket so the browser can\ndraw it on a canvas (the bucket sends no CORS headers). Other URLs and\nfiles that are not images are refused.",
+        "description": "Returns the bytes of an image in the storage bucket so the browser can\ndraw it on a canvas (the bucket sends no CORS headers). Other URLs and\nfiles that are not images (or are SVG) are refused.",
         "operationId": "proxy_stone_image",
         "parameters": [
           {
@@ -10403,7 +10413,7 @@
           "uploads"
         ],
         "summary": "Start an upload",
-        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`),\n`POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route\nalso makes the thumbnail. Inventory folders are for admins; `deals` for\n(and `events`) any employee and also take documents; `quotes` and\n`template-images` any employee, images only; `emails` for any employee, any\nfile, and the response has the `token` `POST /v1/emails` asks for.",
+        "description": "Returns a presigned URL to `PUT` the file to (straight to storage, any\nsize) and the public URL the file will have. Then pass `url` to the\nrecord's route, e.g. `PUT /v1/stones/{id}` (`image_url`),\n`POST /v1/stones/{id}/images` or `POST /v1/deals/{id}/files`; that route\nalso makes the thumbnail. Inventory folders are for admins; `deals` for\n(and `events`) any employee and also take documents; `quotes` and\n`template-images` any employee, images only; `emails` for any employee, any\nfile, and the response has the `token` `POST /v1/emails` asks for. Types a\nbrowser runs script in (HTML, SVG, XML, JavaScript) are refused everywhere.",
         "operationId": "create_upload",
         "requestBody": {
           "content": {
@@ -10427,7 +10437,7 @@
             }
           },
           "400": {
-            "description": "Content type not allowed for the folder, or a malformed body",
+            "description": "Content type not allowed for the folder (HTML, SVG, XML and JavaScript never are), or a malformed body",
             "content": {
               "application/json": {
                 "schema": {
@@ -10490,7 +10500,7 @@
           "uploads"
         ],
         "summary": "Fetch a stored file through the API",
-        "description": "Returns the bytes of an image or document in the storage bucket, for the\nbrowser to attach it to an email (the bucket sends no CORS headers).\nOther URLs and other file types are refused.",
+        "description": "Returns the bytes of an image or document in the storage bucket, for the\nbrowser to attach it to an email (the bucket sends no CORS headers).\nOther URLs and other file types (SVG included) are refused. The file is\nsent as a download that never renders as a page.",
         "operationId": "fetch_uploaded_file",
         "parameters": [
           {
@@ -18324,7 +18334,7 @@
             }
           },
           "400": {
-            "description": "No subject and no note, or an unknown deal",
+            "description": "No subject and no note, an unknown deal, or a file the caller may not attach",
             "content": {
               "application/json": {
                 "schema": {
@@ -19032,7 +19042,7 @@
             }
           },
           "400": {
-            "description": "No subject and no note, or an unknown deal",
+            "description": "No subject and no note, an unknown deal, or a file the caller may not attach",
             "content": {
               "application/json": {
                 "schema": {
@@ -39753,7 +39763,7 @@
             }
           },
           "400": {
-            "description": "No customer, or an invalid phone",
+            "description": "No customer, not a customer of the company, or an invalid phone",
             "content": {
               "application/json": {
                 "schema": {
@@ -40067,7 +40077,7 @@
           "ai"
         ],
         "summary": "Ask the AI chat",
-        "description": "Answers a question in instructions mode (company instructions and the\nCRM manual), price lists mode (supplier price files, special orders) or\nassistant mode (the company's records), streamed as server-sent events.\nThe conversation is kept per user; `isNew` starts it over.",
+        "description": "Answers a question in instructions mode (company instructions and the\nCRM manual), price lists mode (supplier price files, special orders) or\nassistant mode (the company's records, employees only), streamed as\nserver-sent events. The conversation is kept per user; `isNew` starts it\nover.",
         "operationId": "ask_chat",
         "requestBody": {
           "content": {
@@ -40102,6 +40112,16 @@
           },
           "401": {
             "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Assistant mode asked for by a user who is not an employee",
             "content": {
               "application/json": {
                 "schema": {
@@ -49638,7 +49658,7 @@
               "string",
               "null"
             ],
-            "description": "`instructions` (default), `priceLists` or `assistant`. A question\nabout the company's records goes to the assistant anyway."
+            "description": "`instructions` (default), `priceLists` or `assistant`. A question\nabout the company's records goes to the assistant anyway. The\nassistant reads customers, deals and notes: employees only (403 for\nothers, whose record questions are answered from the instructions)."
           },
           "isNew": {
             "type": "boolean",

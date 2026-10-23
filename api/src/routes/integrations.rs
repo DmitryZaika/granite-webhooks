@@ -286,7 +286,13 @@ pub async fn save_settings(
         .filter(|url| !url.is_empty())
     {
         Some(url) => {
-            uploads::attach(&state.storage, url, UploadFolder::CompanyLogos).await?;
+            uploads::attach(
+                &state.storage,
+                url,
+                UploadFolder::CompanyLogos,
+                user.company_id,
+            )
+            .await?;
             Some(url.to_string())
         }
         None => existing,

@@ -79,16 +79,17 @@ const SELECT: &str =
 pub(crate) const CUSTOMER_PARTICIPANT_EMAILS: &str =
     "e.id IN (SELECT ep.email_id FROM email_participants ep WHERE ep.customer_id = ?)";
 
-/// The company check: received mail by the company it arrived for, sent mail
-/// by the sender's company. Matching a customer's address alone would also
-/// find what they wrote to other companies.
+/// Only the company's own mail: by the company the message was stamped with,
+/// else (legacy rows) by its sender's company. Inbound mail nobody stamped is
+/// never shown, so adding another company's address to a customer reveals
+/// nothing.
 pub(crate) fn history_sql(filter: &str, args: Vec<Arg>) -> Sql {
     Sql::new(
         format!(
             "{SELECT}
   LEFT JOIN email_reads er ON e.message_id = er.message_id AND {CLIENT_OPEN_MIN_DELAY}
   WHERE e.deleted_at IS NULL AND e.thread_id IS NOT NULL
-    AND IF(e.sender_user_id IS NULL, e.company_id, u_sender.company_id) = ?
+    AND COALESCE(e.company_id, u_sender.company_id) = ?
     AND {filter}
   GROUP BY e.id
   ORDER BY e.sent_at DESC, e.id DESC"

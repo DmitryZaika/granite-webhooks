@@ -10,7 +10,7 @@ use crate::routes::uploads::{self, schemas::UploadFolder};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
@@ -255,7 +255,7 @@ pub async fn add_images(
     let mut tx = state.pool.begin().await?;
     require_stone(&mut tx, user.company_id, id).await?;
     for url in &body.urls {
-        uploads::attach(&state.storage, url, UploadFolder::Stones).await?;
+        uploads::attach(&state.storage, url, UploadFolder::Stones, user.company_id).await?;
     }
     let mut added = Vec::with_capacity(body.urls.len());
     for url in body.urls {
@@ -315,7 +315,7 @@ pub async fn delete_image(
         .await?;
     tx.commit().await?;
     if let Some(url) = url {
-        uploads::remove(&state.storage, &url).await;
+        uploads::remove(&state.storage, &url, user.company_id).await;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -685,7 +685,7 @@ pub async fn add_slab(
         width = f64::from(stone_width.unwrap_or(0.0));
     }
     if let Some(url) = &image_url {
-        uploads::attach(&state.storage, url, UploadFolder::Stones).await?;
+        uploads::attach(&state.storage, url, UploadFolder::Stones, user.company_id).await?;
     }
     let (length, width) = (length.to_string(), width.to_string());
     let result = sqlx::query(
@@ -723,7 +723,7 @@ pub struct ImageProxyQuery {
 ///
 /// Returns the bytes of an image in the storage bucket so the browser can
 /// draw it on a canvas (the bucket sends no CORS headers). Other URLs and
-/// files that are not images are refused.
+/// files that are not images (or are SVG) are refused.
 #[utoipa::path(
     get,
     path = "/v1/stones/image-proxy",
@@ -753,18 +753,15 @@ pub async fn image_proxy(
         .ok_or_else(disallowed)?;
     let key = percent_decode_str(&key).decode_utf8_lossy().into_owned();
     let object = state.storage.get(&key).await?.ok_or(ApiError::NotFound)?;
-    if !object
+    let mime = object
         .content_type
-        .to_ascii_lowercase()
-        .starts_with("image/")
-    {
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !mime.starts_with("image/") || uploads::executes_in_browser(&mime) {
         return Err(disallowed());
     }
-    Ok((
-        [
-            (header::CONTENT_TYPE, object.content_type),
-            (header::CACHE_CONTROL, "private, max-age=3600".to_string()),
-        ],
-        object.bytes,
-    ))
+    Ok((uploads::stored_file_headers(mime), object.bytes))
 }

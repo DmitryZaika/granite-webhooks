@@ -8,7 +8,7 @@ use crate::state::AppState;
 use crate::thumbnails::IMAGE_CONTENT_TYPES;
 use axum::Json;
 use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
@@ -23,7 +23,8 @@ use utoipa::IntoParams;
 /// also makes the thumbnail. Inventory folders are for admins; `deals` for
 /// (and `events`) any employee and also take documents; `quotes` and
 /// `template-images` any employee, images only; `emails` for any employee, any
-/// file, and the response has the `token` `POST /v1/emails` asks for.
+/// file, and the response has the `token` `POST /v1/emails` asks for. Types a
+/// browser runs script in (HTML, SVG, XML, JavaScript) are refused everywhere.
 #[utoipa::path(
     post,
     path = "/v1/uploads",
@@ -32,7 +33,7 @@ use utoipa::IntoParams;
     request_body = UploadRequest,
     responses(
         (status = 201, description = "Upload URL and public URL", body = Upload),
-        (status = 400, description = "Content type not allowed for the folder, or a malformed body", body = ErrorBody),
+        (status = 400, description = "Content type not allowed for the folder (HTML, SVG, XML and JavaScript never are), or a malformed body", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee, or not an admin for an inventory folder", body = ErrorBody),
         (status = 500, description = "Storage error", body = ErrorBody),
@@ -78,17 +79,17 @@ pub async fn create(
                 "application/pdf" | "text/csv" | "text/tab-separated-values" | "text/plain"
             ))
         || ((is_email || is_bug_report || request.folder == UploadFolder::EmailTemplates)
-            && is_mime_type(&content_type));
+            && is_mime_type(&content_type)
+            && !super::executes_in_browser(&content_type));
     if !allowed {
         return Err(ApiError::BadRequest(format!(
             "unsupported content type: {content_type}"
         )));
     }
-    let key = format!(
-        "{}/{}{}",
-        request.folder.as_str(),
-        uuid::Uuid::new_v4(),
-        extension(&request.file_name, &content_type)
+    let key = super::new_key(
+        request.folder,
+        user.company_id,
+        &extension(&request.file_name, &content_type),
     );
     let upload_url = state.storage.presign_put(&key, &content_type).await?;
     let url = state.storage.public_url(&key)?;
@@ -157,7 +158,7 @@ pub fn extension(file_name: &str, content_type: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::extension;
+    use super::{DOCUMENT_CONTENT_TYPES, IMAGE_CONTENT_TYPES, extension};
 
     #[test]
     fn mime_types() {
@@ -165,6 +166,56 @@ mod tests {
         assert!(super::is_mime_type("video/mp4"));
         assert!(!super::is_mime_type("text"));
         assert!(!super::is_mime_type("text/html; x"));
+    }
+
+    #[test]
+    fn script_types() {
+        use super::super::executes_in_browser;
+        for mime in [
+            "image/svg+xml",
+            "text/html",
+            "application/xhtml+xml",
+            "application/vnd.wap.xhtml+xml",
+            "text/xml",
+            "application/xml",
+            "text/xsl",
+            "application/xslt+xml",
+            "application/rss+xml",
+            "application/atom+xml",
+            "application/mathml+xml",
+            "text/javascript",
+            "text/ecmascript",
+            "application/javascript",
+            "application/x-javascript",
+            "application/ecmascript",
+            "application/x-shockwave-flash",
+        ] {
+            assert!(executes_in_browser(mime), "{mime}");
+        }
+        for mime in [
+            "image/png",
+            "image/avif",
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/json",
+            "application/octet-stream",
+            "application/zip",
+            "text/plain",
+            "text/csv",
+            "text/calendar",
+            "video/mp4",
+        ] {
+            assert!(!executes_in_browser(mime), "{mime}");
+        }
+    }
+
+    /// The folders' fixed lists skip the `executes_in_browser` check, so none
+    /// of them may ever hold such a type (SVG added as an "image", say).
+    #[test]
+    fn fixed_lists_hold_no_script_types() {
+        for mime in IMAGE_CONTENT_TYPES.iter().chain(DOCUMENT_CONTENT_TYPES) {
+            assert!(!super::super::executes_in_browser(mime), "{mime}");
+        }
     }
 
     #[test]
@@ -188,7 +239,8 @@ pub struct FileQuery {
 ///
 /// Returns the bytes of an image or document in the storage bucket, for the
 /// browser to attach it to an email (the bucket sends no CORS headers).
-/// Other URLs and other file types are refused.
+/// Other URLs and other file types (SVG included) are refused. The file is
+/// sent as a download that never renders as a page.
 #[utoipa::path(
     get,
     path = "/v1/uploads/file",
@@ -225,14 +277,9 @@ pub async fn file(
         .unwrap_or("")
         .trim()
         .to_ascii_lowercase();
-    if !(mime.starts_with("image/") || DOCUMENT_CONTENT_TYPES[..5].contains(&mime.as_str())) {
+    let image = mime.starts_with("image/") && !super::executes_in_browser(&mime);
+    if !(image || DOCUMENT_CONTENT_TYPES[..5].contains(&mime.as_str())) {
         return Err(disallowed());
     }
-    Ok((
-        [
-            (header::CONTENT_TYPE, object.content_type),
-            (header::CACHE_CONTROL, "private, max-age=3600".to_string()),
-        ],
-        object.bytes,
-    ))
+    Ok((super::stored_file_headers(mime), object.bytes))
 }

@@ -223,7 +223,7 @@ pub async fn create(
     let mut tx = state.pool.begin().await?;
     validate(&mut tx, user.company_id, &input).await?;
     if let Some(url) = uploaded {
-        uploads::attach(&state.storage, url, UploadFolder::Stones).await?;
+        uploads::attach(&state.storage, url, UploadFolder::Stones, user.company_id).await?;
     }
     let result = sqlx::query(
         "INSERT INTO stones (name, type, finishing, url, company_id, is_display, on_sale,
@@ -298,7 +298,7 @@ pub async fn update(
         .filter(|url| Some(*url) != current_url.as_deref())
         .map(str::to_string);
     if let Some(url) = &new_url {
-        uploads::attach(&state.storage, url, UploadFolder::Stones).await?;
+        uploads::attach(&state.storage, url, UploadFolder::Stones, user.company_id).await?;
     }
     sqlx::query(
         "UPDATE stones SET name = ?, type = ?, finishing = ?, url = COALESCE(?, url),
@@ -342,7 +342,7 @@ pub async fn update(
     };
     tx.commit().await?;
     if let (false, Some(old)) = (shared, &current_url) {
-        uploads::remove(&state.storage, old).await;
+        uploads::remove(&state.storage, old, user.company_id).await;
     }
     Ok(StatusCode::NO_CONTENT)
 }
