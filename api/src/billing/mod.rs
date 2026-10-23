@@ -17,7 +17,11 @@ pub mod items;
 pub mod lock;
 pub mod machine;
 pub mod reactivation;
+pub mod reminder_emails;
+pub mod reminder_store;
+pub mod reminders;
 pub mod seats;
+pub mod setup;
 pub mod store;
 pub mod stripe;
 #[cfg(test)]

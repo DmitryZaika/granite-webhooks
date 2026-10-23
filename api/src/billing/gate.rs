@@ -265,27 +265,35 @@ pub async fn settle_company_billing<S: BillingStore, G: GateStripe>(
     let Some(lock) = stripe.lock(company_id).await else {
         return store.by_company(company_id).await;
     };
-    let result = async {
-        match store.by_company(company_id).await? {
-            Some(existing) if !is_awaiting_first_payment(Some(&existing)) => {
-                settle_overdue_record(store, stripe, existing, now)
-                    .await
-                    .map(Some)
-            }
-            existing => {
-                let window_ended =
-                    required_since.is_some_and(|since| now >= first_payment_deadline(since));
-                Ok(if window_ended {
-                    refresh_first_payment(stripe, existing).await
-                } else {
-                    existing
-                })
-            }
-        }
-    }
-    .await;
+    let result = settle_locked(store, stripe, company_id, required_since, now).await;
     stripe.unlock(lock).await;
     result
+}
+
+/// `settle_company_billing` for a caller that already holds the company lock.
+pub async fn settle_locked<S: BillingStore, G: GateStripe>(
+    store: &S,
+    stripe: &G,
+    company_id: i32,
+    required_since: Option<NaiveDateTime>,
+    now: NaiveDateTime,
+) -> StoreResult<Option<CompanyBilling>> {
+    match store.by_company(company_id).await? {
+        Some(existing) if !is_awaiting_first_payment(Some(&existing)) => {
+            settle_overdue_record(store, stripe, existing, now)
+                .await
+                .map(Some)
+        }
+        existing => {
+            let window_ended =
+                required_since.is_some_and(|since| now >= first_payment_deadline(since));
+            Ok(if window_ended {
+                refresh_first_payment(stripe, existing).await
+            } else {
+                existing
+            })
+        }
+    }
 }
 
 /// Whether the company's access is paused, and the warning for `user_id`.
@@ -480,16 +488,17 @@ impl GateStripe for LiveGate<'_> {
     }
 }
 
-/// `settle_company_billing` on MySQL and Stripe (the reminder emails).
-pub async fn settle_company(
+/// `settle_locked` on MySQL and Stripe (the reminder emails, which hold the
+/// company lock while they settle and send).
+pub async fn settle_company_locked(
     stripe: &Stripe,
     pool: &MySqlPool,
     company_id: i32,
     required_since: Option<NaiveDateTime>,
+    now: NaiveDateTime,
 ) -> StoreResult<Option<CompanyBilling>> {
-    let now = super::now();
     let gate = LiveGate { stripe, pool, now };
-    settle_company_billing(
+    settle_locked(
         &MySqlBillingStore(pool),
         &gate,
         company_id,

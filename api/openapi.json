@@ -41271,6 +41271,43 @@
         ]
       }
     },
+    "/v1/jobs/billing-reminders": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Run the billing upkeep and reminder emails",
+        "description": "Called by the `time-triggered` Lambda every minute with\n`Authorization: <LAMBDA_KEY>`. Three steps run in order and each fails on\nits own: it prunes Stripe webhook event ids older than 90 days (at most\nonce a day), reconciles Stripe-billed companies with Stripe (at most every\n6 hours), then sends the billing reminder emails to each company's\nManagers. Reminders are a failed renewal or a first payment asked for\n(day 0, three days left, paused tomorrow, paused, settled) and one notice\n7 days before the first charge of a self-serve subscription. Each\nrecipient gets each reminder once; an email whose outcome is unknown is\nnever resent. A run sends at most 20 emails and starts no new company\nafter 40 seconds. Reminders are skipped while the mail service is not\nconfigured.",
+        "operationId": "run_billing_reminders",
+        "responses": {
+          "200": {
+            "description": "What the run did",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingRemindersRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
     "/v1/me/call-coaching": {
       "get": {
         "tags": [
@@ -45560,6 +45597,53 @@
         ]
       }
     },
+    "/v1/superuser/billing/setup": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Check the Stripe billing setup",
+        "description": "Reports whether billing is set up correctly: the Stripe secret and\npublishable keys (only whether they are set and live or test, never their\nvalues), the webhook signing secret, the configured plans, `APP_URL`,\nemail sending and the scheduled jobs key, then what Stripe itself reports\nfor the webhook endpoint (exactly one enabled endpoint for\n`/v1/webhooks/stripe`, with every handled event and the api's Stripe API\nversion) and for each configured plan price (active, monthly, USD, same\nmode as the key). A Stripe call that fails becomes a failed check, not an\nerror. Stripe checks are skipped without `STRIPE_SECRET_KEY`. The report\nis cached for 5 minutes. Super admins only.",
+        "operationId": "get_billing_setup",
+        "responses": {
+          "200": {
+            "description": "The setup report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingSetup"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a super admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/superuser/manual-feedback": {
       "get": {
         "tags": [
@@ -48181,6 +48265,83 @@
           "billing_configured": {
             "type": "boolean",
             "description": "Stripe is configured on the server."
+          }
+        }
+      },
+      "BillingRemindersRun": {
+        "type": "object",
+        "description": "What one run did.",
+        "required": [
+          "processed",
+          "sent",
+          "failed",
+          "unknown",
+          "stuck",
+          "company_errors"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Reminders claimed this run (each then sent, failed or unknown); what\nthe scheduler logs.",
+            "minimum": 0
+          },
+          "sent": {
+            "type": "integer",
+            "description": "Reminder emails delivered to the mail service.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "description": "Reminder emails the mail service refused; retried on a later run, up\nto 3 attempts.",
+            "minimum": 0
+          },
+          "unknown": {
+            "type": "integer",
+            "description": "Reminder emails whose outcome is unknown (timeout, 5xx); never resent.",
+            "minimum": 0
+          },
+          "stuck": {
+            "type": "integer",
+            "description": "Claims found still sending after 15 minutes, now marked unknown.",
+            "minimum": 0
+          },
+          "company_errors": {
+            "type": "integer",
+            "description": "Companies skipped after an error (busy billing lock, database, Stripe);\nthe next run picks them up again.",
+            "minimum": 0
+          },
+          "reconciled": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReconcileRun",
+                "description": "The Stripe reconciliation, or null when it was not due this run (it\nruns every 6 hours) or Stripe is not configured."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "BillingSetup": {
+        "type": "object",
+        "description": "Whether Stripe billing is set up correctly.",
+        "required": [
+          "checks",
+          "checked_at"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SetupCheck"
+            },
+            "description": "One entry per thing checked, environment first, then what Stripe\nreports. Billing is fully set up when every entry has `ok = true`."
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the report was built (UTC, ISO 8601). Reports are reused for\n5 minutes, so this can be a few minutes old."
           }
         }
       },
@@ -65932,6 +66093,26 @@
           }
         }
       },
+      "ReconcileRun": {
+        "type": "object",
+        "description": "What one reconciliation with Stripe did.",
+        "required": [
+          "checked",
+          "failed"
+        ],
+        "properties": {
+          "checked": {
+            "type": "integer",
+            "description": "Stripe-billed companies re-read from Stripe successfully.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "description": "Companies Stripe could not be read for, or whose billing was busy.",
+            "minimum": 0
+          }
+        }
+      },
       "Redirect": {
         "type": "object",
         "description": "A link to open in the browser.",
@@ -68294,6 +68475,34 @@
           "is_signature_available": {
             "type": "boolean",
             "description": "Feature flag: the user may use e-signatures."
+          }
+        }
+      },
+      "SetupCheck": {
+        "type": "object",
+        "description": "One line of the billing setup report.",
+        "required": [
+          "key",
+          "label",
+          "ok",
+          "detail"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable machine name, e.g. `stripe_secret_key`, `webhook_endpoint`,\n`price_price_123` (one per configured plan price)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Short human title of what is checked."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "True when this part of the setup is correct."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What was found or what is wrong. Never contains a key or secret value."
           }
         }
       },

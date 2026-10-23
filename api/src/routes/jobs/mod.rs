@@ -12,12 +12,15 @@
 //! - `POST /v1/jobs/supplier-files` → supplier price files into chunks
 //! - `POST /v1/jobs/contact-sync` → customers into `RingCentral` and
 //!   `CloudTalk` contacts
+//! - `POST /v1/jobs/billing-reminders` → Stripe upkeep (webhook event prune,
+//!   reconcile) and the billing reminder emails to managers
 //! - `POST /v1/jobs/subscription-maintenance` → stuck signups resumed,
 //!   abandoned ones expired, the daily seat reconcile
 //!
 //! Replaces the Remix `api.*.process` cron routes.
 
 mod appointment_reminders;
+pub mod billing_reminders;
 pub mod call_points;
 pub mod contact_sync;
 pub mod maintenance_reminders;
@@ -43,6 +46,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(sms_followups::run))
         .routes(routes!(supplier_files::run))
         .routes(routes!(contact_sync::run))
+        .routes(routes!(billing_reminders::run))
         .routes(routes!(subscription_maintenance::run))
 }
 

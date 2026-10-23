@@ -12,6 +12,7 @@ pub mod attachable;
 pub mod auth;
 pub mod billing;
 pub mod billing_account;
+pub mod billing_setup;
 pub mod bug_reports;
 pub mod calendars;
 pub mod call_coaching;
@@ -166,6 +167,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(billing_account::router())
         .merge(integrations::router())
         .merge(superuser_companies::router())
+        .merge(billing_setup::router())
         .merge(manual_feedback_reviews::router())
         .merge(signature_requests::router())
         .merge(signing::router())

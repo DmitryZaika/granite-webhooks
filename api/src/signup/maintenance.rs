@@ -9,6 +9,7 @@ use super::intent::BANK_VERIFICATION_DAYS;
 use super::provision::{self, RunOutcome, record_failure};
 use crate::billing::stripe::StripeError;
 use crate::billing::{self, seats};
+use crate::job_runs;
 use crate::state::AppState;
 use chrono::Duration;
 use lambda_http::tracing;
@@ -164,23 +165,16 @@ async fn reconcile_seats(
     started: Instant,
     outcome: &mut MaintenanceRun,
 ) -> sqlx::Result<()> {
-    let now = billing::now();
-    sqlx::query("INSERT IGNORE INTO job_runs (job_key) VALUES (?)")
-        .bind(SEATS_JOB_KEY)
-        .execute(&state.pool)
-        .await?;
-    let claimed = sqlx::query(
-        "UPDATE job_runs SET last_started_at = ?
-          WHERE job_key = ? AND (last_started_at IS NULL OR last_started_at <= ?)",
+    let Some(claim) = job_runs::claim(
+        &state.pool,
+        SEATS_JOB_KEY,
+        Duration::hours(SEATS_EVERY_HOURS),
+        billing::now(),
     )
-    .bind(now)
-    .bind(SEATS_JOB_KEY)
-    .bind(now - Duration::hours(SEATS_EVERY_HOURS))
-    .execute(&state.pool)
-    .await?;
-    if claimed.rows_affected() != 1 {
+    .await?
+    else {
         return Ok(());
-    }
+    };
     let companies: Vec<i32> = sqlx::query_scalar(
         "SELECT c.id FROM company c
            JOIN company_billing cb ON cb.company_id = c.id
@@ -206,10 +200,5 @@ async fn reconcile_seats(
             }
         }
     }
-    sqlx::query("UPDATE job_runs SET last_finished_at = ? WHERE job_key = ?")
-        .bind(billing::now())
-        .bind(SEATS_JOB_KEY)
-        .execute(&state.pool)
-        .await?;
-    Ok(())
+    claim.finish(&state.pool, billing::now()).await
 }

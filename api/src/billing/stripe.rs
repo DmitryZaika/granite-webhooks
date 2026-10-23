@@ -398,6 +398,14 @@ impl Stripe {
         &self.base
     }
 
+    /// The account's webhook endpoints, enabled or not (up to 100).
+    pub async fn webhook_endpoints(&self) -> Result<Vec<Value>, StripeError> {
+        let list = self
+            .get("/v1/webhook_endpoints", &[("limit", "100".into())])
+            .await?;
+        Ok(data(list))
+    }
+
     /// Active billing portal configurations (up to 100).
     pub async fn list_portal_configurations(&self) -> Result<Vec<Value>, StripeError> {
         let list = self
