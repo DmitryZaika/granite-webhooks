@@ -146,7 +146,7 @@ pub async fn source_allowed(
         return Ok(true);
     }
     let found: Option<i32> = sqlx::query_scalar(
-        "SELECT id FROM customer_sources
+        "SELECT 1 FROM customer_sources
          WHERE company_id = ? AND deleted_at IS NULL AND LOWER(source_key) = LOWER(?) LIMIT 1",
     )
     .bind(company_id)
