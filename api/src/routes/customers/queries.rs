@@ -194,9 +194,10 @@ pub async fn customers_page(
     let mut count = QueryBuilder::<MySql>::new("SELECT COUNT(*)");
     push_page_filter(&mut count, company_id, request.filter, tab);
     let total: i64 = count.build_query_scalar().fetch_one(pool).await?;
-    let last_page = u32::try_from((total + i64::from(request.page_size) - 1) / i64::from(request.page_size))
-        .unwrap_or(u32::MAX)
-        .max(1);
+    let last_page =
+        u32::try_from((total + i64::from(request.page_size) - 1) / i64::from(request.page_size))
+            .unwrap_or(u32::MAX)
+            .max(1);
     let page = request.page.min(last_page);
 
     let (rows, ids) = if companies {

@@ -16,11 +16,13 @@ use crate::error::{ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::routes::calls::recording::transcribe_call;
 use crate::routes::events::notify::display_phone;
-use crate::routes::users::call_activity::agent_calls;
+use crate::routes::users::call_activity::{
+    agent_calls, company_ringcentral_calls, ringcentral_item,
+};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
-use chrono::{Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -75,16 +77,16 @@ pub enum CoachingStatus {
 /// A call the coach can score.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CoachingCall {
-    /// `CloudTalk` call id.
+    /// `CloudTalk` or `RingCentral` call id.
     pub call_id: String,
     pub status: CoachingStatus,
-    /// When it started (`CloudTalk` time).
+    /// When it started (`CloudTalk` time, or RFC 3339 for `RingCentral`).
     pub started_at: String,
     /// Seconds talked.
     pub talking_time: f64,
     /// `incoming` or `outgoing`.
     pub call_type: String,
-    /// The customer, from the CRM or `CloudTalk`.
+    /// The customer, from the CRM or the phone system.
     pub customer_name: Option<String>,
     /// The other party's number, dashed.
     pub phone_display: String,
@@ -101,7 +103,8 @@ pub struct CoachingCall {
 /// `GET`/`POST /v1/me/call-coaching`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Coaching {
-    /// The caller has a `CloudTalk` line (agent and number).
+    /// The caller has a `CloudTalk` line (agent and number) or a
+    /// `RingCentral` line (extension and number).
     pub eligible: bool,
     /// Some call is being scored.
     pub analyzing: bool,
@@ -169,22 +172,61 @@ fn candidate(item: &Value) -> Option<Candidate> {
     })
 }
 
+fn present(value: Option<&String>) -> Option<&str> {
+    value.map(|v| v.trim()).filter(|v| !v.is_empty())
+}
+
+fn has_cloudtalk_line(user: &SessionUser) -> bool {
+    present(user.cloudtalk_agent_id.as_ref()).is_some()
+        && present(user.cloudtalk_phone_number.as_ref()).is_some()
+}
+
+fn has_ringcentral_line(user: &SessionUser) -> bool {
+    present(user.ringcentral_extension_id.as_ref()).is_some()
+        && present(user.ringcentral_phone_number.as_ref()).is_some()
+}
+
 fn has_line(user: &SessionUser) -> bool {
-    let present = |value: &Option<String>| value.as_deref().is_some_and(|v| !v.trim().is_empty());
-    present(&user.cloudtalk_agent_id) && present(&user.cloudtalk_phone_number)
+    has_cloudtalk_line(user) || has_ringcentral_line(user)
+}
+
+/// `CloudTalk`'s `2026-05-01 10:00:00` (UTC) or `RingCentral`'s RFC 3339.
+fn started(at: &str) -> Option<DateTime<Utc>> {
+    NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S")
+        .map(|at| at.and_utc())
+        .or_else(|_| DateTime::parse_from_rfc3339(at).map(|at| at.with_timezone(&Utc)))
+        .ok()
 }
 
 async fn candidates(state: &AppState, user: &SessionUser) -> Vec<Candidate> {
-    let agent = user.cloudtalk_agent_id.as_deref().unwrap_or("").trim();
-    let from = (Utc::now() - Duration::days(LOOKBACK_DAYS))
-        .format("%Y-%m-%d")
-        .to_string();
-    let mut calls: Vec<Candidate> = agent_calls(state, user.company_id, agent, &from)
-        .await
+    let since = Utc::now() - Duration::days(LOOKBACK_DAYS);
+    let cloudtalk = async {
+        if !has_cloudtalk_line(user) {
+            return Vec::new();
+        }
+        let agent = present(user.cloudtalk_agent_id.as_ref()).unwrap_or_default();
+        let from = since.format("%Y-%m-%d").to_string();
+        agent_calls(state, user.company_id, agent, &from).await
+    };
+    let ringcentral = async {
+        if !has_ringcentral_line(user) {
+            return Vec::new();
+        }
+        let extension = present(user.ringcentral_extension_id.as_ref());
+        let from = since.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        company_ringcentral_calls(state, user.company_id, extension, &from)
+            .await
+            .iter()
+            .map(ringcentral_item)
+            .collect()
+    };
+    let (cloudtalk, ringcentral) = tokio::join!(cloudtalk, ringcentral);
+    let mut calls: Vec<Candidate> = cloudtalk
         .iter()
+        .chain(&ringcentral)
         .filter_map(candidate)
         .collect();
-    calls.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    calls.sort_by_key(|call| std::cmp::Reverse(started(&call.started_at)));
     calls.truncate(DISPLAY_CALLS);
     calls
 }
@@ -284,8 +326,8 @@ const fn not_eligible() -> Coaching {
 
 /// Get my call coaching
 ///
-/// The caller's last three real `CloudTalk` calls with their scores, when
-/// they have a `CloudTalk` line.
+/// The caller's last three real `CloudTalk` and `RingCentral` calls with
+/// their scores, when they have either line.
 #[utoipa::path(
     get,
     path = "/v1/me/call-coaching",

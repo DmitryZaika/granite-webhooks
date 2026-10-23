@@ -7,7 +7,7 @@
 use super::JobCaller;
 use crate::auth::session::find_user;
 use crate::error::{ApiResult, ErrorBody};
-use crate::followups::processor::{FollowupRun, company_sms_provider, process_due_followups};
+use crate::followups::processor::{FollowupRun, process_due_followups, rep_sms_provider};
 use crate::routes::calls::to_e164;
 use crate::routes::delayed::{DueRun, process_due_in};
 use crate::routes::sms::flows::variable_names;
@@ -207,14 +207,15 @@ async fn send_drip(state: &AppState, row: &DueDrip) -> Result<bool, sqlx::Error>
             return Ok(false);
         }
     };
-    let Some(provider) = company_sms_provider(state, row.company_id).await? else {
+    let Some(rep) = find_user(&state.pool, row.user_id, row.company_id).await? else {
+        mark_failed(state, row.id, "Sales rep is not linked").await?;
+        return Ok(false);
+    };
+    let Some(provider) = rep_sms_provider(state, row.company_id, &rep).await? else {
         mark_failed(state, row.id, "SMS is not enabled").await?;
         return Ok(false);
     };
-    let Some(agent_id) = find_user(&state.pool, row.user_id, row.company_id)
-        .await?
-        .and_then(|rep| provider.agent_of(&rep))
-    else {
+    let Some(agent_id) = provider.agent_of(&rep) else {
         mark_failed(state, row.id, "Sales rep is not linked").await?;
         return Ok(false);
     };

@@ -9,6 +9,7 @@ use crate::crud::users::{UserTgInfo, get_user_tg_info};
 use crate::libs::alerts::alert_lead_not_notified;
 use crate::libs::constants::{CREATED_RESPONSE, ERR_DB, internal_error};
 use crate::libs::types::BasicResponse;
+use crate::ringcentral::api::sync_customer_to_ring_central;
 use crate::schemas::add_customer::LeadPayload;
 use crate::telegram::send::{
     persist_lead_message, send_plain_message_to_chat, send_telegram_duplicate_notification,
@@ -316,7 +317,10 @@ where
     let customer_id = i32::try_from(result.last_insert_id()).unwrap_or(0);
     if customer_id > 0 {
         let client = Client::new();
-        let _ = sync_customer_to_cloud_talk(pool, &client, customer_id).await;
+        let _ = tokio::join!(
+            sync_customer_to_cloud_talk(pool, &client, customer_id),
+            sync_customer_to_ring_central(pool, &client, customer_id),
+        );
     }
     CREATED_RESPONSE
 }

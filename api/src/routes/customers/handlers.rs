@@ -7,13 +7,13 @@ use super::schemas::{
     CustomersView, EmailsBatchRequest, EmailsByCustomer, ListFilter, ListQuery, ListResponse,
     MAX_BATCH_IDS, PageQuery, PageRequest,
 };
-use chrono::Utc;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use chrono::Utc;
 
 /// List the company's customers
 ///

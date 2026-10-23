@@ -94,7 +94,7 @@ fn last10(phone: Option<&str>) -> Option<String> {
 }
 
 /// Phones of customers whose name (or company) matches, typos allowed, and of
-/// their `CloudTalk` contacts. Port of `findThreadPhoneDigitsByCustomerName`.
+/// their `CloudTalk` and `RingCentral` contacts. Port of `findThreadPhoneDigitsByCustomerName`.
 async fn customer_phones_by_name(
     pool: &MySqlPool,
     company_id: i32,
@@ -110,14 +110,21 @@ async fn customer_phones_by_name(
     if matching.is_empty() {
         return Ok(phones);
     }
-    let mut params: Vec<Param> = vec![company_id.into()];
-    params.extend(matching.iter().map(|c| Param::from(c.id)));
+    // Once per contacts table.
+    let mut params: Vec<Param> = Vec::new();
+    for _ in 0..2 {
+        params.push(company_id.into());
+        params.extend(matching.iter().map(|c| Param::from(c.id)));
+    }
     let contacts: Vec<(Option<String>, Option<String>)> = super::provider::fetch_all(
         pool,
         format!(
             "SELECT phone_e164_1, phone_e164_2 FROM cloudtalk_contacts
-              WHERE company_id = ? AND customer_id IN ({})",
-            marks(matching.len())
+              WHERE company_id = ? AND customer_id IN ({marks})
+             UNION ALL
+             SELECT phone_e164_1, phone_e164_2 FROM ringcentral_contacts
+              WHERE company_id = ? AND customer_id IN ({marks})",
+            marks = marks(matching.len())
         ),
         &params,
     )
