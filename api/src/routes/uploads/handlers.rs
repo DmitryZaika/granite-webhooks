@@ -162,7 +162,7 @@ pub fn extension(file_name: &str, content_type: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::extension;
+    use super::{DOCUMENT_CONTENT_TYPES, IMAGE_CONTENT_TYPES, extension};
 
     #[test]
     fn mime_types() {
@@ -179,16 +179,46 @@ mod tests {
             "image/svg+xml",
             "text/html",
             "application/xhtml+xml",
+            "application/vnd.wap.xhtml+xml",
+            "text/xml",
+            "application/xml",
+            "text/xsl",
+            "application/xslt+xml",
+            "application/rss+xml",
+            "application/atom+xml",
+            "application/mathml+xml",
             "text/javascript",
+            "text/ecmascript",
+            "application/javascript",
+            "application/x-javascript",
+            "application/ecmascript",
+            "application/x-shockwave-flash",
         ] {
             assert!(executes_in_browser(mime), "{mime}");
         }
         for mime in [
             "image/png",
+            "image/avif",
             "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/json",
+            "application/octet-stream",
+            "application/zip",
+            "text/plain",
+            "text/csv",
+            "text/calendar",
+            "video/mp4",
         ] {
             assert!(!executes_in_browser(mime), "{mime}");
+        }
+    }
+
+    /// The folders' fixed lists skip the `executes_in_browser` check, so none
+    /// of them may ever hold such a type (SVG added as an "image", say).
+    #[test]
+    fn fixed_lists_hold_no_script_types() {
+        for mime in IMAGE_CONTENT_TYPES.iter().chain(DOCUMENT_CONTENT_TYPES) {
+            assert!(!super::super::executes_in_browser(mime), "{mime}");
         }
     }
 

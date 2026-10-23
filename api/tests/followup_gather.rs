@@ -183,3 +183,55 @@ async fn an_unknown_phone_is_a_first_contact_to_write(pool: MySqlPool) {
         json!("first_contact")
     );
 }
+
+#[test_db::test(seed)]
+async fn the_email_timeline_never_holds_another_companys_mail(pool: MySqlPool) {
+    // Nina (8695, company 100) was given the address of company 101's
+    // customer, and the follow-up was asked about that address too.
+    sqlx::raw_sql(
+        "INSERT INTO customers_emails (customer_id, email, created_at, created_by)
+           VALUES (8695, 'buyer@other-customer.test', '2026-04-01 08:00:00', 100);
+         INSERT INTO emails (id, subject, body, sent_at, message_id, thread_id, sender_user_id,
+           sender_email, receiver_email, company_id, is_draft) VALUES
+         (98400, 'Ours', 'Nina asks about quartz', '2026-04-04 10:00:00', '<m98400@x.test>',
+          'dddddddd-7777-4000-8000-000000000001', NULL, 'nina@example.com', 'rep@acme.test', 100, 0),
+         (98401, 'Unstamped', 'Unstamped secret', '2026-04-04 11:00:00', '<m98401@x.test>',
+          'dddddddd-7777-4000-8000-000000000002', NULL, 'nina@example.com', 'nobody@x.test', NULL, 0),
+         (98402, 'Theirs', 'Company 101 secret', '2026-04-04 12:00:00', '<m98402@x.test>',
+          'dddddddd-7777-4000-8000-000000000003', NULL, 'someone@x.test', 'rep@other.test', 101, 0);
+         INSERT INTO email_participants (email_id, type, email, customer_id, position)
+           VALUES (98402, 'cc', 'nina@example.com', 8695, 0);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut request = request(100, 100, Some(8695));
+    request.customer_email = Some("pat@prospect.test".into());
+    let g = gather_followup_context(&pool, &request, clock())
+        .await
+        .unwrap();
+    let emails: Vec<&str> = g
+        .timeline
+        .iter()
+        .filter(|m| m.channel == FollowupChannel::Email)
+        .map(|m| m.text.as_str())
+        .collect();
+    assert!(
+        emails.iter().any(|t| t.contains("Nina asks about quartz")),
+        "{emails:?}"
+    );
+    for leaked in [
+        "Unstamped secret",
+        "Company 101 secret",
+        "Can you quote my kitchen?",
+        "Sure, attached.",
+        "Thanks! See my sketch.",
+        "Do you carry Black Pearl?",
+        "Just checking in.",
+    ] {
+        assert!(
+            !emails.iter().any(|t| t.contains(leaked)),
+            "{leaked}: {emails:?}"
+        );
+    }
+}
