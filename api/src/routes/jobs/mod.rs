@@ -12,6 +12,7 @@
 //! - `POST /v1/jobs/supplier-files` → supplier price files into chunks
 //! - `POST /v1/jobs/contact-sync` → customers into `RingCentral` and
 //!   `CloudTalk` contacts
+//! - `POST /v1/jobs/posthog-autofix` → new PostHog errors into fix runs
 //!
 //! Replaces the Remix `api.*.process` cron routes.
 
@@ -19,6 +20,7 @@ mod appointment_reminders;
 pub mod call_points;
 pub mod contact_sync;
 pub mod maintenance_reminders;
+pub mod posthog_autofix;
 pub mod signature_reminders;
 pub mod sms_followups;
 pub mod supplier_files;
@@ -40,6 +42,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(sms_followups::run))
         .routes(routes!(supplier_files::run))
         .routes(routes!(contact_sync::run))
+        .routes(routes!(posthog_autofix::run))
 }
 
 /// The `time-triggered` Lambda, by its key.
@@ -66,6 +69,6 @@ impl FromRequestParts<AppState> for JobCaller {
     }
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }

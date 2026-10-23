@@ -149,3 +149,49 @@ async fn cancelling_needs_the_signwell_key(pool: MySqlPool) {
     );
     assert!(deleted.lock().unwrap().is_empty());
 }
+
+#[test_db::test(seed)]
+async fn cancelling_can_tell_the_customer(pool: MySqlPool) {
+    sqlx::raw_sql(FIXTURE).execute(&pool).await.unwrap();
+    let sent: Arc<Mutex<Vec<api::webhooks_client::OutgoingEmail>>> = Arc::default();
+    let recorded = sent.clone();
+    let router = Router::new()
+        .route(
+            "/documents/{id}",
+            axum::routing::delete(|| async { StatusCode::NO_CONTENT }),
+        )
+        .route(
+            "/email/send",
+            axum::routing::post(
+                move |Json(email): Json<api::webhooks_client::OutgoingEmail>| {
+                    let recorded = recorded.clone();
+                    async move {
+                        recorded.lock().unwrap().push(email);
+                        Json(json!({ "message_id": "<c@ses.test>" }))
+                    }
+                },
+            ),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
+        .with_signwell_base(&base)
+        .with_webhooks(api::webhooks_client::WebhooksClient::new(
+            Some(&base),
+            Some("key"),
+        ));
+    let server = TestServer::new(app(state));
+    let res = server
+        .post("/v1/signature-requests/9301/cancel")
+        .with_session(sessions::REP)
+        .json(&json!({ "notify_customer": true }))
+        .await;
+    res.assert_status(StatusCode::OK);
+    assert_eq!(res.json::<Value>()["customer_notified"], true);
+    let sent = sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to, vec!["john@example.com"]);
+    assert_eq!(sent[0].subject, "Signature request canceled: Quote.pdf");
+    assert!(sent[0].body.contains("Hi John,"), "{}", sent[0].body);
+}

@@ -1142,3 +1142,34 @@ async fn a_page_without_an_email_is_locked(pool: MySqlPool) {
         .unwrap();
     assert_eq!(count, 0);
 }
+
+#[test_db::test(seed)]
+async fn sending_an_older_cookie_again_does_not_reset_the_attempts(pool: MySqlPool) {
+    let (mut server, sent) = server(&pool).await;
+    let requested = server.post(&page("/code")).await;
+    requested.assert_status(StatusCode::NO_CONTENT);
+    // The cookie right after the email: no failed attempts in it yet.
+    let fresh = requested.cookie("__customer_view");
+    server.do_not_save_cookies();
+    server.clear_cookies();
+    let code = last_code(&sent);
+    let wrong = if code == "000000" { "111111" } else { "000000" };
+    for _ in 0..8 {
+        server
+            .post(&page("/verify"))
+            .add_cookie(fresh.clone())
+            .json(&json!({ "code": wrong }))
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+    let res = server
+        .post(&page("/verify"))
+        .add_cookie(fresh)
+        .json(&json!({ "code": code }))
+        .await;
+    res.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        res.json::<Value>()["error"],
+        "Too many attempts. Request a new code."
+    );
+}

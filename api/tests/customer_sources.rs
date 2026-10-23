@@ -46,6 +46,13 @@ async fn admins_manage_sources(pool: MySqlPool) {
     res.assert_status(StatusCode::CREATED);
     let yelp = res.json::<Value>()["id"].as_i64().unwrap();
     assert_eq!(labels(&server).await, ["Walk-in", "Yelp"]);
+    // A customer can be added with the company's own source.
+    server
+        .post("/v1/customers")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "name": "Yelp lead", "source": "Yelp" }))
+        .await
+        .assert_status(StatusCode::CREATED);
     for taken in ["yelp", "walk-in", "Leads"] {
         create(sessions::ADMIN, taken)
             .await

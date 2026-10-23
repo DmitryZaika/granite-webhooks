@@ -362,10 +362,15 @@ impl RingcentralSmsNotification {
         if !self.event.contains("/message-store") || self.event.contains("/instant") {
             return None;
         }
-        let new_texts = self.body.as_ref()?.changes.iter().any(|change| {
-            change.kind.as_deref() == Some("SMS") && change.new_count > 0
-        });
-        new_texts.then(|| extension_from_event(&self.event)).flatten()
+        let new_texts = self
+            .body
+            .as_ref()?
+            .changes
+            .iter()
+            .any(|change| change.kind.as_deref() == Some("SMS") && change.new_count > 0);
+        new_texts
+            .then(|| extension_from_event(&self.event))
+            .flatten()
     }
 
     /// One `message-store` record of `extension`, as its push would carry it.
@@ -609,7 +614,8 @@ mod tests {
 
     #[test]
     fn message_store_push_names_the_extension_with_new_texts() {
-        let parse = |json: &str| -> RingcentralSmsNotification { serde_json::from_str(json).unwrap() };
+        let parse =
+            |json: &str| -> RingcentralSmsNotification { serde_json::from_str(json).unwrap() };
         let new_sms = parse(
             r#"{"event":"/restapi/v1.0/account/1/extension/2765489027/message-store","body":{"extensionId":2765489027,"changes":[{"type":"SMS","newCount":1,"updatedCount":0}]}}"#,
         );

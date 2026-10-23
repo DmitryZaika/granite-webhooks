@@ -253,6 +253,8 @@ async fn store_outbound_sms(
 ) -> BasicResponse {
     match insert_outbound_sms(pool, form, company_id).await {
         Ok(_) => OK_RESPONSE,
+        // Two pushes for the same text raced; the other one stored it.
+        Err(sqlx::Error::Database(error)) if error.is_unique_violation() => OK_RESPONSE,
         Err(error) => {
             tracing::error!("Error inserting sms sent into the database: {}", error);
             internal_error(ERR_DB)
@@ -266,7 +268,11 @@ const SENT_LOOKBACK_MINUTES: i64 = 10;
 
 /// Texts `extension` sent lately, stored like the CRM's own sends (a text the
 /// CRM sent itself is already there under its `RingCentral` id).
-async fn store_recent_outbound(pool: &MySqlPool, company_id: i32, extension: &str) -> BasicResponse {
+async fn store_recent_outbound(
+    pool: &MySqlPool,
+    company_id: i32,
+    extension: &str,
+) -> BasicResponse {
     let since = (chrono::Utc::now() - chrono::Duration::minutes(SENT_LOOKBACK_MINUTES))
         .format("%Y-%m-%dT%H:%M:%S%.3fZ");
     let path = format!(

@@ -7,7 +7,8 @@
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::routes::emails::deal_history::{
-    CUSTOMER_PARTICIPANT_EMAILS, HistoryEmail, address_emails, history_sql, merge, record_missing_sends, with_thread_attachments,
+    CUSTOMER_PARTICIPANT_EMAILS, HistoryEmail, address_emails, history_sql, merge,
+    record_missing_sends, with_thread_attachments,
 };
 use crate::serde_helpers::js_date;
 use crate::state::AppState;

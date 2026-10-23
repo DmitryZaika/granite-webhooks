@@ -46,10 +46,7 @@ pub async fn create(
     EmployeeUser(user): EmployeeUser,
     JsonBody(request): JsonBody<UploadRequest>,
 ) -> ApiResult<(StatusCode, Json<Upload>)> {
-    let is_deal = matches!(
-        request.folder,
-        UploadFolder::Deals | UploadFolder::Events
-    );
+    let is_deal = matches!(request.folder, UploadFolder::Deals | UploadFolder::Events);
     let is_email = request.folder == UploadFolder::Emails;
     let is_bug_report = request.folder == UploadFolder::BugReports;
     let is_quote = matches!(

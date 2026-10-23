@@ -48,6 +48,7 @@ pub mod notifications;
 pub mod onboarding;
 pub mod online_quotes;
 pub mod places;
+pub mod posthog_autofix;
 pub mod public;
 pub mod questionnaires;
 pub mod quickbooks;
@@ -169,4 +170,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(signing::router())
         .merge(signatures::router())
         .merge(signwell_webhook::router())
+        .merge(posthog_autofix::router())
 }

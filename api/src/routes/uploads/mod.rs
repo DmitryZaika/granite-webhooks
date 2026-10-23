@@ -134,9 +134,13 @@ pub async fn attach(
         .get(&key)
         .await?
         .ok_or_else(|| ApiError::BadRequest(format!("file was not uploaded: {url}")))?;
-    if let Some(icon) = make_icon(&object.bytes) {
+    let icon = tokio::task::spawn_blocking(move || make_icon(&object.bytes))
+        .await
+        .ok()
+        .flatten();
+    if let Some(icon) = icon {
         storage
-            .put(&icon_key(&key), icon, &object.content_type)
+            .put(&icon_key(&key), icon.bytes, icon.content_type)
             .await?;
     }
     Ok(())

@@ -7,14 +7,19 @@
 //! loaders and the cancel action (`cancelSignatureRequest`).
 
 use crate::auth::EmployeeUser;
+use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::routes::customers::signatures::{RefreshScope, refresh};
 use crate::signwell::SignWell;
 use crate::state::AppState;
+use crate::webhooks_client::OutgoingEmail;
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
+use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -169,14 +174,19 @@ pub async fn list_requests(
 /// Stops a request the caller sent that is not finished: a `SignWell`
 /// document is deleted at `SignWell` (its link stops working); a native one
 /// is revoked here and gets no more reminders. The request becomes `expired`.
+/// With `notify_customer`, the signer is emailed that it was cancelled (from
+/// the sender, in the invitation's thread when there is one) and the answer
+/// says whether that email went out.
 #[utoipa::path(
     post,
     path = "/v1/signature-requests/{id}/cancel",
     operation_id = "cancel_signature_request",
     tag = "customers",
     params(("id" = i64, Path, description = "Signature request id")),
+    request_body(content = CancelInput, description = "Optional; no body: the customer is not told"),
     responses(
         (status = 204, description = "Cancelled"),
+        (status = 200, description = "Cancelled; whether the customer was emailed", body = Cancelled),
         (status = 400, description = "Already finished, or SignWell refused (its message)", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee", body = ErrorBody),
@@ -189,9 +199,17 @@ pub async fn cancel_request(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
     Path(id): Path<i64>,
-) -> ApiResult<StatusCode> {
-    let row: Option<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT CAST(status AS CHAR), provider, provider_document_id FROM signature_requests
+    body: Bytes,
+) -> ApiResult<Response> {
+    let input: CancelInput = if body.iter().all(u8::is_ascii_whitespace) {
+        CancelInput::default()
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|_| ApiError::BadRequest("Send { \"notify_customer\": true|false }.".into()))?
+    };
+    let row: Option<(String, String, Option<String>, String, String, String)> = sqlx::query_as(
+        "SELECT CAST(status AS CHAR), provider, provider_document_id, filename, signer_name, signer_email
+           FROM signature_requests
           WHERE id = ? AND company_id = ? AND created_by_user_id = ? LIMIT 1",
     )
     .bind(id)
@@ -199,7 +217,8 @@ pub async fn cancel_request(
     .bind(user.id)
     .fetch_optional(&state.pool)
     .await?;
-    let (status, provider, document_id) = row.ok_or(ApiError::NotFound)?;
+    let (status, provider, document_id, filename, signer_name, signer_email) =
+        row.ok_or(ApiError::NotFound)?;
     if matches!(status.as_str(), "signed" | "declined" | "expired") {
         return Err(ApiError::BadRequest(
             "This request is already finished.".into(),
@@ -257,5 +276,120 @@ pub async fn cancel_request(
         .await?;
     }
     tx.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
+    if !input.notify_customer {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+    let email = cancel_email(
+        &state,
+        &user,
+        id,
+        &provider,
+        &filename,
+        &signer_name,
+        &signer_email,
+    )
+    .await;
+    let customer_notified = match state.webhooks.send_email(&email).await {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::warn!(
+                request_id = id,
+                ?error,
+                "signature cancellation email not sent"
+            );
+            false
+        }
+    };
+    Ok(Json(Cancelled { customer_notified }).into_response())
+}
+
+/// Body of `POST /v1/signature-requests/{id}/cancel`.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CancelInput {
+    /// Email the signer that the request was cancelled (default false).
+    #[serde(default)]
+    pub notify_customer: bool,
+}
+
+/// A cancelled request, when the customer was to be told.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Cancelled {
+    /// False when the email to the customer could not be sent.
+    pub customer_notified: bool,
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// `Name <address>` or a bare address.
+fn sender_of(from: &str) -> (Option<String>, String) {
+    match (from.rfind('<'), from.rfind('>')) {
+        (Some(open), Some(close)) if open < close => {
+            let name = from[..open].trim().trim_matches('"').trim();
+            (
+                Some(name.to_string()).filter(|n| !n.is_empty()),
+                from[open + 1..close].trim().to_string(),
+            )
+        }
+        _ => (None, from.trim().to_string()),
+    }
+}
+
+/// The signer's notice: from whoever sent the invitation, replying in its
+/// thread (native); from the caller otherwise.
+async fn cancel_email(
+    state: &AppState,
+    user: &SessionUser,
+    request_id: i64,
+    provider: &str,
+    filename: &str,
+    signer_name: &str,
+    signer_email: &str,
+) -> OutgoingEmail {
+    let invitation = match (&state.native_signing, provider) {
+        (Some(signing), "native") => signing
+            .lifecycle_mail(&state.pool, request_id, i64::from(user.company_id))
+            .await
+            .ok(),
+        _ => None,
+    };
+    let (from_name, from_address) = invitation.as_ref().map_or_else(
+        || (user.name.clone(), user.email.clone()),
+        |mail| sender_of(&mail.snapshot.from),
+    );
+    let greeting = signer_name.split_whitespace().next().unwrap_or_default();
+    let sender = from_name.clone().unwrap_or_else(|| from_address.clone());
+    OutgoingEmail {
+        from_name,
+        from_address,
+        to: vec![signer_email.to_string()],
+        cc: Vec::new(),
+        bcc: Vec::new(),
+        subject: format!("Signature request canceled: {filename}"),
+        body: format!(
+            "<p>Hi{},</p><p>The signature request for <b>{}</b> has been canceled, so you no longer need to sign it and its link no longer works.</p><p>{}</p>",
+            if greeting.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", escape_html(greeting))
+            },
+            escape_html(filename),
+            escape_html(&sender),
+        ),
+        signature: None,
+        reply_to: Vec::new(),
+        in_reply_to: invitation
+            .as_ref()
+            .and_then(|mail| mail.snapshot.in_reply_to.clone()),
+        references: invitation
+            .map(|mail| mail.snapshot.references)
+            .unwrap_or_default(),
+        attachments: Vec::new(),
+        transactional: true,
+    }
 }

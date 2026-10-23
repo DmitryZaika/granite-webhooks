@@ -3,7 +3,8 @@
 //! - `GET /v1/signatures/{id}/document` → a natively signed (or sent)
 //!   document, from the private signature bucket
 //! - `GET /v1/signature-requests/{id}/signed-pdf` → a `SignWell` document's
-//!   signed PDF, named "<document> signed.pdf"
+//!   signed PDF, named "<document> signed.pdf" ("<quote> signed.pdf" for a
+//!   quote's contract)
 //!
 //! Replaces the Remix `api.signatures.$requestId.document` and
 //! `api.signature-requests.$requestId.signed-pdf` loaders.
@@ -120,6 +121,58 @@ pub fn signed_pdf_filename(filename: &str) -> String {
         "{} signed.pdf",
         if base.is_empty() { "Document" } else { &base }
     )
+}
+
+/// The name a signed copy goes by: [`signed_pdf_filename`], except that a
+/// contract sent from a quote (`<contract form> - <quote name>.pdf`) drops
+/// the form and keeps only the quote's name ("Kitchen signed.pdf").
+pub async fn signed_copy_filename(
+    pool: &sqlx::MySqlPool,
+    company_id: i32,
+    customer_id: Option<i64>,
+    filename: &str,
+) -> String {
+    let quote_name = async {
+        let Some(customer_id) = customer_id else {
+            return Ok(None);
+        };
+        let quotes: Vec<Option<String>> = sqlx::query_scalar(
+            "SELECT quote_name FROM quotes
+              WHERE company_id = ? AND customer_id = ? AND deleted_at IS NULL
+              ORDER BY updated_at DESC, id DESC",
+        )
+        .bind(company_id)
+        .bind(customer_id)
+        .fetch_all(pool)
+        .await?;
+        let forms: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM quote_forms
+              WHERE company_id = ? AND deleted_at IS NULL
+                AND JSON_UNQUOTE(JSON_EXTRACT(config_json, '$.kind')) = 'contract'
+              ORDER BY sequence, name",
+        )
+        .bind(company_id)
+        .fetch_all(pool)
+        .await?;
+        let quote = crate::quote_pricing::quote_for_contract_file(
+            filename,
+            &forms,
+            &quotes,
+            Option::as_deref,
+        );
+        Ok::<_, sqlx::Error>(quote.map(|name| {
+            name.as_deref()
+                .filter(|n| !n.is_empty())
+                .unwrap_or("Quote")
+                .to_string()
+        }))
+    }
+    .await
+    .unwrap_or_else(|err| {
+        tracing::error!(?err, "signed copy quote lookup failed");
+        None
+    });
+    signed_pdf_filename(quote_name.as_deref().unwrap_or(filename))
 }
 
 /// Titles the PDF, so the viewer's tab shows the file's name. An untitled
@@ -327,10 +380,11 @@ struct RequestRow {
     status: String,
     provider: String,
     provider_document_id: Option<String>,
+    customer_id: Option<i64>,
 }
 
 /// The URL of a `SignWell` document's signed PDF.
-async fn signwell_completed_pdf_url(
+pub(crate) async fn signwell_completed_pdf_url(
     state: &AppState,
     company_id: i32,
     document_id: &str,
@@ -406,7 +460,8 @@ pub async fn signed_pdf(
         ));
     };
     let row: Option<RequestRow> = sqlx::query_as(
-        "SELECT filename, file_url, CAST(status AS CHAR) AS status, provider, provider_document_id
+        "SELECT filename, file_url, CAST(status AS CHAR) AS status, provider, provider_document_id,
+                CAST(customer_id AS SIGNED) AS customer_id
            FROM signature_requests WHERE id = ? AND company_id = ? LIMIT 1",
     )
     .bind(id)
@@ -463,7 +518,8 @@ pub async fn signed_pdf(
             }
         }
     };
-    let filename = signed_pdf_filename(&row.filename);
+    let filename =
+        signed_copy_filename(&state.pool, user.company_id, row.customer_id, &row.filename).await;
     let title = filename
         .strip_suffix(".pdf")
         .unwrap_or(&filename)

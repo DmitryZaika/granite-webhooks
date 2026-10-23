@@ -153,7 +153,7 @@ pub fn status_html(
         &format!(
             "<tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:24px;color:#18181b;padding-bottom:6px;\">{}</td></tr>
           <tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:17px;font-weight:600;color:#3f3f46;padding-bottom:28px;\">{}</td></tr>
-          <tr><td style=\"{EMAIL_FONT}font-size:15px;line-height:1.6;color:#3f3f46;padding-bottom:28px;\">{}</td></tr>
+          <tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:15px;line-height:1.6;color:#3f3f46;text-align:center;padding-bottom:28px;\">{}</td></tr>
           <tr><td align=\"center\" style=\"padding-bottom:28px;\">
             <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\"><tr>
               <td style=\"width:48px;height:48px;border-radius:999px;background:#ffd400;{EMAIL_FONT}font-size:16px;font-weight:700;color:#18181b;text-align:center;vertical-align:middle;\">{}</td>

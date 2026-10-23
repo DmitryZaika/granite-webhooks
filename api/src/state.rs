@@ -91,6 +91,8 @@ pub struct AppState {
     /// `SIGNATURE_SESSION_SECRET`: keys the native signer's CSRF token
     /// (32+ bytes); unset, native signing links answer 503.
     pub signing_session_secret: Option<Arc<str>>,
+    /// The PostHog auto-fix intake and callbacks (`POSTHOG_AUTOFIX_*`).
+    pub autofix: crate::posthog_autofix::Autofix,
 }
 
 /// Where the SES identity lists come from.
@@ -168,7 +170,14 @@ impl AppState {
             dns: crate::deliverability::AppDns::Fixed(Arc::default()),
             ses: SesIdentities::Fixed(None),
             signing_session_secret: None,
+            autofix: crate::posthog_autofix::Autofix::disabled(),
         }
+    }
+
+    #[must_use]
+    pub fn with_autofix(mut self, autofix: crate::posthog_autofix::Autofix) -> Self {
+        self.autofix = autofix;
+        self
     }
 
     #[must_use]
@@ -373,7 +382,8 @@ impl AppState {
             .with_ses(SesIdentities::Aws)
             .with_signing_session_secret(
                 &std::env::var("SIGNATURE_SESSION_SECRET").unwrap_or_default(),
-            ))
+            )
+            .with_autofix(crate::posthog_autofix::Autofix::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the
