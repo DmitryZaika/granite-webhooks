@@ -53,7 +53,8 @@ pub fn conversation_recency(
     // A message stamped a little ahead of the server clock is "just now".
     let since = (now - last).max(Duration::zero());
     let (last_day, today) = (store_zoned_parts(last), store_zoned_parts(now));
-    let same_day = (last_day.year, last_day.month, last_day.day) == (today.year, today.month, today.day);
+    let same_day =
+        (last_day.year, last_day.month, last_day.day) == (today.year, today.month, today.day);
     if last < now && !same_day {
         ConversationRecency::Reopening {
             minutes_since_last: since.num_minutes(),

@@ -157,16 +157,20 @@ async fn report_job(job: &str, result: Result<usize, JobError>) -> Result<usize,
     }
 }
 
+/// The API answers within its 30 s limit; a hung connection must not use up
+/// the whole run and starve the jobs after it.
+const API_JOB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
+
 /// Runs a scheduled job of the API (`POST <API_URL>/v1/jobs/<job>`).
 async fn post_api_job(job: &str, label: &str) -> Result<usize, JobError> {
-    post_api_job_within(job, label, None).await
+    post_api_job_within(job, label, API_JOB_TIMEOUT).await
 }
 
 /// [`post_api_job`], giving up after `timeout`.
 async fn post_api_job_within(
     job: &str,
     label: &str,
-    timeout: Option<std::time::Duration>,
+    timeout: std::time::Duration,
 ) -> Result<usize, JobError> {
     let api_url = match std::env::var("API_URL") {
         Ok(value) => value,
@@ -183,11 +187,10 @@ async fn post_api_job_within(
         }
     };
     let url = format!("{}/v1/jobs/{job}", api_url.trim_end_matches('/'));
-    let mut request = Client::new().post(url).header("Authorization", lambda_key);
-    if let Some(timeout) = timeout {
-        request = request.timeout(timeout);
-    }
-    let response = request
+    let response = Client::new()
+        .post(url)
+        .header("Authorization", lambda_key)
+        .timeout(timeout)
         .send()
         .await
         .map_err(|error| JobError::transport(&error))?;
@@ -215,6 +218,15 @@ async fn post_api_job_within(
     Ok(usize::try_from(processed).unwrap_or(0))
 }
 
+/// The job's count, or 0 after reporting and logging: one failing job must
+/// not stop the jobs after it.
+async fn or_logged(job: &str, result: Result<usize, JobError>, label: &str) -> usize {
+    report_job(job, result).await.unwrap_or_else(|error| {
+        tracing::error!(?error, "Failed to process {label}; continuing");
+        0
+    })
+}
+
 async fn process_estimate_appointment_reminders() -> Result<usize, JobError> {
     post_api_job("appointment-reminders", "estimate reminders").await
 }
@@ -240,7 +252,7 @@ async fn process_posthog_autofix() -> Result<usize, JobError> {
     post_api_job_within(
         "posthog-autofix",
         "PostHog auto-fix",
-        Some(std::time::Duration::from_secs(25)),
+        std::time::Duration::from_secs(25),
     )
     .await
 }
@@ -430,19 +442,30 @@ pub(crate) async fn function_handler(
             0
         }
     };
-    let estimate_reminder_count = report_job(
+    let estimate_reminder_count = or_logged(
         "appointment-reminders",
         process_estimate_appointment_reminders().await,
+        "estimate reminders",
     )
-    .await?;
-    let maintenance_reminder_count = report_job(
+    .await;
+    let maintenance_reminder_count = or_logged(
         "maintenance-reminders",
         process_maintenance_due_reminders().await,
+        "maintenance due reminders",
     )
-    .await?;
-    let sms_followup_count = report_job("sms-followups", process_sms_followups().await).await?;
-    let checklist_survey_count =
-        report_job("survey-notifications", process_checklist_surveys().await).await?;
+    .await;
+    let sms_followup_count = or_logged(
+        "sms-followups",
+        process_sms_followups().await,
+        "sms follow-ups",
+    )
+    .await;
+    let checklist_survey_count = or_logged(
+        "survey-notifications",
+        process_checklist_surveys().await,
+        "checklist surveys",
+    )
+    .await;
     start_supplier_files_job().await;
     let call_points_count = match report_job("call-points", process_call_points().await).await {
         Ok(count) => count,

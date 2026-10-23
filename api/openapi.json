@@ -1557,6 +1557,160 @@
         ]
       }
     },
+    "/v1/customers/page": {
+      "get": {
+        "tags": [
+          "customers"
+        ],
+        "summary": "One page of the company's customers",
+        "description": "The customers page's table, filtered, sorted and paged here instead of\nin the browser. Filters as `GET /v1/customers`, plus the tab's lead\nsources; the onboarding sample customer is left out. Each page carries\nevery email of its customers, and `month_rows` the rows behind the\n\"this month\" counts per sales rep.",
+        "operationId": "list_customers_page",
+        "parameters": [
+          {
+            "name": "view",
+            "in": "query",
+            "description": "As in `GET /v1/customers`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Which list `GET /v1/customers` returns.",
+              "enum": [
+                "customers",
+                "companies"
+              ]
+            }
+          },
+          {
+            "name": "sales_rep",
+            "in": "query",
+            "description": "As in `GET /v1/customers`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "show_invalid",
+            "in": "query",
+            "description": "As in `GET /v1/customers`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "1"
+          },
+          {
+            "name": "tab",
+            "in": "query",
+            "description": "`walkin` (default), `leads`, `call-in`, `other` (with `user-input`) or\n`all`. Any other value matches no customers.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "leads"
+          },
+          {
+            "name": "sort_by",
+            "in": "query",
+            "description": "Sort column: `name`, `phone`, `email`, `sales_rep_name`,\n`company_name`, `created_date`, `assigned_date`, and in the companies\nview `revenue_generated`, `projects_count`. Omitted or unknown: newest\nfirst by the tab's date (leads by when they were assigned).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "`asc` (default) or `desc`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "desc"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page, default 1. Past the last page, the last page is returned.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "Rows per page, default 20, at most 500.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomersPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`sales_rep` is not an integer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/customers/emails/batch": {
       "post": {
         "tags": [
@@ -21165,7 +21319,7 @@
           "sms"
         ],
         "summary": "Prepare files for a text",
-        "description": "Turns files uploaded to `sms-uploads/` into attachments ready to send:\npictures upright, at most 1600 px and about 480 KB (HEIC, WebP become\nJPEG; PNG and GIF stay), documents (PDF, Word, Excel, text, CSV) as they\nare. The uploads are removed. Each file succeeds or fails on its own.",
+        "description": "Turns files uploaded to `sms-uploads/` into attachments ready to send:\npictures upright, at most 1600 px and about 480 KB (HEIC, WebP and PNG\nphotos become JPEG; PNGs that fit or are see-through, and GIF, stay),\ndocuments (PDF, Word, Excel, text, CSV) as they are. The uploads are\nremoved. Each file succeeds or fails on its own.",
         "operationId": "prepare_sms_attachments",
         "requestBody": {
           "content": {
@@ -35313,6 +35467,85 @@
         ]
       }
     },
+    "/v1/schedule/activity": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "The schedule's activity",
+        "description": "The company's events, most recently changed or commented first, each with\nits last three history lines and comments. Deleted events and events of\ncalendars hidden from the caller are left out.",
+        "operationId": "list_schedule_activity",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many events, 1 to 50 (default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Skip this many events (the next page).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Activity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleActivity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/schedule/people/{user_id}/color": {
       "put": {
         "tags": [
@@ -44136,13 +44369,13 @@
         ]
       }
     },
-    "/v1/public/quickbooks/disconnect": {
+    "/v1/quickbooks/disconnected": {
       "post": {
         "tags": [
           "company"
         ],
         "summary": "QuickBooks was disconnected at Intuit",
-        "description": "Intuit sends users who disconnect the app to `/quickbooks/disconnect`\nwith the `realmId`; the page posts it here and the company holding that\n`QuickBooks` company loses its connection. No session; always 204 (it\nnever tells whether a company matched).",
+        "description": "Intuit sends users who disconnect the app to `/quickbooks/disconnect`\nwith the `realmId`; the page posts it here and the caller's company loses\nits connection when it holds that `QuickBooks` company. A session is\nrequired: anyone could otherwise disconnect a company knowing its realm id\n(a signed-out visitor loses nothing: the app asks to reconnect once Intuit\nrefuses the tokens). Always 204 (it never tells whether it matched).",
         "operationId": "quickbooks_disconnected",
         "requestBody": {
           "content": {
@@ -44156,7 +44389,27 @@
         },
         "responses": {
           "204": {
-            "description": "Done (whether or not a company matched)"
+            "description": "Done (whether or not the company matched)"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "500": {
             "description": "Database error",
@@ -44168,7 +44421,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/superuser/companies/{id}/quickbooks-app": {
@@ -45706,7 +45964,7 @@
           "customers"
         ],
         "summary": "Cancel a signature request",
-        "description": "Stops a request the caller sent that is not finished: a `SignWell`\ndocument is deleted at `SignWell` (its link stops working); a native one\nis revoked here and gets no more reminders. The request becomes `expired`.",
+        "description": "Stops a request the caller sent that is not finished: a `SignWell`\ndocument is deleted at `SignWell` (its link stops working); a native one\nis revoked here and gets no more reminders. The request becomes `expired`.\nWith `notify_customer`, the signer is emailed that it was cancelled (from\nthe sender, in the invitation's thread when there is one) and the answer\nsays whether that email went out.",
         "operationId": "cancel_signature_request",
         "parameters": [
           {
@@ -45720,7 +45978,28 @@
             }
           }
         ],
+        "requestBody": {
+          "description": "Optional; no body: the customer is not told",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelInput"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
+          "200": {
+            "description": "Cancelled; whether the customer was emailed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Cancelled"
+                }
+              }
+            }
+          },
           "204": {
             "description": "Cancelled"
           },
@@ -46980,6 +47259,52 @@
           }
         }
       },
+      "ActivityEvent": {
+        "type": "object",
+        "description": "An event with its latest activity.",
+        "required": [
+          "event",
+          "unscheduled",
+          "last_activity_at",
+          "lines"
+        ],
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/ScheduleEvent",
+            "description": "The event."
+          },
+          "unscheduled": {
+            "type": "boolean",
+            "description": "Waiting for its day (not on the calendar)."
+          },
+          "assignee_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The installer or template maker on it."
+          },
+          "creator_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who made it."
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it last changed."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityLine"
+            },
+            "description": "Its last three lines, oldest first."
+          }
+        }
+      },
       "ActivityInput": {
         "type": "object",
         "description": "Body of `POST /v1/deals/{id}/activities`.",
@@ -47008,6 +47333,37 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "ActivityLine": {
+        "type": "object",
+        "description": "A change to an event or a comment on it.",
+        "required": [
+          "action",
+          "message",
+          "created_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "e.g. `created`, `date_updated`; `commented` for a comment."
+          },
+          "message": {
+            "type": "string",
+            "description": "Shown text."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When."
           }
         }
       },
@@ -49164,6 +49520,30 @@
             ],
             "format": "double",
             "description": "Won out of closed, in percent; null with no closed deals."
+          }
+        }
+      },
+      "CancelInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/signature-requests/{id}/cancel`.",
+        "properties": {
+          "notify_customer": {
+            "type": "boolean",
+            "description": "Email the signer that the request was cancelled (default false)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Cancelled": {
+        "type": "object",
+        "description": "A cancelled request, when the customer was to be told.",
+        "required": [
+          "customer_notified"
+        ],
+        "properties": {
+          "customer_notified": {
+            "type": "boolean",
+            "description": "False when the email to the customer could not be sent."
           }
         }
       },
@@ -52700,6 +53080,54 @@
             "type": "integer",
             "format": "int64",
             "description": "Customers."
+          }
+        }
+      },
+      "CustomersPage": {
+        "type": "object",
+        "description": "One page of the customers table.",
+        "required": [
+          "rows",
+          "emails",
+          "total",
+          "page",
+          "month_rows"
+        ],
+        "properties": {
+          "rows": {
+            "$ref": "#/components/schemas/ListResponse",
+            "description": "The page's rows, shaped as in `GET /v1/customers`."
+          },
+          "emails": {
+            "type": "object",
+            "description": "Every email of the page's customers, primary first, keyed by customer id.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Rows over all pages."
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The page returned: the last one when `page` was past it.",
+            "minimum": 0
+          },
+          "month_rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerRow"
+            },
+            "description": "For the \"this month\" counts per sales rep: the tab's customers whose\ntab date falls in the current UTC month. Empty in the companies view\nand the `other` tab, which show no counts."
           }
         }
       },
@@ -56269,7 +56697,8 @@
           "signature",
           "date",
           "text",
-          "autofill_date_signed"
+          "autofill_date_signed",
+          "checkmark"
         ]
       },
       "FieldType": {
@@ -65967,7 +66396,7 @@
       },
       "RealmDisconnect": {
         "type": "object",
-        "description": "Body of `POST /v1/public/quickbooks/disconnect`.",
+        "description": "Body of `POST /v1/quickbooks/disconnected`.",
         "properties": {
           "realm_id": {
             "type": "string",
@@ -67863,6 +68292,27 @@
           }
         }
       },
+      "ScheduleActivity": {
+        "type": "object",
+        "description": "`GET /v1/schedule/activity`.",
+        "required": [
+          "events",
+          "has_more"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityEvent"
+            },
+            "description": "Most recently changed first."
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "More events past this page."
+          }
+        }
+      },
       "ScheduleEvent": {
         "type": "object",
         "description": "An event on the schedule.",
@@ -68755,7 +69205,7 @@
         "properties": {
           "type": {
             "$ref": "#/components/schemas/FieldKind",
-            "description": "`signature`, `date`, `text` or `autofill_date_signed`."
+            "description": "`signature`, `date`, `text`, `autofill_date_signed` or `checkmark`."
           },
           "page": {
             "type": "integer",

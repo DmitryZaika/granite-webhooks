@@ -329,6 +329,20 @@ mod tests {
         assert!(!message.contains("rather not receive"));
     }
 
+    #[test]
+    fn a_bcc_only_email_has_a_non_empty_to_header() {
+        // Automation notices go to the reps by Bcc; SES refused the empty To.
+        let notice = OutgoingEmail {
+            to: Vec::new(),
+            cc: Vec::new(),
+            attachments: Vec::new(),
+            ..email()
+        };
+        let message = String::from_utf8(build_message(&notice, Vec::new())).unwrap();
+        assert!(message.contains("To: undisclosed-recipients:;\r\n"), "{message}");
+        assert!(!message.contains("hidden@example.com"));
+    }
+
     #[tokio::test]
     async fn sends_headers_bodies_and_attachments() {
         let transport = Recorder::default();

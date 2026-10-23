@@ -408,7 +408,32 @@ pub struct ResponseData {
 
 #[derive(Deserialize, Serialize)]
 pub struct ResponseDataHits {
+    #[serde(default, deserialize_with = "lenient_list")]
     pub data: Option<Vec<ContactSearchHit>>,
+}
+
+/// A list that `CloudTalk` may also send as an object keyed "0", "1", … (its
+/// PHP encodes a list with gaps that way) or as its single item. Items that
+/// do not fit are skipped.
+fn lenient_list<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let items = match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Array(items) => items,
+        serde_json::Value::Object(map) if map.keys().all(|key| key.parse::<usize>().is_ok()) => {
+            map.into_iter().map(|(_, item)| item).collect()
+        }
+        serde_json::Value::Null => return Ok(None),
+        item => vec![item],
+    };
+    Ok(Some(
+        items
+            .into_iter()
+            .filter_map(|item| serde_json::from_value(item).ok())
+            .collect(),
+    ))
 }
 
 // Handles the `item.Country ?? item` fallback cleanly
@@ -502,8 +527,9 @@ pub struct ContactNumberObj {
 #[derive(Serialize, Deserialize)]
 pub struct ContactNode {
     pub id: Option<ContactId>,
+    #[serde(default, deserialize_with = "lenient_list")]
     pub contact_numbers: Option<Vec<String>>,
-    #[serde(rename = "ContactNumber")]
+    #[serde(rename = "ContactNumber", default, deserialize_with = "lenient_list")]
     pub contact_number: Option<Vec<ContactNumberObj>>,
 }
 
@@ -512,8 +538,9 @@ pub struct ContactSearchHit {
     #[serde(rename = "Contact")]
     pub contact: Option<ContactNode>,
     pub id: Option<ContactId>,
+    #[serde(default, deserialize_with = "lenient_list")]
     pub contact_numbers: Option<Vec<String>>,
-    #[serde(rename = "ContactNumber")]
+    #[serde(rename = "ContactNumber", default, deserialize_with = "lenient_list")]
     pub contact_number: Option<Vec<ContactNumberObj>>,
 }
 
@@ -734,5 +761,27 @@ mod tests {
                 recording_link: Some("https://example.com/r.wav".to_string()),
             })
         );
+    }
+
+    #[test]
+    fn contact_search_reads_lists_sent_as_objects() {
+        // CloudTalk sent an object where a list was expected; the sync panicked.
+        let found: ContactSearchEnvelope = serde_json::from_str(
+            r#"{"responseData":{"data":[{
+                "Contact":{"id":"5","contact_numbers":{"1":"+15551234567"},
+                           "ContactNumber":{"public_number":"+15557654321"}},
+                "ContactNumber":{"0":{"public_number":"+15551234567"},"2":{"public_number":"+15550000000"}}
+            }]}}"#,
+        )
+        .unwrap();
+        let hit = &found.response_data.unwrap().data.unwrap()[0];
+        let node = hit.contact.as_ref().unwrap();
+        assert_eq!(
+            node.contact_numbers.as_deref(),
+            Some(&["+15551234567".to_string()][..])
+        );
+        assert_eq!(node.contact_number.as_ref().map(Vec::len), Some(1));
+        assert_eq!(hit.contact_number.as_ref().map(Vec::len), Some(2));
+        assert!(hit.contact_numbers.is_none());
     }
 }

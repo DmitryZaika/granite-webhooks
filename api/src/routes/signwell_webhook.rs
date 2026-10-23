@@ -19,7 +19,7 @@ use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::quote_pricing::{self, js::num_str};
 use crate::routes::emails::signature_mail::{Branding, status_html};
 use crate::state::AppState;
-use crate::webhooks_client::OutgoingEmail;
+use crate::webhooks_client::{OutgoingAttachment, OutgoingEmail};
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Query, State};
@@ -310,6 +310,10 @@ struct NoticeRow {
     deal_id: Option<i64>,
     filename: String,
     signer_name: String,
+    status: String,
+    provider: String,
+    provider_document_id: Option<String>,
+    completed_object_key: Option<String>,
 }
 
 /// A contract sent from a quote belongs to that quote's deal.
@@ -356,9 +360,13 @@ async fn notify(state: &AppState, request_id: i64, company_id: i32, event: Notic
             "SELECT CAST(sr.created_by_user_id AS SIGNED) AS created_by_user_id, u.email AS sender_email,
                     u.name AS sender_name, c.name AS company_name, c.logo_url AS company_logo_url,
                     CAST(sr.customer_id AS SIGNED) AS customer_id,
-                    CAST(COALESCE(sr.deal_id, e.deal_id) AS SIGNED) AS deal_id, sr.filename, sr.signer_name
+                    CAST(COALESCE(sr.deal_id, e.deal_id) AS SIGNED) AS deal_id, sr.filename, sr.signer_name,
+                    CAST(sr.status AS CHAR) AS status, sr.provider, sr.provider_document_id,
+                    nd.completed_object_key
                FROM signature_requests sr
                LEFT JOIN emails e ON e.id = sr.email_id
+               LEFT JOIN native_signature_documents nd
+                      ON nd.request_id = sr.id AND nd.company_id = sr.company_id
                LEFT JOIN users u ON u.id = sr.created_by_user_id
                LEFT JOIN company c ON c.id = sr.company_id
               WHERE sr.id = ? AND sr.company_id = ?
@@ -445,13 +453,58 @@ async fn notify(state: &AppState, request_id: i64, company_id: i32, event: Notic
             reply_to: Vec::new(),
             in_reply_to: None,
             references: Vec::new(),
-            attachments: Vec::new(),
+            attachments: signed_copy(state, company_id, &row)
+                .await
+                .into_iter()
+                .collect(),
             transactional: true,
         };
         if let Err(err) = state.webhooks.send_email(&outgoing).await {
             tracing::error!(error = ?err, request = request_id, "Failed to email that a signature request was {}", event.verb);
         }
     }
+}
+
+/// The signed PDF to attach to the "signed" notice: the completed copy at
+/// `SignWell`, or the native one in the signature bucket. `None` while the
+/// request is not signed, or when the copy cannot be reached.
+async fn signed_copy(
+    state: &AppState,
+    company_id: i32,
+    row: &NoticeRow,
+) -> Option<OutgoingAttachment> {
+    if row.status != "signed" {
+        return None;
+    }
+    let filename = crate::routes::signatures::signed_copy_filename(
+        &state.pool,
+        company_id,
+        row.customer_id,
+        &row.filename,
+    )
+    .await;
+    let url = if row.provider == "native" {
+        let key = row.completed_object_key.as_deref()?;
+        let bucket = state.signature_bucket.as_deref()?;
+        state
+            .storage
+            .presign_get_in(Some(bucket), key, "application/pdf", Some(&filename))
+            .await
+            .ok()?
+    } else {
+        let document_id = row
+            .provider_document_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())?;
+        crate::routes::signatures::signwell_completed_pdf_url(state, company_id, document_id)
+            .await?
+    };
+    Some(OutgoingAttachment {
+        filename,
+        content_type: "application/pdf".into(),
+        url,
+    })
 }
 
 /// Tells the sender a request moved to `status` (`viewed`, `signed`,

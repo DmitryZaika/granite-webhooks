@@ -20,6 +20,8 @@
 
 use crate::auth::cookie::{cookie_value, decode_session_map, encode_session_map};
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::native_signing::sha256_hex;
+use crate::routes::auth::client_ip;
 use crate::routes::quickbooks::{CustomerInvoices, customer_invoice_pdf_of, invoices_of_customer};
 use crate::state::AppState;
 use crate::webhooks_client::OutgoingEmail;
@@ -421,6 +423,50 @@ fn verify(
     Ok(())
 }
 
+/// `verify`, with failed codes for the page also counted in `login_attempts`
+/// (keyed by the page): the cookie's own count starts over when an older
+/// cookie is sent again, so on its own it doesn't stop guessing.
+async fn verify_counted(
+    state: &AppState,
+    visitor: &mut Visitor,
+    headers: &HeaderMap,
+    view_id: &str,
+    company_id: i32,
+    code: &str,
+) -> ApiResult<()> {
+    if view_id.is_empty() {
+        return verify(state, visitor, view_id, company_id, code);
+    }
+    let key = sha256_hex(format!("customer-view:{view_id}").as_bytes());
+    let failures: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM login_attempts
+          WHERE email_hash = ? AND attempted_at > NOW() - INTERVAL ? MINUTE",
+    )
+    .bind(&key)
+    .bind(CODE_EXPIRY_MS / 60_000)
+    .fetch_one(&state.pool)
+    .await?;
+    if failures >= MAX_VERIFY_ATTEMPTS {
+        return Err(ApiError::BadRequest(
+            "Too many attempts. Request a new code.".into(),
+        ));
+    }
+    let result = verify(state, visitor, view_id, company_id, code);
+    if result.is_ok() {
+        sqlx::query("DELETE FROM login_attempts WHERE email_hash = ?")
+            .bind(&key)
+            .execute(&state.pool)
+            .await?;
+    } else {
+        sqlx::query("INSERT INTO login_attempts (email_hash, ip_hash) VALUES (?, ?)")
+            .bind(&key)
+            .bind(sha256_hex(client_ip(headers).as_bytes()))
+            .execute(&state.pool)
+            .await?;
+    }
+    result
+}
+
 /// The response for `result`, with the visitor's cookie either way (failed
 /// attempts are counted).
 fn finish<T: IntoResponse>(state: &AppState, visitor: &Visitor, result: ApiResult<T>) -> Response {
@@ -555,7 +601,15 @@ pub async fn verify_view_code(
     let mut visitor = Visitor::read(&state, &headers);
     let result = async {
         by_view_id(&state, company_id, &view_id).await?;
-        verify(&state, &mut visitor, &view_id, company_id, &input.code)?;
+        verify_counted(
+            &state,
+            &mut visitor,
+            &headers,
+            &view_id,
+            company_id,
+            &input.code,
+        )
+        .await?;
         Ok(StatusCode::NO_CONTENT)
     }
     .await;
@@ -928,8 +982,16 @@ pub async fn verify_login_code(
 ) -> Response {
     let mut visitor = Visitor::read(&state, &headers);
     let view_id = visitor.str("pendingViewId").unwrap_or_default().to_string();
-    let result = verify(&state, &mut visitor, &view_id, company_id, &input.code)
-        .map(|()| Json(OpenedView { view_id }));
+    let result = verify_counted(
+        &state,
+        &mut visitor,
+        &headers,
+        &view_id,
+        company_id,
+        &input.code,
+    )
+    .await
+    .map(|()| Json(OpenedView { view_id }));
     finish(&state, &visitor, result)
 }
 

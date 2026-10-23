@@ -6,12 +6,12 @@
 //! work: call it from `tokio::task::spawn_blocking`.
 
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
-use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::imageops::FilterType;
 use image::{
     AnimationDecoder, DynamicImage, Frame, ImageDecoder, ImageEncoder, ImageReader, Rgba, RgbaImage,
 };
+use jpeg_encoder::{ChromaSubsamplingMethod, ColorType, Encoder};
 use std::io::Cursor;
 use zune_heic::HeifDecoder;
 use zune_heic::zune_core::bytestream::ZCursor;
@@ -188,17 +188,21 @@ fn flatten(image: &DynamicImage) -> image::RgbImage {
     })
 }
 
+/// A JPEG with 4:2:0 chroma below quality 90 (averaged, as libjpeg does) and
+/// Huffman tables fitted to the picture: about a third smaller than the
+/// `image` crate's 4:4:4 output with stock tables, at the same look.
 pub fn encode_jpeg(image: &DynamicImage, quality: u8) -> Vec<u8> {
     let rgb = flatten(image);
     let mut out = Vec::new();
-    let encoder = JpegEncoder::new_with_quality(&mut out, quality);
+    // JPEG sides stop at 65,535 px.
+    let (Ok(width), Ok(height)) = (u16::try_from(rgb.width()), u16::try_from(rgb.height())) else {
+        return out;
+    };
+    let mut encoder = Encoder::new(&mut out, quality);
+    encoder.set_chroma_subsampling_method(ChromaSubsamplingMethod::Average);
+    encoder.set_optimized_huffman_tables(true);
     // Encoding an in-memory RGB buffer cannot fail.
-    let _ = encoder.write_image(
-        rgb.as_raw(),
-        rgb.width(),
-        rgb.height(),
-        image::ExtendedColorType::Rgb8,
-    );
+    let _ = encoder.encode(rgb.as_raw(), width, height, ColorType::Rgb);
     out
 }
 
@@ -214,10 +218,18 @@ pub fn encode_png(image: &DynamicImage) -> Vec<u8> {
     out
 }
 
-/// Scaled to fit `max x max`, never enlarged.
+/// Scaled to fit `max x max`, never enlarged. More than 4x bigger, it is
+/// first box-averaged to twice the size, then Lanczos3 does the rest: a 36 MP
+/// slab photo shrinks in a fraction of the time, with the same result.
 pub fn fit_inside(image: &DynamicImage, max: u32) -> DynamicImage {
     if image.width() <= max && image.height() <= max {
         return image.clone();
+    }
+    let twice = max.saturating_mul(2);
+    if image.width().max(image.height()) / 4 > max {
+        return image
+            .thumbnail(twice, twice)
+            .resize(max, max, FilterType::Lanczos3);
     }
     image.resize(max, max, FilterType::Lanczos3)
 }
@@ -280,11 +292,22 @@ fn encode_gif(frames: &[Frame], max: u32) -> Result<(Vec<u8>, u32, u32), ImageEr
     Ok((out, size.0, size.1))
 }
 
+/// JPEG qualities tried at each size, best first. Below 72 blocks show on a
+/// phone, so the picture gets smaller instead.
+const SMS_JPEG_QUALITIES: [u8; 3] = [85, 78, 72];
+
+/// Whether any pixel is see-through.
+fn has_transparency(image: &DynamicImage) -> bool {
+    image.color().has_alpha() && image.to_rgba8().pixels().any(|pixel| pixel.0[3] < u8::MAX)
+}
+
 /// A picture made ready to text (the CRM's `processSmsImage`).
 ///
-/// Upright, at most 1600 px a side, re-encoded until it fits about 480 KB
-/// (lower JPEG quality first, then smaller). PNG and GIF (animations too) keep
-/// their format; HEIC and WebP become JPEG.
+/// Upright, at most 1600 px a side, re-encoded until it fits about 480 KB:
+/// JPEG quality 85, 78 or 72 first, a smaller size only after that (sharp
+/// and smaller beats full size and blocky). A PNG stays PNG when it fits or
+/// has transparency; other PNGs, HEIC and WebP become JPEG; GIF (animations
+/// too) stays GIF.
 pub fn process_sms_image(bytes: &[u8]) -> Result<SmsImage, ImageError> {
     let kind = sniff(bytes).ok_or(ImageError::Unsupported)?;
     if kind == Kind::Gif {
@@ -305,37 +328,38 @@ pub fn process_sms_image(bytes: &[u8]) -> Result<SmsImage, ImageError> {
             height,
         });
     }
-    let image = decode(bytes)?;
-    let png = kind == Kind::Png;
-    let encode_at = |max: u32, quality: u8| {
-        let resized = fit_inside(&image, max);
-        let bytes = if png {
-            encode_png(&resized)
-        } else {
-            encode_jpeg(&resized, quality)
-        };
-        (bytes, resized.width(), resized.height())
-    };
-    let mut max = SMS_IMAGE_MAX_DIMENSION;
-    let mut quality: u8 = 82;
-    let (mut out, mut width, mut height) = encode_at(max, quality);
-    // PNG is lossless here: only a smaller size helps.
-    while !png && out.len() > SMS_IMAGE_TARGET_BYTES && quality > 40 {
-        quality -= 12;
-        (out, width, height) = encode_at(max, quality);
+    let base = fit_inside(&decode(bytes)?, SMS_IMAGE_MAX_DIMENSION);
+    let mut image = base.clone();
+    let mut png = kind == Kind::Png;
+    let mut out = if png { encode_png(&image) } else { Vec::new() };
+    // Too big and nothing see-through: a photo saved as PNG, JPEG keeps its size.
+    if png && out.len() > SMS_IMAGE_TARGET_BYTES && !has_transparency(&image) {
+        png = false;
     }
-    let mut guard = 0;
-    while out.len() > SMS_IMAGE_TARGET_BYTES && max > 320 && guard < 6 {
-        max = scale_down(max);
-        (out, width, height) = encode_at(max, quality);
-        guard += 1;
+    loop {
+        if !png {
+            for quality in SMS_JPEG_QUALITIES {
+                out = encode_jpeg(&image, quality);
+                if out.len() <= SMS_IMAGE_TARGET_BYTES {
+                    break;
+                }
+            }
+        }
+        let longest = image.width().max(image.height());
+        if out.len() <= SMS_IMAGE_TARGET_BYTES || longest <= 320 {
+            break;
+        }
+        image = fit_inside(&base, scale_down(longest).max(320));
+        if png {
+            out = encode_png(&image);
+        }
     }
     Ok(SmsImage {
         bytes: out,
         content_type: if png { "image/png" } else { "image/jpeg" },
         ext: if png { "png" } else { "jpg" },
-        width,
-        height,
+        width: image.width(),
+        height: image.height(),
     })
 }
 
@@ -377,20 +401,85 @@ mod tests {
         assert_eq!(sniff(b"%PDF-1.7"), None);
     }
 
+    /// A photo-like picture: soft gradients with a little grain, which PNG
+    /// can't squeeze and JPEG can. `alpha` makes the left half see-through.
+    fn photo(width: u32, height: u32, alpha: bool) -> DynamicImage {
+        let grain = |x: u32, y: u32| (x.wrapping_mul(7919) ^ y.wrapping_mul(104_729)) % 7;
+        DynamicImage::ImageRgba8(RgbaImage::from_fn(width, height, |x, y| {
+            let byte = |v: u32| u8::try_from(v.min(255)).expect("a byte");
+            Rgba([
+                byte(x * 200 / width + grain(x, y)),
+                byte(y * 200 / height + grain(y, x)),
+                byte(120 + grain(x + y, x)),
+                if alpha && x < width / 2 { 0 } else { 255 },
+            ])
+        }))
+    }
+
     #[test]
-    fn big_pictures_shrink_to_the_text_size() {
-        let processed = process_sms_image(&png(3000, 2000)).unwrap();
-        assert_eq!(processed.content_type, "image/png");
-        assert!(processed.width <= 1600 && processed.height <= 1600);
-        assert!((i64::from(processed.width) * 2 - i64::from(processed.height) * 3).abs() <= 3);
-        assert!(processed.bytes.len() <= SMS_IMAGE_TARGET_BYTES || processed.width <= 320);
-        let jpeg = encode_jpeg(&decode(&png(3000, 2000)).unwrap(), 95);
+    fn photos_keep_full_size_as_jpeg() {
+        let jpeg = encode_jpeg(&photo(3000, 2000, false), 95);
         let processed = process_sms_image(&jpeg).unwrap();
         assert_eq!(
             (processed.content_type, processed.width, processed.height),
             ("image/jpeg", 1600, 1067)
         );
         assert!(processed.bytes.len() <= SMS_IMAGE_TARGET_BYTES);
+        // Saved as PNG it is too big to stay PNG, so it goes JPEG at full size.
+        let processed = process_sms_image(&encode_png(&photo(3000, 2000, false))).unwrap();
+        assert_eq!(
+            (processed.content_type, processed.width, processed.height),
+            ("image/jpeg", 1600, 1067)
+        );
+        assert!(processed.bytes.len() <= SMS_IMAGE_TARGET_BYTES);
+    }
+
+    #[test]
+    fn see_through_pngs_stay_png_and_shrink() {
+        let processed = process_sms_image(&encode_png(&photo(3000, 2000, true))).unwrap();
+        assert_eq!(processed.content_type, "image/png");
+        assert!(processed.width < 1600);
+        assert!((i64::from(processed.width) * 2 - i64::from(processed.height) * 3).abs() <= 3);
+        assert!(processed.bytes.len() <= SMS_IMAGE_TARGET_BYTES || processed.width <= 320);
+    }
+
+    #[test]
+    fn pngs_that_fit_stay_lossless() {
+        let flat = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            1200,
+            900,
+            image::Rgb([20, 90, 200]),
+        ));
+        let processed = process_sms_image(&encode_png(&flat)).unwrap();
+        assert_eq!(
+            (processed.content_type, processed.width, processed.height),
+            ("image/png", 1200, 900)
+        );
+    }
+
+    #[test]
+    fn big_reductions_keep_the_shape() {
+        let wide = DynamicImage::ImageRgb8(image::RgbImage::new(4000, 2000));
+        let small = fit_inside(&wide, 600);
+        assert_eq!((small.width(), small.height()), (600, 300));
+    }
+
+    #[test]
+    fn jpeg_is_smaller_than_the_image_crate_encoder() {
+        let picture = photo(1600, 1067, false);
+        let ours = encode_jpeg(&picture, 85);
+        let mut theirs = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut theirs, 85)
+            .encode_image(&picture.to_rgb8())
+            .unwrap();
+        assert!(
+            ours.len() * 10 < theirs.len() * 9,
+            "{} vs {}",
+            ours.len(),
+            theirs.len()
+        );
+        let decoded = image::load_from_memory(&ours).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (1600, 1067));
     }
 
     #[test]
