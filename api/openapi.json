@@ -72619,7 +72619,7 @@
           },
           "storm_digest": {
             "type": "boolean",
-            "description": "A storm digest was emailed."
+            "description": "A storm digest was sent."
           },
           "busy": {
             "type": "boolean",
