@@ -63,7 +63,7 @@ Browser app: `$lib` is `web`.
   - `query_key`: the React Query key, which you can find in `app/lib/api/*.ts`;
   - `component_stack`, `error_status`;
   - and for failed API calls, `api_method`, `api_path` and `api_status`.
-- Stack frames are minified (`assets/<Chunk>-<hash>.js`) because source maps are not uploaded yet. Line numbers are useless, but the chunk name usually names the module, for example `DelayedSendButton-…js`.
+- Browser stack frames resolve to source files when the deploy uploaded its source maps (`make deploy` with `POSTHOG_CLI_API_KEY`). A frame still shown as `assets/<Chunk>-<hash>.js` came from a build without them: its line numbers are useless, but the chunk name usually names the module, for example `DelayedSendButton-…js`.
 - `GraniteApiError` with the message `Granite API <status> on <path>: <body>` means the browser received an error from the Rust `api`.
   - A 5xx is almost always a backend bug: fix it in `granite-webhooks/api`.
   - A 4xx is usually the client sending something the API rejects. Decide which side is wrong from the route's contract in `api/src/routes`, and from `api/openapi.json`.

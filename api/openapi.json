@@ -21241,6 +21241,8 @@
         "tags": [
           "sms"
         ],
+        "summary": "Store an inbound MMS's files",
+        "description": "Called by the `webhooks` Lambda (job key), not by the CRM: after it saved an\ninbound `RingCentral` text, it sends the message's file ids. Each file is\ndownloaded with the company's `RingCentral` login, stored under\n`sms-attachments/<company id>/` and shown with the text in the conversation.\nReturns how many were stored; 404 when the text is not the company's.",
         "operationId": "store_ringcentral_inbound_media",
         "requestBody": {
           "content": {
@@ -57747,7 +57749,8 @@
         "properties": {
           "company_id": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "description": "The company the message belongs to: its `RingCentral` login is used."
           },
           "sms_id": {
             "type": "integer",
@@ -57770,7 +57773,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/InboundMediaFile"
-            }
+            },
+            "description": "The message's pictures and files, in the order the customer sent them."
           }
         }
       },
@@ -57787,7 +57791,8 @@
             "description": "The attachment id under the message's `content/`."
           },
           "content_type": {
-            "type": "string"
+            "type": "string",
+            "description": "MIME type `RingCentral` gives the file (e.g. `image/jpeg`); it picks the\nstored file's extension."
           }
         }
       },
@@ -57800,6 +57805,7 @@
         "properties": {
           "stored": {
             "type": "integer",
+            "description": "Files downloaded and attached; a file that failed is left out.",
             "minimum": 0
           }
         }

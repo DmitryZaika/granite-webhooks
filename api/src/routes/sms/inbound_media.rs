@@ -23,12 +23,15 @@ use utoipa::ToSchema;
 pub struct InboundMediaFile {
     /// The attachment id under the message's `content/`.
     pub id: String,
+    /// MIME type `RingCentral` gives the file (e.g. `image/jpeg`); it picks the
+    /// stored file's extension.
     pub content_type: String,
 }
 
 /// Body of `POST /v1/sms/ringcentral/inbound-media`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct InboundMedia {
+    /// The company the message belongs to: its `RingCentral` login is used.
     pub company_id: i32,
     /// The stored `ringcentral_sms` row.
     pub sms_id: i64,
@@ -36,12 +39,14 @@ pub struct InboundMedia {
     pub message_id: i64,
     /// The extension whose message store holds it; the token's own when null.
     pub extension_id: Option<String>,
+    /// The message's pictures and files, in the order the customer sent them.
     pub files: Vec<InboundMediaFile>,
 }
 
 /// How many files were stored.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct InboundMediaStored {
+    /// Files downloaded and attached; a file that failed is left out.
     pub stored: usize,
 }
 
@@ -72,6 +77,13 @@ fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         .ok()
 }
 
+/// Store an inbound MMS's files
+///
+/// Called by the `webhooks` Lambda (job key), not by the CRM: after it saved an
+/// inbound `RingCentral` text, it sends the message's file ids. Each file is
+/// downloaded with the company's `RingCentral` login, stored under
+/// `sms-attachments/<company id>/` and shown with the text in the conversation.
+/// Returns how many were stored; 404 when the text is not the company's.
 #[utoipa::path(
     post,
     path = "/v1/sms/ringcentral/inbound-media",
