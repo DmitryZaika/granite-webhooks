@@ -39,6 +39,9 @@ const DISPATCH_BATCH_LIMIT: i64 = 50;
 const PER_COMPANY_BATCH_LIMIT: i64 = 10;
 const MAX_SEND_ATTEMPTS: i32 = 3;
 const CLAIM_WINDOW_MINUTES: i64 = 20;
+/// A run takes no new enrollment after this, so it stays inside the API's
+/// 30 s limit with the job's other work; the rest stay due for the next run.
+const RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
 /// A customer-requested phone call is rechecked daily until it happened.
 const MANUAL_ACTION_RECHECK_MINUTES: i64 = 24 * 60;
 
@@ -1117,11 +1120,14 @@ pub async fn process_due_followups_at(
     clock: Option<Instant>,
 ) -> Result<FollowupRun, sqlx::Error> {
     let due = due_enrollments(state, clock.unwrap_or_else(Utc::now)).await?;
-    let mut run = FollowupRun {
-        processed: due.len(),
-        ..FollowupRun::default()
-    };
+    let started = std::time::Instant::now();
+    let mut run = FollowupRun::default();
     for enrollment in due {
+        // AI writing takes seconds: what is left waits for the next run.
+        if started.elapsed() > RUN_BUDGET {
+            break;
+        }
+        run.processed += 1;
         let id = enrollment.id;
         if let Err(err) = process_one(state, enrollment, &mut run, clock).await {
             tracing::error!(?err, enrollment = id, "sms follow-up dispatch failed");

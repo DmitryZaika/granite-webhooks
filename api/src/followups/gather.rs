@@ -165,7 +165,7 @@ fn format_db_time(at: NaiveDateTime) -> String {
     at.format("%Y-%m-%d %H:%M").to_string()
 }
 
-fn strip_html_tags(html: &str) -> String {
+pub(crate) fn strip_html_tags(html: &str) -> String {
     re!(r"<[^>]*>", "g").replace_all(html, "").into_owned()
 }
 

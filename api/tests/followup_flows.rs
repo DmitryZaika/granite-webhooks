@@ -1043,3 +1043,188 @@ async fn a_cloudtalk_rep_starts_a_text_flow_where_ringcentral_is_connected_too(p
     res.assert_status_ok();
     assert_eq!(res.json::<Value>()["active_flow"]["status"], "active");
 }
+
+/// Paula's open deal with Rita (list 101), from the start of last month.
+async fn paula_deal(pool: &MySqlPool) {
+    sqlx::query(
+        "INSERT INTO deals (id, customer_id, title, list_id, position, user_id, created_at, updated_at)
+         VALUES (9650, 9600, 'Paula kitchen', 101, 9, 100, '2026-09-01 08:00:00', '2026-09-01 08:00:00')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn end_run(pool: &MySqlPool, id: i32, status: &str, error: Option<&str>) {
+    sqlx::query(
+        "UPDATE sms_flow_enrollments SET status = ?, error_message = ?, next_send_at = NULL,
+                updated_at = UTC_TIMESTAMP() WHERE id = ?",
+    )
+    .bind(status)
+    .bind(error)
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn notifications(pool: &MySqlPool) -> Vec<(i32, Option<i64>, String, Option<String>)> {
+    sqlx::query_as(
+        "SELECT user_id, CAST(deal_id AS SIGNED), message, notification_type FROM notifications
+          WHERE notification_type LIKE 'followup_%' ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+#[test_db::test(seed)]
+async fn a_reply_to_a_follow_up_alerts_the_rep_once(pool: MySqlPool) {
+    let setup = setup(&pool).await;
+    paula_deal(&pool).await;
+    let id = setup.enroll(9700, Some(9600)).await;
+    sqlx::query(
+        "INSERT INTO cloudtalk_sms (sender, recipient, text, direction, status, company_id, created_date,
+                                    phone_digits, sender10, is_echo)
+         VALUES ('3175550177', '3175550000', 'Not now,\n maybe in May', 'inbound', 'received', 100,
+                 '2026-10-02 09:00:00', '3175550177', '3175550177', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    end_run(&pool, id, "stopped_by_reply", None).await;
+
+    let alerted = api::followups::alerts::alert_ended_followups(&setup.state)
+        .await
+        .unwrap();
+    assert_eq!(alerted, 1);
+    assert_eq!(
+        notifications(&pool).await,
+        vec![(
+            100,
+            Some(9650),
+            "Replied to your follow-up: “Not now, maybe in May”".to_string(),
+            Some("followup_replied".to_string())
+        )]
+    );
+    let emails = setup.emails();
+    assert_eq!(emails.len(), 1);
+    assert_eq!(
+        emails[0].subject,
+        "Paula Prospect replied to your follow-up"
+    );
+    assert!(
+        emails[0].body.contains("/employee/deals/edit/9650/project"),
+        "{}",
+        emails[0].body
+    );
+    // Told once.
+    assert_eq!(
+        api::followups::alerts::alert_ended_followups(&setup.state)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(setup.emails().len(), 1);
+}
+
+#[test_db::test(seed)]
+async fn a_failed_follow_up_tells_the_rep_why_and_old_ends_stay_quiet(pool: MySqlPool) {
+    let setup = setup(&pool).await;
+    paula_deal(&pool).await;
+    let id = setup.enroll(9700, Some(9600)).await;
+    end_run(&pool, id, "failed", Some("agent_not_linked")).await;
+    // Ended before alerts existed: counted as told.
+    let old = setup.enroll(9701, Some(9600)).await;
+    end_run(&pool, old, "stopped_by_reply", None).await;
+    sqlx::query("UPDATE sms_flow_enrollments SET ended_alert_at = UTC_TIMESTAMP() WHERE id = ?")
+        .bind(old)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let alerted = api::followups::alerts::alert_ended_followups(&setup.state)
+        .await
+        .unwrap();
+    assert_eq!(alerted, 1);
+    let rows = notifications(&pool).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].3.as_deref(), Some("followup_failed"));
+    assert_eq!(
+        rows[0].2,
+        "Follow-up stopped because your texting line isn't linked to your account. Fix it, then start it again."
+    );
+    assert_eq!(
+        setup.emails()[0].subject,
+        "Follow-up for Paula Prospect stopped"
+    );
+}
+
+#[test_db::test(seed)]
+async fn the_9_am_email_lists_quiet_deals_once_a_day(pool: MySqlPool) {
+    let setup = setup(&pool).await;
+    paula_deal(&pool).await;
+    // Rita's last text to Paula was two weeks ago.
+    rep_text(&pool, "2026-09-30 10:00:00").await;
+    let rita: String = sqlx::query_scalar("SELECT TRIM(email) FROM users WHERE id = 100")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    // Wednesday 9:30 AM in the store.
+    let nine = parse_iso("2026-10-14T13:30:00Z").unwrap();
+
+    let sent = api::followups::digest::send_quiet_digests(&setup.state, nine)
+        .await
+        .unwrap();
+    assert!(sent >= 1);
+    let emails = setup.emails();
+    let to_rita: Vec<_> = emails.iter().filter(|e| e.to == [rita.clone()]).collect();
+    assert_eq!(to_rita.len(), 1);
+    assert!(
+        to_rita[0].subject.ends_with("waiting on you"),
+        "{}",
+        to_rita[0].subject
+    );
+    assert!(
+        to_rita[0].body.contains(
+            "/employee/deals/edit/9650/project\">Paula Prospect</a> · Quoted · last message 14 days ago"
+        ),
+        "{}",
+        to_rita[0].body
+    );
+
+    // Once a day, at 9 only, never on Sunday.
+    let count = setup.emails().len();
+    assert_eq!(
+        api::followups::digest::send_quiet_digests(&setup.state, nine)
+            .await
+            .unwrap(),
+        0
+    );
+    for at in ["2026-10-14T14:30:00Z", "2026-10-18T13:30:00Z"] {
+        assert_eq!(
+            api::followups::digest::send_quiet_digests(&setup.state, parse_iso(at).unwrap())
+                .await
+                .unwrap(),
+            0
+        );
+    }
+    assert_eq!(setup.emails().len(), count);
+}
+
+#[test_db::test(seed)]
+async fn a_customer_with_a_follow_up_running_is_not_listed(pool: MySqlPool) {
+    let setup = setup(&pool).await;
+    paula_deal(&pool).await;
+    rep_text(&pool, "2026-09-30 10:00:00").await;
+    setup.enroll(9704, Some(9600)).await;
+    let deals = api::followups::digest::quiet_deals(
+        &setup.state,
+        100,
+        100,
+        parse_iso("2026-10-14T13:30:00Z").unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(deals.iter().all(|d| d.deal_id != 9650), "{deals:?}");
+}
