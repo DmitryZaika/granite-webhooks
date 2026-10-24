@@ -17,6 +17,7 @@ use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use sqlx::MySqlPool;
 
 /// At most this many threads per delete or purge, so a buggy client cannot
 /// wipe a folder in one request.
@@ -140,28 +141,53 @@ pub async fn unread(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<UnreadCount>> {
-    let domain: Option<Option<String>> =
-        sqlx::query_scalar("SELECT domain FROM company WHERE id = ?")
-            .bind(user.company_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    if domain.flatten().is_none_or(|d| d.trim().is_empty()) {
+    if !has_inbound_email(&state.pool, user.company_id).await? {
         return Ok(Json(UnreadCount {
             count: 0,
             latest_inbound_id: None,
         }));
     }
-    let mailbox = mailbox(&user);
-    let scope = company_scope("e", user.company_id);
-    let incoming = unread_incoming("e", &mailbox);
-    let in_inbox = thread_in_inbox("e", &mailbox);
-    let mut args: Vec<Arg> = vec![user.company_id.into()];
+    let unread = unread_inbox(&mailbox(&user));
+    let (count, latest): (i64, Option<i64>) = Sql::new(
+        format!(
+            "SELECT COUNT(DISTINCT e.thread_id), CAST(MAX(e.id) AS SIGNED) {}",
+            unread.sql
+        ),
+        unread.args,
+    )
+    .query_as()
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(UnreadCount {
+        count,
+        latest_inbound_id: latest,
+    }))
+}
+
+/// The company receives email: it has an inbound email domain.
+pub(super) async fn has_inbound_email(pool: &MySqlPool, company_id: i32) -> sqlx::Result<bool> {
+    let domain: Option<Option<String>> =
+        sqlx::query_scalar("SELECT domain FROM company WHERE id = ?")
+            .bind(company_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(domain.flatten().is_some_and(|d| !d.trim().is_empty()))
+}
+
+/// `FROM ... WHERE ...` of the caller's unread inbox messages (`e`), as the
+/// badge counts them; the company's inbound email domain is checked apart.
+/// `POST /v1/emails/inbound-push` pushes a new email to the users it matches.
+pub(super) fn unread_inbox(mailbox: &Mailbox) -> Sql {
+    let scope = company_scope("e", mailbox.company_id);
+    let incoming = unread_incoming("e", mailbox);
+    let in_inbox = thread_in_inbox("e", mailbox);
+    let mut args: Vec<Arg> = vec![mailbox.company_id.into()];
     args.extend(scope.args);
     args.extend(incoming.args);
     args.extend(in_inbox.args);
-    let (count, latest): (i64, Option<i64>) = Sql::new(
+    Sql::new(
         format!(
-            "SELECT COUNT(DISTINCT e.thread_id), CAST(MAX(e.id) AS SIGNED) FROM emails e
+            "FROM emails e
              LEFT JOIN deals d ON d.id = COALESCE(
                e.deal_id,
                (SELECT MAX(td.deal_id) FROM emails td
@@ -174,13 +200,6 @@ pub async fn unread(
         ),
         args,
     )
-    .query_as()
-    .fetch_one(&state.pool)
-    .await?;
-    Ok(Json(UnreadCount {
-        count,
-        latest_inbound_id: latest,
-    }))
 }
 
 /// Get an email conversation
