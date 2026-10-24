@@ -44482,7 +44482,7 @@
           "superuser"
         ],
         "summary": "List the companies",
-        "description": "Every live company, most users first: users counting toward the limit,\ntours progress, connected integrations, feature switches and whether\nStripe payment is required. The slower checks are per company:\n`/domain-trust`, `/ses-inbound`, `/setup-checklist`.",
+        "description": "Every live company, most users first: users counting toward the limit,\ntours progress, connected integrations, feature switches and whether\nStripe payment is required, plus its plan, usable and free add-ons, Manager\ncount and stored subscription. The slower checks are per company:\n`/domain-trust`, `/ses-inbound`, `/setup-checklist`.",
         "operationId": "list_platform_companies",
         "responses": {
           "200": {
@@ -50109,6 +50109,48 @@
           }
         }
       },
+      "CompanyBillingSummary": {
+        "type": "object",
+        "description": "A company's stored Stripe subscription state.",
+        "required": [
+          "payment_status",
+          "subscription_status"
+        ],
+        "properties": {
+          "payment_status": {
+            "type": "string",
+            "description": "`active`, `past_due`, `suspended` or `none`."
+          },
+          "subscription_status": {
+            "type": "string",
+            "description": "Stripe's subscription status (`active`, `trialing`, `canceled`, ...)."
+          },
+          "current_period_end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Next billing date (ISO 8601), or null."
+          },
+          "grace_period_ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "End of the grace period after a failed payment (ISO 8601), or null."
+          },
+          "trial_end_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the first charge is due, while on a trial (ISO 8601), or null."
+          }
+        }
+      },
       "CompanyDetails": {
         "type": "object",
         "description": "A company's settings as super admins edit them.",
@@ -50717,6 +50759,10 @@
           "cloudtalk_connected",
           "quickbooks_connected",
           "billing_required",
+          "plan_source",
+          "addons",
+          "comp_addons",
+          "manager_count",
           "features"
         ],
         "properties": {
@@ -50784,6 +50830,48 @@
           "billing_required": {
             "type": "boolean",
             "description": "Access depends on the Stripe subscription."
+          },
+          "plan_source": {
+            "type": "string",
+            "description": "`legacy` (every add-on included) or `subscription` (only bought or\ngranted add-ons)."
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Add-on keys (`signatures`, `quotes`, `quickbooks`) the company may use\nnow: all three on a legacy plan, else its active add-ons of any source."
+          },
+          "comp_addons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Add-on keys granted free by a superuser and in force now."
+          },
+          "manager_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Live users holding the Manager position in this company."
+          },
+          "billing_required_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When Stripe payment became required (ISO 8601, UTC), or null."
+          },
+          "billing": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CompanyBillingSummary",
+                "description": "Its stored Stripe subscription, or null when it never had one."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "features": {
             "$ref": "#/components/schemas/Features"

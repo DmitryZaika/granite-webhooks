@@ -31,6 +31,7 @@ use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::{IntoParams, ToSchema};
@@ -123,7 +124,53 @@ pub struct CompanySummary {
     pub quickbooks_connected: bool,
     /// Access depends on the Stripe subscription.
     pub billing_required: bool,
+    /// `legacy` (every add-on included) or `subscription` (only bought or
+    /// granted add-ons).
+    pub plan_source: String,
+    /// Add-on keys (`signatures`, `quotes`, `quickbooks`) the company may use
+    /// now: all three on a legacy plan, else its active add-ons of any source.
+    pub addons: Vec<String>,
+    /// Add-on keys granted free by a superuser and in force now.
+    pub comp_addons: Vec<String>,
+    /// Live users holding the Manager position in this company.
+    pub manager_count: i64,
+    /// When Stripe payment became required (ISO 8601, UTC), or null.
+    pub billing_required_since: Option<DateTime<Utc>>,
+    /// Its stored Stripe subscription, or null when it never had one.
+    pub billing: Option<CompanyBillingSummary>,
     pub features: Features,
+}
+
+/// A company's stored Stripe subscription state.
+#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
+pub struct CompanyBillingSummary {
+    /// `active`, `past_due`, `suspended` or `none`.
+    pub payment_status: String,
+    /// Stripe's subscription status (`active`, `trialing`, `canceled`, ...).
+    pub subscription_status: String,
+    /// Next billing date (ISO 8601), or null.
+    pub current_period_end: Option<DateTime<Utc>>,
+    /// End of the grace period after a failed payment (ISO 8601), or null.
+    pub grace_period_ends_at: Option<DateTime<Utc>>,
+    /// When the first charge is due, while on a trial (ISO 8601), or null.
+    pub trial_end_at: Option<DateTime<Utc>>,
+}
+
+#[derive(sqlx::FromRow)]
+struct BillingRow {
+    company_id: i32,
+    payment_status: String,
+    subscription_status: String,
+    current_period_end: Option<NaiveDateTime>,
+    grace_period_ends_at: Option<NaiveDateTime>,
+    trial_end_at: Option<NaiveDateTime>,
+}
+
+#[derive(sqlx::FromRow)]
+struct AddonRow {
+    company_id: i32,
+    addon_key: String,
+    source: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -140,15 +187,62 @@ struct SummaryRow {
     cloudtalk_connected: bool,
     quickbooks_connected: bool,
     billing_required: bool,
+    plan_source: String,
+    manager_count: i64,
+    billing_required_at: Option<NaiveDateTime>,
     #[sqlx(flatten)]
     features: Features,
+}
+
+/// Every add-on row in force now, by company.
+async fn active_addons(pool: &sqlx::MySqlPool) -> ApiResult<HashMap<i32, Vec<AddonRow>>> {
+    let rows: Vec<AddonRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT ca.company_id, ca.addon_key, ca.source FROM company_addons ca
+          WHERE {ACTIVE_ADDON}"
+    )))
+    .fetch_all(pool)
+    .await?;
+    let mut active: HashMap<i32, Vec<AddonRow>> = HashMap::new();
+    for row in rows {
+        active.entry(row.company_id).or_default().push(row);
+    }
+    Ok(active)
+}
+
+/// Every stored subscription, by company.
+async fn billing_by_company(
+    pool: &sqlx::MySqlPool,
+) -> ApiResult<HashMap<i32, CompanyBillingSummary>> {
+    let rows: Vec<BillingRow> = sqlx::query_as(
+        "SELECT company_id, payment_status, subscription_status, current_period_end,
+                grace_period_ends_at, trial_end_at
+           FROM company_billing",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.company_id,
+                CompanyBillingSummary {
+                    payment_status: row.payment_status,
+                    subscription_status: row.subscription_status,
+                    current_period_end: row.current_period_end.map(|d| d.and_utc()),
+                    grace_period_ends_at: row.grace_period_ends_at.map(|d| d.and_utc()),
+                    trial_end_at: row.trial_end_at.map(|d| d.and_utc()),
+                },
+            )
+        })
+        .collect())
 }
 
 /// List the companies
 ///
 /// Every live company, most users first: users counting toward the limit,
 /// tours progress, connected integrations, feature switches and whether
-/// Stripe payment is required. The slower checks are per company:
+/// Stripe payment is required, plus its plan, usable and free add-ons, Manager
+/// count and stored subscription. The slower checks are per company:
 /// `/domain-trust`, `/ses-inbound`, `/setup-checklist`.
 #[utoipa::path(
     get,
@@ -178,6 +272,11 @@ pub async fn list_companies(
                   AS cloudtalk_connected,
                 COALESCE(TRIM(c.qbo_realm_id), '') <> '' AS quickbooks_connected,
                 COALESCE(c.billing_required, 0) <> 0 AS billing_required,
+                c.plan_source AS plan_source, c.billing_required_at,
+                (SELECT CAST(COUNT(DISTINCT up.user_id) AS SIGNED)
+                   FROM users_positions up JOIN users mu ON mu.id = up.user_id
+                  WHERE up.company_id = c.id AND up.position_id = {MANAGER} AND mu.is_deleted = 0)
+                  AS manager_count,
                 {features}
            FROM company c
            {joins}
@@ -192,22 +291,47 @@ pub async fn list_companies(
     let rows: Vec<SummaryRow> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .fetch_all(&state.pool)
         .await?;
+    let mut active = active_addons(&state.pool).await?;
+    let mut billing = billing_by_company(&state.pool).await?;
     Ok(Json(
         rows.into_iter()
-            .map(|row| CompanySummary {
-                id: row.id,
-                name: row.name,
-                subdomain: row.subdomain,
-                domain: row.domain,
-                logo_url: row.logo_url,
-                max_users: row.max_users,
-                user_count: row.user_count,
-                onboarding_finished: row.onboarding_finished,
-                onboarding_eligible: row.onboarding_eligible,
-                cloudtalk_connected: row.cloudtalk_connected,
-                quickbooks_connected: row.quickbooks_connected,
-                billing_required: row.billing_required,
-                features: row.features,
+            .map(|row| {
+                let own = active.remove(&row.id).unwrap_or_default();
+                let held = |key: AddonKey| own.iter().any(|a| a.addon_key == key.as_str());
+                let addons = AddonKey::ALL
+                    .into_iter()
+                    .filter(|key| row.plan_source != "subscription" || held(*key))
+                    .map(|key| key.as_str().to_string())
+                    .collect();
+                let comp_addons = AddonKey::ALL
+                    .into_iter()
+                    .filter(|key| {
+                        own.iter()
+                            .any(|a| a.addon_key == key.as_str() && a.source == "comp")
+                    })
+                    .map(|key| key.as_str().to_string())
+                    .collect();
+                CompanySummary {
+                    id: row.id,
+                    name: row.name,
+                    subdomain: row.subdomain,
+                    domain: row.domain,
+                    logo_url: row.logo_url,
+                    max_users: row.max_users,
+                    user_count: row.user_count,
+                    onboarding_finished: row.onboarding_finished,
+                    onboarding_eligible: row.onboarding_eligible,
+                    cloudtalk_connected: row.cloudtalk_connected,
+                    quickbooks_connected: row.quickbooks_connected,
+                    billing_required: row.billing_required,
+                    plan_source: row.plan_source,
+                    addons,
+                    comp_addons,
+                    manager_count: row.manager_count,
+                    billing_required_since: row.billing_required_at.map(|d| d.and_utc()),
+                    billing: billing.remove(&row.id),
+                    features: row.features,
+                }
             })
             .collect(),
     ))

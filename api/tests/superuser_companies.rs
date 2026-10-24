@@ -109,6 +109,76 @@ async fn superusers_list_the_companies(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn the_list_carries_plan_add_ons_managers_and_billing(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO company_billing (company_id, subscription_status, payment_status,
+                current_period_end, grace_period_ends_at, trial_end_at)
+         VALUES (20100, 'trialing', 'active', '2026-11-01 12:00:00', NULL, '2026-11-01 12:00:00')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Company 100 has no Manager in the seed: a live one counts, a deleted one does not.
+    sqlx::query("INSERT INTO users_positions (user_id, position_id, company_id) VALUES (100, 5, 100), (105, 5, 100)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE company SET billing_required_at = '2026-10-01 08:30:00' WHERE id = 20101")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let server = server(&pool).await;
+    let rows: Value = server
+        .get("/v1/superuser/companies")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    let find = |id: i32| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap()
+            .clone()
+    };
+
+    let legacy = find(100);
+    assert_eq!(legacy["plan_source"], "legacy");
+    assert_eq!(
+        legacy["addons"],
+        json!(["signatures", "quotes", "quickbooks"])
+    );
+    assert_eq!(legacy["comp_addons"], json!([]));
+    assert_eq!(legacy["manager_count"], 1);
+    assert_eq!(legacy["billing"], Value::Null);
+    assert_eq!(legacy["billing_required_since"], Value::Null);
+
+    let quotes_only = find(20100);
+    assert_eq!(quotes_only["plan_source"], "subscription");
+    assert_eq!(quotes_only["addons"], json!(["quotes"]));
+    assert_eq!(quotes_only["comp_addons"], json!([]));
+    assert_eq!(quotes_only["manager_count"], 1);
+    assert_eq!(
+        quotes_only["billing"],
+        json!({
+            "payment_status": "active",
+            "subscription_status": "trialing",
+            "current_period_end": "2026-11-01T12:00:00Z",
+            "grace_period_ends_at": null,
+            "trial_end_at": "2026-11-01T12:00:00Z",
+        })
+    );
+
+    // The ended Quotes row of 20101 does not count.
+    let comp = find(20101);
+    assert_eq!(comp["addons"], json!(["signatures"]));
+    assert_eq!(comp["comp_addons"], json!(["signatures"]));
+    assert_eq!(comp["manager_count"], 1);
+    assert_eq!(comp["billing"], Value::Null);
+    assert_eq!(comp["billing_required_since"], "2026-10-01T08:30:00Z");
+}
+
+#[test_db::test(seed)]
 async fn creating_a_company_seeds_it(pool: MySqlPool) {
     let server = server(&pool).await;
     for body in [
