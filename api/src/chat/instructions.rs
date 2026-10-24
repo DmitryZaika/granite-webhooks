@@ -913,6 +913,20 @@ pub fn is_related(instruction: &Instruction, query: &str) -> bool {
     count_matching(&terms, &text.title) > 0 || count_matching(&terms, &text.body) > 0
 }
 
+/// Whether one of `instructions` is plainly about `query`: its title has two
+/// of the query's words (or its only one).
+pub fn has_title_match(instructions: &[Instruction], query: &str) -> bool {
+    let terms = query_terms(query);
+    if terms.is_empty() {
+        return false;
+    }
+    let needed = terms.len().min(2);
+    instructions.iter().any(|i| {
+        let title = i.title.as_deref().unwrap_or_default().to_lowercase();
+        count_matching(&terms, &title) >= needed
+    })
+}
+
 /// `instructionIdsToExcludeForRetry`.
 pub fn ids_to_exclude_for_retry(selected: &[Instruction], answer: &str, query: &str) -> Vec<i32> {
     let used = used_for_reply(selected, answer, query);
@@ -1200,5 +1214,27 @@ mod tests {
         }
         let exact = instruction_context(&all, "how do we cut calacatta vagli");
         assert!(!exact.contains("LIKELY TYPOS"));
+    }
+
+    #[test]
+    fn a_title_with_the_question_s_words_is_a_match() {
+        let all = vec![
+            instruction(
+                1,
+                "Handbook 1",
+                "We make a special order when the stone is out.",
+            ),
+            instruction(
+                2,
+                "Special Orders",
+                "Take a 50% deposit, then order the slabs.",
+            ),
+        ];
+        assert!(has_title_match(&all, "how do I make a special order?"));
+        assert!(!has_title_match(
+            &all[..1],
+            "how do I make a special order?"
+        ));
+        assert!(!has_title_match(&all, "how do I add a customer?"));
     }
 }

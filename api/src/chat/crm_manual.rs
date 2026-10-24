@@ -12,7 +12,7 @@ use super::instructions::is_price_query;
 use crate::auth::session::SessionUser;
 use crate::followups::js::trim;
 use crate::re;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -86,9 +86,19 @@ fn without_articles(text: &str) -> String {
         .join(" ")
 }
 
+/// The topics whose keywords `search` has.
+fn matched_topics(search: &str) -> impl Iterator<Item = &'static Topic> {
+    let normalized = without_articles(&normalize(search));
+    MANUAL.topics.iter().filter(move |topic| {
+        topic
+            .keywords
+            .iter()
+            .any(|k| matches_keyword(&normalized, &without_articles(&k.to_lowercase())))
+    })
+}
+
 /// `getCrmManualSectionIdsForQuery`.
 pub fn section_ids_for(search: &str) -> Vec<String> {
-    let normalized = without_articles(&normalize(search));
     let mut selected: Vec<String> = MANUAL.core.clone();
     let add = |id: &str, selected: &mut Vec<String>| {
         if !selected.iter().any(|s| s == id) {
@@ -96,17 +106,11 @@ pub fn section_ids_for(search: &str) -> Vec<String> {
         }
     };
     let mut matched = false;
-    for topic in &MANUAL.topics {
-        if topic
-            .keywords
-            .iter()
-            .any(|k| matches_keyword(&normalized, &without_articles(&k.to_lowercase())))
-        {
-            matched = true;
-            add(&topic.id, &mut selected);
-            for related in &topic.related {
-                add(related, &mut selected);
-            }
+    for topic in matched_topics(search) {
+        matched = true;
+        add(&topic.id, &mut selected);
+        for related in &topic.related {
+            add(related, &mut selected);
         }
     }
     if !matched {
@@ -115,6 +119,12 @@ pub fn section_ids_for(search: &str) -> Vec<String> {
         }
     }
     selected
+}
+
+/// Whether a specific manual topic is about `query` (not only the sections
+/// every answer gets).
+pub fn matches_topic(query: &str) -> bool {
+    matched_topics(query).next().is_some()
 }
 
 /// Super admins' corrections of sections (empty before the table exists).
@@ -221,13 +231,9 @@ pub const ACCESS_RULES: &str = r#"Access rules for the current user:
 7. If a non-superuser asks how to "add a new company", do NOT describe Superuser Dashboard. If they have Employee portal access, you may describe CRM > Customers → Add Customer → Company toggle (customer marked as a company). Otherwise say they lack access.
 8. Never invent access the user does not have."#;
 
-/// `looksLikeCrmManualHowToQuery`: a question about using the CRM itself.
-pub fn looks_like_how_to(query: &str) -> bool {
-    let normalized = normalize(query);
-    if normalized.is_empty() || is_price_query(&normalized) {
-        return false;
-    }
-    let help = [
+/// A question asking for help: "how do I", "where is", "can I"...
+pub(crate) fn is_help_seeking(normalized: &str) -> bool {
+    [
         re!(r"\bhow (?:do|can|should|would|does)\b"),
         re!(r"\bhow to\b"),
         re!(r"\bwhere (?:do|can|is|are)\b"),
@@ -240,7 +246,21 @@ pub fn looks_like_how_to(query: &str) -> bool {
         re!(r"\bwalk me through\b"),
     ]
     .iter()
-    .any(|p| p.is_match(&normalized));
+    .any(|p| p.is_match(normalized))
+}
+
+/// What a how-to does in the CRM ("add", "make"...), before what it does it to.
+const ACTION_VERBS: &str = "add|create|edit|delete|upload|change|open|find|use|set up|setup|sell|remove|update|enable|disable|mark|reply|compose|attach|restore|undelete|make|do|put|enter";
+
+/// `looksLikeCrmManualHowToQuery`: a question about using the CRM itself.
+/// The browser has the same rules; both repos test them with the cases in
+/// `crm_manual_how_to_cases.json`.
+pub fn looks_like_how_to(query: &str) -> bool {
+    let normalized = normalize(query);
+    if normalized.is_empty() || is_price_query(&normalized) {
+        return false;
+    }
+    let help = is_help_seeking(&normalized);
     let product = [
         re!(r"\bcrm\b"),
         re!(r"\bgranite manager\b"),
@@ -253,13 +273,24 @@ pub fn looks_like_how_to(query: &str) -> bool {
         re!(r"\bemployee portal\b"),
         re!(r"\badmin portal\b"),
         re!(r"\buser manual\b"),
+        re!(r"\bin (?:a|the) quote\b"),
+        re!(r"\bin the drawing\b"),
     ]
     .iter()
     .any(|p| p.is_match(&normalized));
     if product && help {
         return true;
     }
-    if re!(r"\b(?:add|create|edit|delete|upload|change|open|find|use|set up|setup|sell|remove|update|enable|disable|mark|reply|compose|attach|restore|undelete)\s+(?:a |an |the |new )?(?:stone|stones|slab|slabs|customer|customers|deal|deals|user|users|sink|sinks|faucet|faucets|supplier|suppliers|invoice|invoices|checklist|checklists|instruction|instructions|logo|company|email|emails|questionnaire|questionnaires|note|notes|event|events|message|messages|inbox|sms|thread|conversation|draft|drafts)\b").is_match(&normalized) {
+    if re!(&format!(r"\b(?:{ACTION_VERBS})\s+(?:a |an |the |new )?(?:stone|stones|slab|slabs|customer|customers|deal|deals|user|users|sink|sinks|faucet|faucets|supplier|suppliers|invoice|invoices|checklist|checklists|instruction|instructions|logo|company|email|emails|questionnaire|questionnaires|note|notes|event|events|message|messages|inbox|sms|thread|conversation|draft|drafts|quote|quotes|drawing|drawings)\b")).is_match(&normalized) {
+        return true;
+    }
+    // In a quote, a special order is a color priced by hand (Other color).
+    if re!(r"\bquotes?\b").is_match(&normalized)
+        && re!(&format!(
+            r"\b(?:{ACTION_VERBS})\s+(?:a |an |the |new )?special orders?\b"
+        ))
+        .is_match(&normalized)
+    {
         return true;
     }
     if help
@@ -268,6 +299,83 @@ pub fn looks_like_how_to(query: &str) -> bool {
         return true;
     }
     re!(r"\bwhere (?:is|are|do i find|can i find)\b.+\b(?:page|button|sidebar|menu|tab|setting|screen|form|folder|inbox)\b").is_match(&normalized)
+}
+
+/// Where an answer comes from when the user was asked which they meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    /// How to do it in Granite Manager: the CRM manual.
+    Manual,
+    /// The company's own process: its instructions.
+    Company,
+}
+
+/// An answer to [`CLARIFY_QUESTION`] the user can pick (the `clarify` event).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Choice {
+    pub label: &'static str,
+    pub source: Source,
+}
+
+/// Asked instead of guessing when a question could be about either.
+pub const CLARIFY_QUESTION: &str =
+    "Do you mean how to do this in Granite Manager, or your company's own process?";
+
+/// The choices sent with [`CLARIFY_QUESTION`]; a click sends the label.
+pub const CLARIFY_CHOICES: [Choice; 2] = [
+    Choice {
+        label: "In Granite Manager",
+        source: Source::Manual,
+    },
+    Choice {
+        label: "Our company's process",
+        source: Source::Company,
+    },
+];
+
+/// Whether to ask before answering: a question asking for help that the
+/// how-to rules leave to the company instructions, while a specific manual
+/// topic covers it too and so does one of the company's instructions.
+pub fn should_clarify(query: &str, how_to: bool, company_instruction: bool) -> bool {
+    let normalized = normalize(query);
+    !how_to
+        && company_instruction
+        && !is_price_query(&normalized)
+        && is_help_seeking(&normalized)
+        && matches_topic(query)
+}
+
+/// The source a reply to [`CLARIFY_QUESTION`] picks: a choice's label, or a
+/// typed word like "app" or "company". Anything else is a new question.
+pub fn clarify_choice(reply: &str) -> Option<Source> {
+    let normalized = normalize(&reply.replace('\u{2019}', "'"));
+    let answer = trim(normalized.trim_end_matches(['.', '!', '?']));
+    if let Some(choice) = CLARIFY_CHOICES
+        .iter()
+        .find(|c| c.label.to_lowercase() == answer)
+    {
+        return Some(choice.source);
+    }
+    match answer {
+        "app" | "the app" | "in the app" | "granite manager" | "in granite manager" | "crm"
+        | "the crm" | "in the crm" => Some(Source::Manual),
+        "company"
+        | "the company"
+        | "our company"
+        | "my company"
+        | "company process"
+        | "our process"
+        | "my process"
+        | "company's process"
+        | "our company's process"
+        | "my company's process"
+        | "the company's process"
+        | "our own process"
+        | "company's own process"
+        | "our company's own process" => Some(Source::Company),
+        _ => None,
+    }
 }
 
 pub(crate) fn asks_cloudtalk_phone(normalized: &str) -> bool {
@@ -412,6 +520,84 @@ pub fn quick_answer(question: &str, access: Option<&Access>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The browser's detector runs the same cases (synced from the CRM repo).
+    #[derive(Deserialize)]
+    struct HowToCase {
+        query: String,
+        #[serde(rename = "howTo")]
+        how_to: bool,
+    }
+
+    #[test]
+    fn how_to_cases_shared_with_the_browser() {
+        let cases: Vec<HowToCase> =
+            serde_json::from_str(include_str!("crm_manual_how_to_cases.json"))
+                .expect("crm_manual_how_to_cases.json is valid");
+        assert!(cases.len() > 20);
+        for case in cases {
+            assert_eq!(
+                looks_like_how_to(&case.query),
+                case.how_to,
+                "{}",
+                case.query
+            );
+        }
+    }
+
+    #[test]
+    fn a_special_order_in_a_quote_is_the_drawing_s_color_step() {
+        let question = "how to make a special order in quote";
+        assert!(looks_like_how_to(question));
+        let ids = section_ids_for(question);
+        assert!(
+            ids.iter().any(|id| id == "quote-drawing-color-slab-layout"),
+            "{ids:?}"
+        );
+        let manual = assemble(&ids, &HashMap::new());
+        assert!(manual.contains("#### Other color (a color not in the price list)"));
+    }
+
+    #[test]
+    fn asks_when_the_app_and_the_company_both_cover_a_question() {
+        let both = "how do I make a special order?";
+        assert!(!looks_like_how_to(both));
+        assert!(matches_topic(both));
+        assert!(should_clarify(both, false, true));
+        // Without a company instruction about it, it is answered as before.
+        assert!(!should_clarify(both, false, false));
+        // A plain company question goes to the instructions.
+        let company = "what is our special order deposit policy";
+        assert!(!looks_like_how_to(company));
+        assert!(!should_clarify(company, false, true));
+        // A how-to by the rules goes to the manual.
+        let app = "how to make a special order in quote";
+        assert!(!should_clarify(app, looks_like_how_to(app), true));
+    }
+
+    #[test]
+    fn a_reply_picks_where_the_answer_comes_from() {
+        for (reply, source) in [
+            ("In Granite Manager", Some(Source::Manual)),
+            ("in granite manager", Some(Source::Manual)),
+            ("app", Some(Source::Manual)),
+            ("The app.", Some(Source::Manual)),
+            ("Our company's process", Some(Source::Company)),
+            ("our company\u{2019}s process", Some(Source::Company)),
+            ("company", Some(Source::Company)),
+            ("how do I add a customer?", None),
+            ("yes", None),
+        ] {
+            assert_eq!(clarify_choice(reply), source, "{reply}");
+        }
+        for choice in CLARIFY_CHOICES {
+            assert_eq!(clarify_choice(choice.label), Some(choice.source));
+        }
+        assert_eq!(
+            serde_json::to_string(&CLARIFY_CHOICES).unwrap(),
+            r#"[{"label":"In Granite Manager","source":"manual"},{"label":"Our company's process","source":"company"}]"#
+        );
+    }
 
     #[test]
     fn renaming_a_person_routes_to_the_users_section() {
