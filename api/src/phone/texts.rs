@@ -320,7 +320,7 @@ async fn unread_by_thread(
                 COALESCE(MAX(r.last_read_at < '",
     );
     query.push(MANUAL_UNREAD_BEFORE).push(
-        "'), 0) <> 0 AS manual
+        "'), 0) <> 0 AS `manual`
            FROM (SELECT o.number_id, o.phone_digits,
                         MAX(CASE WHEN o.direction = 'outbound' AND o.status IN ('sent', 'pending')
                                  THEN o.created_date END) AS last_out
