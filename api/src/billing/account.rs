@@ -175,6 +175,16 @@ pub struct Reconciled {
     pub failed: usize,
 }
 
+/// One batch of a reconciliation pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReconcileBatch {
+    pub reconciled: Reconciled,
+    /// The last company id synced; the next batch starts after it.
+    pub last_id: Option<i32>,
+    /// No company is left after `last_id`: the pass is over.
+    pub done: bool,
+}
+
 /// Re-reads every Stripe-billed company from Stripe (forced).
 ///
 /// A webhook Stripe gave up on would otherwise leave a company paid after a
@@ -184,34 +194,59 @@ pub async fn reconcile_with_stripe(
     stripe: &Stripe,
     pool: &MySqlPool,
 ) -> Result<Option<Reconciled>, sqlx::Error> {
+    Ok(reconcile_batch(stripe, pool, 0, 500, None)
+        .await?
+        .map(|batch| batch.reconciled))
+}
+
+/// The Stripe-billed companies after id `after`, at most `limit`, stopping
+/// early once `budget` has passed (one pass split over several job runs).
+pub async fn reconcile_batch(
+    stripe: &Stripe,
+    pool: &MySqlPool,
+    after: i32,
+    limit: u32,
+    budget: Option<Duration>,
+) -> Result<Option<ReconcileBatch>, sqlx::Error> {
     if !stripe.is_enabled() {
         return Ok(None);
     }
+    let started = Instant::now();
     let company_ids: Vec<i32> = sqlx::query_scalar(
         "SELECT c.id
            FROM company c
            JOIN company_billing cb ON cb.company_id = c.id
           WHERE c.billing_required = 1 AND c.deleted_at IS NULL
-            AND cb.stripe_customer_id IS NOT NULL
+            AND cb.stripe_customer_id IS NOT NULL AND c.id > ?
           ORDER BY c.id
-          LIMIT 500",
+          LIMIT ?",
     )
+    .bind(after)
+    .bind(limit)
     .fetch_all(pool)
     .await?;
     let options = SyncOptions {
         force: true,
         throw_on_error: true,
     };
-    let mut failed = 0;
+    let (mut checked, mut failed, mut last_id) = (0, 0, None);
     for &company_id in &company_ids {
+        if budget.is_some_and(|budget| started.elapsed() >= budget) {
+            break;
+        }
         if let Err(error) = sync_from_stripe(stripe, pool, company_id, options).await {
             tracing::warn!(%error, company_id, "billing reconciliation failed");
             failed += 1;
+        } else {
+            checked += 1;
         }
+        last_id = Some(company_id);
     }
-    Ok(Some(Reconciled {
-        checked: company_ids.len() - failed,
-        failed,
+    let finished_all = checked + failed == company_ids.len();
+    Ok(Some(ReconcileBatch {
+        reconciled: Reconciled { checked, failed },
+        last_id,
+        done: finished_all && company_ids.len() < usize::try_from(limit).unwrap_or(usize::MAX),
     }))
 }
 

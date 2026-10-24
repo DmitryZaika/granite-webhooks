@@ -9,7 +9,7 @@
 
 use super::JobCaller;
 use crate::billing::CompanyBilling;
-use crate::billing::account::{default_card, reconcile_with_stripe};
+use crate::billing::account::{default_card, reconcile_batch};
 use crate::billing::gate::settle_company_locked;
 use crate::billing::lock::{CompanyLock, LockError};
 use crate::billing::reminder_store::MySqlReminderStore;
@@ -42,8 +42,11 @@ const WEBHOOK_EVENT_RETENTION_DAYS: u32 = 90;
 /// is held while the email is sent.
 const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const DEFAULT_FROM_ADDRESS: &str = "noreply@granite-manager.com";
+/// Companies re-read from Stripe per run, and the time they may take.
+const RECONCILE_BATCH: u32 = 50;
+const RECONCILE_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// What one reconciliation with Stripe did.
+/// What this run's batch of the Stripe reconciliation did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 pub struct ReconcileRun {
     /// Stripe-billed companies re-read from Stripe successfully.
@@ -70,8 +73,9 @@ pub struct BillingRemindersRun {
     /// Companies skipped after an error (busy billing lock, database, Stripe);
     /// the next run picks them up again.
     pub company_errors: usize,
-    /// The Stripe reconciliation, or null when it was not due this run (it
-    /// runs every 6 hours) or Stripe is not configured.
+    /// This run's batch of the Stripe reconciliation (up to 50 companies; a
+    /// pass starts every 6 hours and continues over the next runs), or null
+    /// when no pass is running or Stripe is not configured.
     pub reconciled: Option<ReconcileRun>,
 }
 
@@ -276,30 +280,50 @@ async fn prune(state: &AppState, now: NaiveDateTime) {
     settle_claim(state, claim, pruned.is_err()).await;
 }
 
-/// Re-reads Stripe-billed companies from Stripe. Every 6 hours.
+/// Re-reads Stripe-billed companies from Stripe: a pass every 6 hours, in
+/// batches of `RECONCILE_BATCH` within `RECONCILE_BUDGET` per run, so the
+/// reminders always get their time.
 async fn reconcile(state: &AppState, now: NaiveDateTime) -> Option<ReconcileRun> {
-    let claim = match job_runs::claim(&state.pool, RECONCILE_KEY, Duration::hours(6), now).await {
-        Ok(Some(claim)) => claim,
-        Ok(None) => return None,
+    let claim =
+        match job_runs::claim_batch(&state.pool, RECONCILE_KEY, Duration::hours(6), now).await {
+            Ok(Some(claim)) => claim,
+            Ok(None) => return None,
+            Err(err) => {
+                report_step("reconcile", &err.to_string()).await;
+                return None;
+            }
+        };
+    let after = claim.after;
+    let batch = reconcile_batch(
+        &state.stripe,
+        &state.pool,
+        after,
+        RECONCILE_BATCH,
+        Some(RECONCILE_BUDGET),
+    )
+    .await;
+    let (advanced, run) = match batch {
+        Ok(Some(batch)) => (
+            claim
+                .advance(&state.pool, batch.last_id, batch.done, now)
+                .await,
+            Some(ReconcileRun {
+                checked: batch.reconciled.checked,
+                failed: batch.reconciled.failed,
+            }),
+        ),
+        // Stripe is off: nothing to reconcile this pass.
+        Ok(None) => (claim.advance(&state.pool, None, true, now).await, None),
         Err(err) => {
+            // The cursor stays: the next run retries this batch.
             report_step("reconcile", &err.to_string()).await;
             return None;
         }
     };
-    match reconcile_with_stripe(&state.stripe, &state.pool).await {
-        Ok(done) => {
-            settle_claim(state, claim, false).await;
-            done.map(|done| ReconcileRun {
-                checked: done.checked,
-                failed: done.failed,
-            })
-        }
-        Err(err) => {
-            report_step("reconcile", &err.to_string()).await;
-            settle_claim(state, claim, true).await;
-            None
-        }
+    if let Err(err) = advanced {
+        tracing::warn!(error = %err, "reconcile progress not recorded");
     }
+    run
 }
 
 /// Run the billing upkeep and reminder emails
@@ -307,14 +331,16 @@ async fn reconcile(state: &AppState, now: NaiveDateTime) -> Option<ReconcileRun>
 /// Called by the `time-triggered` Lambda every minute with
 /// `Authorization: <LAMBDA_KEY>`. Three steps run in order and each fails on
 /// its own: it prunes Stripe webhook event ids older than 90 days (at most
-/// once a day), reconciles Stripe-billed companies with Stripe (at most every
-/// 6 hours), then sends the billing reminder emails to each company's
-/// Managers. Reminders are a failed renewal or a first payment asked for
-/// (day 0, three days left, paused tomorrow, paused, settled) and one notice
-/// 7 days before the first charge of a self-serve subscription. Each
-/// recipient gets each reminder once; an email whose outcome is unknown is
-/// never resent. A run sends at most 20 emails and starts no new company
-/// after 40 seconds. Reminders are skipped while the mail service is not
+/// once a day), reconciles Stripe-billed companies with Stripe (a pass every
+/// 6 hours, at most 50 companies or 15 seconds per run), then sends the
+/// billing reminder emails to each company's Managers. Reminders are a failed
+/// renewal or a first payment asked for (day 0, three days left, paused
+/// tomorrow, paused, settled) and one notice 7 days before the first charge
+/// of a self-serve subscription (dated by Stripe's trial end; none when the
+/// subscription is set to cancel by then). Each recipient gets each reminder
+/// once; a refused email is retried up to 3 times, 5 minutes apart; an email
+/// whose outcome is unknown is never resent. A run sends at most 20 emails
+/// and starts no new company after 40 seconds. Reminders are skipped while the mail service is not
 /// configured.
 #[utoipa::path(
     post,

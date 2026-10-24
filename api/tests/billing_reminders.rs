@@ -190,7 +190,11 @@ async fn a_rejected_send_can_be_claimed_again_until_three_attempts_are_used(pool
             .mark_failed(row_of(first, 20200), "Throttling")
             .await
             .unwrap();
-        let again = store.claim(&k, now()).await.unwrap();
+        // The next try waits 5 minutes after the last one.
+        let tried = now() + Duration::minutes(5 * i64::from(attempt - 1));
+        let too_soon = store.claim(&k, tried + Duration::minutes(4)).await.unwrap();
+        assert_eq!(too_soon, None);
+        let again = store.claim(&k, tried + Duration::minutes(5)).await.unwrap();
         assert_eq!(again, (attempt < 3).then_some(first));
     }
     assert_eq!(status_of(&pool, first).await, ("failed".to_string(), 3));
@@ -408,26 +412,67 @@ async fn contacts_are_the_companys_non_deleted_users_with_an_email(pool: MySqlPo
 
 #[test_db::test(seed)]
 async fn first_charge_candidates_are_trialing_companies_charged_within_seven_days(pool: MySqlPool) {
-    companies(&pool, &[20200, 20201, 20202, 20203, 20204, 20205]).await;
+    companies(
+        &pool,
+        &[
+            20200, 20201, 20202, 20203, 20204, 20205, 20206, 20207, 20208, 20209,
+        ],
+    )
+    .await;
     let at = utc_now();
     let rows = [
-        (20200, "trialing", at + Duration::days(6)),
-        (20201, "trialing", at + Duration::days(2)),
-        (20202, "trialing", at + Duration::days(8)),
-        (20203, "trialing", at - Duration::hours(1)),
-        (20204, "active", at + Duration::days(3)),
-        (20205, "trialing", at + Duration::days(1)),
+        (20200, "trialing", at + Duration::days(6), None),
+        (20201, "trialing", at + Duration::days(2), None),
+        (20202, "trialing", at + Duration::days(8), None),
+        (20203, "trialing", at - Duration::hours(1), None),
+        (20204, "active", at + Duration::days(3), None),
+        (20205, "trialing", at + Duration::days(1), None),
+        // Cancelled by the charge date: never charged.
+        (
+            20206,
+            "trialing",
+            at + Duration::days(3),
+            Some(at + Duration::days(3)),
+        ),
+        // Cancelled after the first charge: still charged.
+        (
+            20207,
+            "trialing",
+            at + Duration::days(3),
+            Some(at + Duration::days(40)),
+        ),
+        (20208, "trialing", at + Duration::days(4), None),
+        (20209, "trialing", at + Duration::days(5), None),
     ];
-    for (id, status, trial_end) in rows {
+    for (id, status, trial_end, cancel_at) in rows {
         sqlx::query(
-            "INSERT INTO company_billing (company_id, subscription_status, trial_end_at) VALUES (?, ?, ?)",
+            "INSERT INTO company_billing (company_id, subscription_status, trial_end_at, cancel_at)
+             VALUES (?, ?, ?, ?)",
         )
         .bind(id)
         .bind(status)
         .bind(trial_end)
+        .bind(cancel_at)
         .execute(&pool)
         .await
         .unwrap();
+    }
+    // Stripe said "nothing due" for 20208 an hour ago, for 20209 7 hours ago.
+    let store = MySqlReminderStore(&pool);
+    for (id, days, hours_ago) in [(20208, 4, 1), (20209, 5, 7)] {
+        let cycle = DunningCycle {
+            kind: DunningKind::FirstCharge,
+            started_at: at + Duration::days(days),
+        };
+        store
+            .skip_cycle(
+                id,
+                cycle,
+                ReminderStep::Upcoming,
+                at - Duration::hours(hours_ago),
+            )
+            .await
+            .unwrap();
     }
     sqlx::query("UPDATE company SET deleted_at = UTC_TIMESTAMP() WHERE id = 20205")
         .execute(&pool)
@@ -440,7 +485,7 @@ async fn first_charge_candidates_are_trialing_companies_charged_within_seven_day
         .unwrap();
 
     // Soonest first; billing_required plays no part.
-    assert_eq!(mine(ids), vec![20201, 20200]);
+    assert_eq!(mine(ids), vec![20201, 20207, 20209, 20200]);
 }
 
 // ---- the throttles
@@ -483,10 +528,10 @@ async fn a_job_run_is_claimed_once_per_interval_and_undo_restores_it(pool: MySql
 /// Each `/email/send` body as sent, with the `text` part `OutgoingEmail` drops.
 type Mailbox = Arc<Mutex<Vec<Value>>>;
 
-fn trial_subscription() -> Value {
+fn trial_subscription(trial_end: NaiveDateTime) -> Value {
     json!({
         "id": "sub_trial", "object": "subscription", "status": "trialing",
-        "customer": "cus_trial",
+        "customer": "cus_trial", "trial_end": trial_end.and_utc().timestamp(),
         "items": { "data": [{ "id": "si_1", "quantity": 1,
             "price": { "id": "price_flat", "nickname": "Granite Manager", "unit_amount": 4900 } }] },
     })
@@ -499,8 +544,9 @@ async fn serve(router: Router) -> String {
     format!("http://{address}")
 }
 
-/// The job route with a fake mail service and, when asked, a fake Stripe.
-async fn server(pool: &MySqlPool, stripe: bool) -> (TestServer, Mailbox) {
+/// The job route with a fake mail service and, when given the trial end it
+/// reports, a fake Stripe.
+async fn server(pool: &MySqlPool, stripe: Option<NaiveDateTime>) -> (TestServer, Mailbox) {
     let mailbox = Mailbox::default();
     let webhooks = serve(
         Router::new()
@@ -520,12 +566,12 @@ async fn server(pool: &MySqlPool, stripe: bool) -> (TestServer, Mailbox) {
         .with_webhooks(WebhooksClient::new(Some(&webhooks), Some("key")))
         .with_job_key("job-secret")
         .with_app_url("https://app.example.test");
-    if stripe {
+    if let Some(trial_end) = stripe {
         let base = serve(Router::new().route(
             "/v1/subscriptions/{id}",
-            get(|Path(id): Path<String>| async move {
+            get(move |Path(id): Path<String>| async move {
                 if id == "sub_trial" {
-                    Ok(Json(trial_subscription()))
+                    Ok(Json(trial_subscription(trial_end)))
                 } else {
                     Err(StatusCode::NOT_FOUND)
                 }
@@ -570,7 +616,7 @@ async fn asked_to_pay(pool: &MySqlPool, id: i32) -> NaiveDateTime {
 
 #[test_db::test(seed)]
 async fn the_job_needs_the_job_key(pool: MySqlPool) {
-    let (server, _) = server(&pool, false).await;
+    let (server, _) = server(&pool, None).await;
     server
         .post("/v1/jobs/billing-reminders")
         .await
@@ -589,7 +635,7 @@ async fn a_due_dunning_reminder_is_sent_once_across_two_calls(pool: MySqlPool) {
     user(&pool, 20201, 20200, Some("rep@reminder.test"), 1).await;
     user(&pool, 20202, 20201, Some("other@reminder.test"), 5).await;
     asked_to_pay(&pool, 20200).await;
-    let (server, mailbox) = server(&pool, false).await;
+    let (server, mailbox) = server(&pool, None).await;
 
     let body: Value = run(&server).await.json();
 
@@ -623,7 +669,7 @@ async fn an_unknown_reminder_is_never_resent(pool: MySqlPool) {
     .execute(&pool)
     .await
     .unwrap();
-    let (server, mailbox) = server(&pool, false).await;
+    let (server, mailbox) = server(&pool, None).await;
 
     let body: Value = run(&server).await.json();
 
@@ -640,6 +686,7 @@ async fn an_unknown_reminder_is_never_resent(pool: MySqlPool) {
 #[test_db::test(seed)]
 async fn the_first_charge_email_goes_to_each_manager_once(pool: MySqlPool) {
     companies(&pool, &[20200, 20201]).await;
+    let trial_end = utc_now() + Duration::days(5);
     user(&pool, 20200, 20200, Some("one@trial.test"), 5).await;
     user(&pool, 20201, 20200, Some("two@trial.test"), 5).await;
     user(&pool, 20202, 20200, Some("rep@trial.test"), 1).await;
@@ -649,7 +696,7 @@ async fn the_first_charge_email_goes_to_each_manager_once(pool: MySqlPool) {
                                       subscription_status, payment_status, trial_end_at)
          VALUES (20200, 'cus_trial', 'sub_trial', 'trialing', 'none', ?)",
     )
-    .bind(utc_now() + Duration::days(5))
+    .bind(trial_end)
     .execute(&pool)
     .await
     .unwrap();
@@ -662,7 +709,7 @@ async fn the_first_charge_email_goes_to_each_manager_once(pool: MySqlPool) {
     .execute(&pool)
     .await
     .unwrap();
-    let (server, mailbox) = server(&pool, true).await;
+    let (server, mailbox) = server(&pool, Some(trial_end)).await;
 
     let body: Value = run(&server).await.json();
 
@@ -708,7 +755,7 @@ async fn old_webhook_events_are_pruned_once_a_day(pool: MySqlPool) {
         .await
         .unwrap()
     };
-    let (server, _) = server(&pool, false).await;
+    let (server, _) = server(&pool, None).await;
 
     run(&server).await.assert_status_ok();
     assert_eq!(ids().await, vec!["evt_20200_new".to_string()]);
@@ -724,7 +771,7 @@ async fn old_webhook_events_are_pruned_once_a_day(pool: MySqlPool) {
 
 #[test_db::test(seed)]
 async fn the_reconcile_is_stamped_and_not_repeated_within_six_hours(pool: MySqlPool) {
-    let (server, _) = server(&pool, true).await;
+    let (server, _) = server(&pool, Some(utc_now())).await;
     let stamp = || async {
         sqlx::query_scalar::<_, Option<NaiveDateTime>>(
             "SELECT last_finished_at FROM job_runs WHERE job_key = 'billing-reconcile'",

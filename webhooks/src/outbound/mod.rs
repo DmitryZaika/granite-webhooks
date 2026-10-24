@@ -73,6 +73,11 @@ pub struct SentEmail {
 pub enum SendError {
     Attachment(String),
     InvalidAddress,
+    /// SES is over its sending rate: nothing was sent, try again later.
+    Throttled,
+    /// SES refused the message: nothing was sent.
+    Rejected,
+    /// It may or may not have gone out.
     Transport(String),
 }
 
@@ -84,10 +89,26 @@ impl IntoResponse for SendError {
                 format!("Could not load attachment: {name}"),
             ),
             Self::InvalidAddress => (StatusCode::BAD_REQUEST, "Invalid email address".to_string()),
+            Self::Throttled => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Email sending is busy, try again in a few minutes".to_string(),
+            ),
+            Self::Rejected => (StatusCode::BAD_REQUEST, "The email was refused".to_string()),
             Self::Transport(_) => (StatusCode::BAD_GATEWAY, "Email failed to send".to_string()),
         };
         (status, Json(serde_json::json!({ "error": error }))).into_response()
     }
+}
+
+/// Why a transport did not send; the text is for logs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransportError {
+    /// Refused for its rate or quota: nothing was sent.
+    Throttled(String),
+    /// Refused: nothing was sent.
+    Rejected(String),
+    /// It may or may not have gone out.
+    Failed(String),
 }
 
 pub trait EmailTransport: Send + Sync {
@@ -96,16 +117,26 @@ pub trait EmailTransport: Send + Sync {
         &self,
         raw: Vec<u8>,
         destinations: Vec<String>,
-    ) -> impl Future<Output = Result<String, String>> + Send;
+    ) -> impl Future<Output = Result<String, TransportError>> + Send;
 }
 
 pub struct Ses;
 
 impl EmailTransport for Ses {
-    async fn send_raw(&self, raw: Vec<u8>, destinations: Vec<String>) -> Result<String, String> {
-        common::amazon::email::send_raw_message(raw, destinations)
-            .await
-            .map_err(|err| format!("{err:?}"))
+    async fn send_raw(
+        &self,
+        raw: Vec<u8>,
+        destinations: Vec<String>,
+    ) -> Result<String, TransportError> {
+        use common::amazon::email::{SesRefusal, send_raw_message, ses_refusal};
+        send_raw_message(raw, destinations).await.map_err(|err| {
+            let detail = format!("{err:?}");
+            match ses_refusal(&err) {
+                Some(SesRefusal::Throttled) => TransportError::Throttled(detail),
+                Some(SesRefusal::Rejected) => TransportError::Rejected(detail),
+                None => TransportError::Failed(detail),
+            }
+        })
     }
 }
 
@@ -143,8 +174,18 @@ pub async fn deliver(
         .collect();
     match transport.send_raw(raw, destinations).await {
         Ok(message_id) => Ok(SentEmail { message_id }),
-        Err(err) if err.contains("Email address is not verified") => Err(SendError::InvalidAddress),
-        Err(err) => {
+        Err(TransportError::Rejected(err)) if err.contains("Email address is not verified") => {
+            Err(SendError::InvalidAddress)
+        }
+        Err(TransportError::Throttled(err)) => {
+            tracing::warn!(error = %err, "SES throttled a send");
+            Err(SendError::Throttled)
+        }
+        Err(TransportError::Rejected(err)) => {
+            tracing::warn!(error = %err, "SES refused a send");
+            Err(SendError::Rejected)
+        }
+        Err(TransportError::Failed(err)) => {
             tracing::error!(error = %err, "SES send failed");
             Err(SendError::Transport(err))
         }
@@ -273,7 +314,7 @@ mod tests {
     #[derive(Default)]
     struct Recorder {
         sent: Mutex<Vec<(String, Vec<String>)>>,
-        fail_with: Option<String>,
+        fail_with: Option<TransportError>,
     }
 
     impl EmailTransport for Recorder {
@@ -281,7 +322,7 @@ mod tests {
             &self,
             raw: Vec<u8>,
             destinations: Vec<String>,
-        ) -> Result<String, String> {
+        ) -> Result<String, TransportError> {
             if let Some(err) = &self.fail_with {
                 return Err(err.clone());
             }
@@ -382,15 +423,40 @@ mod tests {
     #[tokio::test]
     async fn ses_errors_are_mapped() {
         let unverified = Recorder {
-            fail_with: Some("MessageRejected: Email address is not verified.".into()),
+            fail_with: Some(TransportError::Rejected(
+                "MessageRejected: Email address is not verified.".into(),
+            )),
             ..Recorder::default()
         };
         assert_eq!(
             deliver(&Files, &unverified, email()).await.unwrap_err(),
             SendError::InvalidAddress
         );
+        for (refusal, expected) in [
+            (
+                TransportError::Throttled("TooManyRequestsException".into()),
+                SendError::Throttled,
+            ),
+            (
+                TransportError::Rejected("MessageRejected".into()),
+                SendError::Rejected,
+            ),
+        ] {
+            let refused = Recorder {
+                fail_with: Some(refusal),
+                ..Recorder::default()
+            };
+            assert_eq!(
+                deliver(&Files, &refused, email()).await.unwrap_err(),
+                expected
+            );
+        }
+        assert_eq!(
+            SendError::Throttled.into_response().status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
         let down = Recorder {
-            fail_with: Some("timeout".into()),
+            fail_with: Some(TransportError::Failed("timeout".into())),
             ..Recorder::default()
         };
         assert!(matches!(

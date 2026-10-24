@@ -518,7 +518,15 @@ pub async fn billing_gate(
 ) -> BillingNotice {
     let now = super::now();
     let gate = LiveGate { stripe, pool, now };
-    match evaluate_gate(&MySqlBillingStore(pool), &gate, company_id, user_id, now).await {
+    match Box::pin(evaluate_gate(
+        &MySqlBillingStore(pool),
+        &gate,
+        company_id,
+        user_id,
+        now,
+    ))
+    .await
+    {
         Ok(notice) => notice,
         Err(err) => {
             tracing::warn!(error = %err, company_id, "billing gate failed");

@@ -59,6 +59,9 @@ fn merge_subscription(record: &CompanyBilling, snapshot: &SubscriptionSnapshot) 
     };
     merged.current_period_start = snapshot.period_start.or(merged.current_period_start);
     merged.current_period_end = snapshot.period_end.or(merged.current_period_end);
+    // Mirrored as is: a cleared trial or a withdrawn cancellation clears them.
+    merged.trial_end_at = snapshot.trial_end;
+    merged.cancel_at = snapshot.cancel_at;
     merged.plan_name = snapshot.plan_name.clone().or(merged.plan_name);
     if let Some(total) = snapshot.monthly_total_cents {
         merged.monthly_price_cents = Some(total);
@@ -490,6 +493,8 @@ mod tests {
                 deleted,
                 items: Vec::new(),
                 monthly_total_cents: None,
+                trial_end: None,
+                cancel_at: None,
             },
         }
     }
@@ -555,6 +560,41 @@ mod tests {
         assert_eq!(record.monthly_price_cents, Some(14700));
         assert_eq!(record.grace_period_ends_at, None);
         assert_eq!(store.open_notifications(1), []);
+    }
+
+    #[tokio::test]
+    async fn a_subscription_event_mirrors_its_trial_end_and_cancellation() {
+        let store = Memory::default();
+        store.records.borrow_mut().insert(
+            1,
+            CompanyBilling {
+                stripe_subscription_id: Some("sub_1".into()),
+                ..active(1)
+            },
+        );
+        let trial_end = at("2027-01-21 00:00:00");
+        let with = |id: &str, cancel_at| {
+            let mut event = subscription_event(id, 1, "trialing", false);
+            if let BillingEvent::Subscription { subscription, .. } = &mut event {
+                subscription.trial_end = Some(trial_end);
+                subscription.cancel_at = cancel_at;
+            }
+            event
+        };
+        let now = at("2026-10-21 00:00:00");
+
+        apply_event(&store, &with("evt_cancel", Some(trial_end)), now)
+            .await
+            .unwrap();
+        let cancelled = store.record(1);
+        apply_event(&store, &with("evt_withdraw", None), now)
+            .await
+            .unwrap();
+
+        assert_eq!(cancelled.trial_end_at, Some(trial_end));
+        assert_eq!(cancelled.cancel_at, Some(trial_end));
+        assert_eq!(store.record(1).trial_end_at, Some(trial_end));
+        assert_eq!(store.record(1).cancel_at, None);
     }
 
     #[tokio::test]

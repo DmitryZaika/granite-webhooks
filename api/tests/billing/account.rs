@@ -1,7 +1,7 @@
 //! Ports of the account tests (`billingCheckout`, `billingSync`, `billingReactivation`, `billingPageData`).
 
 use super::*;
-use api::billing::account::{Reconciled, reconcile_with_stripe};
+use api::billing::account::{Reconciled, reconcile_batch, reconcile_with_stripe};
 use api::billing::lock::CompanyLock;
 
 /// Nothing listens there: requests fail at once.
@@ -448,4 +448,38 @@ async fn reconciliation_rereads_every_stripe_billed_company_past_failures(pool: 
             .unwrap(),
         None
     );
+}
+
+#[test_db::test(seed)]
+async fn reconciliation_batches_resume_after_the_last_company(pool: MySqlPool) {
+    let stripe = Shared::default();
+    subscribed(&pool, &stripe).await;
+    sqlx::raw_sql(
+        "UPDATE company SET billing_required = 1 WHERE id = 101;
+         INSERT INTO company_billing (company_id, stripe_customer_id, stripe_subscription_id,
+                                      subscription_status, payment_status)
+         VALUES (101, 'cus_101', 'sub_missing', 'active', 'active');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let client = Stripe::new(
+        Some("sk_test_fake"),
+        &fake_stripe(Arc::clone(&stripe)).await,
+    );
+    let batch = |after| reconcile_batch(&client, &pool, after, 1, None);
+
+    let first = batch(0).await.unwrap().unwrap();
+    assert_eq!((first.last_id, first.done), (Some(100), false));
+    let second = batch(100).await.unwrap().unwrap();
+    assert_eq!((second.last_id, second.done), (Some(101), false));
+    assert_eq!(second.reconciled.failed, 1);
+    let last = batch(101).await.unwrap().unwrap();
+    assert_eq!((last.last_id, last.done), (None, true));
+    // A spent budget stops before the first company: no progress, not done.
+    let spent = reconcile_batch(&client, &pool, 0, 10, Some(Duration::ZERO))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((spent.last_id, spent.done), (None, false));
 }

@@ -42055,7 +42055,7 @@
           "jobs"
         ],
         "summary": "Run the billing upkeep and reminder emails",
-        "description": "Called by the `time-triggered` Lambda every minute with\n`Authorization: <LAMBDA_KEY>`. Three steps run in order and each fails on\nits own: it prunes Stripe webhook event ids older than 90 days (at most\nonce a day), reconciles Stripe-billed companies with Stripe (at most every\n6 hours), then sends the billing reminder emails to each company's\nManagers. Reminders are a failed renewal or a first payment asked for\n(day 0, three days left, paused tomorrow, paused, settled) and one notice\n7 days before the first charge of a self-serve subscription. Each\nrecipient gets each reminder once; an email whose outcome is unknown is\nnever resent. A run sends at most 20 emails and starts no new company\nafter 40 seconds. Reminders are skipped while the mail service is not\nconfigured.",
+        "description": "Called by the `time-triggered` Lambda every minute with\n`Authorization: <LAMBDA_KEY>`. Three steps run in order and each fails on\nits own: it prunes Stripe webhook event ids older than 90 days (at most\nonce a day), reconciles Stripe-billed companies with Stripe (a pass every\n6 hours, at most 50 companies or 15 seconds per run), then sends the\nbilling reminder emails to each company's Managers. Reminders are a failed\nrenewal or a first payment asked for (day 0, three days left, paused\ntomorrow, paused, settled) and one notice 7 days before the first charge\nof a self-serve subscription (dated by Stripe's trial end; none when the\nsubscription is set to cancel by then). Each recipient gets each reminder\nonce; a refused email is retried up to 3 times, 5 minutes apart; an email\nwhose outcome is unknown is never resent. A run sends at most 20 emails\nand starts no new company after 40 seconds. Reminders are skipped while the mail service is not\nconfigured.",
         "operationId": "run_billing_reminders",
         "responses": {
           "200": {
@@ -45307,7 +45307,7 @@
           "superuser"
         ],
         "summary": "List the companies",
-        "description": "Every live company, most users first: users counting toward the limit,\ntours progress, connected integrations, feature switches and whether\nStripe payment is required. The slower checks are per company:\n`/domain-trust`, `/ses-inbound`, `/setup-checklist`.",
+        "description": "Every live company, most users first: users counting toward the limit,\ntours progress, connected integrations, feature switches and whether\nStripe payment is required, plus its plan, usable and free add-ons, Manager\ncount and stored subscription. The slower checks are per company:\n`/domain-trust`, `/ses-inbound`, `/setup-checklist`.",
         "operationId": "list_platform_companies",
         "responses": {
           "200": {
@@ -49192,7 +49192,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ReconcileRun",
-                "description": "The Stripe reconciliation, or null when it was not due this run (it\nruns every 6 hours) or Stripe is not configured."
+                "description": "This run's batch of the Stripe reconciliation (up to 50 companies; a\npass starts every 6 hours and continues over the next runs), or null\nwhen no pass is running or Stripe is not configured."
               },
               {
                 "type": "null"
@@ -51005,6 +51005,48 @@
           }
         }
       },
+      "CompanyBillingSummary": {
+        "type": "object",
+        "description": "A company's stored Stripe subscription state.",
+        "required": [
+          "payment_status",
+          "subscription_status"
+        ],
+        "properties": {
+          "payment_status": {
+            "type": "string",
+            "description": "`active`, `past_due`, `suspended` or `none`."
+          },
+          "subscription_status": {
+            "type": "string",
+            "description": "Stripe's subscription status (`active`, `trialing`, `canceled`, ...)."
+          },
+          "current_period_end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Next billing date (ISO 8601), or null."
+          },
+          "grace_period_ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "End of the grace period after a failed payment (ISO 8601), or null."
+          },
+          "trial_end_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the first charge is due, while on a trial (ISO 8601), or null."
+          }
+        }
+      },
       "CompanyDetails": {
         "type": "object",
         "description": "The company in step 2.",
@@ -51493,6 +51535,10 @@
           "cloudtalk_connected",
           "quickbooks_connected",
           "billing_required",
+          "plan_source",
+          "addons",
+          "comp_addons",
+          "manager_count",
           "features"
         ],
         "properties": {
@@ -51560,6 +51606,48 @@
           "billing_required": {
             "type": "boolean",
             "description": "Access depends on the Stripe subscription."
+          },
+          "plan_source": {
+            "type": "string",
+            "description": "`legacy` (every add-on included) or `subscription` (only bought or\ngranted add-ons)."
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Add-on keys (`signatures`, `quotes`, `quickbooks`) the company may use\nnow: all three on a legacy plan, else its active add-ons of any source."
+          },
+          "comp_addons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Add-on keys granted free by a superuser and in force now."
+          },
+          "manager_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Live users holding the Manager position in this company."
+          },
+          "billing_required_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When Stripe payment became required (ISO 8601, UTC), or null."
+          },
+          "billing": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CompanyBillingSummary",
+                "description": "Its stored Stripe subscription, or null when it never had one."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "features": {
             "$ref": "#/components/schemas/Features"
@@ -67271,7 +67359,7 @@
       },
       "ReconcileRun": {
         "type": "object",
-        "description": "What one reconciliation with Stripe did.",
+        "description": "What this run's batch of the Stripe reconciliation did.",
         "required": [
           "checked",
           "failed"
