@@ -38,7 +38,16 @@ async fn sources(
     };
     let mut out = Vec::new();
     for provider in SmsProvider::ALL {
-        let column = provider.agent_column();
+        let Some(column) = provider.agent_column() else {
+            // Telnyx: the rep by user id, when they have a line.
+            if !crate::phone::texting::inbox_lines(pool, company_id, user_id)
+                .await?
+                .is_empty()
+            {
+                out.push((provider, Some(user_id.to_string())));
+            }
+            continue;
+        };
         let agent: Option<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT TRIM({column}) FROM users WHERE id = ? AND company_id = ? AND is_deleted = 0"
         )))
@@ -366,11 +375,19 @@ pub async fn sales_reps(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
 ) -> ApiResult<Json<Vec<SalesRep>>> {
-    let texts = SmsProvider::ALL
+    let mut texts = SmsProvider::ALL
         .iter()
-        .map(|provider| format!("TRIM(IFNULL({}, '')) != ''", provider.agent_column()))
-        .collect::<Vec<_>>()
-        .join(" OR ");
+        .filter_map(|provider| provider.agent_column())
+        .map(|column| format!("TRIM(IFNULL({column}, '')) != ''"))
+        .collect::<Vec<_>>();
+    // A Telnyx line.
+    texts.push(
+        "EXISTS (SELECT 1 FROM telnyx_number_users nu
+                   JOIN telnyx_numbers n ON n.id = nu.number_id AND n.company_id = users.company_id
+                  WHERE nu.user_id = users.id AND nu.can_call_from <> 0 AND n.active <> 0)"
+            .to_string(),
+    );
+    let texts = texts.join(" OR ");
     let reps = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT CAST(id AS CHAR) AS agent_id, COALESCE(name, '') AS name FROM users
           WHERE company_id = ? AND is_deleted = 0 AND ({texts})

@@ -95,15 +95,24 @@ fn has_sms_line(user: &SessionUser) -> bool {
         || (filled(&user.ringcentral_extension_id) && filled(&user.ringcentral_phone_number))
 }
 
-/// SMS when the company texts and the rep has a line, else email.
+/// SMS when the company texts and the rep has a line (a Telnyx line when
+/// they text through Telnyx), else email.
 async fn cadence_channel(
     state: &AppState,
     user: &SessionUser,
 ) -> Result<FollowupChannel, sqlx::Error> {
-    let texts = super::processor::company_sms_provider(state, user.company_id)
-        .await?
-        .is_some();
-    Ok(if texts && has_sms_line(user) {
+    let provider =
+        crate::routes::sms::send::user_provider(&state.pool, user.company_id, user.id).await?;
+    let texts = match provider {
+        Some(crate::routes::sms::provider::SmsProvider::Telnyx) => {
+            crate::phone::texting::user_line(&state.pool, user.company_id, user.id)
+                .await?
+                .is_some()
+        }
+        Some(_) => has_sms_line(user),
+        None => false,
+    };
+    Ok(if texts {
         FollowupChannel::Sms
     } else {
         FollowupChannel::Email
@@ -826,7 +835,8 @@ pub async fn start(
     if let Err(err) = record_edits(state, user, &gathered, flow_id, preview).await {
         tracing::warn!(?err, flow_id, "ai follow-up edits not recorded");
     }
-    let provider = super::processor::company_sms_provider(state, user.company_id).await?;
+    let provider =
+        crate::routes::sms::send::user_provider(&state.pool, user.company_id, user.id).await?;
     super::enrollments::start(
         &state.pool,
         user,

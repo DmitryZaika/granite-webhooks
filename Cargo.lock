@@ -117,7 +117,9 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "ammonia",
+ "aws-config",
  "aws-sdk-s3",
+ "aws-sdk-ssm",
  "axum",
  "axum-test",
  "base64",
@@ -132,6 +134,7 @@ dependencies = [
  "hickory-resolver",
  "hmac 0.13.0",
  "image",
+ "jpeg-encoder",
  "lambda_http",
  "lopdf",
  "miniz_oxide 0.8.9",
@@ -139,6 +142,7 @@ dependencies = [
  "percent-encoding",
  "regex",
  "reqwest",
+ "ring",
  "serde",
  "serde_html_form",
  "serde_json",
@@ -148,6 +152,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
+ "tower",
  "tower-http",
  "unicode-normalization",
  "url",
@@ -385,6 +390,32 @@ name = "aws-sdk-sesv2"
 version = "1.133.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff3764ca0e000175b6a755d54aaa1873587c2026af02416d4602a4c5f4ce907a"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.5.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-ssm"
+version = "1.122.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "400e5cea358fbcf6f971babbca13bd992a7077e527ac4f961c728c6a5a19ab9f"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -3044,6 +3075,12 @@ dependencies = [
  "getrandom 0.4.3",
  "libc",
 ]
+
+[[package]]
+name = "jpeg-encoder"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 
 [[package]]
 name = "js-sys"

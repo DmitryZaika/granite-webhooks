@@ -83,7 +83,7 @@ const MARKETING: i32 = 7;
 const SHOP_WORKER: i32 = 4;
 const TEMPLATE_MAKER: i32 = 11;
 
-fn sha256_hex(value: &str) -> String {
+pub(crate) fn sha256_hex(value: &str) -> String {
     Sha256::digest(value.as_bytes())
         .iter()
         .fold(String::with_capacity(64), |mut out, byte| {
@@ -269,7 +269,7 @@ async fn password_matches(password: String, hash: String) -> bool {
         .unwrap_or(false)
 }
 
-async fn too_many_failures(
+pub(crate) async fn too_many_failures(
     pool: &sqlx::MySqlPool,
     email_hash: &str,
     ip_hash: &str,
@@ -285,6 +285,66 @@ async fn too_many_failures(
     .fetch_one(pool)
     .await?;
     Ok(per_address >= MAX_FAILURES_PER_ADDRESS || per_email >= MAX_FAILURES_PER_EMAIL)
+}
+
+/// A sign-in's email and password as they are checked (the email trimmed
+/// and lowercased, the password trimmed); `None` when either is empty or
+/// too long.
+pub(crate) fn normalized_credentials(email: &str, password: &str) -> Option<(String, String)> {
+    let email = email.trim().to_lowercase();
+    let password = password.trim().to_string();
+    if email.is_empty() || password.is_empty() || email.len() > 254 || password.len() > 200 {
+        return None;
+    }
+    Some((email, password))
+}
+
+/// The live user `password` is right for, among every live account with
+/// the (normalized) `email`. An unknown email costs a check against
+/// `DUMMY_HASH`, so timing does not tell emails apart.
+pub(crate) async fn verify_login(
+    pool: &sqlx::MySqlPool,
+    email: &str,
+    password: &str,
+) -> sqlx::Result<Option<i32>> {
+    let candidates: Vec<(i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, password FROM users WHERE LOWER(TRIM(email)) = ? AND is_deleted = 0 ORDER BY id",
+    )
+    .bind(email)
+    .fetch_all(pool)
+    .await?;
+    let mut checked = false;
+    for (id, hash) in candidates {
+        let Some(hash) = hash.filter(|hash| !hash.is_empty()) else {
+            continue;
+        };
+        checked = true;
+        if password_matches(password.to_string(), hash).await {
+            return Ok(Some(id));
+        }
+    }
+    if !checked {
+        // Same cost as a real check, so timing does not tell emails apart.
+        let _ = password_matches(password.to_string(), DUMMY_HASH.clone()).await;
+    }
+    Ok(None)
+}
+
+/// Counts a failed sign-in for the rate limits, and prunes day-old ones.
+pub(crate) async fn record_failed_login(
+    pool: &sqlx::MySqlPool,
+    email_hash: &str,
+    ip_hash: &str,
+) -> sqlx::Result<()> {
+    sqlx::query("INSERT INTO login_attempts (email_hash, ip_hash) VALUES (?, ?)")
+        .bind(email_hash)
+        .bind(ip_hash)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM login_attempts WHERE attempted_at < NOW() - INTERVAL 1 DAY LIMIT 500")
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Sign in
@@ -313,13 +373,11 @@ pub async fn login(
     headers: HeaderMap,
     JsonBody(input): JsonBody<LoginInput>,
 ) -> ApiResult<Response> {
-    let email = input.email.trim().to_lowercase();
-    let password = input.password.trim().to_string();
-    if email.is_empty() || password.is_empty() || email.len() > 254 || password.len() > 200 {
+    let Some((email, password)) = normalized_credentials(&input.email, &input.password) else {
         return Err(ApiError::BadRequest(
             "Please check your email and password.".into(),
         ));
-    }
+    };
     let pool = &state.pool;
     let email_hash = sha256_hex(&email);
     let ip_hash = sha256_hex(&client_ip(&headers));
@@ -328,39 +386,8 @@ pub async fn login(
             "Too many login attempts. Please try again later.".into(),
         ));
     }
-    let candidates: Vec<(i32, Option<String>)> = sqlx::query_as(
-        "SELECT id, password FROM users WHERE LOWER(TRIM(email)) = ? AND is_deleted = 0 ORDER BY id",
-    )
-    .bind(&email)
-    .fetch_all(pool)
-    .await?;
-    let mut matched = None;
-    let mut checked = false;
-    for (id, hash) in candidates {
-        let Some(hash) = hash.filter(|hash| !hash.is_empty()) else {
-            continue;
-        };
-        checked = true;
-        if password_matches(password.clone(), hash).await {
-            matched = Some(id);
-            break;
-        }
-    }
-    if !checked {
-        // Same cost as a real check, so timing does not tell emails apart.
-        let _ = password_matches(password, DUMMY_HASH.clone()).await;
-    }
-    let Some(user_id) = matched else {
-        sqlx::query("INSERT INTO login_attempts (email_hash, ip_hash) VALUES (?, ?)")
-            .bind(&email_hash)
-            .bind(&ip_hash)
-            .execute(pool)
-            .await?;
-        sqlx::query(
-            "DELETE FROM login_attempts WHERE attempted_at < NOW() - INTERVAL 1 DAY LIMIT 500",
-        )
-        .execute(pool)
-        .await?;
+    let Some(user_id) = verify_login(pool, &email, &password).await? else {
+        record_failed_login(pool, &email_hash, &ip_hash).await?;
         return Err(ApiError::Unauthenticated(
             "Incorrect email or password. Please try again.".into(),
         ));
@@ -413,7 +440,9 @@ pub(crate) async fn start_session(state: &AppState, user_id: i32) -> ApiResult<S
 /// Sign out
 ///
 /// Ends the request's session (it no longer signs anyone in, even if the
-/// cookie is replayed) and clears the cookie. Always answers 204.
+/// cookie is replayed) and clears the cookie. The browser phone of the
+/// session (Granite Phone in the CRM) is signed out too: its Telnyx
+/// credential is deleted. Always answers 204.
 #[utoipa::path(
     post,
     path = "/v1/auth/logout",
@@ -427,9 +456,15 @@ pub(crate) async fn start_session(state: &AppState, user_id: i32) -> ApiResult<S
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     if let Some(session_id) = request_session_id(&headers, &state.session_secret) {
         sqlx::query("UPDATE sessions SET is_deleted = 1 WHERE id = ?")
-            .bind(session_id)
+            .bind(&session_id)
             .execute(&state.pool)
             .await?;
+        crate::phone::revoke::revoke_web_session(
+            &state,
+            &session_id,
+            crate::phone::revoke::RevokeReason::SignedOut,
+        )
+        .await?;
     }
     Ok(with_cookies(
         StatusCode::NO_CONTENT.into_response(),
@@ -727,7 +762,7 @@ impl std::fmt::Debug for NewPassword {
 /// Set a new password
 ///
 /// Uses a reset link once: sets the password (bcrypt), spends the link and
-/// ends every session of the user.
+/// ends every session of the user, Granite Phone sign-ins included.
 #[utoipa::path(
     post,
     path = "/v1/auth/password-reset/{token}",
@@ -783,6 +818,12 @@ pub async fn reset_password(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    crate::phone::revoke::revoke_user_phones(
+        &state,
+        user_id,
+        crate::phone::revoke::RevokeReason::PasswordChanged,
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

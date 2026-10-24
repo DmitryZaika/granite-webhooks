@@ -211,10 +211,10 @@ fn to_template(row: Row, user: &SessionUser, company_editable: bool) -> SmsTempl
     }
 }
 
-/// Texting needs `CloudTalk` or `RingCentral`.
+/// Texting needs `CloudTalk`, `RingCentral` or Telnyx texting.
 async fn require_sms(pool: &MySqlPool, user: &SessionUser) -> ApiResult<()> {
     let features = company_features(pool, user.company_id).await?;
-    if features.cloudtalk || features.ringcentral {
+    if features.cloudtalk || features.ringcentral || features.telnyx_sms {
         Ok(())
     } else {
         Err(ApiError::Forbidden)

@@ -535,10 +535,13 @@ pub async fn add_attachment(
     JsonBody(input): JsonBody<TemplateAttachmentInput>,
 ) -> ApiResult<(StatusCode, Json<TemplateAttachment>)> {
     editable(&state.pool, &user, id).await?;
-    let in_folder = state
-        .storage
-        .key_for_url(&input.url)
-        .is_some_and(|key| key.starts_with("email-templates/"));
+    let in_folder = crate::routes::uploads::accepted_key(
+        &state.storage,
+        &input.url,
+        crate::routes::uploads::schemas::UploadFolder::EmailTemplates,
+        user.company_id,
+    )
+    .is_some();
     let filename = input.filename.trim();
     let (kind, subtype) = input
         .content_type

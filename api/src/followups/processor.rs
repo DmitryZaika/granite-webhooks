@@ -148,8 +148,13 @@ async fn inbound_sms_since(state: &AppState, due: &Due, phone: &str) -> Result<b
         "SELECT id FROM (SELECT id FROM cloudtalk_sms WHERE company_id = ? AND direction = 'inbound' AND sender = ? AND created_date > ? LIMIT 1) ct
          UNION ALL
          SELECT id FROM (SELECT id FROM ringcentral_sms WHERE company_id = ? AND direction = 'inbound' AND sender = ? AND created_date > ? LIMIT 1) rc
+         UNION ALL
+         SELECT id FROM (SELECT id FROM telnyx_sms WHERE company_id = ? AND direction = 'inbound' AND phone_digits = RIGHT(?, 10) AND created_date > ? LIMIT 1) tx
          LIMIT 1",
     )
+    .bind(due.company_id)
+    .bind(phone)
+    .bind(due.started_at)
     .bind(due.company_id)
     .bind(phone)
     .bind(due.started_at)
@@ -498,7 +503,11 @@ async fn send_step(state: &AppState, due: &Due, now: Instant) -> Result<Outcome,
         return Ok(Outcome::Nothing);
     }
     let provider = if channel == FollowupChannel::Sms {
-        let Some(provider) = company_sms_provider(state, due.company_id).await? else {
+        // The rep's provider: Telnyx when they have a Telnyx line there.
+        let Some(provider) =
+            crate::routes::sms::send::user_provider(&state.pool, due.company_id, due.user_id)
+                .await?
+        else {
             return Ok(
                 if record_send_failure(state, due, "sms_not_configured").await? {
                     Outcome::Failed
@@ -616,7 +625,12 @@ async fn send_step(state: &AppState, due: &Due, now: Instant) -> Result<Outcome,
     };
     let sent = match provider {
         None => send_email(state, due, &rep, customer_id, &subject, &body).await?,
-        Some(provider) => send_sms(state, due, &rep, provider, current.position, &body).await?,
+        Some(company) => {
+            let provider = rep_sms_provider(state, due.company_id, &rep)
+                .await?
+                .unwrap_or(company);
+            send_sms(state, due, &rep, provider, current.position, &body).await?
+        }
     };
     if let Err(outcome) = sent {
         return Ok(outcome);
@@ -738,7 +752,7 @@ async fn send_email(
     }
 }
 
-/// Sends a text step through the company's provider.
+/// Sends a text step through the rep's provider.
 async fn send_sms(
     state: &AppState,
     due: &Due,
@@ -747,7 +761,7 @@ async fn send_sms(
     position: i32,
     body: &str,
 ) -> Result<Result<(), Outcome>, sqlx::Error> {
-    let Some(agent_id) = provider.agent_of(rep) else {
+    let Some(seat) = crate::routes::sms::send::seat(&state.pool, provider, rep).await? else {
         return Ok(Err(if fail(state, due.id, "agent_not_linked").await? {
             Outcome::Failed
         } else {
@@ -770,18 +784,19 @@ async fn send_sms(
         provider: provider.as_str().to_string(),
         company_id: due.company_id,
         user_id: rep.id,
-        agent_id,
+        agent_id: seat.agent_id.clone(),
         phone_digits: phone.to_string(),
         text: body.trim().to_string(),
         attachments: Vec::new(),
         is_automated: true,
         idempotency_key: Some(format!("sms-flow-{}-{}", due.id, position)),
     };
-    match state.webhooks.send_sms(&outgoing).await {
+    match crate::routes::sms::send::send_text(state, provider, &seat, &outgoing).await {
         Ok(_) => Ok(Ok(())),
-        // No number for the agent cannot fix itself.
-        Err(failure) if failure.error == "agent_no_number" => {
-            Ok(Err(if fail(state, due.id, "agent_no_number").await? {
+        // No number for the agent, or a phone that texted STOP, cannot fix
+        // itself.
+        Err(failure) if matches!(failure.error.as_str(), "agent_no_number" | "opted_out") => {
+            Ok(Err(if fail(state, due.id, &failure.error).await? {
                 Outcome::Failed
             } else {
                 Outcome::Nothing
@@ -808,13 +823,48 @@ pub async fn company_sms_provider(
     state: &AppState,
     company_id: i32,
 ) -> Result<Option<SmsProvider>, sqlx::Error> {
-    use crate::routes::stats::schemas::SmsProvider as Configured;
     let features =
         crate::routes::company::queries::company_features(&state.pool, company_id).await?;
-    Ok(features.sms_provider().map(|provider| match provider {
-        Configured::Ringcentral => SmsProvider::Ringcentral,
-        Configured::Cloudtalk => SmsProvider::Cloudtalk,
-    }))
+    Ok(features.sms_provider())
+}
+
+/// The provider `rep` texts through, as their inbox picks it
+/// (`prefersRingcentralInbox`): a linked `RingCentral` line wins, then a
+/// `CloudTalk` agent, then `RingCentral` when both are connected. Telnyx
+/// comes before them when the company texts through it and `rep` has a
+/// line there, and after them when the company texts only through it.
+pub async fn rep_sms_provider(
+    state: &AppState,
+    company_id: i32,
+    rep: &SessionUser,
+) -> Result<Option<SmsProvider>, sqlx::Error> {
+    let features =
+        crate::routes::company::queries::company_features(&state.pool, company_id).await?;
+    if features.telnyx_sms
+        && crate::phone::texting::user_line(&state.pool, company_id, rep.id)
+            .await?
+            .is_some()
+    {
+        return Ok(Some(SmsProvider::Telnyx));
+    }
+    Ok(rep_provider(features.cloudtalk, features.ringcentral, rep)
+        .or_else(|| features.telnyx_sms.then_some(SmsProvider::Telnyx)))
+}
+
+fn rep_provider(cloudtalk: bool, ringcentral: bool, rep: &SessionUser) -> Option<SmsProvider> {
+    if !ringcentral {
+        return cloudtalk.then_some(SmsProvider::Cloudtalk);
+    }
+    let ringcentral_line = SmsProvider::Ringcentral.agent_of(rep).is_some()
+        || rep
+            .ringcentral_phone_number
+            .as_deref()
+            .is_some_and(|phone| !phone.trim().is_empty());
+    if cloudtalk && !ringcentral_line && SmsProvider::Cloudtalk.agent_of(rep).is_some() {
+        Some(SmsProvider::Cloudtalk)
+    } else {
+        Some(SmsProvider::Ringcentral)
+    }
 }
 
 /// Sends the step of one due enrollment now (a rep started a flow or the

@@ -145,8 +145,8 @@ pub async fn source_allowed(
     {
         return Ok(true);
     }
-    let found: Option<i32> = sqlx::query_scalar(
-        "SELECT id FROM customer_sources
+    let found: Option<i64> = sqlx::query_scalar(
+        "SELECT CAST(id AS SIGNED) FROM customer_sources
          WHERE company_id = ? AND deleted_at IS NULL AND LOWER(source_key) = LOWER(?) LIMIT 1",
     )
     .bind(company_id)
@@ -182,9 +182,10 @@ pub fn audit_name(name: Option<&str>) -> Option<String> {
         .map(|n| n.chars().take(100).collect())
 }
 
-/// `recordCustomerReassignment`: one line of the audit trail (only with an actor).
-pub async fn record_reassignment(
-    pool: &MySqlPool,
+/// `recordCustomerReassignment`: one line of the audit trail (only with an
+/// actor). `executor` is the pool or the caller's transaction.
+pub async fn record_reassignment<'e>(
+    executor: impl sqlx::MySqlExecutor<'e>,
     customer_id: i32,
     by: Option<&str>,
     to: Option<&str>,
@@ -204,7 +205,7 @@ pub async fn record_reassignment(
             .bind(by)
             .bind(to)
             .bind(at)
-            .execute(pool)
+            .execute(executor)
             .await?;
         }
         None => {
@@ -214,7 +215,7 @@ pub async fn record_reassignment(
             .bind(customer_id)
             .bind(by)
             .bind(to)
-            .execute(pool)
+            .execute(executor)
             .await?;
         }
     }
@@ -301,9 +302,41 @@ pub async fn ensure_open_deal(
     sales_rep: i32,
 ) -> Result<i64, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    let deal = open_deal_in(&mut tx, customer_id, company_id, sales_rep).await?;
+    tx.commit().await?;
+    if let Some(list_id) = deal.new_in_list {
+        start_drips(pool, deal.id, list_id).await;
+    }
+    Ok(deal.id)
+}
+
+/// The open deal [`open_deal_in`] found or made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenDeal {
+    /// The deal.
+    pub id: i64,
+    /// The stage a new deal starts in; `None` when one was open already.
+    /// A new deal's drips are scheduled after the commit ([`start_drips`]).
+    pub new_in_list: Option<i32>,
+}
+
+/// Schedules the drips of a deal just made in `list_id` (best effort).
+pub async fn start_drips(pool: &MySqlPool, deal_id: i64, list_id: i32) {
+    if let Err(err) = sync_drip(pool, deal_id, list_id, true).await {
+        tracing::warn!(?err, deal_id, "drips of the new deal not scheduled");
+    }
+}
+
+/// [`ensure_open_deal`] in the caller's transaction, without the drips.
+pub async fn open_deal_in(
+    tx: &mut Transaction<'_, MySql>,
+    customer_id: i32,
+    company_id: i32,
+    sales_rep: i32,
+) -> Result<OpenDeal, sqlx::Error> {
     sqlx::query("SELECT id FROM customers WHERE id = ? AND deleted_at IS NULL FOR UPDATE")
         .bind(customer_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     sqlx::query(
         "UPDATE deals SET user_id = ?
@@ -312,18 +345,20 @@ pub async fn ensure_open_deal(
     .bind(sales_rep)
     .bind(customer_id)
     .bind(sales_rep)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     let open: Option<i64> = sqlx::query_scalar(
         "SELECT CAST(id AS SIGNED) FROM deals
          WHERE customer_id = ? AND deleted_at IS NULL AND is_won IS NULL ORDER BY id LIMIT 1",
     )
     .bind(customer_id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?;
     if let Some(open) = open {
-        tx.commit().await?;
-        return Ok(open);
+        return Ok(OpenDeal {
+            id: open,
+            new_in_list: None,
+        });
     }
     let stage: Option<(i32, Option<String>)> = sqlx::query_as(
         "SELECT dl.id, dl.name FROM groups_list g
@@ -332,7 +367,7 @@ pub async fn ensure_open_deal(
          ORDER BY g.id = 1, dl.position LIMIT 1",
     )
     .bind(company_id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?;
     let (list_id, status) = stage.map_or_else(
         || (1, "Not Contacted Yet".to_string()),
@@ -342,7 +377,7 @@ pub async fn ensure_open_deal(
         "SELECT CAST(COALESCE(MAX(position), 0) + 1 AS SIGNED) FROM deals WHERE list_id = ? AND deleted_at IS NULL",
     )
     .bind(list_id)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
     let deal_id = sqlx::query(
         "INSERT INTO deals (customer_id, status, list_id, position, user_id, created_by)
@@ -353,16 +388,15 @@ pub async fn ensure_open_deal(
     .bind(list_id)
     .bind(next)
     .bind(sales_rep)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?
     .last_insert_id();
     let deal_id = i64::try_from(deal_id).unwrap_or(i64::MAX);
-    enter_stage(&mut tx, deal_id, list_id).await?;
-    tx.commit().await?;
-    if let Err(err) = sync_drip(pool, deal_id, list_id, true).await {
-        tracing::warn!(?err, deal_id, "drips of the new deal not scheduled");
-    }
-    Ok(deal_id)
+    enter_stage(tx, deal_id, list_id).await?;
+    Ok(OpenDeal {
+        id: deal_id,
+        new_in_list: Some(list_id),
+    })
 }
 
 /// Reminders for a newly assigned sales rep: text the customer within a

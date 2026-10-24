@@ -1,10 +1,12 @@
 //! Call audio and its transcript.
 //!
 //! `CloudTalk` call ids are numeric; `RingCentral` audio is addressed by the media tokens of
-//! [`super::ringcentral`] (`rec_<id>`, `vm_<extension>_<message>_<attachment>`).
+//! [`super::ringcentral`] (`rec_<id>`, `vm_<extension>_<message>_<attachment>`);
+//! Granite Phone calls are `tx_<id>` ([`super::telnyx`]), read from our own bucket.
 //! Port of `callTranscription.server.ts` and `ringcentralCallMedia.ts`.
 
 use super::ringcentral::attachment_of;
+use super::telnyx;
 use crate::ai::Caller;
 use crate::state::AppState;
 use crate::transcribe::{TranscribeError, Transcript};
@@ -157,6 +159,11 @@ async fn voicemail_transcript(
     (!text.is_empty() && !unavailable).then_some(text)
 }
 
+/// The Granite Phone call (`tx_<id>`) a call id or recording link names.
+pub fn telnyx_call(call_id: &str, recording_link: Option<&str>) -> Option<i64> {
+    telnyx::parse_token(call_id).or_else(|| recording_link.and_then(telnyx::parse_token))
+}
+
 /// The call's audio and its content type.
 pub async fn fetch_audio(
     state: &AppState,
@@ -164,6 +171,9 @@ pub async fn fetch_audio(
     call_id: &str,
     recording_link: Option<&str>,
 ) -> Result<(Vec<u8>, String), CallTranscriptError> {
+    if let Some(id) = telnyx_call(call_id, recording_link) {
+        return telnyx::audio(state, company_id, id).await;
+    }
     if let Some(token) = recording_link.and_then(MediaToken::parse) {
         let (bytes, content_type) = ringcentral::get_raw(
             &state.pool,
@@ -219,7 +229,9 @@ pub async fn fetch_audio(
 }
 
 /// Transcribes a call, reusing `RingCentral`'s voicemail transcript when it
-/// has one.
+/// has one. A Granite Phone call (`tx_<id>`, of the caller's company) reuses
+/// the transcript kept on it, else transcribes our copy of its recording
+/// (always with speaker labels) and keeps the transcript.
 pub async fn transcribe_call(
     state: &AppState,
     caller: Caller<'_>,
@@ -228,6 +240,9 @@ pub async fn transcribe_call(
     speaker_labels: bool,
 ) -> Result<Transcript, CallTranscriptError> {
     let company_id = caller.company_id.unwrap_or_default();
+    if let Some(id) = telnyx_call(call_id, recording_link) {
+        return telnyx::transcript(state, caller, company_id, id).await;
+    }
     if let Some(token) = recording_link.and_then(MediaToken::parse)
         && let Some(text) = voicemail_transcript(state, company_id, &token).await
     {

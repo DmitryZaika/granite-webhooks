@@ -17,10 +17,11 @@ use utoipa::ToSchema;
 /// Body of `POST /v1/call-transcripts`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct TranscriptInput {
-    /// `CloudTalk`'s numeric call id, or the `RingCentral` call id.
+    /// `CloudTalk`'s numeric call id, the `RingCentral` call id, or a
+    /// Granite Phone call `tx_<id>` (`Cdr.id` of `GET /v1/calls/telnyx`).
     pub call_id: String,
-    /// The call's `recording_link`: a `RingCentral` media token or a
-    /// `CloudTalk` URL.
+    /// The call's `recording_link`: a `RingCentral` media token, a
+    /// `CloudTalk` URL, or the Granite Phone call `tx_<id>`.
     #[serde(default)]
     pub recording_link: Option<String>,
 }
@@ -35,7 +36,14 @@ pub struct CallTranscript {
 /// Transcribe a call
 ///
 /// Downloads the call's recording from the provider and transcribes it.
-/// `RingCentral` voicemail reuses `RingCentral`'s own transcript.
+/// `RingCentral` voicemail reuses `RingCentral`'s own transcript. A Granite
+/// Phone call (`tx_<id>`) answers the transcript kept on the call (speaker
+/// turns as `Speaker A: ...` lines), else transcribes our copy of its
+/// recording and keeps it; 404 when it has no recording or is another
+/// company's, 403 (before anything is transcribed) when the caller may not
+/// hear it (only the call's user, the users of its direct line, for an
+/// unanswered incoming call the users its line rings, its deal's owner,
+/// admins and sales managers may).
 #[utoipa::path(
     post,
     path = "/v1/call-transcripts",
@@ -46,8 +54,8 @@ pub struct CallTranscript {
         (status = 200, description = "Transcript", body = CallTranscript),
         (status = 400, description = "Invalid call id", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
-        (status = 404, description = "The recording is empty", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or may not hear this Granite Phone call", body = ErrorBody),
+        (status = 404, description = "The recording is empty (or a Granite Phone call has none, or is not the company's)", body = ErrorBody),
         (status = 422, description = "No speech in the recording", body = ErrorBody),
         (status = 500, description = "The recording could not be fetched or transcribed", body = ErrorBody),
     ),
@@ -66,6 +74,14 @@ pub async fn transcribe(
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
     if !valid {
         return Err(ApiError::BadRequest("Invalid call id".into()));
+    }
+    if let Some(id) = super::recording::telnyx_call(call_id, input.recording_link.as_deref()) {
+        let hearer = crate::phone::calls::Hearer::of(&user);
+        match crate::phone::calls::may_hear(&state.pool, user.company_id, hearer, id).await? {
+            Some(true) => {}
+            Some(false) => return Err(ApiError::Forbidden),
+            None => return Err(ApiError::NotFound),
+        }
     }
     let caller = Caller {
         feature: "call_transcription",
@@ -86,8 +102,11 @@ pub async fn transcribe(
         })
         .into_response()),
         Err(err) => {
+            let ours = super::telnyx::parse_token(call_id).is_some();
             let status = match err {
                 CallTranscriptError::Empty => StatusCode::NOT_FOUND,
+                // Our own call log: no such call, or no recording.
+                CallTranscriptError::NotAvailable if ours => StatusCode::NOT_FOUND,
                 CallTranscriptError::NoSpeech => StatusCode::UNPROCESSABLE_ENTITY,
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             };

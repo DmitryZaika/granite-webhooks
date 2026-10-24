@@ -5,6 +5,10 @@
 //! inbound rows sent to the user's own number (every row). "All" — admins
 //! only — is the whole company, or one rep's "mine" when filtered by agent.
 //! Company lines and the onboarding sample are never thread keys.
+//!
+//! Telnyx: "mine" is every thread of the numbers the user may call from
+//! (whole threads, so a shared line is a shared inbox); the rep filter takes
+//! the rep's user id.
 
 use super::provider::{Param, SAMPLE_PHONES, SmsProvider, marks};
 use crate::auth::session::SessionUser;
@@ -47,7 +51,20 @@ pub async fn filter_agent(
     if scope != SmsScope::All || wanted.is_empty() {
         return Ok(None);
     }
-    let column = provider.agent_column();
+    let Some(column) = provider.agent_column() else {
+        // Telnyx: the rep's user id.
+        let Ok(rep) = wanted.parse::<i32>() else {
+            return Ok(None);
+        };
+        let found: Option<i32> = sqlx::query_scalar(
+            "SELECT id FROM users WHERE id = ? AND company_id = ? AND is_deleted = 0",
+        )
+        .bind(rep)
+        .bind(user.company_id)
+        .fetch_optional(pool)
+        .await?;
+        return Ok(found.map(|id| id.to_string()));
+    };
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT TRIM({column}) FROM users
           WHERE company_id = ? AND is_deleted = 0 AND TRIM(IFNULL({column}, '')) = ?
@@ -70,6 +87,8 @@ pub struct Narrowing {
     pub agent_id: Option<String>,
     /// Company lines, never thread keys.
     pub company_lines: Vec<String>,
+    /// One rep's inbox (unread first), not the company's.
+    pub one_rep: bool,
 }
 
 pub async fn company_lines(
@@ -77,6 +96,9 @@ pub async fn company_lines(
     provider: SmsProvider,
     company_id: i32,
 ) -> Result<Vec<String>, sqlx::Error> {
+    if provider == SmsProvider::Telnyx {
+        return crate::phone::texting::company_lines(pool, company_id).await;
+    }
     sqlx::query_scalar(
         "SELECT phone10 FROM sms_company_phones
           WHERE provider = ? AND company_id = ? AND agent_sender = 1 AND inbound_recipient = 1",
@@ -138,6 +160,27 @@ pub async fn narrowing(
             whole_threads: Vec::new(),
             agent_id: None,
             company_lines,
+            one_rep: false,
+        });
+    }
+    if provider == SmsProvider::Telnyx {
+        let lines = telnyx_lines(pool, user, scope, filter_agent).await?;
+        let threads: Vec<String> =
+            crate::phone::texting::line_threads(pool, user.company_id, &lines)
+                .await?
+                .into_iter()
+                .filter(|phone| {
+                    !company_lines.contains(phone) && !SAMPLE_PHONES.contains(&phone.as_str())
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+        return Ok(Narrowing {
+            phones: Some(threads.clone()),
+            whole_threads: threads,
+            agent_id: None,
+            company_lines,
+            one_rep: true,
         });
     }
     let (agent_id, phone10) = if scope == SmsScope::All {
@@ -172,9 +215,29 @@ pub async fn narrowing(
     Ok(Narrowing {
         phones: Some(phones),
         whole_threads,
+        one_rep: agent_id.is_some(),
         agent_id,
         company_lines,
     })
+}
+
+/// The Telnyx lines (last ten digits) whose threads are visible: the
+/// caller's, or with `scope=all` the filtered rep's (`filter` = user id).
+async fn telnyx_lines(
+    pool: &MySqlPool,
+    user: &SessionUser,
+    scope: SmsScope,
+    filter: Option<&str>,
+) -> Result<Vec<String>, sqlx::Error> {
+    let rep = if scope == SmsScope::All {
+        filter.and_then(|id| id.parse::<i32>().ok())
+    } else {
+        Some(user.id)
+    };
+    match rep {
+        Some(rep) => crate::phone::texting::inbox_lines(pool, user.company_id, rep).await,
+        None => Ok(Vec::new()),
+    }
 }
 
 impl Narrowing {
@@ -254,6 +317,12 @@ pub async fn thread_access(
         )
         .await?;
         return Ok(found.then_some(ThreadAccess { clause: None }));
+    }
+    if provider == SmsProvider::Telnyx {
+        let lines = telnyx_lines(pool, user, scope, filter_agent).await?;
+        let seen =
+            crate::phone::texting::thread_on_lines(pool, user.company_id, &lines, phone).await?;
+        return Ok(seen.then_some(ThreadAccess { clause: None }));
     }
     let (agent_id, phone10) = if scope == SmsScope::All {
         (filter_agent.map(str::to_string), None)

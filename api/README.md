@@ -177,9 +177,14 @@ resumes stuck provisioning, expires abandoned signups and reconciles seats.
 ### Uploads and storage
 
 Images go straight from the browser to the bucket with a presigned PUT
-(`POST /v1/uploads`); routes that take an image URL call
-`routes::uploads::attach` (checks the file is in the folder, stores the
-`-icon` thumbnail) and `remove` when replacing or deleting. `Storage` is
+(`POST /v1/uploads`) under `<folder>/<company id>/`; routes that take an
+image URL call `routes::uploads::attach` (checks the file is the company's
+upload in the folder, or an older upload whose key names no company, and
+stores the `-icon` thumbnail) and `remove` when replacing or deleting.
+Bucket URLs are public, so `remove` (and anything that overwrites a file)
+touches only keys under the caller's company; older keys are never deleted.
+Stored URLs never reach `SIGNATURE_STORAGE_BUCKET`: `readable_url` does not
+sign it and `get_url` does not read it (`get_in` does, for signature code). `Storage` is
 S3 (`STORAGE_BUCKET`, `STORAGE_REGION`, `STORAGE_ACCESS_KEY`,
 `STORAGE_SECRET`, optional `STORAGE_ENDPOINT` / `STORAGE_PUBLIC_URL`),
 `Storage::memory()` in tests (`common::server_with_storage`), or disabled
@@ -409,6 +414,203 @@ that flag, so copy any new variable to both. The browser reaches it at
 whether a called customer answered (`<API_URL>/v1/followups/call-check`, same
 key); the API sends mail and texts through `webhooks` (`WEBHOOKS_URL`, and
 `WEBHOOKS_KEY` = the webhooks Lambda's `REMIX_KEY`).
+
+## Phone (Telnyx)
+
+Granite Phone, the business calling app (repo `granite-phone`; its contract
+is `docs/api-contract.md` there), runs on this API. Calls go through Telnyx:
+a company's numbers sit on its TeXML application (incoming calls), and each
+signed-in phone gets a telephony credential on its credential connection
+(outgoing calls, parked until we approve them). Code: `auth/device.rs` (the
+app's `X-Granite-Device` token), `telnyx.rs`, `push.rs` (FCM), `phone/`
+(shared logic), `routes/device_sessions.rs`, `routes/phone/`,
+`routes/telnyx_webhooks/` and `routes/jobs/phone.rs`.
+
+| Routes | For |
+|---|---|
+| `POST /v1/auth/device-sessions`, `DELETE /v1/auth/device-sessions/current`, `/v1/me/devices*` | the app's sign-in and signed-in phones (device token; `/v1/me/devices` takes the cookie too) |
+| `/v1/phone/*` | the app (device token): bootstrap, devices and login JWTs, settings, contacts, Recents, notes, Call via my cell, 911 alerts, problem reports, the Texts tab (`/v1/phone/texts*`, `phone/texts.rs`) |
+| `/v1/phone/web/*`, `PUT /v1/phone/calls/recording` | the CRM's phone dock (cookie): the browser registers as a phone of its own (`platform = 'web'`, `device_sessions.web_session_id` = the cookie's session), gets login JWTs (the app's limits), says while it is connected (`presence`: only then it rings), declines; the Record button of a live call (also the app's). Call via my cell and cell verification take the cookie too |
+| `/v1/phone/admin/numbers*`, `/v1/phone/admin/devices*` | company admins (cookie): numbers and who they ring, importing them from Telnyx, signing phones out |
+| `/v1/phone/admin/ports*` | company admins (cookie): porting existing numbers to Telnyx (portability, draft orders, business details, LOA and bill, port date, submit, cancel, comments) |
+| `POST /v1/webhooks/telnyx/{token}/porting` | Telnyx's port-in notifications (Ed25519, required; only a nudge to read the order again) |
+| `/v1/phone/admin/tendlc*` | the company's Managers (cookie; the Manager position, not every admin): the 10DLC texting registration, saved as drafts and marked ready |
+| `/v1/superuser/tendlc`, `/v1/superuser/companies/{id}/tendlc*` | superusers (cookie): review a registration, its price, send it to Telnyx, read it again, send it again after a rejection, assign the company's numbers |
+| `POST /v1/webhooks/telnyx/{token}/10dlc` | Telnyx's 10DLC brand, campaign and number notifications (Ed25519, required) |
+| `GET`/`PUT /v1/superuser/companies/{id}/telnyx` | superusers (cookie): a company's Telnyx setup and its `webhookBase` |
+| `POST /v1/webhooks/telnyx/{token}/...` | Telnyx (`token` names the company): TeXML forms, which must carry the company's `AccountSid` once its Telnyx account id is saved; Call Control JSON, Ed25519-signed |
+| `POST /v1/jobs/phone` | `time-triggered` (job key): sign-outs (lost access, expired or idle sign-ins), leftover credentials, old callbacks, calls left open, the customer phone index, AI notes, call points, Telnyx recording deletes, recording retries, port orders, 10DLC registrations and number assignments |
+
+In the CRM (session cookie) the call log is provider `telnyx` of the call
+routes (`routes/calls/telnyx.rs`): `GET /v1/calls/telnyx` lists a deal's or
+customer's calls in the `CloudTalk` shape (ids `tx_<call id>`), the
+recording route answers 5-minute links to our bucket, and
+`POST /v1/call-transcripts` the transcript kept on the call. The bell lists
+unseen missed calls, voicemails and AI messages (dismissing one marks it
+seen, as in the app) and 911 alerts; users-activity and the call coach
+include the calls. A call's end moves the customer's deal on and stops
+their flows like a `CloudTalk` call (`phone/outcomes.rs`; 31 to 89 seconds
+on a rep's call: once the AI note's transcript shows a conversation).
+
+A user's phones are signed out when they sign out or revoke one, when their
+password is reset or changed, and when an admin deletes them or takes their
+employee and admin rights away; a company's phones when a superuser deletes
+the company; the job signs out anyone who lost access another way, and
+sign-ins that expired or went unused for 30 days. An app call always names
+its phone with `X-Granite-Device-Id` and proves it with `X-Granite-Call-Auth`,
+an HMAC keyed with the phone's call key (see the contract); a SIP user in
+`from` must be that phone's. The call key (`callKey`, shown once at sign-in)
+is HMAC-SHA256 of `SESSION_SECRET` over the device session id
+(`auth/device.rs`): derived again for each call and never stored, so a copy
+of the database cannot sign calls. A new `SESSION_SECRET` changes every key:
+phones then sign in again before they can call. Emergency codes (911, 112,
+933, 988) are never refused; the other N11 codes are.
+
+Calls are matched to customers by `customer_phone_index`, the last 10
+digits of each live customer's phone and phone 2 (`phone/customer_index.rs`).
+The job fills each company's index once (at most 5,000 customers a run;
+until it is done, lookups read the customers' phones as before), then
+rewrites the rows of the customers changed (`customers.updated_at`) or added
+(new ids) since its last run; the app's own new contacts and added numbers
+are indexed at once. A CRM edit reaches the index within a run or two, and
+a lookup passes over a row the customer no longer matches, so a stale row
+never names the wrong customer. AI notes are tidied by `call_notes.rs`, a
+port of the CRM's `sanitizeCallNoteContent` (`app/lib/callAiHelpers.ts`):
+change both together.
+
+Porting (`phone/porting.rs`, `telnyx/porting.rs`, `routes/phone/porting.rs`,
+`routes/telnyx_webhooks/porting.rs`): an admin moves the company's existing
+numbers to Telnyx from Admin → Phone → Port numbers. `phone_port_orders` is our
+copy of each Telnyx order (Telnyx may split a request by carrier, number type
+or FastPort; the split orders share `request_id`), `phone_port_events` its
+timeline and the notifications taken; business details and documents stay in
+Telnyx. Every change we send an order carries `webhook_url =
+{webhookBase}/porting` and, for when it ports, the company's TeXML app (and
+billing group, and messaging profile once texting has one) as its
+`phone_number_configuration`, so no portal notification setup is needed.
+Orders are read again when opened, on each notification and by the phone job.
+Once ported, the numbers are added as unassigned direct lines with the
+order's label and checked onto the TeXML app on Telnyx (the job retries until
+Telnyx lists them); the admins get a bell and an email. Migration:
+`20261023040000_create-phone-port-orders.sql`.
+
+Texting registration, 10DLC (`phone/tendlc.rs`, `phone/tendlc_registry.rs`,
+`telnyx/tendlc.rs`, `routes/phone/tendlc.rs`,
+`routes/telnyx_webhooks/tendlc.rs`): US carriers block business texts from
+local numbers until the company's brand (the business) and campaign (how it
+texts) are registered with The Campaign Registry. The company's Managers fill
+the form in from Admin → Phone (checked as Telnyx and the carriers check it:
+EIN, address, sample texts that name the business and say "Reply STOP to opt
+out", ...) and mark it ready; the superusers get a bell. Only a superuser
+sends it, from Superuser → Companies → Texting registrations, after seeing
+Telnyx's campaign price: Telnyx charges for the brand, three months of the
+campaign up front and each number. The brand goes first (never a second one:
+a create whose answer never came is looked up first), then the campaign once
+TCR registered the brand (its `referenceId` finds a campaign an earlier try
+made). Both report to `{webhookBase}/10dlc`, so the company needs its Telnyx
+setup first; notifications, a refresh and the phone job move the registration
+on, and the company's admins and Managers get a bell when it is approved,
+rejected or suspended. After a rejection the form is fixed and sent again: the
+brand updated; on a registered campaign only the samples, message flow and
+help message change, plus an appeal for a fix outside the form; a new campaign
+when TCR refused the first. Once approved, the superuser assigns the company's
+active numbers to the campaign (they must be on its messaging profile).
+Telnyx's reasons are kept with phone numbers masked. Sole proprietors (no EIN)
+are not offered: TCR verifies them with a code sent to the owner's mobile.
+Migration: `20261023060000_create-tendlc-registrations.sql`.
+
+Environment (set by hand on `granite-api(-dev)` and `granite-api-stream(-dev)`):
+
+- `TELNYX_API_KEY`: the Telnyx API key; unset, calling answers 503.
+- `TELNYX_PUBLIC_KEY`: Telnyx's Ed25519 public key (base64; portal → Keys &
+  Credentials → Public Key). Required: Call Control events must be signed,
+  and without it they are refused (503, so every app call fails). TeXML
+  signatures are checked when Telnyx sends them.
+- `PHONE_ALLOW_UNSIGNED_WEBHOOKS`: `1` accepts unsigned Call Control events
+  while `TELNYX_PUBLIC_KEY` is unset. Local and tests only; never set it on
+  Lambda.
+- `TELNYX_FALLBACK_TEXML_URL`: where callers go when a TeXML callback fails
+  and the company has no fallback of its own.
+- `PHONE_PUBLIC_API_URL`: the root Telnyx calls back (default
+  `https://api.granite-manager.com`; `https://api-dev.granite-manager.com` on
+  dev).
+- `PHONE_RECORDINGS_BUCKET`: the private recordings bucket (below).
+- `FCM_SERVICE_ACCOUNT_JSON` (the whole JSON), or `FCM_SERVICE_ACCOUNT_S3_KEY`
+  (that JSON's key in `PHONE_RECORDINGS_BUCKET`; Lambda environments max out
+  at 4 KB).
+- `PHONE_MIN_APP_VERSION`: the oldest app version that may call, for companies
+  that set none.
+- Tests only: `TELNYX_API_BASE` and `FCM_BASE_URL` point at stand-ins.
+- Used too: `ASSEMBLYAI_API_KEY` and `OPEN_AI_SECRET_KEY` (AI notes),
+  `LAMBDA_KEY` (the job), `STORAGE_*` (the bucket's credentials).
+
+Telnyx portal, per company. First save the company's Telnyx setup on the
+superuser page: the first save makes its `webhookBase`
+(`https://api.granite-manager.com/v1/webhooks/telnyx/<token>`).
+
+1. TeXML application: voice URL `{webhookBase}/inbound`, method POST; status
+   callback `{webhookBase}/call-status`, method POST; failover URL a TeXML Bin
+   that connects the AI Assistant and then takes a voicemail (save the same
+   Bin as the setup's fallback TeXML URL). Assign the company's numbers to it,
+   then "Import numbers from Telnyx" on the admin Phone page.
+2. Credential connection (the phones): webhook URL `{webhookBase}/outbound`,
+   webhook API version 2, call parking on (outgoing calls wait for our
+   approval), webhook timeout 10 s, SIP URI calling "internal" (our TeXML
+   rings the phones at `sip:gencred...@sip.telnyx.com`), the company's
+   outbound voice profile (US and Canada), and an Android push credential made
+   from the Firebase service account, so Telnyx can wake the app for calls.
+   The CRM's browser phone uses the same connection over WebRTC (Telnyx's JS
+   SDK with our login JWTs): keep WebRTC allowed on it (the default for
+   credential connections) and the outbound voice profile's US/Canada
+   destinations. A browser phone is signed out with its CRM session; its
+   calls are approved like the app's (`X-Granite-Call-Auth` with its call
+   key). On-demand recording of TeXML calls (incoming, Call via my cell)
+   needs the Telnyx account id saved in the setup (step 3).
+3. Put the TeXML application, credential connection, outbound voice profile,
+   billing group and AI Assistant ids in the setup, and the Telnyx account id
+   (the `AccountSid` of Telnyx's TeXML requests; once it is saved, TeXML
+   requests without it are refused), and switch calling on.
+4. Texting (the `telnyx` SMS provider, `phone/texting.rs`): a messaging
+   profile with webhook URL `{webhookBase}/messaging` (API v2), the
+   company's numbers assigned to it, and the brand / campaign (10DLC) the
+   numbers text under approved; then its id in the setup ("Messaging
+   profile ID"). Users text from their line and read the threads of every
+   number they may call from; inbound files are copied to the bucket, STOP
+   opts the phone out (`sms_opt_outs`; automated texts skip it).
+
+Firebase: the app's Firebase project → Project settings → Service accounts →
+Generate new private key. That JSON is both our FCM sender (upload it to the
+recordings bucket and set `FCM_SERVICE_ACCOUNT_S3_KEY`) and Telnyx's Android
+push credential.
+
+Recordings bucket: an S3 bucket that blocks all public access, with default
+encryption, that the storage IAM user may read and write (`s3:GetObject`,
+`s3:PutObject`). Recordings are copied there from Telnyx
+(`phone/{company}/{yyyy}/{mm}/{call id}-{call|voicemail}.mp3`, Telnyx's copy
+deleted once ours is checked) and played through 5-minute presigned links.
+The CRM's call player fetches the audio, so the bucket's CORS must allow
+`GET` and `HEAD` from `https://granite-manager.com` and
+`https://*.granite-manager.com`.
+
+Migrations: apply `20261017100000_create-phone-tables.sql`,
+`20261017100100_alter-customers-add-updated-at.sql`,
+`20261017100200_alter-phone-call-points-add-telnyx.sql`,
+`20261017100300_create-customer-phone-index.sql`,
+`20261023010000_create-telnyx-texting.sql`,
+`20261023010100_alter-telnyx-sms-add-line-index.sql`,
+`20261023030000_alter-phone-devices-add-web.sql` (browser phones, the Record
+button), `20261023040000_create-phone-port-orders.sql` and
+`20261023060000_create-tendlc-registrations.sql` to RDS (`duplicate`,
+then `main`) before deploying the code, by hand as usual, from an LF checkout
+(sqlx checksums the files' bytes):
+`cargo sqlx migrate run --source migrations --database-url '<RDS URL>'`. Then
+deploy the API, then `time-triggered` (it calls the job).
+
+Tests: `api/tests/phone_*.rs`, one area per file, with shared fixtures and one
+stand-in for Telnyx, FCM, AssemblyAI and OpenAI in `tests/phone_common/`. With
+the local MySQL up (`make api-db-up`), run a file at a time, e.g.
+`cargo test -p api --test phone_jobs`. `.github/workflows/api-pr.yml` runs
+them all and the OpenAPI checks on every pull request to main.
 
 ## Dev environment
 

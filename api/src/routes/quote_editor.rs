@@ -1197,6 +1197,23 @@ async fn revision_doc(
     Ok(doc.flatten().and_then(|t| serde_json::from_str(&t).ok()))
 }
 
+/// The prices a revision was saved with (none on revisions saved before they
+/// were kept).
+async fn revision_prices(
+    pool: &MySqlPool,
+    quote_id: i32,
+    revision_id: i32,
+) -> ApiResult<Option<Value>> {
+    let prices: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT CAST(price_snapshot_json AS CHAR) FROM quote_revisions WHERE id = ? AND quote_id = ?",
+    )
+    .bind(revision_id)
+    .bind(quote_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(prices.flatten().and_then(|t| serde_json::from_str(&t).ok()))
+}
+
 /// Open a quote
 ///
 /// The quote, its drawing (a saved revision's with `revision`), its prices
@@ -1237,7 +1254,13 @@ pub async fn get_quote(
     if unsigned {
         drop_unavailable_slab_pictures(&state.pool, user.company_id, &mut doc).await?;
     }
-    let (price_list, latest_price_list) = pricing_for_quote(&state.pool, &pricing).await?;
+    let (mut price_list, latest_price_list) = pricing_for_quote(&state.pool, &pricing).await?;
+    // An old revision shows the prices it was saved with, not today's.
+    if let Some(revision) = viewing_revision
+        && let Some(prices) = revision_prices(&state.pool, id, revision).await?
+    {
+        price_list = prices;
+    }
     let revisions: Vec<QuoteRevision> = sqlx::query_as(
         "SELECT r.id, r.revision_number, DATE_FORMAT(r.created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at,
                 u.name AS created_by, r.notes
@@ -1590,14 +1613,23 @@ pub async fn save_drawing(
     let next = latest.unwrap_or(0) + 1;
     sqlx::query(
         "INSERT INTO quote_revisions
-           (quote_id, revision_number, drawing_json, options_json, totals_json, price_list_revision_id, notes, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+           (quote_id, revision_number, drawing_json, options_json, totals_json, price_snapshot_json,
+            price_list_revision_id, notes, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(next)
     .bind(input.doc.to_string())
-    .bind(input.doc.get("colorOptions").cloned().unwrap_or(json!([])).to_string())
+    .bind(
+        input
+            .doc
+            .get("colorOptions")
+            .cloned()
+            .unwrap_or(json!([]))
+            .to_string(),
+    )
     .bind(Value::Array(totals).to_string())
+    .bind(price_list.to_string())
     .bind(row.price_list_revision_id)
     .bind((!notes.is_empty()).then_some(notes))
     .bind(user.id)

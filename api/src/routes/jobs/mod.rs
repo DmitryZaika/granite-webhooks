@@ -12,6 +12,9 @@
 //! - `POST /v1/jobs/supplier-files` → supplier price files into chunks
 //! - `POST /v1/jobs/contact-sync` → customers into `RingCentral` and
 //!   `CloudTalk` contacts
+//! - `POST /v1/jobs/phone` → Granite Phone upkeep: sign-outs, recordings,
+//!   AI notes, call points, old Telnyx callbacks
+//! - `POST /v1/jobs/posthog-autofix` → new PostHog errors into fix runs
 //! - `POST /v1/jobs/billing-reminders` → Stripe upkeep (webhook event prune,
 //!   reconcile) and the billing reminder emails to managers
 //! - `POST /v1/jobs/subscription-maintenance` → stuck signups resumed,
@@ -24,6 +27,8 @@ pub mod billing_reminders;
 pub mod call_points;
 pub mod contact_sync;
 pub mod maintenance_reminders;
+pub mod phone;
+pub mod posthog_autofix;
 pub mod signature_reminders;
 pub mod sms_followups;
 pub mod subscription_maintenance;
@@ -46,6 +51,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(sms_followups::run))
         .routes(routes!(supplier_files::run))
         .routes(routes!(contact_sync::run))
+        .routes(routes!(phone::run))
+        .routes(routes!(posthog_autofix::run))
         .routes(routes!(billing_reminders::run))
         .routes(routes!(subscription_maintenance::run))
 }
@@ -74,6 +81,6 @@ impl FromRequestParts<AppState> for JobCaller {
     }
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }

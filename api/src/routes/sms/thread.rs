@@ -147,10 +147,11 @@ async fn message_rows(
               LIMIT ?"
         )
     } else {
+        let order = provider.order_column();
         format!(
             "SELECT {columns}, s.created_date AS conversation_at FROM {table} s
               WHERE {filter}
-              ORDER BY s.created_date DESC, s.{id} DESC, s.id DESC
+              ORDER BY s.created_date DESC, s.{order} DESC, s.id DESC
               LIMIT ?"
         )
     };
@@ -164,7 +165,13 @@ async fn agent_maps(
     provider: SmsProvider,
     company_id: i32,
 ) -> Result<(HashMap<String, String>, HashMap<String, (String, String)>), sqlx::Error> {
-    let (agent, phone) = (provider.agent_column(), provider.phone_column());
+    let (Some(agent), Some(phone)) = (provider.agent_column(), provider.phone_column()) else {
+        // Telnyx: users by id, and the users of direct lines.
+        return Ok((
+            crate::phone::texting::user_names(pool, company_id).await?,
+            crate::phone::texting::direct_line_users(pool, company_id).await?,
+        ));
+    };
     let names: Vec<(String, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT TRIM({agent}), MIN(name) FROM users
           WHERE company_id = ? AND is_deleted = 0 AND {agent} IS NOT NULL AND TRIM({agent}) != ''
@@ -207,8 +214,8 @@ pub async fn customer_by_phone(
     company_id: i32,
     phone: &str,
 ) -> Result<Option<ThreadCustomer>, sqlx::Error> {
-    let contacts = provider.contacts_table();
-    let linked = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+    if let Some(contacts) = provider.contacts_table() {
+        let linked: Option<ThreadCustomer> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT c.id, c.name, u.name AS sales_rep_name
            FROM customers c
            JOIN {contacts} cc ON cc.customer_id = c.id
@@ -222,8 +229,9 @@ pub async fn customer_by_phone(
     .bind(phone)
     .fetch_optional(pool)
     .await?;
-    if linked.is_some() {
-        return Ok(linked);
+        if linked.is_some() {
+            return Ok(linked);
+        }
     }
     sqlx::query_as(
         "SELECT c.id, c.name, u.name AS sales_rep_name
@@ -558,13 +566,14 @@ pub async fn get_thread(
         _ => 0,
     };
     let active_flow = active_flow(pool, &user, &digits, access.is_some()).await?;
+    let can_send = super::send::seat(pool, provider, &user).await?.is_some();
     Ok(Json(ThreadDetail {
         phone_digits: phone,
         customer,
         supplier_name,
         messages,
         unread_count,
-        can_send: provider.can_send(&user),
+        can_send,
         has_older,
         active_flow,
     }))

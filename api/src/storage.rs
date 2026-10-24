@@ -53,6 +53,10 @@ pub struct S3Storage {
     client: aws_sdk_s3::Client,
     bucket: String,
     public_base: String,
+    /// Buckets that stored URLs never reach (the private signatures bucket):
+    /// [`Storage::readable_url`] does not sign them and [`Storage::get_url`]
+    /// does not read them, since stored URLs can come from request bodies.
+    private_buckets: Vec<String>,
 }
 
 #[derive(Clone, Default)]
@@ -89,7 +93,22 @@ impl Storage {
             client: aws_sdk_s3::Client::from_conf(config.build()),
             bucket,
             public_base: public_base.trim_end_matches('/').to_string(),
+            private_buckets: Vec::new(),
         })
+    }
+
+    /// This storage, with `bucket` out of reach of stored URLs (empty:
+    /// unchanged). Read it with [`Storage::get_in`].
+    #[must_use]
+    pub fn keeping_private(mut self, bucket: &str) -> Self {
+        let bucket = bucket.trim();
+        if let Self::S3(s3) = &mut self
+            && !bucket.is_empty()
+            && !s3.private_buckets.iter().any(|b| b == bucket)
+        {
+            s3.private_buckets.push(bucket.to_string());
+        }
+        self
     }
 
     pub fn memory() -> Self {
@@ -141,8 +160,9 @@ impl Storage {
 
     /// A browser-readable URL for a stored file URL. Old records keep private
     /// `s3://bucket/key` URIs: those get a presigned `GET` valid an hour
-    /// (shown inline, with `content_type` when given). Any other URL, or a
-    /// URI that cannot be signed here, is returned as it is.
+    /// (shown inline, with `content_type` when given). Any other URL, a URI
+    /// that cannot be signed here, or one in a private bucket (see
+    /// [`Storage::keeping_private`]) is returned as it is.
     pub async fn readable_url(&self, url: &str, content_type: Option<&str>) -> String {
         let Self::S3(s3) = self else {
             return url.to_string();
@@ -150,6 +170,7 @@ impl Storage {
         let Some((bucket, key)) = url
             .strip_prefix("s3://")
             .and_then(|rest| rest.split_once('/'))
+            .filter(|(bucket, _)| !s3.private_buckets.iter().any(|b| b == bucket))
         else {
             return url.to_string();
         };
@@ -246,9 +267,10 @@ impl Storage {
         }
     }
 
-    /// Writes a signature file once to the private signature bucket
-    /// (`If-None-Match: *`, encrypted, never cached); writing the same bytes
-    /// again is fine, other bytes are refused.
+    /// Writes a file once to a private bucket (signatures, call
+    /// recordings: `If-None-Match: *`, encrypted, never cached); writing the
+    /// same bytes again is fine, other bytes are refused. The bytes are
+    /// handed to S3 without a copy (recordings run to 100 MB).
     pub async fn put_private(
         &self,
         bucket: &str,
@@ -263,6 +285,8 @@ impl Storage {
                 use sha2::Digest as _;
                 let checksum =
                     base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(&bytes));
+                // Shared, not copied: the body and the check below read the same buffer.
+                let bytes = axum::body::Bytes::from(bytes);
                 let result = s3
                     .client
                     .put_object()
@@ -279,7 +303,7 @@ impl Storage {
                 match result {
                     Ok(_) => Ok(()),
                     Err(err) if err.code() == Some("PreconditionFailed") => {
-                        let existing = self.get_url(&format!("s3://{bucket}/{key}")).await?;
+                        let existing = self.get_in(bucket, key).await?;
                         if existing.is_some_and(|object| object.bytes == bytes) {
                             Ok(())
                         } else {
@@ -397,6 +421,20 @@ impl Storage {
         content_type: &str,
         filename: Option<&str>,
     ) -> Result<String, StorageError> {
+        self.presign_get_in_for(bucket, key, content_type, filename, DOWNLOAD_URL_TTL)
+            .await
+    }
+
+    /// [`Storage::presign_get_in`] with a link that works for `ttl` (the
+    /// usual one works an hour), e.g. 5 minutes for call recordings.
+    pub async fn presign_get_in_for(
+        &self,
+        bucket: Option<&str>,
+        key: &str,
+        content_type: &str,
+        filename: Option<&str>,
+        ttl: Duration,
+    ) -> Result<String, StorageError> {
         let disposition = filename.map_or_else(
             || "inline".to_string(),
             |name| {
@@ -418,7 +456,7 @@ impl Storage {
         );
         match self {
             Self::S3(s3) => {
-                let config = PresigningConfig::expires_in(DOWNLOAD_URL_TTL)
+                let config = PresigningConfig::expires_in(ttl)
                     .map_err(|err| StorageError::Backend(err.to_string()))?;
                 let request = s3
                     .client
@@ -480,6 +518,49 @@ impl Storage {
         Ok(self.head(key).await?.is_some())
     }
 
+    /// The size in bytes of an object in `bucket` (else this bucket); `None`
+    /// when it is missing. The in-memory bucket ignores bucket names.
+    pub async fn size_in(
+        &self,
+        bucket: Option<&str>,
+        key: &str,
+    ) -> Result<Option<u64>, StorageError> {
+        match self {
+            Self::S3(s3) => {
+                match s3
+                    .client
+                    .head_object()
+                    .bucket(bucket.unwrap_or(&s3.bucket))
+                    .key(key)
+                    .send()
+                    .await
+                {
+                    Ok(output) => Ok(Some(
+                        output
+                            .content_length()
+                            .and_then(|length| u64::try_from(length).ok())
+                            .unwrap_or_default(),
+                    )),
+                    Err(err)
+                        if err.as_service_error().is_some_and(
+                            aws_sdk_s3::operation::head_object::HeadObjectError::is_not_found,
+                        ) =>
+                    {
+                        Ok(None)
+                    }
+                    Err(err) => Err(StorageError::Backend(err.to_string())),
+                }
+            }
+            Self::Memory(memory) => Ok(memory
+                .objects
+                .lock()
+                .expect("lock")
+                .get(key)
+                .map(|object| u64::try_from(object.bytes.len()).unwrap_or(u64::MAX))),
+            Self::Disabled => Err(StorageError::Disabled),
+        }
+    }
+
     /// The bucket and key a stored file URL points at: `s3://bucket/key`, an
     /// S3 HTTPS URL (virtual-host or path style), or a URL of this bucket
     /// (the CRM's `resolveS3Object`). The in-memory bucket ignores bucket names.
@@ -515,14 +596,39 @@ impl Storage {
     }
 
     /// The file at a stored file URL (see [`Storage::locate`]); `None` when
-    /// the URL is not in S3 or the object is missing.
+    /// the URL is not in S3, is in a private bucket (stored URLs can come
+    /// from request bodies; read those with [`Storage::get_in`]), or the
+    /// object is missing.
     pub async fn get_url(&self, url: &str) -> Result<Option<StoredObject>, StorageError> {
         let Some((bucket, key)) = self.locate(url) else {
             return Ok(None);
         };
+        if let (Self::S3(s3), Some(bucket)) = (self, &bucket)
+            && s3.private_buckets.contains(bucket)
+        {
+            return Ok(None);
+        }
+        self.get_located(bucket, &key).await
+    }
+
+    /// The object at `key` of `bucket`, a private bucket too; `None` when it
+    /// is missing. The in-memory bucket ignores bucket names.
+    pub async fn get_in(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Option<StoredObject>, StorageError> {
+        self.get_located(Some(bucket.to_string()), key).await
+    }
+
+    async fn get_located(
+        &self,
+        bucket: Option<String>,
+        key: &str,
+    ) -> Result<Option<StoredObject>, StorageError> {
         match (self, bucket) {
             (Self::S3(s3), Some(bucket)) if bucket != s3.bucket => {
-                let result = s3.client.get_object().bucket(bucket).key(&key).send().await;
+                let result = s3.client.get_object().bucket(bucket).key(key).send().await;
                 match result {
                     Ok(output) => {
                         let content_type = output
@@ -551,7 +657,7 @@ impl Storage {
                     Err(err) => Err(StorageError::Backend(err.to_string())),
                 }
             }
-            _ => self.get(&key).await,
+            _ => self.get(key).await,
         }
     }
 
@@ -612,6 +718,32 @@ mod tests {
         assert_eq!(icon_key("stones/a.b/c.jpg"), "stones/a.b/c-icon.jpg");
         assert_eq!(icon_key("stones/abc"), "stones/abc-icon");
         assert_eq!(icon_key("stones.x/abc"), "stones.x/abc-icon");
+    }
+
+    #[tokio::test]
+    async fn stored_urls_never_reach_the_private_bucket() {
+        let config = aws_sdk_s3::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-2"))
+            .credentials_provider(Credentials::new("key", "secret", None, None, "test"))
+            .build();
+        let storage = Storage::S3(S3Storage {
+            client: aws_sdk_s3::Client::from_conf(config),
+            bucket: "files".into(),
+            public_base: "https://files.s3.us-east-2.amazonaws.com".into(),
+            private_buckets: Vec::new(),
+        })
+        .keeping_private(" signatures ");
+        let private = "s3://signatures/signatures/9/completed-x.pdf";
+        assert_eq!(storage.readable_url(private, None).await, private);
+        assert!(storage.get_url(private).await.unwrap().is_none());
+        let inbound = storage
+            .readable_url("s3://inbound/emails/a.pdf", None)
+            .await;
+        assert!(
+            inbound.starts_with("https://") && inbound.contains("X-Amz-Signature"),
+            "{inbound}"
+        );
     }
 
     #[test]

@@ -370,10 +370,8 @@ fn step_order(
 }
 
 async fn sms_enabled(pool: &MySqlPool, company_id: i32) -> Result<bool, sqlx::Error> {
-    Ok(company_features(pool, company_id)
-        .await?
-        .sms_provider()
-        .is_some())
+    let features = company_features(pool, company_id).await?;
+    Ok(features.sms_provider().is_some() || features.telnyx_sms)
 }
 
 fn bad(message: &str) -> ApiError {
@@ -1308,9 +1306,13 @@ async fn deliver(
     };
     if Channel::parse(&rule.channel) == Channel::Sms {
         let features = company_features(pool, rule.company_id).await?;
-        // The company's provider first; with both set up, the other one when
-        // the office manager only has a line there.
+        // Telnyx when the company texts through it and the office manager
+        // has a line there; then the company's provider first; with both set
+        // up, the other one when the office manager only has a line there.
         let mut providers: Vec<SmsProvider> = Vec::new();
+        if features.telnyx_sms {
+            providers.push(SmsProvider::Telnyx);
+        }
         if features.sms_provider() == Some(SmsProvider::Ringcentral) {
             providers.push(SmsProvider::Ringcentral);
         }
@@ -1325,12 +1327,20 @@ async fn deliver(
         }
         let mut sender = None;
         for provider in providers {
-            if let Some(manager) = office_manager(pool, rule.company_id, provider).await? {
-                sender = Some((provider, manager));
+            if let Some(manager) = office_manager(pool, rule.company_id, provider).await?
+                && let Some(seat) = crate::routes::events::notify::manager_seat(
+                    pool,
+                    rule.company_id,
+                    provider,
+                    &manager,
+                )
+                .await?
+            {
+                sender = Some((provider, manager, seat));
                 break;
             }
         }
-        let Some((provider, manager)) = sender else {
+        let Some((provider, manager, seat)) = sender else {
             return Ok(Some("no_sms_sender"));
         };
         let Some(phone_digits) = customer_phone(pool, rule.company_id, customer_id)
@@ -1356,13 +1366,15 @@ async fn deliver(
                 event.start_date.and_utc().timestamp()
             )),
         };
-        return Ok(match state.webhooks.send_sms(&sms).await {
-            Ok(_) => None,
-            Err(failure) => {
-                tracing::warn!(error = %failure.error, rule_id = rule.id, "schedule notification text failed");
-                Some("send_error")
-            }
-        });
+        return Ok(
+            match crate::routes::sms::send::send_text(state, provider, &seat, &sms).await {
+                Ok(_) => None,
+                Err(failure) => {
+                    tracing::warn!(error = %failure.error, rule_id = rule.id, "schedule notification text failed");
+                    Some("send_error")
+                }
+            },
+        );
     }
     let Some(email) = customer_email(pool, customer_id).await? else {
         return Ok(Some("no_email"));

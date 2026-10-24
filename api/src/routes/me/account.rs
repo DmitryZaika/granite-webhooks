@@ -269,14 +269,22 @@ fn digits_field(value: Option<&str>, label: &str, min: usize) -> ApiResult<()> {
     Ok(())
 }
 
-fn valid_email(email: &str) -> bool {
+/// One address: no whitespace, no characters that are SQL patterns or
+/// address-list syntax (`%`, `<`, `,`, ...), a domain of letters, digits,
+/// `-` and dots. Mail and notifications are matched to users by address.
+pub fn valid_email(email: &str) -> bool {
     email.len() <= 254
-        && !email.chars().any(char::is_whitespace)
+        && !email
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "%<>,;:\"()[]\\".contains(c))
         && email.split_once('@').is_some_and(|(local, domain)| {
             !local.is_empty()
                 && !domain.contains('@')
                 && domain.split('.').count() >= 2
                 && domain.split('.').all(|part| !part.is_empty())
+                && domain
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '.')
         })
 }
 
@@ -741,7 +749,7 @@ async fn finished_setup_credit(
 /// Save my account
 ///
 /// Saves the user's details in their home company. A new password ends the
-/// user's other sessions. The texting line is checked with its provider (the
+/// user's other sessions and signs out their Granite Phone apps. The texting line is checked with its provider (the
 /// `RingCentral` extension is looked up from the number), and a number moved
 /// from `CloudTalk` to `RingCentral` brings its texting history along. A newly
 /// filled email name or signature completes its setup task, with its points.
@@ -798,6 +806,14 @@ pub async fn update_account(
         line.extension.as_ref(),
     )
     .await?;
+    if input.password.is_some() {
+        crate::phone::revoke::revoke_user_phones(
+            &state,
+            actor.user_id,
+            crate::phone::revoke::RevokeReason::PasswordChanged,
+        )
+        .await?;
+    }
     follow_ringcentral_link(&state, actor, &input, &before, &line).await;
     let credit = finished_setup_credit(&state, actor, &input, &before).await;
     Ok(Json(AccountSaved {
@@ -810,6 +826,30 @@ pub async fn update_account(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emails_are_single_plain_addresses() {
+        for ok in [
+            "rep@acme.com",
+            "first.last+tag@mail.acme.co",
+            "o'neil_x@acme-stone.com",
+        ] {
+            assert!(valid_email(ok), "{ok}");
+        }
+        for bad in [
+            "%@%.%",
+            "rep%@acme.com",
+            "rep@ac%me.com",
+            "a@b.com, c@d.com",
+            "Rep <rep@acme.com>",
+            "rep@acme_x.com",
+            "rep@acme",
+            "rep@@acme.com",
+            "rep @acme.com",
+        ] {
+            assert!(!valid_email(bad), "{bad}");
+        }
+    }
 
     fn stored_line(
         ct: Option<&str>,

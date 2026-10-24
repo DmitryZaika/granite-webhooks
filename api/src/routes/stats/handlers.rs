@@ -7,7 +7,6 @@ use super::schemas::{DealConversion, MonthlyCount, SalesStats, SentSms, TopSoldS
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::period::{MonthToDate, month_start_back, today};
-use crate::routes::company::queries::company_features;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -150,9 +149,9 @@ pub async fn sent_sms(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
 ) -> ApiResult<Json<SentSms>> {
-    let provider = company_features(&state.pool, user.company_id)
-        .await?
-        .sms_provider();
+    // The user's provider: Telnyx when they text from a Telnyx line.
+    let provider =
+        crate::routes::sms::send::user_provider(&state.pool, user.company_id, user.id).await?;
     let months = match provider {
         Some(provider) => {
             let today = today();

@@ -217,7 +217,7 @@ async fn hidden_threads_stay_hidden(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::BAD_REQUEST);
     server
-        .get("/v1/sms/telnyx/threads")
+        .get("/v1/sms/nowhere/threads")
         .with_session(sessions::REP)
         .await
         .assert_status(StatusCode::BAD_REQUEST);

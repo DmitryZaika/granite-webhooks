@@ -200,8 +200,11 @@ fn bare_message_id(id: &str) -> String {
 }
 
 /// The MIME message: `multipart/alternative` text and HTML, then the
-/// attachments (`files[i]` is the content of `email.attachments[i]`). Bcc
-/// recipients are only in the envelope.
+/// attachments (`files[i]` is the content of `email.attachments[i]`).
+///
+/// Bcc recipients are only in the envelope; a Bcc-only email (a notice to the
+/// whole team) is addressed to `undisclosed-recipients:;`, since SES refuses an
+/// empty To header.
 pub fn build_message(email: &OutgoingEmail, files: Vec<Vec<u8>>) -> Vec<u8> {
     let bodies = if email.transactional {
         let mut bodies = body::transactional_bodies(&email.body);
@@ -224,10 +227,17 @@ pub fn build_message(email: &OutgoingEmail, files: Vec<Vec<u8>>) -> Vec<u8> {
     };
     let mut message = MessageBuilder::new()
         .from(from)
-        .to(email.to.clone())
         .subject(email.subject.clone())
         .text_body(bodies.text)
         .html_body(bodies.html);
+    message = if email.to.is_empty() {
+        message.header(
+            "To",
+            mail_builder::headers::raw::Raw::new("undisclosed-recipients:;"),
+        )
+    } else {
+        message.to(email.to.clone())
+    };
     if !email.cc.is_empty() {
         message = message.cc(email.cc.clone());
     }
@@ -382,6 +392,23 @@ mod tests {
         assert!(message.contains("<li>Quotes add-on</li>"));
     }
 
+    #[test]
+    fn a_bcc_only_email_has_a_non_empty_to_header() {
+        // Automation notices go to the reps by Bcc; SES refused the empty To.
+        let notice = OutgoingEmail {
+            to: Vec::new(),
+            cc: Vec::new(),
+            attachments: Vec::new(),
+            ..email()
+        };
+        let message = String::from_utf8(build_message(&notice, Vec::new())).unwrap();
+        assert!(
+            message.contains("To: undisclosed-recipients:;\r\n"),
+            "{message}"
+        );
+        assert!(!message.contains("hidden@example.com"));
+    }
+
     #[tokio::test]
     async fn sends_headers_bodies_and_attachments() {
         let transport = Recorder::default();
@@ -402,6 +429,24 @@ mod tests {
         assert!(raw.contains("multipart/alternative"));
         assert!(raw.contains("quote.pdf"));
         assert!(raw.contains("application/pdf"));
+    }
+
+    // The api's automation notices go to the whole team in Bcc; SES refused
+    // every one ("Empty required header 'To'").
+    #[tokio::test]
+    async fn a_bcc_only_email_is_addressed_to_undisclosed_recipients() {
+        let transport = Recorder::default();
+        let notice = OutgoingEmail {
+            to: Vec::new(),
+            cc: Vec::new(),
+            bcc: vec!["rep1@example.com".into(), "rep2@example.com".into()],
+            ..email()
+        };
+        deliver(&Files, &transport, notice).await.unwrap();
+        let (raw, destinations) = transport.sent.lock().unwrap()[0].clone();
+        assert_eq!(destinations, ["rep1@example.com", "rep2@example.com"]);
+        assert!(raw.contains("To: undisclosed-recipients:;\r\n"), "{raw}");
+        assert!(!raw.contains("rep1@example.com"));
     }
 
     #[tokio::test]

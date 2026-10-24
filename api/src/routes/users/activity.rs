@@ -192,9 +192,9 @@ type PhoneRow = (i64, Option<String>, Option<String>, Option<String>);
 
 /// A customer an email or a text was matched to.
 #[derive(Debug, Clone)]
-struct CustomerRef {
-    id: i64,
-    name: Option<String>,
+pub(super) struct CustomerRef {
+    pub(super) id: i64,
+    pub(super) name: Option<String>,
 }
 
 /// Whole dollars with thousands separators (`$1,235`); None for 0.
@@ -256,14 +256,14 @@ fn email_key(raw: Option<&str>) -> String {
 }
 
 /// The last 10 digits of a phone number, when it has at least 10.
-fn last10(value: &str) -> Option<String> {
+pub(super) fn last10(value: &str) -> Option<String> {
     let digits: String = value.chars().filter(char::is_ascii_digit).collect();
     (digits.len() >= 10).then(|| digits[digits.len() - 10..].to_string())
 }
 
 /// Phone (last 10 digits) → customer: `CloudTalk` contact numbers first, then
 /// the customers' own numbers win.
-async fn customers_by_phone(
+pub(super) async fn customers_by_phone(
     pool: &MySqlPool,
     company: i32,
 ) -> sqlx::Result<HashMap<String, CustomerRef>> {

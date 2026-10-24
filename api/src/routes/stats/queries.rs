@@ -160,11 +160,13 @@ pub async fn sent_sms_by_month(
     from: NaiveDate,
     to: NaiveDate,
 ) -> Result<Vec<MonthlyCount>, sqlx::Error> {
-    // Table and column come from this match, never from input.
-    let (table, agent_column) = match provider {
-        SmsProvider::Ringcentral => ("ringcentral_sms", "ringcentral_extension_id"),
-        SmsProvider::Cloudtalk => ("cloudtalk_sms", "cloudtalk_agent_id"),
-    };
+    // Table and column come from the provider, never from input; a Telnyx
+    // text's agent is its sender's user id.
+    let table = provider.sms_table();
+    let agent = provider.agent_column().map_or_else(
+        || "CAST(u.id AS CHAR)".to_string(),
+        |column| format!("u.{column}"),
+    );
     let sql = format!(
         "SELECT DATE_FORMAT(cs.created_date, '%Y-%m') AS month, COUNT(*) AS count
            FROM {table} cs
@@ -175,8 +177,8 @@ pub async fn sent_sms_by_month(
             AND (cs.sender_user_id = ?
                  OR EXISTS (SELECT 1 FROM users u
                              WHERE u.id = ? AND u.is_deleted = 0
-                               AND u.{agent_column} IS NOT NULL
-                               AND u.{agent_column} = cs.agent))
+                               AND {agent} IS NOT NULL
+                               AND {agent} = cs.agent))
           GROUP BY month
           ORDER BY month"
     );

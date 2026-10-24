@@ -12,6 +12,7 @@ use super::attachable::LibraryFile;
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::routes::uploads::schemas::UploadFolder;
 use crate::state::AppState;
 use crate::storage::Storage;
 use axum::Json;
@@ -59,11 +60,8 @@ fn checked_name(name: &str) -> ApiResult<String> {
     Ok(name.to_string())
 }
 
-fn checked_url(storage: &Storage, url: &str) -> ApiResult<()> {
-    if storage
-        .key_for_url(url)
-        .is_some_and(|key| key.starts_with("documents/"))
-    {
+fn checked_url(storage: &Storage, url: &str, company_id: i32) -> ApiResult<()> {
+    if super::uploads::accepted_key(storage, url, UploadFolder::Documents, company_id).is_some() {
         Ok(())
     } else {
         Err(ApiError::BadRequest(format!(
@@ -115,7 +113,7 @@ pub async fn create(
     JsonBody(input): JsonBody<NewDocument>,
 ) -> ApiResult<(StatusCode, Json<LibraryFile>)> {
     let name = checked_name(&input.name)?;
-    checked_url(&state.storage, &input.url)?;
+    checked_url(&state.storage, &input.url, user.company_id)?;
     let id = sqlx::query("INSERT INTO documents (name, url, company_id) VALUES (?, ?, ?)")
         .bind(&name)
         .bind(&input.url)
@@ -164,7 +162,7 @@ pub async fn update(
     let old = find(&state, user.company_id, id).await?;
     let new_url = input.url.filter(|url| Some(url) != old.url.as_ref());
     if let Some(url) = &new_url {
-        checked_url(&state.storage, url)?;
+        checked_url(&state.storage, url, user.company_id)?;
     }
     sqlx::query(
         "UPDATE documents SET name = ?, url = COALESCE(?, url) WHERE id = ? AND company_id = ?",
@@ -176,8 +174,8 @@ pub async fn update(
     .execute(&state.pool)
     .await?;
     if let (Some(_), Some(old_url)) = (&new_url, &old.url) {
-        super::uploads::remove(&state.storage, old_url).await;
-        super::uploads::remove(&state.storage, &preview_url(old_url)).await;
+        super::uploads::remove(&state.storage, old_url, user.company_id).await;
+        super::uploads::remove(&state.storage, &preview_url(old_url), user.company_id).await;
     }
     Ok(Json(find(&state, user.company_id, id).await?))
 }

@@ -87,6 +87,9 @@ pub async fn process_ses_received_event<C: S3Bucket + Send + Sync + 'static>(
     process_ses_received_event_with(pool, client, event, &PostHogUnprocessedEmailReporter).await
 }
 
+/// Name of the test object SES puts in a bucket when a receipt rule is set up.
+const SES_SETUP_NOTIFICATION_KEY: &str = "AMAZON_SES_SETUP_NOTIFICATION";
+
 pub async fn process_ses_received_event_with<C, R>(
     pool: &MySqlPool,
     client: C,
@@ -99,6 +102,17 @@ where
 {
     let bucket = &event.detail.bucket.name;
     let key = &event.detail.object.key;
+
+    // SES writes this test object when a receipt rule is set up. It is not an
+    // email, so reading it would only fail and be retried forever.
+    if key.rsplit('/').next() == Some(SES_SETUP_NOTIFICATION_KEY) {
+        tracing::info!(
+            bucket = bucket,
+            key = key,
+            "Ignoring the SES setup notification object"
+        );
+        return OK_RESPONSE;
+    }
 
     let email_bytes = match client.read_bytes(bucket, key).await {
         Ok(bytes) => bytes,
@@ -255,6 +269,27 @@ mod local_tests {
         ));
         assert!(!is_missing_s3_object("AccessDenied"));
         assert!(!is_missing_s3_object("timeout connecting to S3"));
+    }
+
+    /// SES writes a test object into the bucket when a receipt rule is set up.
+    /// It is not an email: answer 200 without reading it, with or without a prefix.
+    #[test_db::test]
+    async fn setup_notification_object_is_ignored(pool: MySqlPool) {
+        // Reading this file fails, so a read would answer 500.
+        let mock_client = MockClient::new("src/tests/data/does_not_exist.eml");
+        for key in [
+            "AMAZON_SES_SETUP_NOTIFICATION",
+            "inbound/AMAZON_SES_SETUP_NOTIFICATION",
+        ] {
+            let mut data: S3Event = ses_received_json();
+            data.detail.object.key = key.to_string();
+            let response = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+            assert_eq!(response, OK_RESPONSE);
+        }
+        // A normal key still reads S3.
+        let data: S3Event = ses_received_json();
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response.0, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     struct ReadDb {

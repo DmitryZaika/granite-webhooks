@@ -370,7 +370,7 @@ async fn picked_files_are_made_ready_to_text(pool: MySqlPool) {
             { "url": csv, "filename": "list.csv" },
             { "url": junk, "filename": "notes.bin" },
             { "url": "https://example.test/x.jpg", "filename": "x.jpg" },
-            { "url": url("sms-uploads/missing.jpg"), "filename": "gone.jpg" },
+            { "url": url("sms-uploads/100/missing.jpg"), "filename": "gone.jpg" },
             { "url": url("stones/a.jpg"), "filename": "a.jpg" },
         ] }))
         .await

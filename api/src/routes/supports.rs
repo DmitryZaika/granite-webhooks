@@ -121,7 +121,13 @@ pub async fn create(
     JsonBody(input): JsonBody<NewSupport>,
 ) -> ApiResult<(StatusCode, Json<LibraryFile>)> {
     let name = checked_name(&input.name)?;
-    uploads::attach(&state.storage, &input.url, UploadFolder::Supports).await?;
+    uploads::attach(
+        &state.storage,
+        &input.url,
+        UploadFolder::Supports,
+        user.company_id,
+    )
+    .await?;
     let id = sqlx::query("INSERT INTO supports (name, url, company_id) VALUES (?, ?, ?)")
         .bind(&name)
         .bind(&input.url)
@@ -170,7 +176,7 @@ pub async fn update(
     let old = find(&state, user.company_id, id).await?;
     let new_url = input.url.filter(|url| Some(url) != old.url.as_ref());
     if let Some(url) = &new_url {
-        uploads::attach(&state.storage, url, UploadFolder::Supports).await?;
+        uploads::attach(&state.storage, url, UploadFolder::Supports, user.company_id).await?;
     }
     sqlx::query(
         "UPDATE supports SET name = ?, url = COALESCE(?, url) WHERE id = ? AND company_id = ?",
@@ -182,7 +188,7 @@ pub async fn update(
     .execute(&state.pool)
     .await?;
     if let (Some(_), Some(old_url)) = (&new_url, &old.url) {
-        uploads::remove(&state.storage, old_url).await;
+        uploads::remove(&state.storage, old_url, user.company_id).await;
     }
     Ok(Json(find(&state, user.company_id, id).await?))
 }

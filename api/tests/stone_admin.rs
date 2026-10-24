@@ -845,10 +845,10 @@ async fn slabs_are_added_renamed_and_deleted(pool: MySqlPool) {
         .assert_status(StatusCode::NOT_FOUND);
 }
 
-// ---- slab numbers are unique per stone (QA audit 2026-10-14, B-027) ----------
+// ---- slab numbers may repeat on one stone (e.g. several "On the way") --------
 
 #[test_db::test(seed)]
-async fn slab_numbers_are_unique_per_stone(pool: MySqlPool) {
+async fn slab_numbers_may_repeat_on_a_stone(pool: MySqlPool) {
     let server = server(pool.clone());
     let res = server
         .post("/v1/stones")
@@ -864,33 +864,17 @@ async fn slab_numbers_are_unique_per_stone(pool: MySqlPool) {
             .with_session(sessions::ADMIN)
             .json(&json!({ "bundle": bundle, "length": 120, "width": 60 }))
     };
-    add("QA-DUP-1").await.assert_status(StatusCode::CREATED);
-    expect_error(
-        add("QA-DUP-1").await,
-        StatusCode::BAD_REQUEST,
-        "Slab number QA-DUP-1 is already used",
-    )
-    .await;
+    add("On the way").await.assert_status(StatusCode::CREATED);
+    add("On the way").await.assert_status(StatusCode::CREATED);
     let second = add("QA-DUP-2").await;
     second.assert_status(StatusCode::CREATED);
     let second = second.json::<Value>()["id"].as_i64().unwrap();
 
-    // Renaming onto a number another slab of this stone has is refused.
-    expect_error(
-        server
-            .patch(&format!("/v1/slabs/{second}"))
-            .with_session(sessions::ADMIN)
-            .json(&json!({ "bundle": "QA-DUP-1" }))
-            .await,
-        StatusCode::BAD_REQUEST,
-        "Slab number QA-DUP-1 is already used",
-    )
-    .await;
-    // Keeping its own number is fine.
+    // Renaming onto a number another slab of this stone has is fine too.
     server
         .patch(&format!("/v1/slabs/{second}"))
         .with_session(sessions::ADMIN)
-        .json(&json!({ "bundle": "QA-DUP-2" }))
+        .json(&json!({ "bundle": "On the way" }))
         .await
         .assert_status(StatusCode::NO_CONTENT);
 }

@@ -144,3 +144,58 @@ async fn admins_color_schedule_people_and_hide_calendars(pool: MySqlPool) {
         .json::<Value>();
     assert_eq!(common::ids(&employees), [107, 101, 100]);
 }
+
+#[test_db::test(seed)]
+async fn activity_lists_the_latest_changed_events_first(pool: MySqlPool) {
+    seed(&pool).await;
+    sqlx::raw_sql(
+        "UPDATE events SET assigned_user_id = 101 WHERE id = 9710;
+         INSERT INTO event_history (event_id, company_id, action, message, created_by, created_at) VALUES
+           (9710, 100, 'created', 'Event created', 'Rita Rep', '2026-04-01 10:00:00'),
+           (9710, 100, 'date_updated', 'Date updated', 'Rita Rep', '2026-04-02 10:00:00'),
+           (9710, 100, 'label_updated', 'Label updated', 'Rita Rep', '2026-04-03 10:00:00'),
+           (9710, 100, 'comment_added', 'Comment added', 'Rita Rep', '2026-04-04 09:00:00'),
+           (9711, 100, 'created', 'Event created', 'Rita Rep', '2026-04-05 10:00:00'),
+           (9713, 100, 'created', 'Event created', 'Mark Manager', '2026-04-03 12:00:00'),
+           (9714, 101, 'created', 'Event created', 'Other', '2026-04-06 10:00:00');
+         INSERT INTO event_comments (event_id, company_id, content, created_by, created_at) VALUES
+           (9710, 100, 'On my way', 'Mark Manager', '2026-04-04 09:00:00');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool);
+    let body = server
+        .get("/v1/schedule/activity")
+        .with_session(sessions::REP)
+        .await
+        .json::<Value>();
+    // Crew B is hidden from Rita, and 9714 is another company's.
+    assert_eq!(body["has_more"], false);
+    assert_eq!(body["events"].as_array().unwrap().len(), 2);
+    let first = &body["events"][0];
+    assert_eq!(first["event"]["id"], 9710);
+    assert_eq!(first["event"]["customer_name"], "Alice Lead");
+    assert_eq!(first["assignee_name"], "Mark Manager");
+    assert_eq!(first["unscheduled"], false);
+    assert_eq!(first["last_activity_at"], "2026-04-04T09:00:00Z");
+    let messages: Vec<&str> = first["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["message"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        messages,
+        ["Date updated", "Label updated", "Event commented"]
+    );
+    assert_eq!(body["events"][1]["event"]["id"], 9713);
+
+    let page = server
+        .get("/v1/schedule/activity?limit=1&offset=1")
+        .with_session(sessions::ADMIN)
+        .await
+        .json::<Value>();
+    assert_eq!(page["events"][0]["event"]["id"], 9710);
+    assert_eq!(page["has_more"], true);
+}

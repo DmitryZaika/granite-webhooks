@@ -14,11 +14,29 @@ pub fn extract_email_address(raw: &str) -> String {
     inner.trim().to_lowercase()
 }
 
+/// The address mail of a user leaves from: their own when its domain (the
+/// part after the last `@`) is the company's mail domain or a subdomain of
+/// it, else the shared sending address. A substring match would let
+/// `acme.com@other-tenant.com` send as another company's verified domain.
 pub fn from_email(company_domain: Option<&str>, user_email: &str) -> String {
-    let Some(domain) = company_domain.filter(|value| !value.is_empty()) else {
+    let domain = company_domain
+        .map(|value| value.trim().trim_start_matches('@').to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    let Some(domain) = domain else {
         return DEFAULT_SEND_EMAIL_ADDRESS.to_string();
     };
-    if user_email.contains(domain) {
+    let on_domain = user_email
+        .trim()
+        .rsplit_once('@')
+        .is_some_and(|(local, host)| {
+            let host = host.to_ascii_lowercase();
+            !local.is_empty()
+                && (host == domain
+                    || host
+                        .strip_suffix(domain.as_str())
+                        .is_some_and(|sub| sub.len() > 1 && sub.ends_with('.')))
+        });
+    if on_domain {
         return user_email.to_string();
     }
     DEFAULT_SEND_EMAIL_ADDRESS.to_string()
@@ -212,6 +230,33 @@ mod tests {
         assert_eq!(
             from_email(Some("acme.com"), "rep@gmail.com"),
             DEFAULT_SEND_EMAIL_ADDRESS
+        );
+    }
+
+    #[test]
+    fn from_email_matches_the_domain_not_a_substring() {
+        for email in [
+            "acme.com@other-tenant.com",
+            "rep@acme.com.other-tenant.com",
+            "rep@notacme.com",
+            "rep@acme.co",
+            "@acme.com",
+            "rep.acme.com",
+        ] {
+            assert_eq!(
+                from_email(Some("acme.com"), email),
+                DEFAULT_SEND_EMAIL_ADDRESS,
+                "{email}"
+            );
+        }
+        assert_eq!(from_email(Some("Acme.com"), "Rep@ACME.com"), "Rep@ACME.com");
+        assert_eq!(
+            from_email(Some("acme.com"), "rep@mail.acme.com"),
+            "rep@mail.acme.com"
+        );
+        assert_eq!(
+            from_email(Some("@acme.com"), "rep@acme.com"),
+            "rep@acme.com"
         );
     }
 

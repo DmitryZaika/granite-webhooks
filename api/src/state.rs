@@ -2,9 +2,12 @@ use crate::ai::Ai;
 use crate::billing::BillingPlan;
 use crate::billing::stripe::Stripe;
 use crate::maps::Maps;
+use crate::phone::PhoneConfig;
+use crate::push::Push;
 use crate::qbo::Qbo;
 use crate::storage::Storage;
 use crate::telegram::TelegramBots;
+use crate::telnyx::Telnyx;
 use crate::transcribe::Transcriber;
 use crate::webhooks_client::WebhooksClient;
 use axum::http::{Method, header};
@@ -35,9 +38,6 @@ pub struct AppState {
     pub sms_upkeep: Arc<Mutex<HashMap<(&'static str, i32), Instant>>>,
     /// Recent texts sent per user, for the per-minute limit.
     pub sms_sends: Arc<Mutex<HashMap<i32, VecDeque<Instant>>>>,
-    /// When each customer page (or unknown address) may get its next login
-    /// code, in Unix milliseconds.
-    pub customer_view_cooldown: Arc<Mutex<HashMap<String, i64>>>,
     /// Recent SMS flow starts per user, for the per-minute limit.
     pub flow_starts: Arc<Mutex<HashMap<i32, VecDeque<Instant>>>>,
     /// Threads the composer's autocomplete gathered in the last minute.
@@ -96,6 +96,17 @@ pub struct AppState {
     pub signing_session_secret: Option<Arc<str>>,
     /// Self-serve signup settings.
     pub signup: crate::signup::SignupConfig,
+    /// Telnyx, for Granite Phone (a stub in tests; disabled without
+    /// `TELNYX_API_KEY`).
+    pub telnyx: Telnyx,
+    /// FCM pushes to the Granite Phone app (disabled without a service
+    /// account).
+    pub push: Push,
+    /// Granite Phone settings (`PHONE_*`, `TELNYX_PUBLIC_KEY`,
+    /// `TELNYX_FALLBACK_TEXML_URL`).
+    pub phone: PhoneConfig,
+    /// The PostHog auto-fix intake and callbacks (`POSTHOG_AUTOFIX_*`).
+    pub autofix: crate::posthog_autofix::Autofix,
 }
 
 /// Where the SES identity lists come from.
@@ -148,7 +159,6 @@ impl AppState {
             webhooks: WebhooksClient::disabled(),
             sms_upkeep: Arc::default(),
             sms_sends: Arc::default(),
-            customer_view_cooldown: Arc::default(),
             flow_starts: Arc::default(),
             compose_contexts: Arc::default(),
             maps: Maps::disabled(),
@@ -175,7 +185,35 @@ impl AppState {
             ses: SesIdentities::Fixed(None),
             signing_session_secret: None,
             signup: crate::signup::SignupConfig::default(),
+            telnyx: Telnyx::disabled(),
+            push: Push::disabled(),
+            phone: PhoneConfig::default(),
+            autofix: crate::posthog_autofix::Autofix::disabled(),
         }
+    }
+
+    #[must_use]
+    pub fn with_telnyx(mut self, telnyx: Telnyx) -> Self {
+        self.telnyx = telnyx;
+        self
+    }
+
+    #[must_use]
+    pub fn with_push(mut self, push: Push) -> Self {
+        self.push = push;
+        self
+    }
+
+    #[must_use]
+    pub fn with_phone_config(mut self, phone: PhoneConfig) -> Self {
+        self.phone = phone;
+        self
+    }
+
+    #[must_use]
+    pub fn with_autofix(mut self, autofix: crate::posthog_autofix::Autofix) -> Self {
+        self.autofix = autofix;
+        self
     }
 
     #[must_use]
@@ -226,6 +264,7 @@ impl AppState {
     pub fn with_signature_bucket(mut self, bucket: &str) -> Self {
         let bucket = bucket.trim();
         self.signature_bucket = (!bucket.is_empty()).then(|| Arc::from(bucket));
+        self.storage = self.storage.keeping_private(bucket);
         self
     }
 
@@ -246,7 +285,8 @@ impl AppState {
 
     #[must_use]
     pub fn with_storage(mut self, storage: Storage) -> Self {
-        self.storage = storage;
+        self.storage =
+            storage.keeping_private(self.signature_bucket.as_deref().unwrap_or_default());
         self
     }
 
@@ -344,8 +384,12 @@ impl AppState {
         let secret = std::env::var("SESSION_SECRET").map_err(|_| MissingSessionSecret)?;
         let origins = std::env::var("API_ALLOWED_ORIGINS")
             .unwrap_or_else(|_| DEFAULT_ALLOWED_ORIGINS.to_string());
+        let storage = Storage::from_env();
         Ok(Self::new(pool, &secret, &origins)
-            .with_storage(Storage::from_env())
+            .with_push(Push::from_env(&storage))
+            .with_storage(storage)
+            .with_telnyx(Telnyx::from_env())
+            .with_phone_config(PhoneConfig::from_env())
             .with_telegram(TelegramBots::from_env())
             .with_webhooks(WebhooksClient::from_env())
             .with_maps(Maps::from_env())
@@ -385,6 +429,7 @@ impl AppState {
             .with_signing_session_secret(
                 &std::env::var("SIGNATURE_SESSION_SECRET").unwrap_or_default(),
             )
+            .with_autofix(crate::posthog_autofix::Autofix::from_env())
             .with_signup(crate::signup::SignupConfig::from_env()))
     }
 

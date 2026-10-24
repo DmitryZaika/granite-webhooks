@@ -23,8 +23,8 @@ use utoipa::ToSchema;
 /// `app/content/legal/manifest.json` (a new version is a new pair here).
 pub const TERMS_VERSION: &str = "terms-2026-10-v1";
 pub const TERMS_SHA256: &str = "aecc6ea6791059bb5f402a9c6470466646febe88280ec326d01d812eec9678c3";
-pub const PRIVACY_VERSION: &str = "privacy-2026-10-v1";
-pub const PRIVACY_SHA256: &str = "56fa8e798987ae3ba5c06a73997ddde90e9bb585a53ead102558a68f32e91e7c";
+pub const PRIVACY_VERSION: &str = "privacy-2026-10-v2";
+pub const PRIVACY_SHA256: &str = "a5c1a5ad7793ad455a709c474429fc1b5ab45829e2bfafd3249a5c90ecd9a2dc";
 pub const DPA_VERSION: &str = "dpa-2026-10-v1";
 pub const DPA_SHA256: &str = "a41370b6f1d617ea63ac1a01918d1bc38d88db13c5f2a62e71f7063c53184dc4";
 
@@ -469,7 +469,7 @@ mod tests {
         );
         assert_eq!(
             text_of(&rendered, ConsentKind::Terms).text,
-            "I am authorized to bind Acme Stone. I agree to the Terms of Service and Subscription Terms (version terms-2026-10-v1), the Data Processing Addendum, and the Privacy Policy (version privacy-2026-10-v1)."
+            "I am authorized to bind Acme Stone. I agree to the Terms of Service and Subscription Terms (version terms-2026-10-v1), the Data Processing Addendum, and the Privacy Policy (version privacy-2026-10-v2)."
         );
         assert_eq!(
             text_of(&rendered, ConsentKind::AutoRenewal).text,

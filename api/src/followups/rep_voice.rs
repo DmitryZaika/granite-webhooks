@@ -100,7 +100,7 @@ pub async fn load_rep_voice(
     .fetch_all(pool)
     .await?;
     let mut sent: Vec<(String, chrono::NaiveDateTime)> = Vec::new();
-    for table in ["cloudtalk_sms", "ringcentral_sms"] {
+    for table in ["cloudtalk_sms", "ringcentral_sms", "telnyx_sms"] {
         let sql = format!(
             "SELECT text, CAST(created_date AS DATETIME) AS created_date FROM {table}
               WHERE company_id = ? AND sender_user_id = ? AND direction = 'outbound'

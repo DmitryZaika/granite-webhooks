@@ -106,7 +106,7 @@ async fn a_new_password_ends_the_other_sessions(pool: MySqlPool) {
 
 #[test_db::test(seed)]
 async fn invalid_saves_are_refused(pool: MySqlPool) {
-    let server = server(pool);
+    let server = server(pool.clone());
     for (body, status) in [
         (
             json!({ "name": "Rita", "email": "manager@acme.test" }),
@@ -118,6 +118,27 @@ async fn invalid_saves_are_refused(pool: MySqlPool) {
         ),
         (
             json!({ "name": "Rita", "email": "not-an-email" }),
+            StatusCode::BAD_REQUEST,
+        ),
+        // Patterns and address lists: mail is matched to users by address.
+        (
+            json!({ "name": "Rita", "email": "%@%.%" }),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({ "name": "Rita", "email": "rep%@acme.test" }),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({ "name": "Rita", "email": "Rita <rep@acme.test>" }),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({ "name": "Rita", "email": "rep@acme.test, boss@acme.test" }),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({ "name": "Rita", "email": "rep@acme_test.com" }),
             StatusCode::BAD_REQUEST,
         ),
         (
@@ -136,6 +157,11 @@ async fn invalid_saves_are_refused(pool: MySqlPool) {
             .await
             .assert_status(status);
     }
+    let email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = 100")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(email, "rep@acme.test");
 }
 
 #[test_db::test(seed)]

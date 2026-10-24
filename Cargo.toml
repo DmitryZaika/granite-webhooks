@@ -9,6 +9,14 @@ members = [
 ]
 resolver = "2"
 
+# Full debug info made every test binary's .pdb ~1 GB and filled the disk.
+# Line tables still give file:line in backtraces.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # Image and PDF decoding are many times slower unoptimized; keep tests fast.
 [profile.dev.package.zune-heic]
 opt-level = 3

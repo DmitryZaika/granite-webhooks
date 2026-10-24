@@ -27,6 +27,7 @@ use crate::deliverability::{self, DomainTrust};
 use crate::entitlements::{ACTIVE_ADDON, AddonKey};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::phone::revoke::{RevokeReason, revoke_company_phones};
 use crate::routes::created::CreatedId;
 use crate::routes::onboarding::store::{self, OnboardingState};
 use crate::routes::uploads::{self, schemas::UploadFolder};
@@ -36,6 +37,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use chrono::{DateTime, NaiveDateTime, Utc};
+use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::{IntoParams, ToSchema};
@@ -698,7 +700,13 @@ pub async fn update_company(
         .filter(|u| !u.is_empty())
     {
         Some(url) => {
-            uploads::attach(&state.storage, url, UploadFolder::CompanyLogos).await?;
+            uploads::attach(
+                &state.storage,
+                url,
+                UploadFolder::CompanyLogos,
+                user.company_id,
+            )
+            .await?;
             Some(url.to_string())
         }
         None => None,
@@ -766,7 +774,8 @@ pub struct ConfirmName {
 /// Delete a company
 ///
 /// Marks the company deleted. `confirm_name` must be its exact name (400
-/// otherwise).
+/// otherwise). Its Granite Phone calling is switched off and its phones are
+/// signed out (Telnyx credentials and push tokens dropped).
 #[utoipa::path(
     delete,
     path = "/v1/superuser/companies/{id}",
@@ -799,10 +808,26 @@ pub async fn delete_company(
     if confirm.confirm_name.trim() != name {
         return Err(ApiError::BadRequest("Company name does not match".into()));
     }
+    // Granite Phone stops with the company: calling off, then its phones
+    // signed out (Telnyx credentials and push tokens dropped).
+    let mut tx = state.pool.begin().await?;
     sqlx::query("UPDATE company SET deleted_at = NOW() WHERE id = ?")
         .bind(id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    sqlx::query("UPDATE telnyx_company_config SET enabled = 0 WHERE company_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    if let Err(err) = revoke_company_phones(&state, id, RevokeReason::CompanyDeleted).await {
+        // A deleted company's sign-ins no longer work; the phone job ends them.
+        tracing::warn!(
+            company_id = id,
+            ?err,
+            "phones of a deleted company not signed out"
+        );
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -52,6 +52,7 @@ async fn legacy_companies_keep_their_features_and_gain_the_new_keys(pool: MySqlP
             "cloudtalk": cloudtalk, "e_signature": false, "inbound_email": inbound_email,
             "leaderboard": leaderboard, "onboarding": false, "quickbooks_connected": false,
             "quickbooks_enabled": true, "ringcentral": false,
+            "telnyx": false, "telnyx_sms": false,
         })
     };
     for (session, leaderboard, cloudtalk, inbound_email) in [

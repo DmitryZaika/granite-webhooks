@@ -125,10 +125,14 @@ async fn prepare(
     file: &PickedFile,
 ) -> Result<PreparedAttachment, &'static str> {
     let storage = &state.storage;
-    let key = storage
-        .key_for_url(&file.url)
-        .filter(|key| key.starts_with("sms-uploads/"))
-        .ok_or("invalid_upload")?;
+    // The upload is deleted once copied: only one the company made.
+    let key = crate::routes::uploads::company_key(
+        storage,
+        &file.url,
+        crate::routes::uploads::schemas::UploadFolder::SmsUploads,
+        company_id,
+    )
+    .ok_or("invalid_upload")?;
     let object = storage
         .get(&key)
         .await
@@ -196,9 +200,10 @@ async fn prepare(
 /// Prepare files for a text
 ///
 /// Turns files uploaded to `sms-uploads/` into attachments ready to send:
-/// pictures upright, at most 1600 px and about 480 KB (HEIC, WebP become
-/// JPEG; PNG and GIF stay), documents (PDF, Word, Excel, text, CSV) as they
-/// are. The uploads are removed. Each file succeeds or fails on its own.
+/// pictures upright, at most 1600 px and about 480 KB (HEIC, WebP and PNG
+/// photos become JPEG; PNGs that fit or are see-through, and GIF, stay),
+/// documents (PDF, Word, Excel, text, CSV) as they are. The uploads are
+/// removed. Each file succeeds or fails on its own.
 #[utoipa::path(
     post,
     path = "/v1/sms/attachments",

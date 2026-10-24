@@ -3,7 +3,7 @@
 //! - `GET /v1/users/sales-reps` → live users of the company holding the sales rep position
 //! - `GET /v1/users/employees` → the company's live employees
 //! - `GET /v1/users/activity` → the last 90 days of what users did (admin)
-//! - `GET /v1/users/call-activity` → reps' `CloudTalk` calls (admin)
+//! - `GET /v1/users/call-activity` → reps' `CloudTalk`, `RingCentral` and Granite Phone calls (admin)
 //! - `/v1/admin/users*` → managing users (see [`manage`])
 //!
 //! Replaces the Remix `app/routes/api.sales-reps.tsx` loader.

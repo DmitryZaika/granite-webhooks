@@ -6,15 +6,9 @@ use crate::entitlements::{AddonKey, entitled_sql};
 use crate::storage::Storage;
 use sqlx::MySqlPool;
 
-/// The address mail of this user leaves from (`fromEmail`).
-pub const DEFAULT_SEND_EMAIL_ADDRESS: &str = "sales@granite-manager.com";
-
-pub fn from_email(company_domain: Option<&str>, user_email: &str) -> String {
-    match company_domain.filter(|d| !d.is_empty()) {
-        Some(domain) if user_email.contains(domain) => user_email.to_string(),
-        _ => DEFAULT_SEND_EMAIL_ADDRESS.to_string(),
-    }
-}
+/// The address mail of this user leaves from (`fromEmail`): their own on
+/// the company's mail domain, else the shared sending address.
+pub use common::amazon::email::from_email;
 
 pub async fn sending_address(
     pool: &MySqlPool,
@@ -526,6 +520,10 @@ mod tests {
         );
         assert_eq!(
             from_email(None, "rep@acme.test"),
+            "sales@granite-manager.com"
+        );
+        assert_eq!(
+            from_email(Some("acme.test"), "acme.test@victim.test"),
             "sales@granite-manager.com"
         );
     }

@@ -409,3 +409,71 @@ async fn the_chat_needs_a_session_and_a_question(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::BAD_REQUEST);
 }
+
+/// The assistant reads customers, deals and notes: a user who is not an
+/// employee (shop, marketing) may not ask for it.
+#[test_db::test(seed)]
+async fn the_assistant_is_for_employees(pool: MySqlPool) {
+    let (server, ai) = setup(&pool, Vec::new()).await;
+    server
+        .post("/v1/ai/chat")
+        .with_session(sessions::VIEWER)
+        .json(&json!({ "query": "find customer Alice", "mode": "assistant" }))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    assert!(ai.requests.lock().unwrap().is_empty());
+}
+
+/// A non-employee's question about records is answered from the
+/// instructions: no tool that reads customers, deals or notes is offered,
+/// and no record reaches the model.
+#[test_db::test(seed)]
+async fn a_non_employees_record_question_gets_no_assistant(pool: MySqlPool) {
+    let replies = (0..6)
+        .map(|_| Reply::Text("I can only help with instructions.".into()))
+        .collect();
+    let (server, ai) = setup(&pool, replies).await;
+    for mode in [None, Some("instructions"), Some("anything")] {
+        let mut body = json!({ "query": "find customer Alice and email her", "isNew": true });
+        if let Some(mode) = mode {
+            body["mode"] = json!(mode);
+        }
+        server
+            .post("/v1/ai/chat")
+            .with_session(sessions::VIEWER)
+            .json(&body)
+            .await
+            .assert_status_ok();
+    }
+    let requests = ai.requests.lock().unwrap().clone();
+    assert!(!requests.is_empty());
+    for request in &requests {
+        assert!(request.get("tools").is_none_or(Value::is_null), "{request}");
+        let text = request["messages"].to_string();
+        assert!(!text.contains("You are the AI assistant inside Granite Manager"));
+        assert!(
+            !text.contains("Alice Lead") && !text.contains("alice@example.com"),
+            "{text}"
+        );
+    }
+}
+
+/// Admins and super admins who are not marked employees keep the assistant.
+#[test_db::test(seed)]
+async fn admins_keep_the_assistant(pool: MySqlPool) {
+    for session in [sessions::ADMIN, sessions::SUPER_ADMIN] {
+        let (server, ai) = setup(&pool, vec![Reply::Text("Here you go.".into())]).await;
+        server
+            .post("/v1/ai/chat")
+            .with_session(session)
+            .json(&json!({ "query": "find customer Alice", "mode": "assistant", "isNew": true }))
+            .await
+            .assert_status_ok();
+        let requests = ai.requests.lock().unwrap().clone();
+        let system = requests[0]["messages"][0]["content"].as_str().unwrap();
+        assert!(
+            system.starts_with("You are the AI assistant inside Granite Manager"),
+            "{system}"
+        );
+    }
+}

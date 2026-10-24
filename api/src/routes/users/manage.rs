@@ -262,13 +262,7 @@ fn checked_phone(phone: Option<&str>) -> ApiResult<Option<String>> {
 
 pub(crate) fn checked_email(email: &str) -> ApiResult<String> {
     let email = email.trim().to_lowercase();
-    let valid = email.split_once('@').is_some_and(|(local, domain)| {
-        !local.is_empty()
-            && domain.contains('.')
-            && !domain.starts_with('.')
-            && !domain.ends_with('.')
-    });
-    if valid && !email.contains(char::is_whitespace) {
+    if crate::routes::me::account::valid_email(&email) {
         Ok(email)
     } else {
         Err(ApiError::BadRequest("Enter a valid email".into()))
@@ -759,7 +753,9 @@ struct PositionRow {
 /// user's company, Super Admin and check-in positions and Super Admin
 /// companies as they are, and may only grant marketing for the user's own
 /// company (or remove companies a superuser granted). Super Admins are
-/// always admins. The `RingCentral` extension follows the number.
+/// always admins. The `RingCentral` extension follows the number. A user
+/// who is no longer an employee or admin of their company (or moved to
+/// another one) is signed out of Granite Phone.
 #[utoipa::path(
     put,
     path = "/v1/admin/users/{id}",
@@ -947,12 +943,14 @@ pub async fn update(
             seats::after_user_change(&state, existing_company).await;
         }
     }
+    crate::phone::revoke::revoke_if_lost_access(&state, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Delete a user
 ///
-/// Soft-deletes a live user of the caller's company (superusers: any).
+/// Soft-deletes a live user of the caller's company (superusers: any) and
+/// signs out their Granite Phone apps.
 #[utoipa::path(
     delete,
     path = "/v1/admin/users/{id}",
@@ -979,6 +977,12 @@ pub async fn delete(
         .execute(&state.pool)
         .await?;
     seats::after_user_change(&state, company_id).await;
+    crate::phone::revoke::revoke_user_phones(
+        &state,
+        id,
+        crate::phone::revoke::RevokeReason::UserRemoved,
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -10,7 +10,7 @@ pub enum DashboardWidget {
     UnreadMessages,
     /// The points leaderboard (the grid's fixed first block).
     Leaderboard,
-    /// Coaching on recent calls; needs a CloudTalk line.
+    /// Coaching on recent calls; needs a CloudTalk or RingCentral line.
     CallCoaching,
     /// QuickBooks sales this month against the monthly goal.
     QboSales,

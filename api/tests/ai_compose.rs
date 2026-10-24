@@ -168,6 +168,71 @@ async fn a_composer_needs_someone_to_write_to(pool: MySqlPool) {
         .assert_status(StatusCode::UNAUTHORIZED);
 }
 
+/// Another company's customer id is refused before anything about them is
+/// read or sent to the model.
+#[test_db::test(seed)]
+async fn another_companys_customer_is_not_composed_for(pool: MySqlPool) {
+    let (server, model) = setup(&pool).await;
+    let res = server
+        .post("/v1/ai/compose/autocomplete")
+        .with_session(sessions::REP)
+        .json(&json!({ "channel": "sms", "customer_id": 2000, "draft": "Hi" }))
+        .await;
+    res.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(res.json::<Value>()["error"], "Customer not found");
+    // Not with an own address or phone beside it, nor warming, nor in email.
+    for body in [
+        json!({ "channel": "sms", "customer_id": 2000, "phone_digits": "3175550100", "draft": "Hi" }),
+        json!({ "channel": "email", "customer_id": 2000, "customer_email": "alice@example.com", "draft": "" }),
+        json!({ "channel": "sms", "customer_id": 2000, "draft": "", "warm": true }),
+        json!({ "channel": "sms", "customer_id": 999_999, "draft": "Hi" }),
+    ] {
+        let res = server
+            .post("/v1/ai/compose/autocomplete")
+            .with_session(sessions::REP)
+            .json(&body)
+            .await;
+        res.assert_status(StatusCode::BAD_REQUEST);
+        assert_eq!(res.json::<Value>()["error"], "Customer not found", "{body}");
+    }
+    assert!(model.requests().is_empty());
+
+    // Their own rep composes for them as before.
+    model.reply("\"there!\"");
+    server
+        .post("/v1/ai/compose/autocomplete")
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .json(&json!({ "channel": "sms", "customer_id": 2000, "draft": "Hi" }))
+        .await
+        .assert_status_ok();
+    let prompt = model.requests()[0]["messages"][1]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(prompt.contains("Other Co Customer"), "{prompt}");
+}
+
+/// A cached context is per company: another company's rep asking for the
+/// same customer id never gets the one built for its owner.
+#[test_db::test(seed)]
+async fn a_cached_context_is_never_handed_to_another_company(pool: MySqlPool) {
+    let (server, model) = setup(&pool).await;
+    model.reply("\"x\"");
+    server
+        .post("/v1/ai/compose/autocomplete")
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .json(&json!({ "channel": "sms", "customer_id": 2000, "draft": "", "warm": true }))
+        .await
+        .assert_status_ok();
+    let res = server
+        .post("/v1/ai/compose/autocomplete")
+        .with_session(sessions::REP)
+        .json(&json!({ "channel": "sms", "customer_id": 2000, "draft": "Hi" }))
+        .await;
+    res.assert_status(StatusCode::BAD_REQUEST);
+    assert!(model.requests().is_empty());
+}
+
 #[test_db::test(seed)]
 async fn the_inventory_link_is_the_companys_stones_page(pool: MySqlPool) {
     let (server, _) = setup(&pool).await;

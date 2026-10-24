@@ -245,11 +245,18 @@ async fn sent_address(sent: &Sent) -> String {
 
 #[test_db::test(seed)]
 async fn outbound_calls_become_call_points(pool: MySqlPool) {
-    // Olga (106, company 101 with CloudTalk keys) is agent 5106.
-    sqlx::raw_sql("UPDATE users SET cloudtalk_agent_id = '5106' WHERE id = 106; DELETE FROM phone_call_points;")
-        .execute(&pool)
-        .await
-        .unwrap();
+    // Olga (106, company 101 with CloudTalk keys) is agent 5106. A Granite
+    // Phone call of hers waits for its transcript: the phone job scores it,
+    // never this one.
+    sqlx::raw_sql(
+        "UPDATE users SET cloudtalk_agent_id = '5106' WHERE id = 106; DELETE FROM phone_call_points;
+         INSERT INTO phone_call_points (company_id, provider, provider_call_id, user_id, customer_digits,
+                                        started_at, talk_seconds, outcome)
+         VALUES (101, 'telnyx', '981999', 106, '3175550100', '2026-05-01 09:00:00', 120, 'pending');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let router = Router::new()
         .route(
             "/calls/index.json",
@@ -289,7 +296,16 @@ async fn outbound_calls_become_call_points(pool: MySqlPool) {
         rows,
         [
             ("1".into(), 106, "attempt".into()),
-            ("2".into(), 106, "attempt".into())
+            ("2".into(), 106, "attempt".into()),
+            ("981999".into(), 106, "pending".into())
         ]
     );
+    let untouched: (i64, bool) = sqlx::query_as(
+        "SELECT CAST(transcribe_attempts AS SIGNED), transcribe_claimed_at IS NULL
+           FROM phone_call_points WHERE provider = 'telnyx'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(untouched, (0, true));
 }

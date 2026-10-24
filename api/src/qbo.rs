@@ -629,16 +629,21 @@ pub async fn disconnect(pool: &MySqlPool, company_id: i32) -> Result<(), sqlx::E
     Ok(())
 }
 
-/// Forgets the connection of whichever company holds `realm_id` (Intuit's
-/// disconnect link).
-pub async fn disconnect_realm(pool: &MySqlPool, realm_id: &str) -> Result<(), sqlx::Error> {
+/// Forgets the company's connection when it holds `realm_id` (Intuit's
+/// disconnect link, opened by someone signed in to that company).
+pub async fn disconnect_realm(
+    pool: &MySqlPool,
+    realm_id: &str,
+    company_id: i32,
+) -> Result<(), sqlx::Error> {
     if !valid_id(realm_id) {
         return Ok(());
     }
     sqlx::query(sqlx::AssertSqlSafe(format!(
-        "{CLEAR_CONNECTION} WHERE qbo_realm_id = ?"
+        "{CLEAR_CONNECTION} WHERE qbo_realm_id = ? AND id = ?"
     )))
     .bind(realm_id.trim())
+    .bind(company_id)
     .execute(pool)
     .await?;
     Ok(())

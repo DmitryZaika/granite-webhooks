@@ -1,6 +1,7 @@
 use common::crud::scheduled_emails::{
     cancel_pending_scheduled_emails_for_deal, reschedule_templates_for_deal_list,
 };
+use common::crud::scheduled_sms::cancel_pending_scheduled_sms_for_deal;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
@@ -163,12 +164,21 @@ async fn reschedule_drip_after_move(
                 "Failed to reschedule drip emails after moving deal to contacted"
             );
         }
-    } else if let Err(error) = cancel_pending_scheduled_emails_for_deal(pool, deal.id).await {
-        tracing::error!(
-            ?error,
-            deal_id = deal.id,
-            "Failed to cancel pending drip emails after moving deal to contacted"
-        );
+    } else {
+        if let Err(error) = cancel_pending_scheduled_emails_for_deal(pool, deal.id).await {
+            tracing::error!(
+                ?error,
+                deal_id = deal.id,
+                "Failed to cancel pending drip emails after moving deal to contacted"
+            );
+        }
+        if let Err(error) = cancel_pending_scheduled_sms_for_deal(pool, deal.id).await {
+            tracing::error!(
+                ?error,
+                deal_id = deal.id,
+                "Failed to cancel pending drip SMS after moving deal to contacted"
+            );
+        }
     }
 }
 

@@ -1,0 +1,84 @@
+name: API tests
+
+# Pull requests to main: the api crate's OpenAPI checks (every route
+# documented, api/openapi.json current) and the Granite Phone integration
+# tests. The tests make their own databases (test-db) on the MySQL below;
+# .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local, where
+# common's query! macros check their SQL at compile time, so every migration
+# is applied there first, as in deploy-lambda.yml.
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: api-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: api tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: granite
+          MYSQL_DATABASE: granite_local
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pgranite --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: api-tests
+
+      - name: Apply migrations to the test database
+        run: |
+          for f in migrations/*.sql; do
+            mysql -h 127.0.0.1 -P 3307 -uroot -pgranite granite_local < "$f" \
+              || { echo "::error::Migration $f failed"; exit 1; }
+          done
+
+      - name: OpenAPI checks
+        run: cargo test -p api --test openapi
+
+      - name: Granite Phone tests
+        run: >-
+          cargo test -p api
+          --test phone_admin
+          --test phone_auth
+          --test phone_bootstrap
+          --test phone_calls
+          --test phone_contacts
+          --test phone_devices
+          --test phone_jobs
+          --test phone_revocation
+          --test phone_settings
+          --test phone_telnyx_dial
+          --test phone_telnyx_inbound
+          --test phone_telnyx_outbound
+          --test phone_telnyx_recording
+          --test phone_telnyx_via_cell
+          --test telnyx_10dlc
+          --test phone_porting
+          --test telnyx_sms
+          --test phone_texts
+          --test phone_web
+          --test phone_web_recording
+          --test telnyx_calls
+          --test server_errors

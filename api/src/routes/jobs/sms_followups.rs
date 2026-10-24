@@ -7,7 +7,7 @@
 use super::JobCaller;
 use crate::auth::session::find_user;
 use crate::error::{ApiResult, ErrorBody};
-use crate::followups::processor::{FollowupRun, company_sms_provider, process_due_followups};
+use crate::followups::processor::{FollowupRun, process_due_followups, rep_sms_provider};
 use crate::routes::calls::to_e164;
 use crate::routes::delayed::{DueRun, process_due_in};
 use crate::routes::sms::flows::variable_names;
@@ -116,10 +116,16 @@ async fn provider_id(
     provider: SmsProvider,
     id: i64,
 ) -> Result<Option<String>, sqlx::Error> {
-    let (table, column) = match provider {
-        SmsProvider::Cloudtalk => ("cloudtalk_sms", "cloudtalk_id"),
-        SmsProvider::Ringcentral => ("ringcentral_sms", "ringcentral_id"),
-    };
+    let (table, column) = (provider.sms_table(), provider.id_column());
+    if !provider.numeric_ids() {
+        let found: Option<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT {column} FROM {table} WHERE id = ?"
+        )))
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?;
+        return Ok(found.flatten());
+    }
     let found: Option<Option<i64>> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT CAST({column} AS SIGNED) FROM {table} WHERE id = ?"
     )))
@@ -207,14 +213,16 @@ async fn send_drip(state: &AppState, row: &DueDrip) -> Result<bool, sqlx::Error>
             return Ok(false);
         }
     };
-    let Some(provider) = company_sms_provider(state, row.company_id).await? else {
+    let Some(rep) = find_user(&state.pool, row.user_id, row.company_id).await? else {
+        mark_failed(state, row.id, "Sales rep is not linked").await?;
+        return Ok(false);
+    };
+    // The rep's provider: Telnyx when they have a Telnyx line there.
+    let Some(provider) = rep_sms_provider(state, row.company_id, &rep).await? else {
         mark_failed(state, row.id, "SMS is not enabled").await?;
         return Ok(false);
     };
-    let Some(agent_id) = find_user(&state.pool, row.user_id, row.company_id)
-        .await?
-        .and_then(|rep| provider.agent_of(&rep))
-    else {
+    let Some(seat) = crate::routes::sms::send::seat(&state.pool, provider, &rep).await? else {
         mark_failed(state, row.id, "Sales rep is not linked").await?;
         return Ok(false);
     };
@@ -222,14 +230,14 @@ async fn send_drip(state: &AppState, row: &DueDrip) -> Result<bool, sqlx::Error>
         provider: provider.as_str().to_string(),
         company_id: row.company_id,
         user_id: row.user_id,
-        agent_id,
+        agent_id: seat.agent_id.clone(),
         phone_digits: phone10,
         text,
         attachments: Vec::new(),
         is_automated: true,
         idempotency_key: Some(format!("sms-drip-{}", row.id)),
     };
-    match state.webhooks.send_sms(&outgoing).await {
+    match crate::routes::sms::send::send_text(state, provider, &seat, &outgoing).await {
         Ok(ids) => {
             let provider_id = match ids.first() {
                 Some(id) => provider_id(state, provider, *id).await?,
@@ -241,6 +249,8 @@ async fn send_drip(state: &AppState, row: &DueDrip) -> Result<bool, sqlx::Error>
         Err(failure) => {
             let reason = if failure.error == "agent_no_number" {
                 "Sales rep has no SMS number".to_string()
+            } else if failure.error == "opted_out" {
+                "Customer opted out of texts (STOP)".to_string()
             } else {
                 failure.error
             };

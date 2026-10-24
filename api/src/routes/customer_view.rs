@@ -13,10 +13,13 @@
 //! - `POST   /v1/public/customer-view/{company_id}/login/verify`       → enter it; answers the page to open
 //! - `DELETE /v1/public/customer-view/login`                           → drop a pending code
 //!
-//! The state lives in the signed `__customer_view` cookie (same format and
-//! secret as the CRM's, so a verified visitor stays verified for 7 days).
-//! Port of `customerViewAuth.server.ts` and the `customer.$company.$viewId`
-//! and `customer.$company.stones.account` routes.
+//! A verified visitor is remembered in the signed `__customer_view` cookie
+//! (same format and secret as the CRM's, so they stay verified for 7 days).
+//! Pending codes live in `customer_view_codes`, the cookie holding only a
+//! random handle on one: attempts are counted there, since a cookie can be
+//! replayed, and sends are limited per address. Port of
+//! `customerViewAuth.server.ts` and the `customer.$company.$viewId` and
+//! `customer.$company.stones.account` routes.
 
 use crate::auth::cookie::{cookie_value, decode_session_map, encode_session_map};
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -51,10 +54,15 @@ pub fn router() -> OpenApiRouter<AppState> {
 }
 
 const COOKIE: &str = "__customer_view";
-const CODE_EXPIRY_MS: i64 = 10 * 60 * 1000;
-const SEND_COOLDOWN_MS: i64 = 45_000;
-const MAX_VERIFY_ATTEMPTS: i64 = 8;
+const CODE_EXPIRY_MINUTES: i64 = 10;
+const SEND_COOLDOWN_SECONDS: i64 = 45;
+/// Codes per address and company an hour: with [`MAX_VERIFY_ATTEMPTS`]
+/// each, guessing a 6-digit code takes years.
+const MAX_SENDS_PER_HOUR: i64 = 5;
+const MAX_VERIFY_ATTEMPTS: i32 = 8;
 const VERIFIED_MAX_AGE_SECONDS: i64 = 60 * 60 * 24 * 7;
+/// The cookie's handle on its pending code (a `customer_view_codes.token`).
+const PENDING: &str = "pendingCode";
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -99,6 +107,8 @@ impl Visitor {
 
     fn clear_pending(&mut self) {
         for key in [
+            PENDING,
+            // Kept in the cookie before codes moved to the database.
             "pendingViewId",
             "pendingCompanyId",
             "pendingEmail",
@@ -119,16 +129,19 @@ impl Visitor {
             && self.int("verifiedCompanyId") == Some(i64::from(company_id))
     }
 
-    fn pending_live(&self) -> bool {
-        self.int("pendingExpiresAt").is_some_and(|at| at > now_ms())
-    }
-
-    /// A code was sent for this view and has not expired.
-    fn code_sent(&self, view_id: &str, company_id: i32) -> bool {
-        self.str("pendingViewId") == Some(view_id)
-            && self.int("pendingCompanyId") == Some(i64::from(company_id))
-            && self.pending_live()
-            && self.str("pendingCodeHash").is_some()
+    /// The visitor's pending code of the company, live or not.
+    async fn pending(&self, state: &AppState, company_id: i32) -> ApiResult<Option<PendingCode>> {
+        let Some(token) = self.str(PENDING) else {
+            return Ok(None);
+        };
+        Ok(sqlx::query_as(
+            "SELECT id, customer_id, email, code_hash, expires_at > UTC_TIMESTAMP() AS live
+               FROM customer_view_codes WHERE token = ? AND company_id = ?",
+        )
+        .bind(token)
+        .bind(company_id)
+        .fetch_optional(&state.pool)
+        .await?)
     }
 
     /// Adds the cookie to a response when the state changed.
@@ -187,14 +200,30 @@ fn valid_email(email: &str) -> bool {
     })
 }
 
-fn code_hash(secret: &str, view_id: &str, code: &str) -> String {
-    Sha256::digest(format!("{secret}:{view_id}:{}", code.trim()).as_bytes())
+/// A code sent (or, for an unknown address, pretended to be).
+#[derive(sqlx::FromRow)]
+struct PendingCode {
+    id: u64,
+    customer_id: Option<i32>,
+    email: String,
+    code_hash: Option<String>,
+    live: bool,
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes
         .iter()
-        .fold(String::with_capacity(64), |mut out, byte| {
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
             use std::fmt::Write;
             let _ = write!(out, "{byte:02x}");
             out
         })
+}
+
+fn code_hash(secret: &str, token: &str, code: &str) -> String {
+    hex(&Sha256::digest(
+        format!("{secret}:{token}:{}", code.trim()).as_bytes(),
+    ))
 }
 
 fn new_code() -> ApiResult<String> {
@@ -203,28 +232,10 @@ fn new_code() -> ApiResult<String> {
     Ok(format!("{:06}", u32::from_le_bytes(bytes) % 1_000_000))
 }
 
-/// May a code go out now (per visitor and per view)?
-fn can_send(state: &AppState, visitor: &Visitor, key: &str) -> bool {
-    let now = now_ms();
-    let ready = visitor
-        .int("pendingLastSentAt")
-        .is_none_or(|at| now - at >= SEND_COOLDOWN_MS);
-    let until = state
-        .customer_view_cooldown
-        .lock()
-        .expect("cooldown lock")
-        .get(key)
-        .copied()
-        .unwrap_or_default();
-    ready && now >= until
-}
-
-fn mark_sent(state: &AppState, key: &str, at: i64) {
-    state
-        .customer_view_cooldown
-        .lock()
-        .expect("cooldown lock")
-        .insert(key.to_string(), at + SEND_COOLDOWN_MS);
+fn new_token() -> ApiResult<String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|_| ApiError::Internal("no randomness".into()))?;
+    Ok(hex(&bytes))
 }
 
 fn rate_limited() -> ApiError {
@@ -237,7 +248,6 @@ struct ViewCustomer {
     id: i32,
     name: Option<String>,
     email: Option<String>,
-    view_id: String,
 }
 
 async fn by_view_id(state: &AppState, company_id: i32, view_id: &str) -> ApiResult<ViewCustomer> {
@@ -245,7 +255,7 @@ async fn by_view_id(state: &AppState, company_id: i32, view_id: &str) -> ApiResu
         return Err(ApiError::NotFound);
     }
     let row: Option<ViewCustomer> = sqlx::query_as(
-        "SELECT c.id, c.name, ce.email, BIN_TO_UUID(c.view_id) AS view_id
+        "SELECT c.id, c.name, ce.email
            FROM customers c
            LEFT JOIN customers_emails ce ON ce.id = c.email_id AND ce.customer_id = c.id
           WHERE c.view_id = UUID_TO_BIN(?) AND c.company_id = ? AND c.deleted_at IS NULL
@@ -272,7 +282,7 @@ async fn by_email(
     email: &str,
 ) -> ApiResult<Option<ViewCustomer>> {
     let row: Option<ViewCustomer> = sqlx::query_as(
-        "SELECT c.id, c.name, ce.email, BIN_TO_UUID(c.view_id) AS view_id
+        "SELECT c.id, c.name, ce.email
            FROM customers c
            JOIN customers_emails ce ON ce.customer_id = c.id
           WHERE c.company_id = ? AND c.deleted_at IS NULL AND LOWER(ce.email) = ? AND c.view_id IS NOT NULL
@@ -294,6 +304,18 @@ async fn by_email(
     }))
 }
 
+/// The page of a customer, for a verified code.
+async fn view_of(state: &AppState, company_id: i32, customer_id: i32) -> ApiResult<Option<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT BIN_TO_UUID(view_id) FROM customers
+          WHERE id = ? AND company_id = ? AND deleted_at IS NULL AND view_id IS NOT NULL",
+    )
+    .bind(customer_id)
+    .bind(company_id)
+    .fetch_optional(&state.pool)
+    .await?)
+}
+
 fn code_email_html(code: &str) -> String {
     format!(
         r#"<div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
@@ -305,103 +327,146 @@ fn code_email_html(code: &str) -> String {
     )
 }
 
-/// Emails a code for `customer` and records it as pending (`sendCustomerViewLoginCode`).
+/// Emails a code to `email` for `customer` (`sendCustomerViewLoginCode`),
+/// or with no customer only records one that can never verify, so an
+/// unknown address looks the same. Either way the address gets at most one
+/// code every 45 seconds and [`MAX_SENDS_PER_HOUR`] an hour, and its older
+/// codes stop working.
 async fn send_code(
     state: &AppState,
     visitor: &mut Visitor,
     company_id: i32,
-    customer: &ViewCustomer,
+    email: &str,
+    customer: Option<&ViewCustomer>,
 ) -> ApiResult<()> {
-    let Some(email) = customer.email.clone() else {
-        return Err(ApiError::Conflict(
-            "This page is locked. Ask the company to add your email so we can send a login code."
-                .into(),
-        ));
-    };
-    let key = format!("{company_id}:{}", customer.view_id);
-    if !can_send(state, visitor, &key) {
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "DELETE FROM customer_view_codes WHERE expires_at < UTC_TIMESTAMP() - INTERVAL 1 DAY",
+    )
+    .execute(&mut *tx)
+    .await?;
+    // Locks the address's rows (and the gap after them), so concurrent
+    // requests cannot each pass the limit.
+    let (sent, recent): (i64, i64) = sqlx::query_as(
+        "SELECT CAST(COUNT(*) AS SIGNED),
+                CAST(COALESCE(SUM(created_at > UTC_TIMESTAMP() - INTERVAL ? SECOND), 0) AS SIGNED)
+           FROM customer_view_codes
+          WHERE company_id = ? AND email = ? AND created_at > UTC_TIMESTAMP() - INTERVAL 1 HOUR
+          FOR UPDATE",
+    )
+    .bind(SEND_COOLDOWN_SECONDS)
+    .bind(company_id)
+    .bind(email)
+    .fetch_one(&mut *tx)
+    .await?;
+    if recent > 0 {
         return Err(rate_limited());
     }
-    let code = new_code()?;
-    let message = OutgoingEmail {
-        from_name: None,
-        from_address: "noreply@granite-manager.com".into(),
-        to: vec![email.clone()],
-        cc: Vec::new(),
-        bcc: Vec::new(),
-        subject: "Your customer login code".into(),
-        body: code_email_html(&code),
-        signature: None,
-        reply_to: Vec::new(),
-        in_reply_to: None,
-        references: Vec::new(),
-        attachments: Vec::new(),
-        transactional: true,
-    };
-    if let Err(error) = state.webhooks.send_email(&message).await {
-        tracing::warn!(?error, company_id, "customer view code email failed");
-        return Err(ApiError::Upstream(
-            "We could not send the email. Please try again.".into(),
+    if sent >= MAX_SENDS_PER_HOUR {
+        return Err(ApiError::TooManyRequests(
+            "Too many codes were requested. Please try again later.".into(),
         ));
     }
-    let now = now_ms();
-    mark_sent(state, &key, now);
-    visitor.unset("pendingDummy");
-    visitor.set("pendingViewId", json!(customer.view_id));
-    visitor.set("pendingCompanyId", json!(company_id));
-    visitor.set("pendingEmail", json!(email));
-    visitor.set(
-        "pendingCodeHash",
-        json!(code_hash(&state.session_secret, &customer.view_id, &code)),
-    );
-    visitor.set("pendingExpiresAt", json!(now + CODE_EXPIRY_MS));
-    visitor.set("pendingAttempts", json!(0));
-    visitor.set("pendingLastSentAt", json!(now));
+    sqlx::query(
+        "UPDATE customer_view_codes SET expires_at = UTC_TIMESTAMP()
+          WHERE company_id = ? AND email = ? AND expires_at > UTC_TIMESTAMP()",
+    )
+    .bind(company_id)
+    .bind(email)
+    .execute(&mut *tx)
+    .await?;
+    let token = new_token()?;
+    let code = customer.map(|_| new_code()).transpose()?;
+    sqlx::query(
+        "INSERT INTO customer_view_codes
+           (token, company_id, customer_id, email, code_hash, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP() + INTERVAL ? MINUTE)",
+    )
+    .bind(&token)
+    .bind(company_id)
+    .bind(customer.map(|c| c.id))
+    .bind(email)
+    .bind(
+        code.as_deref()
+            .map(|code| code_hash(&state.session_secret, &token, code)),
+    )
+    .bind(CODE_EXPIRY_MINUTES)
+    .execute(&mut *tx)
+    .await?;
+    if let Some(code) = &code {
+        let message = OutgoingEmail {
+            from_name: None,
+            from_address: "noreply@granite-manager.com".into(),
+            to: vec![email.to_string()],
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            subject: "Your customer login code".into(),
+            body: code_email_html(code),
+            signature: None,
+            reply_to: Vec::new(),
+            in_reply_to: None,
+            references: Vec::new(),
+            attachments: Vec::new(),
+            transactional: true,
+        };
+        if let Err(error) = state.webhooks.send_email(&message).await {
+            tracing::warn!(?error, company_id, "customer view code email failed");
+            return Err(ApiError::Upstream(
+                "We could not send the email. Please try again.".into(),
+            ));
+        }
+    }
+    tx.commit().await?;
+    visitor.clear_pending();
+    visitor.set(PENDING, json!(token));
     Ok(())
 }
 
-/// Checks a code against the pending one (`verifyCustomerViewLoginCode`);
-/// on success the visitor is verified for `view_id`.
-fn verify(
+/// Checks a code against the visitor's pending one
+/// (`verifyCustomerViewLoginCode`), counting the attempt in the database
+/// first; on success the visitor is verified for the customer's page,
+/// which is returned. With `customer_id` (a page's own route), only a code
+/// for that customer counts.
+async fn verify(
     state: &AppState,
     visitor: &mut Visitor,
-    view_id: &str,
     company_id: i32,
+    customer_id: Option<i32>,
     code: &str,
-) -> ApiResult<()> {
+) -> ApiResult<String> {
     let invalid = || ApiError::BadRequest("That code is not valid.".into());
-    let attempts = visitor.int("pendingAttempts").unwrap_or_default();
-    if visitor
-        .int("pendingExpiresAt")
-        .is_some_and(|at| at <= now_ms())
-    {
-        return Err(ApiError::BadRequest(
-            "That code expired. Request a new one.".into(),
-        ));
-    }
-    if attempts >= MAX_VERIFY_ATTEMPTS {
-        return Err(ApiError::BadRequest(
-            "Too many attempts. Request a new code.".into(),
-        ));
-    }
-    if visitor.data.get("pendingDummy") == Some(&Value::Bool(true)) {
-        if visitor.int("pendingCompanyId") == Some(i64::from(company_id)) {
-            visitor.set("pendingAttempts", json!(attempts + 1));
-        }
-        return Err(invalid());
-    }
-    let Some(expected) = visitor.str("pendingCodeHash").map(str::to_string) else {
+    let Some(token) = visitor.str(PENDING).map(str::to_string) else {
         return Err(invalid());
     };
-    if view_id.is_empty()
-        || visitor.str("pendingViewId") != Some(view_id)
-        || visitor.int("pendingCompanyId") != Some(i64::from(company_id))
-        || visitor.int("pendingExpiresAt").is_none()
-    {
+    let counted = sqlx::query(
+        "UPDATE customer_view_codes SET attempts = attempts + 1
+          WHERE token = ? AND company_id = ? AND expires_at > UTC_TIMESTAMP() AND attempts < ?",
+    )
+    .bind(&token)
+    .bind(company_id)
+    .bind(MAX_VERIFY_ATTEMPTS)
+    .execute(&state.pool)
+    .await?
+    .rows_affected()
+        == 1;
+    let Some(pending) = visitor.pending(state, company_id).await? else {
+        return Err(invalid());
+    };
+    if !counted {
+        return Err(ApiError::BadRequest(if pending.live {
+            "Too many attempts. Request a new code.".into()
+        } else {
+            "That code expired. Request a new one.".into()
+        }));
+    }
+    let (Some(expected), Some(owner)) = (pending.code_hash, pending.customer_id) else {
+        return Err(invalid());
+    };
+    if customer_id.is_some_and(|id| id != owner) {
         return Err(invalid());
     }
     let normalized: String = code.chars().filter(|c| !c.is_whitespace()).collect();
-    let actual = code_hash(&state.session_secret, view_id, &normalized);
+    let actual = code_hash(&state.session_secret, &token, &normalized);
     let matches = normalized.len() == 6
         && normalized.bytes().all(|b| b.is_ascii_digit())
         && actual.len() == expected.len()
@@ -411,18 +476,23 @@ fn verify(
             .fold(0u8, |acc, (a, b)| acc | (a ^ b))
             == 0;
     if !matches {
-        visitor.set("pendingAttempts", json!(attempts + 1));
         return Err(invalid());
     }
+    let Some(view_id) = view_of(state, company_id, owner).await? else {
+        return Err(invalid());
+    };
+    sqlx::query("DELETE FROM customer_view_codes WHERE id = ?")
+        .bind(pending.id)
+        .execute(&state.pool)
+        .await?;
     visitor.clear_pending();
     visitor.set("verifiedViewId", json!(view_id));
     visitor.set("verifiedCompanyId", json!(company_id));
     visitor.set("verifiedAt", json!(now_ms()));
-    Ok(())
+    Ok(view_id)
 }
 
-/// The response for `result`, with the visitor's cookie either way (failed
-/// attempts are counted).
+/// The response for `result`, with the visitor's cookie either way.
 fn finish<T: IntoResponse>(state: &AppState, visitor: &Visitor, result: ApiResult<T>) -> Response {
     match result {
         Ok(ok) => visitor.respond(state, ok),
@@ -473,12 +543,16 @@ pub async fn view_gate(
     let result = async {
         let customer = by_view_id(&state, company_id, &view_id).await?;
         let verified = visitor.verified(&view_id, company_id);
+        let code_sent = visitor
+            .pending(&state, company_id)
+            .await?
+            .is_some_and(|code| code.live && code.customer_id == Some(customer.id));
         Ok(Json(ViewGate {
             verified,
             customer_name: verified.then(|| customer.name.clone().unwrap_or_default()),
             has_email: customer.email.is_some(),
             masked_email: customer.email.as_deref().map(mask_email),
-            code_sent: visitor.code_sent(&view_id, company_id),
+            code_sent,
         }))
     }
     .await;
@@ -487,7 +561,9 @@ pub async fn view_gate(
 
 /// Email a login code
 ///
-/// Sends a one-time code (10 minutes) to the customer's email.
+/// Sends a one-time code (10 minutes) to the customer's email. An address
+/// gets at most one code every 45 seconds and 5 an hour; a new code
+/// replaces the previous one.
 #[utoipa::path(
     post,
     path = "/v1/public/customer-view/{company_id}/{view_id}/code",
@@ -501,7 +577,7 @@ pub async fn view_gate(
         (status = 204, description = "Sent"),
         (status = 404, description = "No such page", body = ErrorBody),
         (status = 409, description = "The customer has no email", body = ErrorBody),
-        (status = 429, description = "A code was just sent", body = ErrorBody),
+        (status = 429, description = "A code was just sent, or 5 this hour", body = ErrorBody),
         (status = 502, description = "The email could not be sent", body = ErrorBody),
     )
 )]
@@ -513,7 +589,13 @@ pub async fn send_view_code(
     let mut visitor = Visitor::read(&state, &headers);
     let result = async {
         let customer = by_view_id(&state, company_id, &view_id).await?;
-        send_code(&state, &mut visitor, company_id, &customer).await?;
+        let Some(email) = customer.email.clone() else {
+            return Err(ApiError::Conflict(
+                "This page is locked. Ask the company to add your email so we can send a login code."
+                    .into(),
+            ));
+        };
+        send_code(&state, &mut visitor, company_id, &email, Some(&customer)).await?;
         Ok(StatusCode::NO_CONTENT)
     }
     .await;
@@ -529,7 +611,8 @@ pub struct EnteredCode {
 
 /// Enter a login code
 ///
-/// Unlocks the page for this browser for 7 days.
+/// Unlocks the page for this browser for 7 days. A code takes 8 attempts at
+/// most.
 #[utoipa::path(
     post,
     path = "/v1/public/customer-view/{company_id}/{view_id}/verify",
@@ -554,8 +637,15 @@ pub async fn verify_view_code(
 ) -> Response {
     let mut visitor = Visitor::read(&state, &headers);
     let result = async {
-        by_view_id(&state, company_id, &view_id).await?;
-        verify(&state, &mut visitor, &view_id, company_id, &input.code)?;
+        let customer = by_view_id(&state, company_id, &view_id).await?;
+        verify(
+            &state,
+            &mut visitor,
+            company_id,
+            Some(customer.id),
+            &input.code,
+        )
+        .await?;
         Ok(StatusCode::NO_CONTENT)
     }
     .await;
@@ -802,7 +892,10 @@ pub struct PendingLogin {
     operation_id = "get_customer_view_login",
     tag = "customer-view",
     params(("company_id" = i32, Path, description = "Company id")),
-    responses((status = 200, description = "The pending sign-in", body = PendingLogin))
+    responses(
+        (status = 200, description = "The pending sign-in", body = PendingLogin),
+        (status = 500, description = "Database error", body = ErrorBody),
+    )
 )]
 pub async fn pending_login(
     State(state): State<AppState>,
@@ -810,20 +903,18 @@ pub async fn pending_login(
     headers: HeaderMap,
 ) -> Response {
     let visitor = Visitor::read(&state, &headers);
-    let email = visitor.str("pendingEmail");
-    let sent = visitor.int("pendingCompanyId") == Some(i64::from(company_id))
-        && email.is_some()
-        && visitor.pending_live()
-        && (visitor.data.get("pendingDummy") == Some(&Value::Bool(true))
-            || (visitor.str("pendingCodeHash").is_some()
-                && visitor.str("pendingViewId").is_some()));
-    visitor.respond(
-        &state,
-        Json(PendingLogin {
-            code_sent: sent,
-            masked_email: sent.then(|| mask_email(email.unwrap_or_default())),
-        }),
-    )
+    let result = async {
+        let pending = visitor
+            .pending(&state, company_id)
+            .await?
+            .filter(|code| code.live);
+        Ok(Json(PendingLogin {
+            code_sent: pending.is_some(),
+            masked_email: pending.map(|code| mask_email(&code.email)),
+        }))
+    }
+    .await;
+    finish(&state, &visitor, result)
 }
 
 /// An address to sign in with.
@@ -837,7 +928,8 @@ pub struct LoginEmail {
 /// Email a code to an account's address
 ///
 /// Sends a code when a customer of the company has that email. The answer
-/// is the same either way, so it does not reveal who is a customer.
+/// is the same either way, so it does not reveal who is a customer. Same
+/// limits as `send_customer_view_code`.
 #[utoipa::path(
     post,
     path = "/v1/public/customer-view/{company_id}/login/code",
@@ -848,7 +940,7 @@ pub struct LoginEmail {
     responses(
         (status = 204, description = "Sent (if the address is a customer's)"),
         (status = 400, description = "Not an email", body = ErrorBody),
-        (status = 429, description = "A code was just sent", body = ErrorBody),
+        (status = 429, description = "A code was just sent, or 5 this hour", body = ErrorBody),
         (status = 502, description = "The email could not be sent", body = ErrorBody),
     )
 )]
@@ -863,34 +955,23 @@ pub async fn send_login_code(
         let typed = parse_email(&input.email);
         let email = if typed.is_empty() {
             visitor
-                .str("pendingEmail")
+                .pending(&state, company_id)
+                .await?
+                .map(|code| code.email)
                 .unwrap_or_default()
-                .to_lowercase()
         } else {
             typed
         };
         if !valid_email(&email) {
             return Err(ApiError::BadRequest("Email is required".into()));
         }
-        if let Some(customer) = by_email(&state, company_id, &email).await? {
-            send_code(&state, &mut visitor, company_id, &customer).await?;
-        } else {
-            // No such customer: behave as if a code went out.
-            let key = format!("{company_id}:dummy:{email}");
-            if !can_send(&state, &visitor, &key) {
-                return Err(rate_limited());
-            }
-            let now = now_ms();
-            mark_sent(&state, &key, now);
-            visitor.unset("pendingViewId");
-            visitor.unset("pendingCodeHash");
-            visitor.set("pendingDummy", Value::Bool(true));
-            visitor.set("pendingCompanyId", json!(company_id));
-            visitor.set("pendingEmail", json!(email));
-            visitor.set("pendingExpiresAt", json!(now + CODE_EXPIRY_MS));
-            visitor.set("pendingAttempts", json!(0));
-            visitor.set("pendingLastSentAt", json!(now));
-        }
+        // No such customer: behave as if a code went out.
+        let customer = by_email(&state, company_id, &email).await?;
+        let to = customer
+            .as_ref()
+            .and_then(|c| c.email.clone())
+            .unwrap_or_else(|| email.clone());
+        send_code(&state, &mut visitor, company_id, &to, customer.as_ref()).await?;
         Ok(StatusCode::NO_CONTENT)
     }
     .await;
@@ -906,8 +987,8 @@ pub struct OpenedView {
 
 /// Enter an account sign-in code
 ///
-/// Verifies the code sent to the account's address; answers the page it
-/// unlocks.
+/// Verifies the code sent to the account's address (8 attempts at most);
+/// answers the page it unlocks.
 #[utoipa::path(
     post,
     path = "/v1/public/customer-view/{company_id}/login/verify",
@@ -927,9 +1008,9 @@ pub async fn verify_login_code(
     Json(input): Json<EnteredCode>,
 ) -> Response {
     let mut visitor = Visitor::read(&state, &headers);
-    let view_id = visitor.str("pendingViewId").unwrap_or_default().to_string();
-    let result = verify(&state, &mut visitor, &view_id, company_id, &input.code)
-        .map(|()| Json(OpenedView { view_id }));
+    let result = verify(&state, &mut visitor, company_id, None, &input.code)
+        .await
+        .map(|view_id| Json(OpenedView { view_id }));
     finish(&state, &visitor, result)
 }
 
@@ -966,12 +1047,16 @@ mod tests {
     }
 
     #[test]
-    fn codes_hash_like_the_crm() {
-        // sha256("secret:view:123456")
+    fn codes_hash_with_their_token() {
         assert_eq!(
-            code_hash("secret", "view", " 123456 "),
-            code_hash("secret", "view", "123456")
+            code_hash("secret", "token", " 123456 "),
+            code_hash("secret", "token", "123456")
         );
-        assert_eq!(code_hash("s", "v", "1").len(), 64);
+        assert_ne!(
+            code_hash("secret", "token", "123456"),
+            code_hash("secret", "other", "123456")
+        );
+        assert_eq!(code_hash("s", "t", "1").len(), 64);
+        assert_eq!(new_token().unwrap().len(), 64);
     }
 }

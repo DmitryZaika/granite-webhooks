@@ -48,7 +48,9 @@ pub struct ChatInput {
     /// The question.
     pub query: String,
     /// `instructions` (default), `priceLists` or `assistant`. A question
-    /// about the company's records goes to the assistant anyway.
+    /// about the company's records goes to the assistant anyway. The
+    /// assistant reads customers, deals and notes: employees only (403 for
+    /// others, whose record questions are answered from the instructions).
     #[serde(default)]
     pub mode: Option<String>,
     /// The first question of a conversation.
@@ -101,8 +103,9 @@ fn sse_event(event: Event) -> sse::Event {
 ///
 /// Answers a question in instructions mode (company instructions and the
 /// CRM manual), price lists mode (supplier price files, special orders) or
-/// assistant mode (the company's records), streamed as server-sent events.
-/// The conversation is kept per user; `isNew` starts it over.
+/// assistant mode (the company's records, employees only), streamed as
+/// server-sent events. The conversation is kept per user; `isNew` starts it
+/// over.
 #[utoipa::path(
     post,
     path = "/v1/ai/chat",
@@ -113,6 +116,7 @@ fn sse_event(event: Event) -> sse::Event {
         (status = 200, description = "The answer as server-sent events", content_type = "text/event-stream", body = String),
         (status = 400, description = "No question", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Assistant mode asked for by a user who is not an employee", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
@@ -123,6 +127,9 @@ pub async fn ask(
 ) -> ApiResult<Response> {
     if input.query.trim().is_empty() && input.special_order.is_none() {
         return Err(ApiError::BadRequest("Ask a question".into()));
+    }
+    if input.mode.as_deref() == Some("assistant") && !chat::may_use_assistant(&user) {
+        return Err(ApiError::Forbidden);
     }
     let request = chat::Request {
         query: input.query,

@@ -273,11 +273,10 @@ pub async fn upload(
             "unsupported content type: {content_type}"
         )));
     }
-    let key = format!(
-        "{}/{}{}",
-        UploadFolder::Leads.as_str(),
-        uuid::Uuid::new_v4(),
-        extension(&request.file_name, &content_type)
+    let key = crate::routes::uploads::new_key(
+        UploadFolder::Leads,
+        company_id,
+        &extension(&request.file_name, &content_type),
     );
     let upload_url = state.storage.presign_put(&key, &content_type).await?;
     let url = state.storage.public_url(&key)?;

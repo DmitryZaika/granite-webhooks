@@ -486,6 +486,10 @@ async fn load_context(
     request.customer_email.clone_from(&thread.customer_email);
     request.preferred_deal_id = thread.deal_id.map(i64::from);
     let gathered = gather_followup_context(&state.pool, &request, Utc::now()).await?;
+    // A customer id of another company resolves to none.
+    if thread.customer_id.is_some() && gathered.customer_id.is_none() {
+        return Err(ApiError::BadRequest("Customer not found".into()));
+    }
     let rep: Option<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT phone_number, cloudtalk_phone_number, ringcentral_phone_number FROM users WHERE id = ? LIMIT 1",
     )
@@ -497,8 +501,13 @@ async fn load_context(
             .bind(user.company_id)
             .fetch_optional(&state.pool)
             .await?;
-    let rep_phone = rep.and_then(|phones| {
-        <[_; 3]>::from(phones)
+    // Their own phone, else the Telnyx line they text from, else their
+    // CloudTalk or RingCentral number.
+    let telnyx_line = crate::phone::texting::user_line(&state.pool, user.company_id, user.id)
+        .await?
+        .map(|line| line.e164);
+    let rep_phone = rep.and_then(|(own, cloudtalk, ringcentral)| {
+        [own, telnyx_line, cloudtalk, ringcentral]
             .into_iter()
             .flatten()
             .map(|p| p.trim().to_string())
@@ -621,7 +630,7 @@ pub struct Completion {
     request_body = AutocompleteRequest,
     responses(
         (status = 200, description = "The suggestion", body = Completion),
-        (status = 400, description = "No customer, or an invalid phone", body = ErrorBody),
+        (status = 400, description = "No customer, not a customer of the company, or an invalid phone", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee", body = ErrorBody),
         (status = 502, description = "The model failed", body = ErrorBody),

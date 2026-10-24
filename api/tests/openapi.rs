@@ -74,7 +74,8 @@ fn every_operation_is_documented() {
                 || path.starts_with("/v1/webhooks/")
                 || path == "/v1/auth/login"
                 || path == "/v1/auth/logout"
-                || path.starts_with("/v1/auth/password-reset");
+                || path.starts_with("/v1/auth/password-reset")
+                || path == "/v1/auth/device-sessions";
 
             match op["operationId"].as_str() {
                 // The default is the handler's name (`list`); tools need `list_customers`.

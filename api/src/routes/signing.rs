@@ -1116,7 +1116,7 @@ async fn read_pdf(
         return Err(unavailable());
     }
     let bucket = state.signature_bucket.as_deref().ok_or_else(unavailable)?;
-    match state.storage.get_url(&format!("s3://{bucket}/{key}")).await {
+    match state.storage.get_in(bucket, key).await {
         Ok(Some(object)) if sha256_hex(&object.bytes) == sha => Ok(object.bytes),
         Ok(_) => Err(unavailable()),
         Err(error) => {

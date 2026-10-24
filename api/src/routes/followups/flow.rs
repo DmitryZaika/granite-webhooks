@@ -11,7 +11,7 @@ use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::followups::enrollments::{self, Control, Refusal, Target};
-use crate::followups::processor::{company_sms_provider, process_due_enrollment};
+use crate::followups::processor::process_due_enrollment;
 use crate::routes::sms::provider::{SmsProvider, valid_thread_phone};
 use crate::routes::sms::schemas::ActiveFlow;
 use crate::state::AppState;
@@ -120,7 +120,8 @@ async fn act(
             let Some(flow_id) = action.flow_id.filter(|id| *id > 0) else {
                 return Err(ApiError::BadRequest("validation_failed".into()));
             };
-            let sms_provider = company_sms_provider(state, user.company_id).await?;
+            let sms_provider =
+                crate::routes::sms::send::user_provider(pool, user.company_id, user.id).await?;
             let (phone, customer_id) = match &target {
                 Target::Phone(phone) => (Some(phone.as_str()), None),
                 Target::Customer(id) => (None, Some(*id)),

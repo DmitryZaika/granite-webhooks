@@ -63,17 +63,18 @@ pub async fn context(
         }
         OrderingType::Sms | OrderingType::Email => {
             let types = if ordering == OrderingType::Sms {
-                ("cloudtalk_sms", "ringcentral_sms")
+                ("cloudtalk_sms", "ringcentral_sms", "telnyx_sms")
             } else {
-                ("email", "email")
+                ("email", "email", "email")
             };
             sqlx::query_as(
                 "SELECT template_id, CAST(SUM(usage_count) AS SIGNED) FROM user_template_usage
-                 WHERE user_id = ? AND template_type IN (?, ?) GROUP BY template_id",
+                 WHERE user_id = ? AND template_type IN (?, ?, ?) GROUP BY template_id",
             )
             .bind(user_id)
             .bind(types.0)
             .bind(types.1)
+            .bind(types.2)
             .fetch_all(pool)
             .await?
         }

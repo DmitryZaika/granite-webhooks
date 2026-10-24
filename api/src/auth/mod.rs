@@ -7,8 +7,11 @@
 //! | `EmployeeUser` | `getEmployeeUser`           | `is_employee \|\| is_admin \|\| is_superuser` |
 //! | `AdminUser`    | `getAdminUser`              | `is_admin \|\| is_superuser`              |
 //! | `UserManager`  | `canEditAdminUsers`         | a superuser, or an admin holding Manager in the company |
+//! | `CompanyManager` | (`can_manage_billing`)    | anyone holding Manager in the company (superusers too only then) |
 //! | `InstallerUser` | `getInstallerUser` | an installer of the company |
 //! | `ShopOrEmployeeUser` | `getShopOrEmployeeUser` | an employee, or a shop manager / worker of the company |
+//! | `device::DeviceUser` | (Granite Phone app)  | a live `X-Granite-Device` token of an employee, admin or superuser |
+//! | `device::PhoneCaller` | (app or CRM)        | the device token when sent, else `EmployeeUser`'s cookie rules |
 //!
 //! *`CurrentUser` also applies the super-admin elevation and company switch, so
 //! `company_id` is always the company the request acts in.
@@ -16,8 +19,17 @@
 //! Every extractor answers 402 `payment_required` when the company the request
 //! acts in has its access paused for billing, except on the paths in
 //! [`open_while_paused`].
+//!
+//! On [`DEVICE_ROUTES`] (the app's Emails and Schedule screens) the cookie
+//! extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
+//! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
+//! the device session's company, with the same rights as their CRM session.
+//! There the header decides alone (a bad token is 401 even with a cookie); on
+//! every other route they ignore it. `device::DeviceUser` and
+//! `device::PhoneCaller` take the token on any route, as before.
 
 pub mod cookie;
+pub mod device;
 pub mod session;
 
 use crate::entitlements::company_entitlements;
@@ -37,10 +49,32 @@ async fn authenticate(parts: &Parts, state: &AppState) -> Result<SessionUser, Ap
         .map(|(user, _)| user)
 }
 
+/// The CRM routes the Granite Phone app also calls with its device token:
+/// these prefixes and everything under them.
+pub const DEVICE_ROUTES: [&str; 3] = ["/v1/emails", "/v1/schedule", "/v1/events"];
+
+/// `path` is one of [`DEVICE_ROUTES`] or under one (`/v1/emailsx` is not).
+fn device_route(path: &str) -> bool {
+    DEVICE_ROUTES.iter().any(|prefix| {
+        path.strip_prefix(prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
 async fn authenticate_with_positions(
     parts: &Parts,
     state: &AppState,
 ) -> Result<(SessionUser, Vec<session::UserPositionRow>), ApiError> {
+    if device_route(parts.uri.path())
+        && let Some(token) = device::device_token(parts)
+    {
+        let device = device::authenticate_device(&token, state).await?;
+        if company_paused(state, device.user.company_id).await {
+            return Err(ApiError::PaymentRequired);
+        }
+        let positions = user_positions(&state.pool, device.user.id).await?;
+        return Ok((device.user, positions));
+    }
     let session = parts
         .headers
         .get_all(COOKIE)
@@ -64,19 +98,24 @@ async fn authenticate_with_positions(
         let paused = if user.company_id == own_company_id {
             row.billing_paused
         } else {
-            // A super admin acting in another company; errors keep access.
-            company_billing_paused(&state.pool, user.company_id)
-                .await
-                .unwrap_or_else(|err| {
-                    tracing::warn!(error = %err, "billing pause check failed");
-                    false
-                })
+            // A super admin acting in another company.
+            company_paused(state, user.company_id).await
         };
         if paused {
             return Err(ApiError::PaymentRequired);
         }
     }
     Ok((user, positions))
+}
+
+/// Whether `company_id`'s access is paused for billing; errors keep access.
+async fn company_paused(state: &AppState, company_id: i32) -> bool {
+    company_billing_paused(&state.pool, company_id)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "billing pause check failed");
+            false
+        })
 }
 
 /// Paths (and everything below them) that work while the company's access
@@ -236,6 +275,29 @@ impl FromRequestParts<AppState> for BillingManager {
     }
 }
 
+/// Someone holding the Manager position in the company the request acts in.
+///
+/// The app shell's `can_manage_billing`, whatever their other rights: a
+/// company admin or a superuser without it is refused. Used where only the
+/// company's Managers may act (the 10DLC texting registration).
+pub struct CompanyManager(pub SessionUser);
+
+impl FromRequestParts<AppState> for CompanyManager {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        let (user, positions) = authenticate_with_positions(parts, state).await?;
+        let manager = positions
+            .iter()
+            .any(|row| row.company_id == user.company_id && row.position_id == MANAGER_POSITION);
+        if manager {
+            Ok(Self(user))
+        } else {
+            Err(ApiError::Forbidden)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,5 +357,27 @@ mod tests {
         assert!(!open_while_paused(&Method::PUT, "/v1/me"));
         assert!(!open_while_paused(&Method::PUT, "/v1/me/account"));
         assert!(open_while_paused(&Method::POST, "/v1/billing/checkout"));
+    }
+
+    #[test]
+    fn device_routes_are_whole_prefixes() {
+        for path in [
+            "/v1/emails",
+            "/v1/emails/threads",
+            "/v1/schedule/events",
+            "/v1/events/7/details",
+        ] {
+            assert!(device_route(path), "{path}");
+        }
+        for path in [
+            "/v1/emailsx",
+            "/v1/eventsfoo/1",
+            "/v1/customers",
+            "/v1/me/devices",
+            "/emails",
+            "",
+        ] {
+            assert!(!device_route(path), "{path}");
+        }
     }
 }

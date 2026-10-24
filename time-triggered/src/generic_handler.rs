@@ -1,19 +1,20 @@
+use crate::posthog::{report_failure, reported};
 use crate::schemas::{EventBridgeEvent, OutgoingMessage};
 use common::amazon::email::{assigned_sender_from, send_message_from};
 use common::crud::notifications::{
     get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
     unmark_deadline_reminder_telegram_sent,
 };
-use common::crud::outbound_email::{record_outbound_scheduled_email, OutboundScheduledEmail};
+use common::crud::outbound_email::{OutboundScheduledEmail, record_outbound_scheduled_email};
 use common::crud::scheduled_emails::{
-    cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
+    ScheduledEmail, cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
     get_ready_scheduled_emails, mark_scheduled_email_as_sent,
-    mark_scheduled_email_failed_with_reason, ScheduledEmail,
+    mark_scheduled_email_failed_with_reason,
 };
 use common::crud::template::fetch_template_variable_data;
 use common::utils::email_send_window::automated_email_send_window_is_open_now;
 use common::utils::template::replace_template_variables;
-use lambda_runtime::{tracing, Error, LambdaEvent};
+use lambda_runtime::{Error, LambdaEvent, tracing};
 use reqwest::Client;
 use sqlx::MySqlPool;
 use teloxide::prelude::*;
@@ -108,17 +109,69 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
     Ok(sent_count)
 }
 
-/// Runs a scheduled job of the API (`POST <API_URL>/v1/jobs/<job>`).
-async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
-    post_api_job_within(job, label, None).await
+/// Why a job of the API did not run.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct JobError {
+    message: String,
+    /// The api answered 5xx: it reported that error to `PostHog` itself.
+    api_reported: bool,
 }
 
-/// [`post_api_job`] that gives up after `timeout`.
+impl JobError {
+    fn transport(error: &reqwest::Error) -> Self {
+        Self {
+            message: error.to_string(),
+            api_reported: false,
+        }
+    }
+
+    /// `Err` for any non-success answer; 5xx ones are already reported by the api.
+    fn from_status(status: u16) -> Result<(), Self> {
+        match status {
+            200..=299 => Ok(()),
+            _ => Err(Self {
+                message: format!("the api answered HTTP {status}"),
+                api_reported: (500..=599).contains(&status),
+            }),
+        }
+    }
+
+    pub(crate) const fn should_report(&self) -> bool {
+        !self.api_reported
+    }
+}
+
+impl std::fmt::Display for JobError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for JobError {}
+
+/// Reports a job's failure unless the api already did.
+async fn report_job(job: &str, result: Result<usize, JobError>) -> Result<usize, JobError> {
+    match result {
+        Err(error) if !error.should_report() => Err(error),
+        other => reported(job, other).await,
+    }
+}
+
+/// The API answers within its 30 s limit; a hung connection must not use up
+/// the whole run and starve the jobs after it.
+const API_JOB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
+
+/// Runs a scheduled job of the API (`POST <API_URL>/v1/jobs/<job>`).
+async fn post_api_job(job: &str, label: &str) -> Result<usize, JobError> {
+    post_api_job_within(job, label, API_JOB_TIMEOUT).await
+}
+
+/// [`post_api_job`], giving up after `timeout`.
 async fn post_api_job_within(
     job: &str,
     label: &str,
-    timeout: Option<std::time::Duration>,
-) -> Result<usize, Error> {
+    timeout: std::time::Duration,
+) -> Result<usize, JobError> {
     let api_url = match std::env::var("API_URL") {
         Ok(value) => value,
         Err(error) => {
@@ -134,26 +187,30 @@ async fn post_api_job_within(
         }
     };
     let url = format!("{}/v1/jobs/{job}", api_url.trim_end_matches('/'));
-    let request = Client::new().post(url).header("Authorization", lambda_key);
-    let request = match timeout {
-        Some(timeout) => request.timeout(timeout),
-        None => request,
-    };
-    let response = request
+    let response = Client::new()
+        .post(url)
+        .header("Authorization", lambda_key)
+        .timeout(timeout)
         .send()
         .await
-        .map_err(|error| Error::from(error.to_string()))?;
-    if !response.status().is_success() {
+        .map_err(|error| JobError::transport(&error))?;
+    if let Err(error) = JobError::from_status(response.status().as_u16()) {
         tracing::warn!(
             status = response.status().as_u16(),
             "Failed to process {label}"
         );
+        // The tick goes on whatever the api answered. A 5xx the api reported
+        // itself; any other answer (a wrong key, a missing route) only shows
+        // here.
+        if error.should_report() {
+            report_failure(job, &error).await;
+        }
         return Ok(0);
     }
     let body = response
         .json::<serde_json::Value>()
         .await
-        .map_err(|error| Error::from(error.to_string()))?;
+        .map_err(|error| JobError::transport(&error))?;
     let processed = body
         .get("processed")
         .and_then(|value| value.as_u64())
@@ -161,35 +218,54 @@ async fn post_api_job_within(
     Ok(usize::try_from(processed).unwrap_or(0))
 }
 
-async fn process_estimate_appointment_reminders() -> Result<usize, Error> {
+/// The job's count, or 0 after reporting and logging: one failing job must
+/// not stop the jobs after it.
+async fn or_logged(job: &str, result: Result<usize, JobError>, label: &str) -> usize {
+    report_job(job, result).await.unwrap_or_else(|error| {
+        tracing::error!(?error, "Failed to process {label}; continuing");
+        0
+    })
+}
+
+async fn process_estimate_appointment_reminders() -> Result<usize, JobError> {
     post_api_job("appointment-reminders", "estimate reminders").await
 }
 
-async fn process_maintenance_due_reminders() -> Result<usize, Error> {
+async fn process_maintenance_due_reminders() -> Result<usize, JobError> {
     post_api_job("maintenance-reminders", "maintenance due reminders").await
 }
 
-async fn process_sms_followups() -> Result<usize, Error> {
+async fn process_sms_followups() -> Result<usize, JobError> {
     post_api_job("sms-followups", "sms follow-ups").await
 }
 
-async fn process_call_points() -> Result<usize, Error> {
+async fn process_call_points() -> Result<usize, JobError> {
     post_api_job("call-points", "call points").await
 }
 
-async fn process_signature_reminders() -> Result<usize, Error> {
+async fn process_signature_reminders() -> Result<usize, JobError> {
     post_api_job("signature-reminders", "e-signature reminders").await
 }
 
-async fn process_checklist_surveys() -> Result<usize, Error> {
+/// The api answers within its 30 s; a call that hangs must not hold the tick.
+async fn process_posthog_autofix() -> Result<usize, JobError> {
+    post_api_job_within(
+        "posthog-autofix",
+        "PostHog auto-fix",
+        std::time::Duration::from_secs(25),
+    )
+    .await
+}
+
+async fn process_checklist_surveys() -> Result<usize, JobError> {
     post_api_job("survey-notifications", "checklist survey notifications").await
 }
 
-async fn process_contact_sync() -> Result<usize, Error> {
+async fn process_contact_sync() -> Result<usize, JobError> {
     post_api_job("contact-sync", "contact sync").await
 }
 
-async fn process_billing_reminders() -> Result<usize, Error> {
+async fn process_billing_reminders() -> Result<usize, JobError> {
     post_api_job("billing-reminders", "billing reminders").await
 }
 
@@ -197,18 +273,23 @@ async fn process_billing_reminders() -> Result<usize, Error> {
 /// for everything else.
 const SUBSCRIPTION_MAINTENANCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(55);
 
-async fn process_subscription_maintenance() -> Result<usize, Error> {
+async fn process_subscription_maintenance() -> Result<usize, JobError> {
     post_api_job_within(
         "subscription-maintenance",
         "subscription maintenance",
-        Some(SUBSCRIPTION_MAINTENANCE_TIMEOUT),
+        SUBSCRIPTION_MAINTENANCE_TIMEOUT,
     )
     .await
 }
 
 /// Self-serve signups and seats; a failure never aborts the tick.
 async fn run_subscription_maintenance() {
-    match process_subscription_maintenance().await {
+    match report_job(
+        "subscription-maintenance",
+        process_subscription_maintenance().await,
+    )
+    .await
+    {
         Ok(0) => {}
         Ok(count) => tracing::info!("Processed {count} signups in subscription maintenance"),
         Err(error) => {
@@ -336,18 +417,29 @@ pub(crate) async fn function_handler(
     run_subscription_maintenance().await;
 
     // First: every later job may abort the tick with `?`.
-    let billing_reminder_count = match process_billing_reminders().await {
-        Ok(count) => count,
-        Err(error) => {
-            tracing::error!(?error, "Failed to process billing reminders; continuing");
-            0
-        }
-    };
+    let billing_reminder_count =
+        match report_job("billing-reminders", process_billing_reminders().await).await {
+            Ok(count) => count,
+            Err(error) => {
+                tracing::error!(?error, "Failed to process billing reminders; continuing");
+                0
+            }
+        };
 
-    cancel_pending_emails_left_list(pool).await?;
-    cancel_pending_emails_for_non_leads(pool).await?;
-    let ready_emails = get_ready_scheduled_emails(pool).await?;
+    reported(
+        "cancel-pending-emails",
+        cancel_pending_emails_left_list(pool).await,
+    )
+    .await?;
+    reported(
+        "cancel-pending-emails",
+        cancel_pending_emails_for_non_leads(pool).await,
+    )
+    .await?;
+    let ready_emails = reported("scheduled-emails", get_ready_scheduled_emails(pool).await).await?;
     let processed_email_count = if automated_email_send_window_is_open_now() {
+        let mut failed = 0usize;
+        let mut first_error = None;
         for email in &ready_emails {
             if let Err(error) = send_and_record_scheduled_email(pool, email).await {
                 tracing::error!(
@@ -356,6 +448,8 @@ pub(crate) async fn function_handler(
                     customer_id = email.customer_id,
                     "Failed to send automated email"
                 );
+                failed += 1;
+                first_error.get_or_insert_with(|| error.to_string());
                 if let Err(mark_error) =
                     mark_scheduled_email_failed_with_reason(pool, email.id, &error.to_string())
                         .await
@@ -368,6 +462,16 @@ pub(crate) async fn function_handler(
                 }
             }
         }
+        if let Some(first) = first_error {
+            report_failure(
+                "scheduled-emails",
+                &format!(
+                    "{failed} of {} scheduled emails failed to send; first error: {first}",
+                    ready_emails.len()
+                ),
+            )
+            .await;
+        }
         ready_emails.len()
     } else {
         0
@@ -379,40 +483,73 @@ pub(crate) async fn function_handler(
                 ?error,
                 "Failed to send activity deadline reminders; continuing scheduled work"
             );
+            report_failure("activity-deadline-reminders", &error).await;
             0
         }
     };
-    let estimate_reminder_count = process_estimate_appointment_reminders().await?;
-    let maintenance_reminder_count = process_maintenance_due_reminders().await?;
-    let sms_followup_count = process_sms_followups().await?;
-    let checklist_survey_count = process_checklist_surveys().await?;
+    let estimate_reminder_count = or_logged(
+        "appointment-reminders",
+        process_estimate_appointment_reminders().await,
+        "estimate reminders",
+    )
+    .await;
+    let maintenance_reminder_count = or_logged(
+        "maintenance-reminders",
+        process_maintenance_due_reminders().await,
+        "maintenance due reminders",
+    )
+    .await;
+    let sms_followup_count = or_logged(
+        "sms-followups",
+        process_sms_followups().await,
+        "sms follow-ups",
+    )
+    .await;
+    let checklist_survey_count = or_logged(
+        "survey-notifications",
+        process_checklist_surveys().await,
+        "checklist surveys",
+    )
+    .await;
     start_supplier_files_job().await;
-    let call_points_count = match process_call_points().await {
+    let call_points_count = match report_job("call-points", process_call_points().await).await {
         Ok(count) => count,
         Err(error) => {
             tracing::error!(?error, "Failed to process call points; continuing");
             0
         }
     };
-    let signature_reminder_count = match process_signature_reminders().await {
-        Ok(count) => count,
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                "Failed to process e-signature reminders; continuing"
-            );
-            0
-        }
-    };
-    let contact_sync_count = match process_contact_sync().await {
+    let signature_reminder_count =
+        match report_job("signature-reminders", process_signature_reminders().await).await {
+            Ok(count) => count,
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    "Failed to process e-signature reminders; continuing"
+                );
+                0
+            }
+        };
+    let contact_sync_count = match report_job("contact-sync", process_contact_sync().await).await {
         Ok(count) => count,
         Err(error) => {
             tracing::error!(?error, "Failed to sync contacts; continuing");
             0
         }
     };
+    if let Err(error) = report_job("phone", post_api_job("phone", "Phone").await).await {
+        tracing::error!(?error, "Failed to process Phone; continuing");
+    }
+    let posthog_autofix_count =
+        match report_job("posthog-autofix", process_posthog_autofix().await).await {
+            Ok(count) => count,
+            Err(error) => {
+                tracing::error!(?error, "Failed to process PostHog auto-fix; continuing");
+                0
+            }
+        };
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} billing reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, and {} contact syncs",
+        "Successfully processed {} emails, {} activity deadline reminders, {} billing reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, {} contact syncs, and {} PostHog auto-fix changes",
         processed_email_count,
         reminder_count,
         billing_reminder_count,
@@ -422,7 +559,8 @@ pub(crate) async fn function_handler(
         checklist_survey_count,
         call_points_count,
         signature_reminder_count,
-        contact_sync_count
+        contact_sync_count,
+        posthog_autofix_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());
     tracing::info!("{}", message);
@@ -542,6 +680,30 @@ mod tests {
             "Checklist surveys should run on the same scheduled tick as SMS follow-ups"
         );
         assert!(source.contains("checklist surveys"));
+    }
+
+    #[test]
+    fn api_server_errors_are_not_reported_again() {
+        assert_eq!(JobError::from_status(200), Ok(()));
+        for status in [500, 502, 503, 599] {
+            let error = JobError::from_status(status).expect_err("5xx fails");
+            assert!(!error.should_report(), "{status}");
+        }
+        for status in [301, 400, 401, 404, 422, 429] {
+            let error = JobError::from_status(status).expect_err("non-2xx fails");
+            assert!(error.should_report(), "{status}");
+            assert!(error.to_string().contains(&status.to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn connection_errors_are_reported() {
+        let error = Client::new()
+            .post("http://127.0.0.1:1/v1/jobs/x")
+            .send()
+            .await
+            .expect_err("nothing listens on port 1");
+        assert!(JobError::transport(&error).should_report());
     }
 
     #[test_db::test]

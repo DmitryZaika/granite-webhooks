@@ -240,7 +240,13 @@ pub async fn attach_files(
     }
     require_deal(&state, user.company_id, id).await?;
     for file in &body.files {
-        attach(&state.storage, &file.url, UploadFolder::Deals).await?;
+        attach(
+            &state.storage,
+            &file.url,
+            UploadFolder::Deals,
+            user.company_id,
+        )
+        .await?;
     }
     let created_by = user
         .name
@@ -399,7 +405,7 @@ pub async fn delete_file(
     .bind(file_id)
     .execute(&state.pool)
     .await?;
-    remove(&state.storage, &url).await;
+    remove(&state.storage, &url, user.company_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
