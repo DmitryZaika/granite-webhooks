@@ -87,6 +87,10 @@ pub struct GatheredContext {
     pub templates: Vec<FollowupTemplateExample>,
     pub company_instructions: String,
     pub admin_instruction: String,
+    /// The company's current offer, as last saved (maybe ended or cleared).
+    pub offer: Option<crate::routes::followups::offer::SavedOffer>,
+    /// The rep's sign-off under AI texts; empty when none.
+    pub sms_signature: String,
     pub crm_hold: Option<CrmHoldUntil>,
     pub crm_note_hold: Option<CrmHoldUntil>,
     pub contact_pressure: FollowupContactPressure,
@@ -124,6 +128,17 @@ impl GatheredContext {
             self.contact_pressure.customer_requested_followup_at,
         ])
     }
+
+    /// The current offer as the writer reads it ("<offer> (until
+    /// 2026-10-31)"), while it may still be mentioned today.
+    pub fn offer_for_prompt(&self, now: Instant) -> Option<String> {
+        let saved = self.offer.as_ref()?;
+        let offer = saved.standing_on(super::store_time::store_day(now))?;
+        Some(saved.ends_on.map_or_else(
+            || offer.to_string(),
+            |last| format!("{offer} (until {last})"),
+        ))
+    }
 }
 
 fn truncate_text(text: &str, max: usize) -> String {
@@ -150,7 +165,7 @@ fn format_db_time(at: NaiveDateTime) -> String {
     at.format("%Y-%m-%d %H:%M").to_string()
 }
 
-fn strip_html_tags(html: &str) -> String {
+pub(crate) fn strip_html_tags(html: &str) -> String {
     re!(r"<[^>]*>", "g").replace_all(html, "").into_owned()
 }
 
@@ -1066,6 +1081,10 @@ pub async fn gather_timed(
     let company_instructions = load_company_instructions(pool, request.company_id).await?;
     let admin_instruction =
         crate::routes::followups::instruction::load(pool, request.company_id).await?;
+    let offer = crate::routes::followups::offer::load(pool, request.company_id).await?;
+    let sms_signature =
+        crate::routes::followups::signature::load(pool, request.user_id, request.company_id)
+            .await?;
     let customer_page_line = load_customer_page_line(pool, request.company_id).await?;
     let style_profile = load_style_profile(pool, request.user_id, request.company_id).await?;
     // Best effort: without it the draft only loses the style examples.
@@ -1110,6 +1129,8 @@ pub async fn gather_timed(
         templates,
         company_instructions,
         admin_instruction,
+        offer,
+        sms_signature,
         crm_hold: profile_result.crm_hold,
         crm_note_hold: profile_result.crm_note_hold,
         contact_pressure: pressure,

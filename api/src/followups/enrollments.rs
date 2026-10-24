@@ -357,8 +357,14 @@ async fn prepare(
         }
     }
     if has_sms {
-        // The company's own line: the user needs an agent (a Telnyx line)
-        // there.
+        // SMS follow-ups only for a rep with their own CloudTalk or
+        // RingCentral number.
+        let filled =
+            |value: &Option<String>| value.as_deref().is_some_and(|v| !v.trim().is_empty());
+        if !filled(&user.cloudtalk_phone_number) && !filled(&user.ringcentral_phone_number) {
+            return Ok(Err("agent_not_linked"));
+        }
+        // The rep's line: the user needs an agent (a Telnyx line) there.
         let seated = match sms_provider {
             Some(provider) => crate::routes::sms::send::seat(pool, provider, user)
                 .await?

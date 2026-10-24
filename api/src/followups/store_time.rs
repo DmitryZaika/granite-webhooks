@@ -68,6 +68,11 @@ pub fn same_store_calendar_day(left: Instant, right: Instant) -> bool {
     (a.year, a.month, a.day) == (b.year, b.month, b.day)
 }
 
+/// The store calendar date.
+pub fn store_day(at: Instant) -> chrono::NaiveDate {
+    at.with_timezone(&Indianapolis).date_naive()
+}
+
 /// `YYYY-MM-DD` of the store date.
 pub fn store_date_input_value(at: Instant) -> String {
     let parts = store_zoned_parts(at);

@@ -386,3 +386,51 @@ async fn one_message_is_rewritten_unlike_the_rejected_draft(pool: MySqlPool) {
     .await;
     assert_eq!(res.json::<Value>()["error"], "validation_failed");
 }
+
+#[test_db::test(seed)]
+async fn a_preview_keeps_the_gaps_signs_the_texts_and_knows_the_offer(pool: MySqlPool) {
+    let (server, model) = setup(&pool).await;
+    sqlx::raw_sql(
+        "UPDATE users SET followup_sms_signature = 'Rita\nAcme Stone' WHERE id = 100;
+         INSERT INTO ai_followup_offers (company_id, offer, ends_on, updated_by, updated_at)
+           VALUES (100, 'Free sink with any kitchen', NULL, 100, '2026-10-01 09:00:00');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // The model asks for 45 days between every message.
+    model.replies.lock().unwrap().push_back(
+        json!({ "skip": false, "messages": DRAFTS.iter().map(|body| json!({
+        "skip": false, "subject": "Your countertops", "body": body, "delayMinutes": 45 * 1440
+    })).collect::<Vec<_>>() }),
+    );
+    let res = send(
+        &server,
+        "/v1/followups/ai-cadence/preview",
+        json!({ "customer_id": 9600 }),
+    )
+    .await;
+    res.assert_status_ok();
+    let preview = res.json::<Value>()["preview"].as_array().unwrap().clone();
+    assert!(preview.len() >= 2, "{preview:?}");
+    let delays: Vec<i64> = preview
+        .iter()
+        .map(|m| m["delay_minutes"].as_i64().unwrap())
+        .collect();
+    // The second message comes 2–4 days after the first; no wait is over 30 days.
+    assert!((2 * 1440..=4 * 1440).contains(&delays[1]), "{delays:?}");
+    assert!(delays.iter().skip(1).all(|d| *d <= 30 * 1440), "{delays:?}");
+    for message in &preview {
+        if message["channel"] == "sms" {
+            let body = message["body"].as_str().unwrap();
+            assert!(body.ends_with("\n\nRita\nAcme Stone"), "{body}");
+            assert_eq!(message["generated_body"], message["body"]);
+        }
+    }
+    let prompts = model.prompts.lock().unwrap().clone();
+    let user_prompt = prompts[0]["messages"][1]["content"].as_str().unwrap();
+    assert!(
+        user_prompt.contains("Free sink with any kitchen"),
+        "{user_prompt}"
+    );
+}

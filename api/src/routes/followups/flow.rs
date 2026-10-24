@@ -120,8 +120,9 @@ async fn act(
             let Some(flow_id) = action.flow_id.filter(|id| *id > 0) else {
                 return Err(ApiError::BadRequest("validation_failed".into()));
             };
+            // The rep's own line, as their sends use it (not the company's first).
             let sms_provider =
-                crate::routes::sms::send::user_provider(pool, user.company_id, user.id).await?;
+                crate::followups::processor::rep_sms_provider(state, user.company_id, user).await?;
             let (phone, customer_id) = match &target {
                 Target::Phone(phone) => (Some(phone.as_str()), None),
                 Target::Customer(id) => (None, Some(*id)),

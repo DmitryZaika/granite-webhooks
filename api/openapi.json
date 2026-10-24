@@ -42001,6 +42001,270 @@
         ]
       }
     },
+    "/v1/followups/offer": {
+      "get": {
+        "tags": [
+          "followups"
+        ],
+        "summary": "Get the AI follow-up offer",
+        "description": "The company's current offer the AI may mention in follow-ups, and its last\nday. An empty offer when none is saved.",
+        "operationId": "get_followup_offer",
+        "responses": {
+          "200": {
+            "description": "The offer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupOffer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "followups"
+        ],
+        "summary": "Save the AI follow-up offer",
+        "description": "Replaces the company's offer with `offer`, trimmed, and its last day. An\nempty (or blank) offer clears it. Saving the same offer again changes\nnothing, so running follow-ups keep the copy written for it. Answers the\nsaved offer.",
+        "operationId": "save_followup_offer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FollowupOffer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The saved offer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupOffer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Longer than 500 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/followups/signature": {
+      "get": {
+        "tags": [
+          "followups"
+        ],
+        "summary": "Get your AI follow-up text signature",
+        "description": "The caller's sign-off, added under every text the AI writes for them.\nEmpty when none is saved.",
+        "operationId": "get_followup_signature",
+        "responses": {
+          "200": {
+            "description": "The signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupSignature"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "followups"
+        ],
+        "summary": "Save your AI follow-up text signature",
+        "description": "Replaces the caller's sign-off with `signature` (trailing spaces and\nblank edge lines dropped). An empty signature removes it. Texts already\nscheduled keep the sign-off they were written with. Answers the saved\nsignature.",
+        "operationId": "save_followup_signature",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FollowupSignature"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The saved signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowupSignature"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Longer than 200 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/followups/timeline": {
       "get": {
         "tags": [
@@ -68295,6 +68559,40 @@
           "instruction": {
             "type": "string",
             "description": "The rule as plain text, trimmed; empty when the company has none."
+          }
+        }
+      },
+      "FollowupOffer": {
+        "type": "object",
+        "description": "The company's current offer.",
+        "required": [
+          "offer"
+        ],
+        "properties": {
+          "offer": {
+            "type": "string",
+            "description": "The offer as the AI may state it, trimmed; empty when there is none."
+          },
+          "ends_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The last day it may be mentioned (store time); null: until changed."
+          }
+        }
+      },
+      "FollowupSignature": {
+        "type": "object",
+        "description": "The caller's sign-off for AI follow-up texts.",
+        "required": [
+          "signature"
+        ],
+        "properties": {
+          "signature": {
+            "type": "string",
+            "description": "The sign-off, line breaks kept; empty when the rep has none."
           }
         }
       },

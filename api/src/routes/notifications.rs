@@ -361,6 +361,8 @@ fn type_title(kind: &str) -> Option<&'static str> {
         "quote_signed" => "Quote Signed",
         "delayed_message_sent" => "Scheduled Message Sent",
         "delayed_message_failed" => "Scheduled Message Failed",
+        crate::followups::alerts::FOLLOWUP_REPLIED => "Replied to Your Follow-up",
+        crate::followups::alerts::FOLLOWUP_FAILED => "Follow-up Stopped",
         "e911_alert" => "Emergency Call",
         TENDLC_READY | TENDLC_STATUS => "Texting Registration",
         PHONE_PORT => "Number Port",

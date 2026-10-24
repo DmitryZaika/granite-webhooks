@@ -7,10 +7,11 @@
 //! edits teach the writer their style. Port of `smsFlowAiCadence.server.ts`.
 
 use super::cadence::ramp::{
-    PreviewDelayInputs, classify_ai_cadence_mode, first_outbound_at_from_timeline,
-    is_email_only_outbound_history, is_established_conversation_customer, is_old_followup_customer,
-    last_outbound_at_from_timeline, never_tried_sms_yet, old_customer_uses_thirty_day_gap,
-    ramp_outbound_count, resolve_cadence_preview_delay_minutes, should_force_first_message_today,
+    PreviewDelayInputs, bound_cadence_gap_minutes, classify_ai_cadence_mode,
+    first_outbound_at_from_timeline, is_email_only_outbound_history,
+    is_established_conversation_customer, is_old_followup_customer, last_outbound_at_from_timeline,
+    never_tried_sms_yet, old_customer_uses_thirty_day_gap, ramp_outbound_count,
+    resolve_cadence_preview_delay_minutes, should_force_first_message_today,
     stale_conversation_gap_days,
 };
 use super::cadence::schedule::{
@@ -25,7 +26,7 @@ use super::dates::{Instant, iso};
 use super::gather::{FollowupRequest, GatheredContext, gather_followup_context};
 use super::generation::{
     CopyGenerationMode, GenerationError, RegenerateFailure, Writer, complete_cadence,
-    regenerate_cadence_message,
+    complete_due_rewrite, regenerate_cadence_message, signed_body,
 };
 use super::instruction::{
     admin_instruction_gap_minutes, admin_instruction_sends_first_message_today,
@@ -35,7 +36,10 @@ use super::pipeline::PipelineTimer;
 use super::pressure::build::contact_pressure_for_forced_generate;
 use super::pressure::types::{FollowupAngle, FollowupContactPressure, FollowupPhase};
 use super::prompt::GeneratedCadenceFollowup;
-use super::send_window::{FollowupChannel, StepTiming, followup_delay_minutes_avoiding_sunday};
+use super::send_window::{
+    FollowupChannel, StepTiming, followup_delay_minutes_avoiding_sunday, followup_next_send_at,
+};
+use super::store_time::is_store_sunday;
 use super::style::{
     FollowupStyleSample, collect_edited_followup_pairs, compare_followup_edit,
     derive_followup_style_profile, first_name_from_customer_profile,
@@ -329,6 +333,45 @@ fn with_delay(message: &AiCadencePreviewMessage, delay_minutes: f64) -> AiCadenc
     }
 }
 
+/// The gap bounds again after Sundays moved: a send pulled in onto a Sunday
+/// goes the Saturday before, one pushed out onto a Sunday the Monday after
+/// (the second message's window still holds either way).
+fn keep_gap_bounds(
+    preview: Vec<AiCadencePreviewMessage>,
+    now: Instant,
+) -> Vec<AiCadencePreviewMessage> {
+    let mut cursor = now;
+    preview
+        .into_iter()
+        .enumerate()
+        .map(|(index, message)| {
+            #[allow(clippy::cast_precision_loss)]
+            let params = PreviewDelayInputs {
+                is_first_message: index == 0,
+                message_index: Some(index as f64),
+                ..PreviewDelayInputs::default()
+            };
+            let bounded = bound_cadence_gap_minutes(message.delay_minutes, &params);
+            let message = if index == 0 || (bounded - message.delay_minutes).abs() < f64::EPSILON {
+                message
+            } else {
+                // A bound is whole store days, so it keeps the clock (and
+                // holds) across a DST change.
+                let sunday =
+                    is_store_sunday(followup_next_send_at(cursor, bounded, message.channel));
+                let delay = match (sunday, bounded < message.delay_minutes) {
+                    (false, _) => bounded,
+                    (true, true) => bounded - MINUTES_PER_DAY,
+                    (true, false) => bounded + MINUTES_PER_DAY,
+                };
+                with_delay(&message, delay)
+            };
+            cursor = followup_next_send_at(cursor, message.delay_minutes, message.channel);
+            message
+        })
+        .collect()
+}
+
 /// A hold is a floor: the first send never goes out earlier.
 fn apply_hold_floor(
     preview: Vec<AiCadencePreviewMessage>,
@@ -421,7 +464,7 @@ fn preview_from_generated(
             })
             .collect();
         let delays = followup_delay_minutes_avoiding_sunday(&timings, now, options.allow_sunday_on);
-        floored
+        let shifted: Vec<AiCadencePreviewMessage> = floored
             .iter()
             .zip(delays.iter().map(Some).chain(std::iter::repeat(None)))
             .map(|(message, delay)| match delay {
@@ -430,7 +473,8 @@ fn preview_from_generated(
                 }
                 _ => message.clone(),
             })
-            .collect()
+            .collect();
+        keep_gap_bounds(shifted, now)
     };
     let force_today = should_force_first_message_today(
         options.send_first_message_today,
@@ -445,6 +489,23 @@ fn preview_from_generated(
             today
         }
         _ => scheduled,
+    }
+}
+
+/// A text with the rep's sign-off under it, as the picker shows it; what
+/// the model wrote counts as signed, so a kept sign-off is no edit.
+fn signed_preview_message(
+    message: AiCadencePreviewMessage,
+    gathered: &GatheredContext,
+) -> AiCadencePreviewMessage {
+    if message.channel != FollowupChannel::Sms {
+        return message;
+    }
+    let body = signed_body(&message.body, message.channel, gathered);
+    AiCadencePreviewMessage {
+        generated_body: Some(body.clone()),
+        body,
+        ..message
     }
 }
 
@@ -624,7 +685,11 @@ pub async fn preview(
     let mut timer = PipelineTimer::default();
     let messages =
         complete_cadence(writer, &request, &gathered, &steps, mode, now, &mut timer).await?;
-    let preview = preview_from_generated(&planned, &messages, hold, now, &options);
+    let preview: Vec<AiCadencePreviewMessage> =
+        preview_from_generated(&planned, &messages, hold, now, &options)
+            .into_iter()
+            .map(|message| signed_preview_message(message, &gathered))
+            .collect();
     if preview.is_empty() {
         return Ok(Err(blocked("NOTHING_TO_SEND", &gathered)));
     }
@@ -835,8 +900,8 @@ pub async fn start(
     if let Err(err) = record_edits(state, user, &gathered, flow_id, preview).await {
         tracing::warn!(?err, flow_id, "ai follow-up edits not recorded");
     }
-    let provider =
-        crate::routes::sms::send::user_provider(&state.pool, user.company_id, user.id).await?;
+    // The rep's own line, as their sends use it (not the company's first).
+    let provider = super::processor::rep_sms_provider(state, user.company_id, user).await?;
     super::enrollments::start(
         &state.pool,
         user,
@@ -920,7 +985,59 @@ pub async fn regenerate(
         now,
     )
     .await?
+    .map(|(body, subject)| (signed_body(&body, message.channel, &gathered), subject))
     .map_err(RegenerateFailure::as_str))
+}
+
+/// A due message of a running AI follow-up, written again for the customer
+/// as they are now (the conversation changed since the rep approved
+/// `approved`): the plan's next step, on the step's channel, by the
+/// preview's writer, signed. `Ok(None)`: nothing worth sending now.
+pub async fn rewrite_due_message(
+    state: &AppState,
+    request: &FollowupRequest,
+    gathered: &GatheredContext,
+    approved: &str,
+    now: Instant,
+) -> Result<Option<(String, Option<String>)>, GenerationError> {
+    let resolved = Resolved {
+        customer_id: gathered.customer_id.or(request.customer_id),
+        phone_digits: request.phone_digits.clone(),
+        customer_email: request.customer_email.clone(),
+        channel: request.channel,
+        mix_sms_and_email: false,
+    };
+    let (planned, _) = plan(gathered, &resolved, false, now);
+    let Some(next) = planned
+        .into_iter()
+        .find(|step| step.manual_action != Some("PHONE_CALL"))
+    else {
+        return Ok(None);
+    };
+    let step = PlannedAiCadenceStep {
+        offset_days: 0.0,
+        delay_label: delay_label_for_model_delay(0.0),
+        delay_minutes: 0.0,
+        channel: request.channel,
+        expected_send_on: Some(iso(now)[..10].to_string()),
+        ..next
+    };
+    let writer = Writer {
+        pool: &state.pool,
+        ai: &state.ai,
+        company_id: request.company_id,
+        user_id: request.user_id,
+    };
+    Ok(
+        complete_due_rewrite(writer, request, gathered, &step, approved, now)
+            .await?
+            .map(|message| {
+                (
+                    signed_body(&message.body, request.channel, gathered),
+                    message.subject,
+                )
+            }),
+    )
 }
 
 #[cfg(test)]
@@ -958,5 +1075,45 @@ mod tests {
         assert!(!can_force_generate_despite_block("STOPPED_OPT_OUT"));
         assert!(!can_force_generate_despite_block("VALIDATION_FAILED:x"));
         assert!(can_force_generate_despite_block("HARD_HOLD_ACTIVE"));
+    }
+
+    fn text(delay_minutes: f64) -> AiCadencePreviewMessage {
+        AiCadencePreviewMessage {
+            delay_minutes,
+            delay_label: delay_label_for_model_delay(delay_minutes),
+            goal: "Reconnect".into(),
+            channel: FollowupChannel::Sms,
+            skip: false,
+            skip_reason: None,
+            body: "Any news on the kitchen?".into(),
+            subject: None,
+            generated_body: None,
+            generated_subject: None,
+            angle: None,
+            phase: None,
+        }
+    }
+
+    fn delays(preview: &[AiCadencePreviewMessage]) -> Vec<f64> {
+        preview.iter().map(|m| m.delay_minutes).collect()
+    }
+
+    #[test]
+    fn gaps_keep_their_bounds_when_sundays_move_sends() {
+        // Wednesday 2026-06-10, noon in the store.
+        let now = super::super::dates::parse_iso("2026-06-10T16:00:00Z").unwrap();
+        let day = MINUTES_PER_DAY;
+        // Day 4 is a Sunday: the second message goes Saturday; the 45-day
+        // wait becomes 30 (a Monday); a short later gap stays.
+        let bounded = keep_gap_bounds(
+            vec![text(0.0), text(9.0 * day), text(45.0 * day), text(day)],
+            now,
+        );
+        assert_eq!(delays(&bounded), [0.0, 3.0 * day, 30.0 * day, day]);
+        assert_eq!(bounded[1].delay_label, "+3 days");
+        // Too soon a second message waits two days; a 30-day mark on a
+        // Sunday goes the Saturday before.
+        let bounded = keep_gap_bounds(vec![text(0.0), text(day), text(40.0 * day)], now);
+        assert_eq!(delays(&bounded), [0.0, 2.0 * day, 29.0 * day]);
     }
 }
