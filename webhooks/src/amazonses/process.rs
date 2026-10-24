@@ -3,6 +3,7 @@ use sqlx::MySqlPool;
 
 use crate::amazon::bucket::S3Bucket;
 use crate::amazonses::parse_email::{Attachment, ParsedEmail};
+use crate::amazonses::push::push_inbound_email;
 use crate::amazonses::upload::upload_attachments;
 use crate::axum_helpers::guards::NotificationsTelegramBot;
 use crate::crud::deals::{maybe_cancel_flow_on_inbound_email, maybe_move_deal_on_inbound_email};
@@ -177,12 +178,15 @@ pub async fn process_reply_email<C: S3Bucket + Send + Sync + 'static>(
         SendEmail::new(email_info.parsed, prior.thread_id, received_id).with_company_id(company_id);
     let result =
         create_email_with_attachments(pool, &send_email, &s3_url, &uploaded_attachments).await;
-    if let Err(error) = result {
-        return email_insert_failure(&email_info.parsed.message_id, error);
-    }
+    let stored = match result {
+        Ok(stored) => stored,
+        Err(error) => return email_insert_failure(&email_info.parsed.message_id, error),
+    };
     maybe_move_deal_on_inbound_email(pool, &send_email).await;
     maybe_cancel_flow_on_inbound_email(pool, &send_email).await;
     maybe_send_inbound_email_telegram(pool, &send_email).await;
+    // Only a row stored just now: a redelivery or a duplicate insert stops above.
+    push_inbound_email(stored.last_insert_id()).await;
     OK_RESPONSE
 }
 
@@ -263,12 +267,15 @@ pub async fn process_first_email<C: S3Bucket + Send + Sync + 'static>(
         SendEmail::new(email_info.parsed, None, Some(receiver)).with_company_id(company_id);
     let result =
         create_email_with_attachments(pool, &send_email, &s3_url, &uploaded_attachments).await;
-    if let Err(error) = result {
-        return email_insert_failure(&email_info.parsed.message_id, error);
-    }
+    let stored = match result {
+        Ok(stored) => stored,
+        Err(error) => return email_insert_failure(&email_info.parsed.message_id, error),
+    };
     maybe_move_deal_on_inbound_email(pool, &send_email).await;
     maybe_cancel_flow_on_inbound_email(pool, &send_email).await;
     maybe_send_inbound_email_telegram(pool, &send_email).await;
+    // Only a row stored just now: a redelivery or a duplicate insert stops above.
+    push_inbound_email(stored.last_insert_id()).await;
     OK_RESPONSE
 }
 

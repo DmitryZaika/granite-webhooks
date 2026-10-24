@@ -1,10 +1,12 @@
-//! Loopback HTTP stubs so tests never reach the real `CloudTalk` or Google APIs.
+//! Loopback HTTP stubs so tests never reach the real `CloudTalk`, Google or
+//! Granite APIs.
 //!
-//! Production code asks [`cloudtalk_base_url`] / [`google_places_base_url`] for its
-//! endpoint; a test points them at a local server with [`StubServer::route`] and
-//! [`use_cloudtalk`] / [`use_google_places`]. The overrides are thread-local, and
-//! `#[test_db::test]` / `#[tokio::test]` run each test on its own current-thread
-//! runtime, so tests do not see each other's stubs.
+//! Production code asks [`cloudtalk_base_url`] / [`google_places_base_url`] /
+//! [`api_base_url`] for its endpoint; a test points them at a local server with
+//! [`StubServer::route`] and [`use_cloudtalk`] / [`use_google_places`] /
+//! [`use_api`]. The overrides are thread-local, and `#[test_db::test]` /
+//! `#[tokio::test]` run each test on its own current-thread runtime, so tests
+//! do not see each other's stubs.
 
 use axum::Router;
 use axum::body::Bytes;
@@ -16,6 +18,7 @@ use std::sync::{Arc, Mutex};
 thread_local! {
     static CLOUDTALK_BASE: RefCell<Option<String>> = const { RefCell::new(None) };
     static GOOGLE_PLACES_BASE: RefCell<Option<String>> = const { RefCell::new(None) };
+    static API_BASE: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 pub fn cloudtalk_base_url() -> Option<String> {
@@ -26,12 +29,20 @@ pub fn google_places_base_url() -> Option<String> {
     GOOGLE_PLACES_BASE.with(|cell| cell.borrow().clone())
 }
 
+pub fn api_base_url() -> Option<String> {
+    API_BASE.with(|cell| cell.borrow().clone())
+}
+
 pub fn use_cloudtalk(base: &str) {
     CLOUDTALK_BASE.with(|cell| *cell.borrow_mut() = Some(base.to_string()));
 }
 
 pub fn use_google_places(base: &str) {
     GOOGLE_PLACES_BASE.with(|cell| *cell.borrow_mut() = Some(base.to_string()));
+}
+
+pub fn use_api(base: &str) {
+    API_BASE.with(|cell| *cell.borrow_mut() = Some(base.to_string()));
 }
 
 /// One request the stub received.

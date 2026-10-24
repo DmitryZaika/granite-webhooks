@@ -252,6 +252,7 @@ mod local_tests {
     use crate::posthog::PostHogEvent;
     use crate::tests::data::ses_open_json::ses_open_event_json;
     use crate::tests::data::ses_received::ses_received_json;
+    use crate::tests::stub_http::{StubServer, use_api};
     use crate::tests::utils::{
         MockClient, MockUnprocessedReporter, get_emails, insert_email, insert_user, new_test_app,
         read_file_as_bytes,
@@ -975,6 +976,81 @@ mod local_tests {
         let email_id = u64::try_from(result[0].id).unwrap();
         let attachments = get_email_attachments(&pool, email_id).await.unwrap();
         assert_eq!(attachments.len(), 1);
+    }
+
+    /// Pushes of `email_id`s the stub API was asked for.
+    fn pushed_ids(stub: &StubServer) -> Vec<serde_json::Value> {
+        stub.requests()
+            .iter()
+            .map(|request| {
+                assert_eq!(request.path, "/v1/emails/inbound-push");
+                serde_json::from_str::<serde_json::Value>(&request.body).unwrap()["email_id"]
+                    .clone()
+            })
+            .collect()
+    }
+
+    /// A stored email asks the API to push it to the phones, once: the
+    /// redelivery stores nothing and pushes nothing.
+    #[test_db::test]
+    async fn stored_email_is_pushed_once(pool: MySqlPool) {
+        let stub = StubServer::start(|_| Some(serde_json::json!({ "pushed": 1 }))).await;
+        use_api(&stub.base);
+        insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/image_only.eml");
+        let data: S3Event = ses_received_json();
+
+        for _ in 0..2 {
+            let response = process_ses_received_event(&pool, mock_client.clone(), &data).await;
+            assert_eq!(response, OK_RESPONSE);
+        }
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(pushed_ids(&stub), [serde_json::json!(result[0].id)]);
+    }
+
+    /// A reply joining a thread is pushed too, by its own id.
+    #[test_db::test]
+    async fn stored_reply_is_pushed(pool: MySqlPool) {
+        let stub = StubServer::start(|_| Some(serde_json::json!({ "pushed": 0 }))).await;
+        use_api(&stub.base);
+        let parent_id =
+            "010f019ab18dd4f1-e4d8dbab-6e05-466a-9cdb-5c9ccde5f3de-000000@us-east-2.amazonses.com";
+        insert_email(&pool, parent_id).await.unwrap();
+        let mock_client = MockClient::new("src/tests/data/reply_email1.eml");
+        let data: S3Event = ses_received_json();
+
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+        let result = get_emails(&pool).await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(pushed_ids(&stub), [serde_json::json!(result[1].id)]);
+    }
+
+    /// An email nobody receives is dropped: nothing to push. A failing API
+    /// never fails the delivery.
+    #[test_db::test]
+    async fn dropped_email_is_not_pushed_and_a_failing_api_is_ignored(pool: MySqlPool) {
+        let stub = StubServer::start(|_| None).await;
+        use_api(&stub.base);
+        let data: S3Event = ses_received_json();
+
+        let mock_client = MockClient::new("src/tests/data/image_only.eml");
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+        assert!(stub.requests().is_empty());
+
+        // The API answers 404: the email is still stored and delivered.
+        insert_user(&pool, "dema@granitedepotindy.com", None)
+            .await
+            .unwrap();
+        let mock_client = MockClient::new("src/tests/data/image_only.eml");
+        let response = process_ses_received_event(&pool, mock_client, &data).await;
+        assert_eq!(response, OK_RESPONSE);
+        assert_eq!(get_emails(&pool).await.unwrap().len(), 1);
+        assert_eq!(stub.requests().len(), 1);
     }
 
     /// Same for a reply that joins a thread: a redelivery uploads nothing.
