@@ -4,7 +4,8 @@
 //!
 //! - `POST .../inbound`                     → TeXML: ring the number's phones, or its no-answer action
 //! - `POST .../dial-result?call=`           → TeXML: hang up, or the next no-answer step (cells, AI, voicemail, forward)
-//! - `POST .../cell-screen?call=&user=`     → TeXML: "press 1 to answer" on a cell (fallback)
+//! - `POST .../cell-screen?call=&user=`     → TeXML: "press 1" (or the user's PIN) to answer on a cell (fallback)
+//! - `POST .../whisper?call=&user=`         → TeXML: the announcement a user hears before a call connects
 //! - `POST .../cell-screen-result?call=&user=` → TeXML: connect the cell, or hang it up
 //! - `POST .../after-ai?call=`              → TeXML: voicemail when the AI Assistant did not start, else hang up
 //! - `POST .../voicemail-done?call=`        → TeXML: hang up (a voicemail was left)
@@ -43,6 +44,7 @@ mod recording;
 mod status;
 mod tendlc;
 mod via_cell;
+mod whisper;
 
 use crate::error::{ApiError, ApiResult};
 use crate::phone::PhoneConfig;
@@ -70,6 +72,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(dial::cell_screen_result))
         .routes(routes!(dial::after_ai))
         .routes(routes!(dial::voicemail_done))
+        .routes(routes!(whisper::whisper))
         .routes(routes!(status::leg_status))
         .routes(routes!(status::call_status))
         .routes(routes!(recording::recording))
@@ -137,6 +140,14 @@ pub struct TexmlRequest {
     /// When it happened (RFC 3339 or RFC 2822); used as the time of an
     /// answer or an end, held between the call's start and now.
     pub timestamp: Option<String>,
+    /// The caller's display name, when the network gave one (Telnyx's
+    /// inbound call screening puts `SPAM LIKELY` there).
+    pub caller_id: Option<String>,
+    /// The caller-ID check's (STIR/SHAKEN) attestation, `A`, `B` or `C`,
+    /// when the TeXML app sends STIR/SHAKEN data.
+    pub shaken_stir_attestation: Option<String>,
+    /// Whether the caller-ID check passed (`true` / `false`), when sent.
+    pub shaken_stir_validated: Option<String>,
 }
 
 /// A field as sent, trimmed; `None` when missing or blank.
@@ -209,6 +220,18 @@ impl TexmlRequest {
 
     fn timestamp(&self) -> Option<&str> {
         field(self.timestamp.as_ref())
+    }
+
+    /// The call is likely spam: its STIR/SHAKEN validation failed, or
+    /// Telnyx's call screening named it `SPAM LIKELY`. A call without that
+    /// data is not (attestation C alone is not either, as Telnyx's own
+    /// screening no longer counts it).
+    fn spam_likely(&self) -> bool {
+        let failed = field(self.shaken_stir_validated.as_ref())
+            .is_some_and(|validated| validated.eq_ignore_ascii_case("false"));
+        let flagged = field(self.caller_id.as_ref())
+            .is_some_and(|name| name.to_ascii_uppercase().contains("SPAM LIKELY"));
+        failed || flagged
     }
 
     /// When the callback says it happened.
@@ -462,6 +485,16 @@ fn recorded(dial: Verb, record: bool, base: &str, call_id: i64) -> Verb {
     )
 }
 
+/// How the phones of an incoming call ring, besides the phones.
+#[derive(Debug, Clone, Default)]
+struct RingOptions {
+    /// What the phones show as the caller (`<Dial callerId>`); None = the
+    /// caller's own number.
+    caller_id: Option<String>,
+    /// The users who hear an announcement before the call connects.
+    announced: Vec<i32>,
+}
+
 /// Rings the phones, all at once, for `timeout` seconds.
 fn ring(
     response: Texml,
@@ -470,15 +503,22 @@ fn ring(
     base: &str,
     call_id: i64,
     record: bool,
+    options: &RingOptions,
 ) -> Texml {
     let dial = Verb::new("Dial")
         .attr("answerOnBridge", "true")
         .attr("timeout", timeout.to_string())
-        .attr("action", format!("{base}/dial-result?call={call_id}"));
+        .attr("action", format!("{base}/dial-result?call={call_id}"))
+        .attr_opt("callerId", options.caller_id.clone());
     let mut dial = recorded(dial, record, base, call_id);
     for phone in phones {
+        let whisper = options
+            .announced
+            .contains(&phone.user_id)
+            .then(|| format!("{base}/whisper?call={call_id}&user={}", phone.user_id));
         dial = dial.child(
             Verb::new("Sip")
+                .attr_opt("url", whisper)
                 .attr(
                     "statusCallback",
                     format!(
@@ -545,6 +585,7 @@ fn no_answer(
         ),
         NoAnswer::Voicemail(greeting) => voicemail(response, greeting, base, call_id),
         NoAnswer::Forward(number) => response.verb(Verb::new("Dial").text(number.clone())),
+        NoAnswer::Message(text) => response.say(text).hangup(),
     }
 }
 

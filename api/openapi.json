@@ -11343,6 +11343,54 @@
         }
       }
     },
+    "/v1/public/hold-music/{file}": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Download a hold music track",
+        "description": "The MP3 of a built-in hold music track (`calm.mp3`, `bright.mp3`,\n`ambient.mp3`; see `GET /v1/phone/hold-music`). 404 for any other name.",
+        "operationId": "download_hold_music_track",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "description": "The track's id with `.mp3`, e.g. `calm.mp3`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The MP3",
+            "content": {
+              "audio/mpeg": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such track",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/public/calendly-url": {
       "get": {
         "tags": [
@@ -47549,7 +47597,7 @@
           "phone"
         ],
         "summary": "Change my phone settings",
-        "description": "Changes only the fields sent: default caller ID, AI notes, working\nhours, cell fallback, ring timeout; returns all the settings. The cell\nnumber changes only through `POST /v1/phone/cell/verify` and `/confirm`.\n400 `not_a_caller_id`, `cell_not_verified`, or a message for bad hours or\ntimeouts. Device token only.",
+        "description": "Changes only the fields sent: default caller ID, AI notes, working\nhours, cell fallback, ring timeout, \"Forward all calls\", incoming call\ninformation (display number, announcements, answer PIN) and hold music;\nreturns all the settings. The cell number changes only through\n`POST /v1/phone/cell/verify` and `/confirm`; Do not disturb through\n`PUT /v1/phone/availability`; custom rules through\n`/v1/phone/call-rules`. 400 `not_a_caller_id`, `cell_not_verified`,\n`invalid_phone`, `invalid_pin`, `pin_required`, `invalid_hold_music`, or\na message for bad hours or timeouts. Device token only.",
         "operationId": "update_phone_settings",
         "requestBody": {
           "content": {
@@ -47573,7 +47621,7 @@
             }
           },
           "400": {
-            "description": "`not_a_caller_id`, `cell_not_verified`, or what is wrong",
+            "description": "`not_a_caller_id`, `cell_not_verified`, `invalid_phone`, `invalid_pin`, `pin_required`, `invalid_hold_music`, or what is wrong",
             "content": {
               "application/json": {
                 "schema": {
@@ -52440,6 +52488,650 @@
         ]
       }
     },
+    "/v1/phone/calls/hold": {
+      "put": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Put my live call on hold (or resume it)",
+        "description": "The app calls this right after it holds or resumes a call (its own\nhold, a swap between two calls, answering a waiting call), so the other\nparty hears my hold music (`holdMusic` in my settings) instead of\nsilence: Telnyx plays it in a loop until the call is resumed or ends. An\nend clears the hold by itself. Saying the same thing twice changes\nnothing. The call is my answered call that has not ended, the one the\ngiven Telnyx ids name (else the newest). The hold itself is the app's:\nwhen Telnyx does not take the music the call is still on hold, with\n`music: false`. 404 when I am on no call; 409 `hold_unavailable` for a\nCall via my cell call or a test call. Takes the device token or the\nsession cookie.",
+        "operationId": "set_live_call_hold",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HoldInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "On hold (or not) now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token or session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A cookie of a user who is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "I am on no call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`hold_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          },
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/hold-music": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "List the hold music tracks",
+        "description": "The built-in tracks (original music the company may use freely), with a\npublic MP3 link each for the preview, and the upload size limit. My\nchoice is `holdMusic` in `GET /v1/phone/bootstrap` `settings`; change it\nwith `PUT /v1/phone/settings`. Device token only.",
+        "operationId": "list_phone_hold_music",
+        "responses": {
+          "200": {
+            "description": "The tracks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldMusicOptions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/hold-music/upload": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Start uploading my hold music",
+        "description": "Returns a presigned URL to `PUT` an MP3 or WAV file to (at most 5 MB;\nchecked when it is chosen), and the URL to choose it with\n(`PUT /v1/phone/settings` `holdMusic: custom`, `holdMusicUrl`). 400\n`invalid_hold_music` for another kind of file; 503 when uploads are not\nset up on the server. Device token only.",
+        "operationId": "start_phone_hold_music_upload",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HoldMusicUploadInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Where to put the file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldMusicUpload"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_hold_music`: not an MP3 or WAV",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Storage error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Uploads are not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/lines": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "List my lines",
+        "description": "The company's active numbers that ring me or that I may call from, with\nwhat their calls do when nobody answers (the AI Assistant, voicemail or\na forward, as it works now: the AI Assistant falls back to voicemail\nwhen the company has none) and whether the line rings only me (where my\nrules decide whole calls). For the \"Incoming calls\" summary and a rule's\n\"number called\" condition. Device token only.",
+        "operationId": "list_phone_lines",
+        "responses": {
+          "200": {
+            "description": "My lines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyLines"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/call-rules": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "List my incoming call rules",
+        "description": "My custom incoming call rules, in the order they are tried. \"Forward all\ncalls\", Do not disturb and working hours are in `GET /v1/phone/bootstrap`\n`settings` / `availability`. Device token only.",
+        "operationId": "list_phone_call_rules",
+        "responses": {
+          "200": {
+            "description": "My rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallRules"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Add an incoming call rule",
+        "description": "A new rule, tried after my others: when a call matches every condition\nit sets (callers, schedule, number called), it decides what the call\ndoes for me (ring my phones even outside working hours, forward, send\nto voicemail, or play a message and hang up). On my own direct line it\ndecides the whole call; on shared and main lines only whether my phones\nring. Do not disturb and \"Forward all calls\" win over rules. At most 20\nrules (400 `too_many_rules`). 400 `invalid_phone`, `unknown_contact`,\n`not_my_number`, or what is wrong. Device token only.",
+        "operationId": "create_phone_call_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`too_many_rules`, `invalid_phone`, `unknown_contact`, `not_my_number`, or what is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/call-rules/{id}": {
+      "put": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Change an incoming call rule",
+        "description": "Replaces my rule with the one sent (send it whole, e.g. with `enabled`\nflipped for its switch); it keeps its place in the order. 404 when the\nrule is not mine; 400 as for `POST /v1/phone/call-rules`. Device token\nonly.",
+        "operationId": "update_phone_call_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The rule's id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The rule now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_phone`, `unknown_contact`, `not_my_number`, or what is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not one of my rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Delete an incoming call rule",
+        "description": "Deletes my rule; 404 when it is not mine. Device token only.",
+        "operationId": "delete_phone_call_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The rule's id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not one of my rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/call-blocking": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Read the company's spam and blocked numbers",
+        "description": "Spam call handling, the blocked numbers and area codes, the action for\nblocked calls and its announcement, the trusted numbers, and whether\ncalls with no caller ID are blocked (the defaults until an admin saves:\nspam rings, blocked callers hear the default announcement, nothing is\nblocked). Company admins only (403 `admin_only`). Device token only.",
+        "operationId": "get_phone_call_blocking",
+        "responses": {
+          "200": {
+            "description": "The company's call blocking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallBlocking"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`admin_only`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Save the company's spam and blocked numbers",
+        "description": "Replaces the company's whole call blocking with the one sent, for every\nincoming call from now on: it applies before anything rings, and blocked\ncalls get no missed-call push. A trusted number is never blocked, not\neven as spam. Returns it as saved (entries normalized to E.164 and\nsorted). Audited. Company admins only (403 `admin_only`). 400\n`invalid_entry` for an entry that is not a number (or, for blocked, a\n3-digit area code), or what is wrong. Device token only.",
+        "operationId": "save_phone_call_blocking",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallBlockingInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The company's call blocking now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallBlocking"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_entry`, or what is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`admin_only`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ]
+      }
+    },
     "/v1/phone/admin/tendlc": {
       "get": {
         "tags": [
@@ -53517,7 +54209,7 @@
           "telnyx-webhooks"
         ],
         "summary": "Answer an incoming call",
-        "description": "Telnyx's TeXML app voice URL, fetched when someone calls one of the\ncompany's numbers (`To`). Logs the call (`ringing`; the customer is the\ncompany's newest live customer with the caller's number) and answers\nTeXML: \"This call may be recorded.\" when the company records incoming\ncalls, then a `<Dial>` ringing every signed-in phone of the users the\nnumber rings who are available now (not Do not disturb, inside their\nworking hours; the main line only while the company is open), with\n`dial-result` as its action and a `leg-status` callback per phone. When\nno phone can ring it goes straight on: the cells of users with cell\nfallback on, else the number's no-answer action (AI Assistant, voicemail\nor forward) and a `missed_call` push. A repeated request answers the same\ncall again. An internal error answers the fallback TeXML\n(`<Redirect>`). 403 when the number, account or connection is not the\ntoken's company's.",
+        "description": "Telnyx's TeXML app voice URL, fetched when someone calls one of the\ncompany's numbers (`To`). First the company's spam and blocked numbers\n(`GET /v1/phone/admin/call-blocking`): a trusted number is never\nblocked; a hidden number (when the company blocks those), a blocked\nnumber or area code, or likely spam (STIR/SHAKEN validation failed, or\nTelnyx's call screening says `SPAM LIKELY`; when the company blocks spam\nor sends it to voicemail) is logged as blocked and hears the\nannouncement then a hang-up, is rejected, or goes to voicemail without\nringing anyone; blocked calls get no missed-call push. Otherwise the\ncall is logged (`ringing`; the customer is the company's newest live\ncustomer with the caller's number; `spamLikely` when the caller-ID check\nsays so) and answered with TeXML: \"This call may be recorded.\" when the\ncompany records incoming calls, then a `<Dial>` ringing every signed-in\nphone of the users whose part of the call is to ring (not Do not\ndisturb, no forward of all calls, their first matching incoming call\nrule, else their working hours; the main line only while the company is\nopen), with `dial-result` as its action, a `leg-status` callback per\nphone, the `whisper` announcement for users who turned it on, and the\nnumber called as the caller ID when every one of them chose to see it.\nOn a user's own direct line their forward, voicemail or message rule\ntakes the whole call (no missed-call push). When no phone can ring it\ngoes straight on: the cells of users with cell fallback on, else the\nnumber's no-answer action (AI Assistant, voicemail or forward) and a\n`missed_call` push. A repeated request answers the same call again. An\ninternal error answers the fallback TeXML (`<Redirect>`). 403 when the\nnumber, account or connection is not the token's company's.",
         "operationId": "answer_telnyx_inbound_call",
         "parameters": [
           {
@@ -53531,7 +54223,7 @@
           }
         ],
         "requestBody": {
-          "description": "Telnyx's TeXML request: `AccountSid`, `CallSid`, `ConnectionId`, `From`, `To`",
+          "description": "Telnyx's TeXML request: `AccountSid`, `CallSid`, `ConnectionId`, `From`, `To`, and when sent `CallerId`, `ShakenStirAttestation`, `ShakenStirValidated`",
           "content": {
             "application/x-www-form-urlencoded": {
               "schema": {
@@ -53543,7 +54235,7 @@
         },
         "responses": {
           "200": {
-            "description": "TeXML: ring the phones, or the no-answer action",
+            "description": "TeXML: ring the phones, a user's rule, the no-answer action, or the blocked-call action",
             "content": {
               "application/xml": {
                 "schema": {
@@ -54112,6 +54804,129 @@
           },
           "400": {
             "description": "Not a form-encoded request, or no `call`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Telnyx's signature does not check out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account or connection is not the company's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No company has this webhook token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error before the company was known",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/webhooks/telnyx/{token}/whisper": {
+      "post": {
+        "tags": [
+          "telnyx-webhooks"
+        ],
+        "summary": "Announce a call before it connects",
+        "description": "The `<Sip url>` of a phone of a user who turned on the announcement\n(`PUT /v1/phone/settings/call-information`): once they answer they hear\n\"Call for <line name> from <caller>\" (the line's name only when they\nchose it; the caller is the CRM customer's name, else the number read\nout), then the call connects; a key press connects at once. A call that\nended, or that someone else answered meanwhile, hangs this phone up.",
+        "operationId": "announce_telnyx_incoming_call",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The company's webhook token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "call",
+            "in": "query",
+            "description": "Our call id.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "user",
+            "in": "query",
+            "description": "The user whose phone answered.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "done",
+            "in": "query",
+            "description": "`1` when the user pressed a key during the announcement: connect.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Telnyx's `<Sip url>` request for the phone's leg: `CallSid`",
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/TexmlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "TeXML: the announcement (then the call connects), or hang up",
+            "content": {
+              "application/xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a form-encoded request, or no `call` / `user`",
             "content": {
               "application/json": {
                 "schema": {
@@ -57615,6 +58430,15 @@
           }
         }
       },
+      "BlockedAction": {
+        "type": "string",
+        "description": "What a blocked caller gets: `announce` (the announcement, then hang\nup), `hangup`, or `voicemail`.",
+        "enum": [
+          "Announce",
+          "Hangup",
+          "Voicemail"
+        ]
+      },
       "BoardDeal": {
         "type": "object",
         "description": "A deal card of the board.",
@@ -58231,6 +59055,98 @@
           }
         }
       },
+      "CallBlocking": {
+        "type": "object",
+        "description": "The company's blocking, as the app shows and saves it.",
+        "required": [
+          "spamAction",
+          "blockedAction",
+          "announcement",
+          "defaultAnnouncement",
+          "blockNoCallerId",
+          "blocked",
+          "trusted"
+        ],
+        "properties": {
+          "spamAction": {
+            "$ref": "#/components/schemas/SpamAction",
+            "description": "What happens to likely spam: `ring`, `block` or `voicemail`."
+          },
+          "blockedAction": {
+            "$ref": "#/components/schemas/BlockedAction",
+            "description": "What blocked callers get: `announce`, `hangup` or `voicemail`."
+          },
+          "announcement": {
+            "type": "string",
+            "description": "What they hear with `announce` (the default when none was saved)."
+          },
+          "defaultAnnouncement": {
+            "type": "boolean",
+            "description": "The announcement is the default one."
+          },
+          "blockNoCallerId": {
+            "type": "boolean",
+            "description": "Calls that hide their number are blocked."
+          },
+          "blocked": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Blocked numbers (E.164) and 3-digit area codes, sorted."
+          },
+          "trusted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Trusted numbers (E.164, never blocked), sorted."
+          }
+        }
+      },
+      "CallBlockingInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/phone/call-blocking`: the whole setting (the screen's\nSAVE).",
+        "required": [
+          "spamAction",
+          "blockedAction"
+        ],
+        "properties": {
+          "spamAction": {
+            "$ref": "#/components/schemas/SpamAction",
+            "description": "What happens to likely spam: `ring` (allow to ring), `block` (the\naction for blocked calls) or `voicemail`."
+          },
+          "blockedAction": {
+            "$ref": "#/components/schemas/BlockedAction",
+            "description": "What blocked callers get: `announce` (the announcement, then hang\nup), `hangup` or `voicemail`."
+          },
+          "announcement": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What blocked callers hear with `announce`, at most 500 characters;\nnull, empty or the default text = the default announcement."
+          },
+          "blockNoCallerId": {
+            "type": "boolean",
+            "description": "Block calls that hide their number."
+          },
+          "blocked": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Blocked numbers (any US or Canada format, or E.164) and 3-digit US\nor Canada area codes; at most 1000; duplicates are dropped."
+          },
+          "trusted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Trusted numbers, never blocked (numbers only); at most 1000."
+          }
+        }
+      },
       "CallCheck": {
         "type": "object",
         "description": "A finished outbound call.",
@@ -58607,6 +59523,97 @@
           "viaCell": {
             "type": "boolean",
             "description": "Placed with \"Call via my cell\"."
+          }
+        }
+      },
+      "CallRule": {
+        "type": "object",
+        "description": "A custom incoming call rule.",
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "action"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The rule's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name, e.g. \"After hours\"."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "The rule's switch: off rules are kept but never match."
+          },
+          "callers": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/RuleCaller"
+            },
+            "description": "The callers it is for; null = any caller."
+          },
+          "schedule": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkingHours",
+                "description": "When it applies, as weekly local time ranges; null = any time."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "numberIds": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Which of my numbers was called (`numberId`s of my caller IDs and the\nlines that ring me); null = any of them."
+          },
+          "action": {
+            "$ref": "#/components/schemas/RuleAction",
+            "description": "What it does."
+          },
+          "forwardTo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `forward`: where to, E.164; else null."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `message`: what the caller hears before the call ends; else\nnull."
+          }
+        }
+      },
+      "CallRules": {
+        "type": "object",
+        "description": "`GET /v1/phone/call-rules`.",
+        "required": [
+          "rules"
+        ],
+        "properties": {
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CallRule"
+            },
+            "description": "My rules, in the order they are tried (the first that matches an\nincoming call decides)."
           }
         }
       },
@@ -64268,6 +65275,14 @@
           "outbound"
         ]
       },
+      "DisplayNumber": {
+        "type": "string",
+        "description": "What my phones show for an incoming call: `caller` (the caller's\nnumber) or `called` (the company number they called).",
+        "enum": [
+          "Caller",
+          "Called"
+        ]
+      },
       "DocumentEvent": {
         "type": "object",
         "description": "One quote or contract event of a deal.",
@@ -67282,6 +68297,14 @@
         },
         "additionalProperties": false
       },
+      "ForwardAllTo": {
+        "type": "string",
+        "description": "Where \"Forward all calls\" sends calls: `voicemail` or `number`.",
+        "enum": [
+          "Voicemail",
+          "Number"
+        ]
+      },
       "FoundEvent": {
         "type": "object",
         "description": "An event found by the search.",
@@ -67855,6 +68878,136 @@
               "$ref": "#/components/schemas/Attachment"
             },
             "description": "The photos and files sent with it, in the order they were sent."
+          }
+        }
+      },
+      "HoldInput": {
+        "type": "object",
+        "description": "Body of `PUT /v1/phone/calls/hold`.",
+        "required": [
+          "held"
+        ],
+        "properties": {
+          "held": {
+            "type": "boolean",
+            "description": "True: I just put the call on hold; false: I just resumed it."
+          },
+          "telnyxCallIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The ids Telnyx's SDK knows the call by (its call id, call control\nid, call session id, leg id; at most 4 are read), to pick the call\nwhen I have more than one (call waiting, swapping); empty = the\nnewest."
+          }
+        }
+      },
+      "HoldMusicOptions": {
+        "type": "object",
+        "description": "`GET /v1/phone/hold-music`.",
+        "required": [
+          "tracks",
+          "maxUploadBytes"
+        ],
+        "properties": {
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HoldTrack"
+            },
+            "description": "The built-in tracks, the default (`calm`) first."
+          },
+          "maxUploadBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The largest file `POST /v1/phone/hold-music/upload` takes, in bytes.",
+            "minimum": 0
+          }
+        }
+      },
+      "HoldMusicUpload": {
+        "type": "object",
+        "description": "`POST /v1/phone/hold-music/upload`.",
+        "required": [
+          "uploadUrl",
+          "contentType",
+          "url"
+        ],
+        "properties": {
+          "uploadUrl": {
+            "type": "string",
+            "description": "`PUT` the file here (straight to storage) with this `contentType`;\nvalid 15 minutes."
+          },
+          "contentType": {
+            "type": "string",
+            "description": "The `Content-Type` header the PUT must send."
+          },
+          "url": {
+            "type": "string",
+            "description": "The file's URL once put: send it as `holdMusicUrl` (with `holdMusic:\ncustom`) to `PUT /v1/phone/settings`."
+          }
+        }
+      },
+      "HoldMusicUploadInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/phone/hold-music/upload`.",
+        "required": [
+          "fileName"
+        ],
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "description": "The file's name, e.g. `jingle.mp3`."
+          },
+          "contentType": {
+            "type": "string",
+            "description": "Its type: `audio/mpeg` or `audio/wav` (an `.mp3` / `.wav` name is\nenough)."
+          }
+        }
+      },
+      "HoldState": {
+        "type": "object",
+        "description": "`PUT /v1/phone/calls/hold`.",
+        "required": [
+          "callId",
+          "onHold",
+          "music"
+        ],
+        "properties": {
+          "callId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Our call id."
+          },
+          "onHold": {
+            "type": "boolean",
+            "description": "The call is on hold now."
+          },
+          "music": {
+            "type": "boolean",
+            "description": "The other party hears my hold music now (false: silence, because I\nchose none, or Telnyx did not take the music)."
+          }
+        }
+      },
+      "HoldTrack": {
+        "type": "object",
+        "description": "A built-in hold music track.",
+        "required": [
+          "id",
+          "name",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Its id: send it as `holdMusic` to `PUT /v1/phone/settings`."
+          },
+          "name": {
+            "type": "string",
+            "description": "What to call it, e.g. \"Calm piano\"."
+          },
+          "url": {
+            "type": "string",
+            "description": "The MP3, public (for the preview button)."
           }
         }
       },
@@ -70311,6 +71464,66 @@
             ],
             "format": "int32",
             "description": "The one the dialog starts with: what the caller sends most, else the\ncompany's most used, else the first."
+          }
+        }
+      },
+      "MyLine": {
+        "type": "object",
+        "description": "A company number that rings me or that I may call from.",
+        "required": [
+          "numberId",
+          "e164",
+          "label",
+          "kind",
+          "rings",
+          "mineAlone",
+          "noAnswer"
+        ],
+        "properties": {
+          "numberId": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The number's id (for a rule's `numberIds`)."
+          },
+          "e164": {
+            "type": "string",
+            "description": "The number, E.164."
+          },
+          "label": {
+            "type": "string",
+            "description": "Its name, e.g. \"Sales\"; may be empty."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NumberKind",
+            "description": "`direct`, `shared` or `main`."
+          },
+          "rings": {
+            "type": "boolean",
+            "description": "Calls to it ring my phones (else I only call from it)."
+          },
+          "mineAlone": {
+            "type": "boolean",
+            "description": "It rings nobody but me: my rules and \"Forward all calls\" decide its\ncalls whole."
+          },
+          "noAnswer": {
+            "type": "string",
+            "description": "What its calls do when nobody answers, as it works now: `ai` (the\nAI Assistant), `voicemail` or `forward`."
+          }
+        }
+      },
+      "MyLines": {
+        "type": "object",
+        "description": "`GET /v1/phone/lines`.",
+        "required": [
+          "lines"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MyLine"
+            },
+            "description": "My lines: direct first, then shared, then the main line."
           }
         }
       },
@@ -73495,7 +74708,16 @@
           "aiNotes",
           "cellVerified",
           "cellFallback",
-          "ringTimeoutSecs"
+          "ringTimeoutSecs",
+          "forwardAll",
+          "forwardAllTo",
+          "displayNumber",
+          "unknownShowMine",
+          "announceDirect",
+          "announceShared",
+          "announceLineName",
+          "requirePin",
+          "holdMusic"
         ],
         "properties": {
           "defaultCallerNumberId": {
@@ -73540,6 +74762,63 @@
             "type": "integer",
             "format": "int64",
             "description": "How long calls ring the user's phones, in seconds (15 to 60, default\n25)."
+          },
+          "forwardAll": {
+            "type": "boolean",
+            "description": "\"Forward all calls\" is on: calls to my own direct line go to\n`forwardAllTo`; on shared and main lines my phones just don't ring.\nDo not disturb wins over it."
+          },
+          "forwardAllTo": {
+            "$ref": "#/components/schemas/ForwardAllTo",
+            "description": "Where \"Forward all calls\" sends them: `voicemail` or `number`."
+          },
+          "forwardAllNumber": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `number`: where to, E.164 (US or Canada); null when none was\nset."
+          },
+          "displayNumber": {
+            "$ref": "#/components/schemas/DisplayNumber",
+            "description": "What my phones show for an incoming call: `caller` (their number) or\n`called` (the company number they called)."
+          },
+          "unknownShowMine": {
+            "type": "boolean",
+            "description": "When the caller hides their number, show the number they called."
+          },
+          "announceDirect": {
+            "type": "boolean",
+            "description": "Hear an announcement (\"Call for <line> from <caller>\") before calls\nto my direct lines connect."
+          },
+          "announceShared": {
+            "type": "boolean",
+            "description": "The same for calls to shared lines and the main line."
+          },
+          "announceLineName": {
+            "type": "boolean",
+            "description": "The announcement names the line called."
+          },
+          "requirePin": {
+            "type": "boolean",
+            "description": "My fallback cell asks for my 4-digit PIN instead of \"press 1\"\nbefore it takes a call."
+          },
+          "holdMusic": {
+            "type": "string",
+            "description": "What callers hear while I have them on hold: a built-in track id\n(`GET /v1/phone/hold-music`), `custom` (my upload) or `none`\n(silence)."
+          },
+          "holdMusicUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `custom`: my uploaded track's URL (MP3 or WAV); else null."
+          },
+          "holdMusicName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `custom`: the uploaded file's name, as shown; else null."
           }
         }
       },
@@ -78814,6 +80093,37 @@
           }
         }
       },
+      "RuleAction": {
+        "type": "string",
+        "description": "What a matching rule does with the call: `ring` (my phones),\n`forward` (to `forwardTo`), `voicemail`, or `message` (play\n`message`, then hang up).",
+        "enum": [
+          "Ring",
+          "Forward",
+          "Voicemail",
+          "Message"
+        ]
+      },
+      "RuleCaller": {
+        "type": "object",
+        "description": "One caller a rule is for: a phone number or a CRM contact (whichever\nof their numbers calls).",
+        "properties": {
+          "number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A phone number, E.164; null for a contact."
+          },
+          "customerId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A customer of the company (`GET /v1/phone/contacts/{id}`); null for a\nnumber."
+          }
+        }
+      },
       "RuleInput": {
         "type": "object",
         "description": "A rule as an admin builds it (`commissionRuleSchema`).",
@@ -80739,6 +82049,105 @@
             ],
             "format": "int64",
             "description": "How long calls ring my phones, 15 to 60 seconds."
+          },
+          "forwardAll": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "\"Forward all calls\" on or off; on with `number` needs a number\n(400 `invalid_phone`)."
+          },
+          "forwardAllTo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ForwardAllTo",
+                "description": "Where \"Forward all calls\" sends calls: `voicemail` or `number`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "forwardAllNumber": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The number to forward all calls to: a US or Canada number, any\nformat (400 `invalid_phone` otherwise); null clears it."
+          },
+          "displayNumber": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DisplayNumber",
+                "description": "What my phones show for an incoming call: `caller` or `called`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unknownShowMine": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "When the caller hides their number, show the number they called."
+          },
+          "announceDirect": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Announce calls to my direct lines before they connect."
+          },
+          "announceShared": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Announce calls to shared lines and the main line."
+          },
+          "announceLineName": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The announcement names the line called."
+          },
+          "answerPin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "My answer PIN for my fallback cell: exactly 4 digits (400\n`invalid_pin` otherwise); null clears it (and turns `requirePin`\noff). It is never sent back."
+          },
+          "requirePin": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "My fallback cell asks for the PIN instead of \"press 1\"; turning it\non needs a PIN, sent now or before (400 `pin_required`)."
+          },
+          "holdMusic": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hold music: a built-in track id (`GET /v1/phone/hold-music`),\n`custom` (with `holdMusicUrl`) or `none` (400 `invalid_hold_music`\notherwise)."
+          },
+          "holdMusicUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `custom`: the `url` from `POST /v1/phone/hold-music/upload`,\nonce the file was put there; it must be my upload, an MP3 or WAV of\nat most 5 MB (400 `invalid_hold_music`). Left out with `custom`: my\ncurrent upload stays."
+          },
+          "holdMusicName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `custom` and a new `holdMusicUrl`: the file's name to show (at\nmost 100 characters)."
           }
         }
       },
@@ -82087,6 +83496,15 @@
             "description": "1 to 255 characters."
           }
         }
+      },
+      "SpamAction": {
+        "type": "string",
+        "description": "What happens to likely spam: `ring` (allow to ring, marked as\npossible spam), `block` (like a blocked number) or `voicemail`.",
+        "enum": [
+          "Ring",
+          "Block",
+          "Voicemail"
+        ]
       },
       "SpecialOrderInput": {
         "type": "object",
@@ -85818,6 +87236,30 @@
               "null"
             ],
             "description": "When it happened (RFC 3339 or RFC 2822); used as the time of an\nanswer or an end, held between the call's start and now.",
+            "default": null
+          },
+          "CallerId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's display name, when the network gave one (Telnyx's\ninbound call screening puts `SPAM LIKELY` there).",
+            "default": null
+          },
+          "ShakenStirAttestation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller-ID check's (STIR/SHAKEN) attestation, `A`, `B` or `C`,\nwhen the TeXML app sends STIR/SHAKEN data.",
+            "default": null
+          },
+          "ShakenStirValidated": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Whether the caller-ID check passed (`true` / `false`), when sent.",
             "default": null
           }
         }

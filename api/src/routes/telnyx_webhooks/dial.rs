@@ -10,10 +10,10 @@ use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
 use crate::phone::call_log::{self, Answer, CallFacts, End};
 use crate::phone::calls::{CallDirection, CallStatus};
-use crate::phone::numbers::last10;
+use crate::phone::numbers::{last10, to_e164};
 use crate::phone::outcomes::{self, Push};
 use crate::phone::routing::{self, DEFAULT_GREETING, NoAnswer};
-use crate::phone::settings;
+use crate::phone::settings::{self, PIN_DIGITS};
 use crate::state::AppState;
 use crate::telnyx::{Response as Texml, Verb};
 use axum::body::Bytes;
@@ -101,7 +101,11 @@ pub async fn dial_result(
 }
 
 /// The incoming call of the company, or an error (the fallback answers).
-async fn inbound_call(state: &AppState, hook: &Hook, call_id: i64) -> ApiResult<CallFacts> {
+pub(super) async fn inbound_call(
+    state: &AppState,
+    hook: &Hook,
+    call_id: i64,
+) -> ApiResult<CallFacts> {
     call_log::facts(&state.pool, hook.company_id(), call_id)
         .await?
         .filter(|call| call.direction == CallDirection::Inbound)
@@ -158,7 +162,9 @@ async fn next_step(state: &AppState, hook: &Hook, params: &DialParams) -> ApiRes
     };
     let (step, timeout) = match &line {
         Some(line) => {
-            let ringers = routing::ringers(pool, config, line, Utc::now()).await?;
+            let caller = to_e164(&call.other_number);
+            let ringers =
+                routing::ringers(pool, config, line, caller.as_deref(), Utc::now()).await?;
             let step = routing::no_answer(
                 line,
                 config,
@@ -298,8 +304,17 @@ async fn screen(state: &AppState, hook: &Hook, params: &CellParams) -> ApiResult
         return Ok(hang_up());
     }
     let who = other_party(state, &call).await?;
+    let pin = settings::load(&state.pool, params.user, hook.company_id())
+        .await?
+        .answer_pin_hash
+        .is_some();
+    let (digits, ask) = if pin {
+        (PIN_DIGITS, "Enter your PIN to answer.")
+    } else {
+        (1, "Press 1 to answer.")
+    };
     let gather = Verb::new("Gather")
-        .attr("numDigits", "1")
+        .attr("numDigits", digits.to_string())
         .attr("timeout", "8")
         .attr(
             "action",
@@ -308,9 +323,7 @@ async fn screen(state: &AppState, hook: &Hook, params: &CellParams) -> ApiResult
                 hook.base, call.id, params.user
             ),
         )
-        .child(Verb::new("Say").text(format!(
-            "Granite Phone: a call from {who}. Press 1 to answer."
-        )));
+        .child(Verb::new("Say").text(format!("Granite Phone: a call from {who}. {ask}")));
     Ok(Texml::new().verb(gather).hangup().into_response())
 }
 
@@ -359,7 +372,7 @@ async fn take_on_cell(state: &AppState, hook: &Hook, params: &CellParams) -> Api
     let call = inbound_call(state, hook, params.call).await?;
     hook.claim(state, "cell-screen-result", Some(call.id))
         .await?;
-    if hook.form.digits() != Some("1") || call.ended {
+    if hook.form.digits().is_none() || call.ended {
         return Ok(hang_up());
     }
     if call.answered {
@@ -381,6 +394,14 @@ async fn take_on_cell(state: &AppState, hook: &Hook, params: &CellParams) -> Api
         return Ok(hang_up());
     };
     let stored = settings::load(pool, user_id, company_id).await?;
+    let digits = hook.form.digits().unwrap_or_default();
+    let unlocked = stored.answer_pin_hash.as_deref().map_or_else(
+        || digits == "1",
+        |hash| settings::pin_matches(hash, user_id, digits),
+    );
+    if !unlocked {
+        return Ok(hang_up());
+    }
     // The leg must be the one rung on that user's verified cell.
     let to_their_cell = hook.form.to().and_then(last10).is_some_and(|called| {
         stored.cell_number.as_deref().and_then(last10).as_ref() == Some(&called)

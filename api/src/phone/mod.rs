@@ -12,6 +12,9 @@
 //! - [`availability`]: working hours, Do not disturb, who can ring now
 //! - [`lines`]: the company's numbers, caller IDs
 //! - [`settings`]: a user's phone settings and accepted notices
+//! - [`call_rules`]: incoming call rules and "Forward all calls"
+//! - [`blocking`]: the company's spam and blocked numbers
+//! - [`hold_music`]: what callers hear on hold
 //! - [`devices`]: phones, their Telnyx credentials, our pushes
 //! - [`limits`]: how many calls a user may start
 //! - [`contacts`]: the contact index (customers and coworkers)
@@ -31,7 +34,9 @@
 
 pub mod alerts;
 pub mod availability;
+pub mod blocking;
 pub mod call_log;
+pub mod call_rules;
 pub mod calls;
 pub mod clock;
 pub mod company;
@@ -39,6 +44,7 @@ pub mod contacts;
 pub mod customer_index;
 pub mod devices;
 pub mod events;
+pub mod hold_music;
 pub mod limits;
 pub mod lines;
 pub mod numbers;
