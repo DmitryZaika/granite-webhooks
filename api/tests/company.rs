@@ -97,7 +97,10 @@ async fn integrations_count_once_set_up(pool: MySqlPool) {
                 ringcentral_refresh_expires = UNIX_TIMESTAMP() - 1
           WHERE id = 101;
          INSERT INTO telnyx_company_config (company_id, enabled, webhook_token)
-         VALUES (100, 1, REPEAT('a', 32)), (101, 0, REPEAT('b', 32));",
+         VALUES (100, 1, REPEAT('a', 32)), (101, 0, REPEAT('b', 32));
+         -- eSignatures are in use once one user has access (no company switch).
+         UPDATE users SET is_signature_available = 1 WHERE id = 100;
+         UPDATE company SET signature_enabled = 1 WHERE id = 101;",
     )
     .await;
     assert_eq!(
@@ -116,16 +119,23 @@ async fn integrations_count_once_set_up(pool: MySqlPool) {
         })
     );
     // A blank secret is no CloudTalk; an expired RingCentral refresh token is
-    // no connection.
+    // no connection; the old company eSignatures switch alone is nothing.
     let other = features(pool.clone(), sessions::OTHER_COMPANY_REP).await;
     assert_eq!(
         (
             &other["inbound_email"],
             &other["cloudtalk"],
             &other["ringcentral"],
-            &other["telnyx"]
+            &other["telnyx"],
+            &other["e_signature"]
         ),
-        (&json!(false), &json!(false), &json!(false), &json!(false))
+        (
+            &json!(false),
+            &json!(false),
+            &json!(false),
+            &json!(false),
+            &json!(false)
+        )
     );
 
     // QuickBooks needs every token column, not just the realm.

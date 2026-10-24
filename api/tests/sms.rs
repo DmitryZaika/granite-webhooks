@@ -516,3 +516,81 @@ async fn the_admin_inbox_merges_every_provider(pool: MySqlPool) {
             .assert_status(StatusCode::FORBIDDEN);
     }
 }
+
+#[test_db::test(seed)]
+async fn a_rep_on_two_providers_reads_every_text_in_one_inbox(pool: MySqlPool) {
+    seed(&pool).await;
+    sqlx::raw_sql(RINGCENTRAL).execute(&pool).await.unwrap();
+    // The company is connected to both, so Rita can answer through either.
+    sqlx::raw_sql(
+        "UPDATE company SET cloudtalk_access_key = 'k', cloudtalk_access_secret = 's',
+                ringcentral_client_id = 'i', ringcentral_client_secret = 's',
+                ringcentral_jwt = 'j'
+          WHERE id = 100",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Her CloudTalk inbox and her RingCentral one, merged: unread first.
+    let mine = get(&pool, "/v1/sms/mine/threads", sessions::REP).await;
+    assert_eq!(phones(&mine), ["3175550100", "3175550777", "3175550888"]);
+    assert_eq!(mine["total_count"], 3);
+    assert_eq!(mine["unread_count"], 2);
+    assert_eq!(mine["threads"][0]["last_message_text"], "Via RingCentral");
+    assert_eq!(mine["threads"][0]["message_count"], 3);
+
+    let thread = get(&pool, "/v1/sms/mine/threads/3175550100", sessions::REP).await;
+    let texts: Vec<(&str, &str)> = thread["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| (m["provider"].as_str().unwrap(), m["text"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            ("cloudtalk", "Hello Alice"),
+            ("cloudtalk", "Thanks!"),
+            ("ringcentral", "Via RingCentral"),
+        ]
+    );
+    // Answered through the provider of the latest text.
+    assert_eq!(thread["reply_provider"], "ringcentral");
+    assert_eq!(thread["can_send"], true);
+    assert_eq!(thread["unread_count"], 0);
+    // Only on CloudTalk: answered there.
+    let stranger = get(&pool, "/v1/sms/mine/threads/3175550777", sessions::REP).await;
+    assert_eq!(stranger["reply_provider"], "cloudtalk");
+
+    let unread = get(&pool, "/v1/sms/mine/unread-count", sessions::REP).await;
+    assert_eq!(unread["count"], 2);
+
+    let alerts = get(
+        &pool,
+        "/v1/sms/mine/desktop-alerts?inbox=ringcentral",
+        sessions::REP,
+    )
+    .await;
+    let hrefs: Vec<&str> = alerts["alerts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["href"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        hrefs,
+        [
+            "/employee/ringcentral/thread/3175550777",
+            "/employee/ringcentral/thread/3175550100"
+        ]
+    );
+
+    // Someone on no provider: an empty inbox, nothing to answer through.
+    let none = get(&pool, "/v1/sms/mine/threads", sessions::ADMIN).await;
+    assert_eq!(phones(&none), Vec::<&str>::new());
+    let thread = get(&pool, "/v1/sms/mine/threads/3175550100", sessions::ADMIN).await;
+    assert_eq!(thread["messages"], serde_json::json!([]));
+    assert_eq!(thread["can_send"], false);
+    assert_eq!(thread["reply_provider"], Value::Null);
+}

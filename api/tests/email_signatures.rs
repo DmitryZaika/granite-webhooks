@@ -289,20 +289,9 @@ async fn signatures_need_access_and_one_message(pool: MySqlPool) {
         .execute(&pool)
         .await
         .unwrap();
+    // The old company switch no longer matters: access is per user, so the
+    // send gets past the access check to the recipient check.
     sqlx::query("UPDATE company SET signature_enabled = 0 WHERE id = 100")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let res = setup.send(sessions::REP, setup.email(json!({}))).await;
-    res.assert_status(StatusCode::FORBIDDEN);
-    assert!(
-        res.json::<Value>()["error"]
-            .as_str()
-            .unwrap()
-            .starts_with("eSignatures are turned off for this company.")
-    );
-
-    sqlx::query("UPDATE company SET signature_enabled = 1 WHERE id = 100")
         .execute(&pool)
         .await
         .unwrap();

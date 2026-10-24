@@ -1,6 +1,6 @@
 //! A company's Telnyx setup (`telnyx_company_config`), as superusers edit
-//! it: the kill switch, Telnyx resource ids, recording, business hours,
-//! limits, and the webhook base to paste into Telnyx. Session cookie only;
+//! it: the kill switch, Telnyx resource ids, limits, and the
+//! webhook base to paste into Telnyx. Session cookie only;
 //! superusers only.
 
 use super::audit;
@@ -79,7 +79,7 @@ pub struct TelnyxCompanyConfig {
 }
 
 impl TelnyxCompanyConfig {
-    fn of(config: &CompanyConfig, state: &AppState) -> Self {
+    pub(super) fn of(config: &CompanyConfig, state: &AppState) -> Self {
         Self {
             enabled: config.enabled,
             credential_connection_id: config.credential_connection_id.clone(),
@@ -131,23 +131,10 @@ pub struct TelnyxConfigInput {
     /// The fallback TeXML URL (`http(s)://`, at most 512 characters).
     #[serde(default)]
     pub fallback_texml_url: Option<String>,
-    /// `off`, `inbound` or `both`.
-    pub recording_mode: RecordingMode,
-    /// The recording notice's audio URL (`http(s)://`, at most 512
-    /// characters); null or blank = the spoken notice.
-    #[serde(default)]
-    pub recording_notice_url: Option<String>,
     /// Telnyx messaging profile id (at most 64 characters, no spaces); null
     /// or blank = no texting through Telnyx.
     #[serde(default)]
     pub messaging_profile_id: Option<String>,
-    /// The main line's hours (a valid IANA `tz`, at least one range,
-    /// `HH:MM` with start before end); null = always.
-    #[serde(default)]
-    pub business_hours: Option<WorkingHours>,
-    /// `YYYY-MM-DD` dates (at most 366; repeats are dropped).
-    #[serde(default)]
-    pub holidays: Vec<String>,
     /// A version like `1.4.0` (at most 16 characters).
     #[serde(default)]
     pub min_app_version: Option<String>,
@@ -167,11 +154,7 @@ struct CheckedConfig {
     telnyx_account_id: Option<String>,
     ai_assistant_id: Option<String>,
     fallback_texml_url: Option<String>,
-    recording_mode: RecordingMode,
-    recording_notice_url: Option<String>,
     messaging_profile_id: Option<String>,
-    business_hours: Option<WorkingHours>,
-    holidays: Vec<String>,
     min_app_version: Option<String>,
     daily_call_limit: i32,
 }
@@ -179,18 +162,6 @@ struct CheckedConfig {
 impl TelnyxConfigInput {
     /// The setup as stored: 400 with a message for what is wrong.
     fn checked(self) -> ApiResult<CheckedConfig> {
-        let business_hours = match self.business_hours {
-            Some(hours) => {
-                if let Some(problem) = hours.problem() {
-                    return Err(ApiError::BadRequest(problem));
-                }
-                Some(WorkingHours {
-                    tz: hours.tz.trim().to_string(),
-                    days: hours.days,
-                })
-            }
-            None => None,
-        };
         if !(0..=MAX_DAILY_CALLS).contains(&self.daily_call_limit) {
             return Err(ApiError::BadRequest(
                 "The daily call limit is 0 to 1,000,000 calls.".into(),
@@ -213,15 +184,11 @@ impl TelnyxConfigInput {
             telnyx_account_id: telnyx_id(self.telnyx_account_id.as_ref(), 64, "Telnyx account id")?,
             ai_assistant_id: telnyx_id(self.ai_assistant_id.as_ref(), 128, "AI Assistant id")?,
             fallback_texml_url: http_url(self.fallback_texml_url.as_ref(), "fallback TeXML")?,
-            recording_mode: self.recording_mode,
-            recording_notice_url: http_url(self.recording_notice_url.as_ref(), "recording notice")?,
             messaging_profile_id: telnyx_id(
                 self.messaging_profile_id.as_ref(),
                 64,
                 "messaging profile id",
             )?,
-            business_hours,
-            holidays: checked_holidays(&self.holidays)?,
             min_app_version: app_version(self.min_app_version.as_ref())?,
             daily_call_limit: self.daily_call_limit,
         })
@@ -268,7 +235,7 @@ fn telnyx_id(value: Option<&String>, max: usize, what: &str) -> ApiResult<Option
 }
 
 /// An `http(s)://` URL of at most 512 characters.
-fn http_url(value: Option<&String>, what: &str) -> ApiResult<Option<String>> {
+pub(super) fn http_url(value: Option<&String>, what: &str) -> ApiResult<Option<String>> {
     let value = blank_none(value);
     let bad = value.as_deref().is_some_and(|text| {
         text.chars().count() > 512
@@ -301,8 +268,23 @@ fn app_version(value: Option<&String>) -> ApiResult<Option<String>> {
     Ok(value)
 }
 
+/// Business hours as stored (the time zone trimmed): 400 with a message for
+/// what is wrong.
+pub(super) fn checked_hours(hours: Option<WorkingHours>) -> ApiResult<Option<WorkingHours>> {
+    let Some(hours) = hours else {
+        return Ok(None);
+    };
+    if let Some(problem) = hours.problem() {
+        return Err(ApiError::BadRequest(problem));
+    }
+    Ok(Some(WorkingHours {
+        tz: hours.tz.trim().to_string(),
+        days: hours.days,
+    }))
+}
+
 /// The holidays as stored: real `YYYY-MM-DD` dates, sorted, once each.
-fn checked_holidays(dates: &[String]) -> ApiResult<Vec<String>> {
+pub(super) fn checked_holidays(dates: &[String]) -> ApiResult<Vec<String>> {
     let mut checked = Vec::with_capacity(dates.len());
     for date in dates {
         let date = date.trim();
@@ -327,7 +309,7 @@ fn checked_holidays(dates: &[String]) -> ApiResult<Vec<String>> {
 }
 
 /// A new webhook token: 32 random hex characters (128 bits).
-fn new_webhook_token() -> ApiResult<String> {
+pub(super) fn new_webhook_token() -> ApiResult<String> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).map_err(|err| ApiError::Internal(err.to_string()))?;
     Ok(bytes
@@ -377,14 +359,17 @@ pub async fn company_telnyx_config(
 
 /// Save a company's Telnyx setup
 ///
-/// Saves the whole setup (every field of `TelnyxCompanyConfig` but
-/// `webhookBase`; blank text is null) and returns it. The first save makes
+/// Saves the whole setup and returns it: every field of
+/// `TelnyxCompanyConfig` but the read-only `webhookBase` and what the
+/// company's admins decide (`businessHours` and `holidays` with `PUT
+/// /v1/phone/admin/hours`, `recordingMode` and `recordingNoticeUrl` with
+/// `PUT /v1/phone/admin/recording`); blank text is null. The first save makes
 /// the company's webhook token (32 random characters, kept from then on),
 /// so `webhookBase` is known from then on. A `telnyxAccountId` makes every
 /// TeXML request to the company's webhooks carry that `AccountSid` (403
 /// otherwise). Checks: Telnyx ids without spaces (64 characters, the AI
 /// Assistant's 128), `http(s)://` URLs,
-/// valid business hours, `YYYY-MM-DD` holidays, a version like `1.4.0`,
+/// a version like `1.4.0`,
 /// a daily limit of 0 to 1,000,000; 400 with a message otherwise. Written
 /// to the phone audit log. Superusers only.
 #[utoipa::path(
@@ -428,9 +413,9 @@ pub async fn save_company_telnyx_config(
         "UPDATE telnyx_company_config
             SET enabled = ?, credential_connection_id = ?, texml_app_id = ?,
                 outbound_voice_profile_id = ?, billing_group_id = ?, telnyx_account_id = ?,
-                ai_assistant_id = ?, fallback_texml_url = ?, recording_mode = ?,
-                recording_notice_url = ?, messaging_profile_id = ?, business_hours = ?,
-                holidays = ?, min_app_version = ?, daily_call_limit = ?
+                ai_assistant_id = ?, fallback_texml_url = ?, messaging_profile_id = ?,
+                min_app_version = ?,
+                daily_call_limit = ?
           WHERE company_id = ?",
     )
     .bind(checked.enabled)
@@ -441,11 +426,7 @@ pub async fn save_company_telnyx_config(
     .bind(&checked.telnyx_account_id)
     .bind(&checked.ai_assistant_id)
     .bind(&checked.fallback_texml_url)
-    .bind(checked.recording_mode.as_str())
-    .bind(&checked.recording_notice_url)
     .bind(&checked.messaging_profile_id)
-    .bind(checked.business_hours.as_ref().map(WorkingHours::to_json))
-    .bind(serde_json::to_string(&checked.holidays).unwrap_or_else(|_| "[]".into()))
     .bind(&checked.min_app_version)
     .bind(checked.daily_call_limit)
     .bind(id)

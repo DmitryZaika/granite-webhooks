@@ -77,7 +77,8 @@ const RUNS_ONBOARDING: &str = "(u.is_superuser = 1 OR NOT EXISTS (
 pub struct Features {
     /// QuickBooks is on.
     pub quickbooks: bool,
-    /// E-signatures are on.
+    /// The old company eSignatures switch; no longer used (eSignatures are
+    /// given per user).
     pub signature: bool,
     /// Guided tours are on (own switch, else the platform default).
     pub onboarding: bool,
@@ -85,11 +86,15 @@ pub struct Features {
     pub leaderboard: bool,
 }
 
+/// The old company eSignatures switch. It no longer gates anything:
+/// eSignatures are given per user (Superuser › Feature access). Kept so old
+/// pages that still show it read the stored value.
+const LEGACY_SIGNATURE_SWITCH: &str = "(COALESCE(c.signature_enabled, 0) <> 0)";
+
 fn features_sql() -> String {
     format!(
-        "COALESCE(c.quickbooks_enabled, 1) <> 0 AS quickbooks, {} AS signature,
+        "COALESCE(c.quickbooks_enabled, 1) <> 0 AS quickbooks, {LEGACY_SIGNATURE_SWITCH} AS signature,
          {} AS onboarding, {} AS leaderboard",
-        crate::routes::company::queries::signature_on(),
         crate::routes::company::queries::ONBOARDING_ON,
         crate::routes::company::queries::LEADERBOARD_ON
     )
@@ -260,7 +265,8 @@ pub struct CompanyDetails {
     pub signwell_api_key: Option<String>,
     /// QuickBooks switch.
     pub quickbooks_enabled: bool,
-    /// E-signature switch (own setting, else on with a `SignWell` key).
+    /// The old company eSignatures switch; no longer used (eSignatures are
+    /// given per user).
     pub signature_enabled: bool,
     /// Stripe payment required.
     pub billing_required: bool,
@@ -303,11 +309,10 @@ pub async fn get_company(
                 c.ringcentral_client_secret, c.ringcentral_jwt, c.ringcentral_server_url,
                 c.qbo_realm_id, c.signwell_api_key,
                 COALESCE(c.quickbooks_enabled, 1) <> 0 AS quickbooks_enabled,
-                {} AS signature_enabled, COALESCE(c.billing_required, 0) <> 0 AS billing_required,
+                {LEGACY_SIGNATURE_SWITCH} AS signature_enabled, COALESCE(c.billing_required, 0) <> 0 AS billing_required,
                 {} AS onboarding, {} AS leaderboard
            FROM company c {}
           WHERE c.id = ? AND c.deleted_at IS NULL",
-        crate::routes::company::queries::signature_on(),
         crate::routes::company::queries::ONBOARDING_ON,
         crate::routes::company::queries::LEADERBOARD_ON,
         crate::routes::company::queries::ROLLOUT_JOINS,
@@ -381,7 +386,8 @@ pub struct CompanyInput {
     /// QuickBooks switch; edit only (default on).
     #[serde(default)]
     pub quickbooks_enabled: Option<bool>,
-    /// E-signature switch; edit only (omit to leave it).
+    /// The old company eSignatures switch; edit only (omit to leave it). No
+    /// longer used: eSignatures are given per user.
     #[serde(default)]
     pub signature_enabled: Option<bool>,
 }

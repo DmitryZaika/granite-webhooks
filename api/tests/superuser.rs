@@ -41,20 +41,27 @@ async fn super_admins_read_onboarding_feedback(pool: MySqlPool) {
 async fn super_admins_switch_signature_access(pool: MySqlPool) {
     make_super(&pool).await;
     let server = server(pool.clone());
-    let body: Value = server
-        .get("/v1/superuser/signature-access?company_id=101")
-        .with_session(sessions::SUPER_ADMIN)
-        .await
-        .json();
-    // Company 101 has signatures off: not offered, so the filter is dropped.
-    assert_eq!(body["company_id"], Value::Null);
+    let access = |company: i32| {
+        server
+            .get(&format!(
+                "/v1/superuser/signature-access?company_id={company}"
+            ))
+            .with_session(sessions::SUPER_ADMIN)
+    };
+    // Every company is offered, the old company switch (off for 101) or not:
+    // access is per user.
+    let body: Value = access(101).await.json();
+    assert_eq!(body["company_id"], 101);
     let companies: Vec<i64> = body["companies"]
         .as_array()
         .unwrap()
         .iter()
         .map(|company| company["id"].as_i64().unwrap())
         .collect();
-    assert!(companies.contains(&100) && !companies.contains(&101));
+    assert!(companies.contains(&100) && companies.contains(&101));
+    // An unknown company: the filter is dropped.
+    assert_eq!(access(999).await.json::<Value>()["company_id"], Value::Null);
+    let body: Value = access(100).await.json();
     let rita = body["users"]
         .as_array()
         .unwrap()

@@ -58,6 +58,11 @@ use std::sync::Arc;
 /// Where Telnyx calls back when `PHONE_PUBLIC_API_URL` is unset.
 pub const DEFAULT_PUBLIC_API_URL: &str = "https://api.granite-manager.com";
 
+/// The TeXML calls go to when our webhook fails and
+/// `TELNYX_FALLBACK_TEXML_URL` is unset: "no one can take your call", then
+/// a voicemail (in our Telnyx account's media storage).
+pub const DEFAULT_FALLBACK_TEXML_URL: &str = "https://api.telnyx.com/v2/media/granite-fallback.xml";
+
 /// Where "Report a problem" goes, and what the app shows as the support
 /// address.
 pub const SUPPORT_EMAIL: &str = "support@granite-manager.com";
@@ -122,8 +127,9 @@ pub struct PhoneConfig {
     /// `PHONE_RECORDINGS_BUCKET`: the private bucket call recordings are
     /// copied to (and the FCM service account may live in).
     pub recordings_bucket: Option<Arc<str>>,
-    /// `TELNYX_FALLBACK_TEXML_URL`: the TeXML Bin calls go to when our
-    /// webhook fails, unless the company set its own.
+    /// `TELNYX_FALLBACK_TEXML_URL` (default `DEFAULT_FALLBACK_TEXML_URL`):
+    /// the TeXML calls go to when our webhook fails, unless the company set
+    /// its own.
     pub fallback_texml_url: Option<Arc<str>>,
     /// `TELNYX_PUBLIC_KEY`: Telnyx's Ed25519 public key (base64), to check
     /// webhook signatures.
@@ -168,7 +174,10 @@ impl PhoneConfig {
         Self {
             public_api_url: Arc::from(public_api_url.trim_end_matches('/')),
             recordings_bucket: var("PHONE_RECORDINGS_BUCKET").map(Arc::from),
-            fallback_texml_url: var("TELNYX_FALLBACK_TEXML_URL").map(Arc::from),
+            fallback_texml_url: Some(Arc::from(
+                var("TELNYX_FALLBACK_TEXML_URL")
+                    .unwrap_or_else(|| DEFAULT_FALLBACK_TEXML_URL.to_string()),
+            )),
             public_key: var("TELNYX_PUBLIC_KEY").map(Arc::from),
             allow_unsigned_webhooks: var("PHONE_ALLOW_UNSIGNED_WEBHOOKS").as_deref() == Some("1"),
             min_app_version: var("PHONE_MIN_APP_VERSION").map(Arc::from),

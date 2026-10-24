@@ -10,7 +10,6 @@
 //! `superuser.sendemail` action.
 
 use super::bug_reports::escape;
-use super::company::queries::signature_on;
 use crate::auth::CurrentUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -216,7 +215,7 @@ pub struct SignatureUser {
 /// Who may send for signature.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SignatureAccess {
-    /// Companies with signatures on, by name.
+    /// Every company, by name.
     pub companies: Vec<CompanyOption>,
     /// Their live users, by company then name.
     pub users: Vec<SignatureUser>,
@@ -226,9 +225,9 @@ pub struct SignatureAccess {
 
 /// List signature access
 ///
-/// The companies that have signatures switched on and their users with
-/// whether each may send documents for signature; `company_id` narrows the
-/// users to one of those companies. Super admins only.
+/// Every company and its users with whether each may send documents for
+/// signature (eSignatures are given per user, with no company switch);
+/// `company_id` narrows the users to one company. Super admins only.
 #[utoipa::path(
     get,
     path = "/v1/superuser/signature-access",
@@ -249,12 +248,11 @@ pub async fn signature_access(
     MultiQuery(query): MultiQuery<AccessQuery>,
 ) -> ApiResult<Json<SignatureAccess>> {
     super_only(&user)?;
-    let companies: Vec<CompanyOption> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+    let companies: Vec<CompanyOption> = sqlx::query_as(
         "SELECT c.id, c.name FROM company c
-          WHERE c.deleted_at IS NULL AND {}
+          WHERE c.deleted_at IS NULL
           ORDER BY c.name, c.id",
-        signature_on()
-    )))
+    )
     .fetch_all(&state.pool)
     .await?;
     let company_id = query

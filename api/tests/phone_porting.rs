@@ -685,7 +685,7 @@ async fn without_a_telnyx_setup_nothing_is_ported(pool: MySqlPool) {
     response.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
         response.json::<Value>()["error"],
-        "Telnyx is not set up for this company yet. Ask a superuser."
+        "Telnyx is not connected for this company yet. Click Connect Telnyx on the Phone page first."
     );
     assert!(fake.paths().is_empty());
 }

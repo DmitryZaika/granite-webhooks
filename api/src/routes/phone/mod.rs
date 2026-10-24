@@ -66,6 +66,7 @@ mod admin;
 mod bootstrap;
 mod calls;
 mod cell;
+mod connect;
 mod contacts;
 mod devices;
 mod porting;
@@ -130,6 +131,12 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(admin::import_admin_numbers))
         .routes(routes!(admin::list_admin_devices))
         .routes(routes!(admin::revoke_admin_device))
+        .routes(routes!(admin::get_admin_hours, admin::save_admin_hours))
+        .routes(routes!(admin::get_admin_recording, admin::save_admin_recording))
+        .routes(routes!(connect::connect_telnyx))
+        .routes(routes!(connect::search_numbers))
+        .routes(routes!(connect::buy_number))
+        .routes(routes!(connect::connect_company_telnyx))
         .routes(routes!(
             superuser::company_telnyx_config,
             superuser::save_company_telnyx_config

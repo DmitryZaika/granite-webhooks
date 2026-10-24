@@ -576,6 +576,7 @@ pub async fn get_thread(
         can_send,
         has_older,
         active_flow,
+        reply_provider: None,
     }))
 }
 

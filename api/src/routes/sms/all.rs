@@ -1,27 +1,36 @@
-//! The admin inbox over every provider (`/v1/sms/all/...`): each provider's
-//! conversations merged by phone, so the company's texts show whichever
-//! provider carried them. A rep filter takes the rep's user id and reads each
-//! provider through that rep's agent id there.
+//! The inboxes over every provider, each provider's conversations merged by
+//! phone so texts show whichever provider carried them: the admin inbox
+//! (`/v1/sms/all/...`, the whole company; a rep filter takes the rep's user
+//! id and reads each provider through that rep's agent id there) and the
+//! caller's own (`/v1/sms/mine/...`, every provider the caller texts
+//! through, for people on more than one).
 
 use super::provider::{SAMPLE_PHONES, SmsProvider, phone_variants, phone10};
 use super::rollup::Mode;
 use super::schemas::{
-    Direction, SalesRep, ThreadDetail, ThreadList, ThreadQuery, ThreadSummary, ThreadsQuery,
+    DesktopAlert, DesktopAlerts, Direction, SalesRep, ThreadDetail, ThreadList, ThreadQuery,
+    ThreadSummary, ThreadsQuery, UnreadCount,
 };
 use super::scope::{SmsScope, thread_access};
+use super::send::seat;
 use super::thread::{active_flow, checked_phone, customer_by_phone, messages, thread_unread};
 use super::threads::{
-    RollupRow, customers_by_phone, last_rows, rollup, suppliers_by_phone, unread_threads, upkeep,
+    RollupRow, customers_by_phone, last_rows, provider_alerts, rollup, suppliers_by_phone,
+    unread_threads, upkeep,
 };
-use crate::auth::AdminUser;
+use crate::auth::session::SessionUser;
+use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::routes::company::queries::company_features;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use sqlx::MySqlPool;
 use std::collections::HashMap;
+use utoipa::IntoParams;
 
 /// The providers to read and the agent id to narrow each to: every provider
 /// unfiltered without a rep, else those the rep (a user id) has an agent id on.
@@ -95,15 +104,106 @@ pub async fn list_threads(
     AdminUser(user): AdminUser,
     MultiQuery(query): MultiQuery<ThreadsQuery>,
 ) -> ApiResult<Json<ThreadList>> {
-    let pool = &state.pool;
-    let term: String = query.search.chars().take(100).collect();
-    let limit = query.limit.unwrap_or(20).clamp(1, 100);
-    let offset = query.offset.unwrap_or(0).max(0);
+    let sources = sources(&state.pool, user.company_id, query.agent_id.as_deref()).await?;
     let one_rep = query
         .agent_id
         .as_deref()
         .is_some_and(|rep| !rep.trim().is_empty());
-    let sources = sources(pool, user.company_id, query.agent_id.as_deref()).await?;
+    merged_threads(&state, &user, &query, &sources, SmsScope::All, one_rep).await
+}
+
+/// List my conversations over every provider
+///
+/// The caller's own SMS conversations through every provider they text
+/// through or have texted through (a `CloudTalk` agent id, a `RingCentral`
+/// extension, a Telnyx line), merged by phone: unread first, then latest.
+/// Each provider's part is what its own inbox shows the caller. A search
+/// matches phone digits, message text and customer or supplier names.
+#[utoipa::path(
+    get,
+    path = "/v1/sms/mine/threads",
+    operation_id = "list_my_sms_threads",
+    tag = "sms",
+    params(ThreadsQuery),
+    responses(
+        (status = 200, description = "A page of conversations", body = ThreadList),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn list_my_threads(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    MultiQuery(query): MultiQuery<ThreadsQuery>,
+) -> ApiResult<Json<ThreadList>> {
+    let sources: Vec<(SmsProvider, Option<String>)> = own_providers(&state.pool, &user)
+        .await?
+        .into_iter()
+        .map(|provider| (provider, None))
+        .collect();
+    merged_threads(&state, &user, &query, &sources, SmsScope::Mine, true).await
+}
+
+/// The providers the caller reads their own texts through: an agent id or
+/// own number (`CloudTalk`, `RingCentral`), or a Telnyx line.
+async fn own_providers(
+    pool: &MySqlPool,
+    user: &SessionUser,
+) -> Result<Vec<SmsProvider>, sqlx::Error> {
+    let mut out = Vec::new();
+    for provider in SmsProvider::ALL {
+        let reads = if provider == SmsProvider::Telnyx {
+            !crate::phone::texting::inbox_lines(pool, user.company_id, user.id)
+                .await?
+                .is_empty()
+        } else {
+            provider.can_send(user) || provider.phone_of(user).is_some()
+        };
+        if reads {
+            out.push(provider);
+        }
+    }
+    Ok(out)
+}
+
+/// The providers the caller can text through now: a seat there, and the
+/// company connected to it.
+async fn sendable_providers(
+    pool: &MySqlPool,
+    user: &SessionUser,
+) -> Result<Vec<SmsProvider>, sqlx::Error> {
+    let features = company_features(pool, user.company_id).await?;
+    let mut out = Vec::new();
+    for provider in SmsProvider::ALL {
+        let connected = match provider {
+            SmsProvider::Cloudtalk => features.cloudtalk,
+            SmsProvider::Ringcentral => features.ringcentral,
+            SmsProvider::Telnyx => features.telnyx_sms,
+        };
+        if connected && seat(pool, provider, user).await?.is_some() {
+            out.push(provider);
+        }
+    }
+    Ok(out)
+}
+
+/// A page of `sources`' conversations merged by phone: `scope` per
+/// provider, unread first when `one_rep`.
+async fn merged_threads(
+    state: &AppState,
+    user: &SessionUser,
+    query: &ThreadsQuery,
+    sources: &[(SmsProvider, Option<String>)],
+    scope: SmsScope,
+    one_rep: bool,
+) -> ApiResult<Json<ThreadList>> {
+    let pool = &state.pool;
+    let user = user.clone();
+    let term: String = query.search.chars().take(100).collect();
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+    let offset = query.offset.unwrap_or(0).max(0);
 
     // Every provider's first `offset + limit` threads hold this page's.
     let window = offset + limit;
@@ -111,13 +211,13 @@ pub async fn list_threads(
     let mut total_count = 0;
     let mut unread_count = 0;
     let mut more = false;
-    for (provider, agent) in &sources {
-        upkeep(&state, *provider, user.company_id).await?;
+    for (provider, agent) in sources {
+        upkeep(state, *provider, user.company_id).await?;
         let rows: Vec<RollupRow> = rollup(
             pool,
             *provider,
             &user,
-            SmsScope::All,
+            scope,
             agent.as_deref(),
             &term,
             Mode::List {
@@ -134,7 +234,7 @@ pub async fn list_threads(
             }
             None => {
                 unread_count +=
-                    unread_threads(pool, *provider, &user, SmsScope::All, agent.as_deref()).await?;
+                    unread_threads(pool, *provider, &user, scope, agent.as_deref()).await?;
             }
         }
         for row in rows {
@@ -284,7 +384,79 @@ pub async fn get_thread(
     Path(phone): Path<String>,
     MultiQuery(query): MultiQuery<ThreadQuery>,
 ) -> ApiResult<Json<ThreadDetail>> {
+    let sources = sources(&state.pool, user.company_id, query.agent_id.as_deref()).await?;
+    merged_thread(&state, &user, &phone, &query, &sources, SmsScope::All).await
+}
+
+/// Get my conversation over every provider
+///
+/// The newest messages with one phone through every provider the caller
+/// texts through (as `GET /v1/sms/mine/threads`), oldest first, each with
+/// the provider that carried it (page back by raising `limit`;
+/// `before_id` is ignored); the customer or supplier it belongs to and the
+/// SMS flow running on it. `replyProvider` is the provider to answer
+/// through: the one of the latest message the caller can text through,
+/// else the first they can; `canSend` is false when they can text through
+/// none. Opening it in the caller's own inbox marks it read (`unreadCount`
+/// is 0).
+#[utoipa::path(
+    get,
+    path = "/v1/sms/mine/threads/{phone}",
+    operation_id = "get_my_sms_thread",
+    tag = "sms",
+    params(
+        ("phone" = String, Path, description = "The other party's phone digits"),
+        ThreadQuery,
+    ),
+    responses(
+        (status = 200, description = "The conversation", body = ThreadDetail),
+        (status = 400, description = "Not a phone number", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 404, description = "The onboarding sample", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn get_my_thread(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(phone): Path<String>,
+    MultiQuery(query): MultiQuery<ThreadQuery>,
+) -> ApiResult<Json<ThreadDetail>> {
+    let sources: Vec<(SmsProvider, Option<String>)> = own_providers(&state.pool, &user)
+        .await?
+        .into_iter()
+        .map(|provider| (provider, None))
+        .collect();
+    let Json(mut thread) =
+        merged_thread(&state, &user, &phone, &query, &sources, SmsScope::Mine).await?;
+    let sendable = sendable_providers(&state.pool, &user).await?;
+    let latest = thread
+        .messages
+        .iter()
+        .rev()
+        .map(|message| message.provider)
+        .find(|provider| sendable.contains(provider));
+    thread.reply_provider = latest.or_else(|| sendable.first().copied());
+    thread.can_send = thread.reply_provider.is_some();
+    // The caller's own inbox marks the thread read on open.
+    thread.unread_count = 0;
+    Ok(Json(thread))
+}
+
+/// One phone's messages through `sources`, merged oldest first; never
+/// sendable (the caller decides).
+async fn merged_thread(
+    state: &AppState,
+    user: &SessionUser,
+    phone: &str,
+    query: &ThreadQuery,
+    sources: &[(SmsProvider, Option<String>)],
+    scope: SmsScope,
+) -> ApiResult<Json<ThreadDetail>> {
     let pool = &state.pool;
+    let phone = phone.to_string();
     let digits = checked_phone(&phone)?;
     if SAMPLE_PHONES[0] == phone {
         return Err(ApiError::NotFound);
@@ -293,24 +465,18 @@ pub async fn get_thread(
     let page = ThreadQuery {
         limit: Some(limit),
         before_id: None,
-        scope: SmsScope::All,
+        scope,
         agent_id: None,
     };
     let mut all = Vec::new();
     let mut has_older = false;
     let mut unread_count = 0;
     let mut seen = false;
-    for (provider, agent) in sources(pool, user.company_id, query.agent_id.as_deref()).await? {
-        upkeep(&state, provider, user.company_id).await?;
-        let access = thread_access(
-            pool,
-            provider,
-            &user,
-            SmsScope::All,
-            agent.as_deref(),
-            &digits,
-        )
-        .await?;
+    for (provider, agent) in sources {
+        let provider = *provider;
+        upkeep(state, provider, user.company_id).await?;
+        let access =
+            thread_access(pool, provider, user, scope, agent.as_deref(), &digits).await?;
         let Some(access) = access else {
             continue;
         };
@@ -319,7 +485,7 @@ pub async fn get_thread(
             messages(pool, provider, user.company_id, &digits, &access, &page).await?;
         has_older |= older;
         all.extend(rows);
-        unread_count += thread_unread(pool, provider, &user, &digits, &access).await?;
+        unread_count += thread_unread(pool, provider, user, &digits, &access).await?;
     }
     all.sort_by_key(|message| message.created_at);
     let keep = usize::try_from(limit).unwrap_or(0);
@@ -341,7 +507,7 @@ pub async fn get_thread(
             .await?
             .remove(&digits)
     };
-    let active_flow = active_flow(pool, &user, &digits, seen).await?;
+    let active_flow = active_flow(pool, user, &digits, seen).await?;
     Ok(Json(ThreadDetail {
         phone_digits: phone,
         customer,
@@ -351,6 +517,7 @@ pub async fn get_thread(
         can_send: false,
         has_older,
         active_flow,
+        reply_provider: None,
     }))
 }
 
@@ -397,4 +564,86 @@ pub async fn sales_reps(
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(reps))
+}
+
+/// Count my unread conversations over every provider
+///
+/// The caller's own conversations with unread messages through every
+/// provider they text through (as `GET /v1/sms/mine/threads`), for the
+/// sidebar badge. A phone with unread texts through two providers counts
+/// twice.
+#[utoipa::path(
+    get,
+    path = "/v1/sms/mine/unread-count",
+    operation_id = "count_my_unread_sms_threads",
+    tag = "sms",
+    responses(
+        (status = 200, description = "The count", body = UnreadCount),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn my_unread_count(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+) -> ApiResult<Json<UnreadCount>> {
+    let mut count = 0;
+    for provider in own_providers(&state.pool, &user).await? {
+        count += unread_threads(&state.pool, provider, &user, SmsScope::Mine, None).await?;
+    }
+    Ok(Json(UnreadCount { count }))
+}
+
+/// `GET /v1/sms/mine/desktop-alerts`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct AlertsQuery {
+    /// The SMS page the alerts open (the caller's inbox); default `telnyx`.
+    #[param(inline)]
+    pub inbox: Option<SmsProvider>,
+}
+
+/// My unread texts to alert about, over every provider
+///
+/// As `GET /v1/sms/{provider}/desktop-alerts` for every provider the caller
+/// texts through: one alert per phone (the latest), newest first, at most
+/// 50, each opening the conversation on the caller's `inbox` page.
+#[utoipa::path(
+    get,
+    path = "/v1/sms/mine/desktop-alerts",
+    operation_id = "list_my_sms_desktop_alerts",
+    tag = "sms",
+    params(AlertsQuery),
+    responses(
+        (status = 200, description = "Alerts", body = DesktopAlerts),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn my_desktop_alerts(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    MultiQuery(query): MultiQuery<AlertsQuery>,
+) -> ApiResult<Json<DesktopAlerts>> {
+    let inbox = query.inbox.unwrap_or(SmsProvider::Telnyx);
+    let mut by_phone: HashMap<String, DesktopAlert> = HashMap::new();
+    for provider in own_providers(&state.pool, &user).await? {
+        for alert in provider_alerts(&state.pool, provider, &user, inbox).await? {
+            let key = phone10(&alert.phone_digits);
+            match by_phone.get(&key) {
+                Some(seen) if seen.sent_at >= alert.sent_at => {}
+                _ => {
+                    by_phone.insert(key, alert);
+                }
+            }
+        }
+    }
+    let mut alerts: Vec<DesktopAlert> = by_phone.into_values().collect();
+    alerts.sort_by(|a, b| b.sent_at.cmp(&a.sent_at));
+    alerts.truncate(50);
+    Ok(Json(DesktopAlerts { alerts }))
 }

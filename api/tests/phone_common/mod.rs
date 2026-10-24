@@ -383,6 +383,10 @@ pub struct Stubs {
     voicemail_reply: Arc<Mutex<Option<String>>>,
     /// While set, OpenAI answers 500.
     pub chat_down: Arc<AtomicBool>,
+    /// Names Telnyx says are in use (`10015`) when a resource is made.
+    taken_names: Arc<Mutex<Vec<String>>>,
+    /// Resources made so far (billing groups, profiles, apps, connections).
+    made: Arc<AtomicUsize>,
 }
 
 impl Stubs {
@@ -464,6 +468,11 @@ impl Stubs {
             .push((id.to_string(), e164.to_string()));
     }
 
+    /// Telnyx refuses to make a resource named `name` (`10015`, in use).
+    pub fn take_name(&self, name: &str) {
+        self.taken_names.lock().unwrap().push(name.to_string());
+    }
+
     /// AssemblyAI transcribes `audio` as `text`, with these speaker turns
     /// (`(speaker, text)`) when speaker labels are asked for.
     pub fn add_transcript(&self, audio: &[u8], text: &str, turns: &[(&str, &str)]) {
@@ -541,6 +550,92 @@ impl Stubs {
     }
 
     fn telnyx_answer(&self, method: &str, path: &str, body: &Value) -> Response {
+        let ok = |body: Value| (StatusCode::OK, Json(body)).into_response();
+        let not_found = || {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "errors": [{ "code": "10005", "title": "Resource not found" }] })),
+            )
+                .into_response()
+        };
+        // What "Connect Telnyx" makes: billing groups, voice profiles (whose
+        // ids are numbers), TeXML apps, credential connections, messaging
+        // profiles. A resource whose id is `gone` was deleted.
+        let made = [
+            ("/billing_groups", "bg"),
+            ("/outbound_voice_profiles", "ovp"),
+            ("/texml_applications", "app"),
+            ("/credential_connections", "conn"),
+            ("/messaging_profiles", "mp"),
+        ];
+        if method == "POST"
+            && let Some((_, kind)) = made.iter().find(|(made_path, _)| *made_path == path)
+        {
+            let name = ["friendly_name", "connection_name", "name"]
+                .iter()
+                .find_map(|field| body[*field].as_str())
+                .unwrap_or_default();
+            if self
+                .taken_names
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|taken| taken == name)
+            {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({ "errors": [{ "code": "10015", "title": "Bad Request",
+                                              "detail": "The name you have chosen is already in use." }] })),
+                )
+                    .into_response();
+            }
+            let n = self.made.fetch_add(1, Ordering::SeqCst) + 1;
+            let id = if *kind == "ovp" {
+                json!(4_000_000_000_000_000_000_u64 + n as u64)
+            } else {
+                json!(format!("{kind}-new-{n}"))
+            };
+            return ok(json!({ "data": { "id": id, "name": name } }));
+        }
+        if method == "PATCH"
+            && made
+                .iter()
+                .any(|(made_path, _)| path == format!("{made_path}/gone"))
+        {
+            return not_found();
+        }
+        match method {
+            "GET" if path.starts_with("/mobile_push_credentials") => ok(json!({ "data": [
+                { "id": "push-android", "alias": "granite-phone-android", "type": "android" },
+                { "id": "push-other", "alias": "someone-elses-app", "type": "android" },
+            ] })),
+            "GET" if path.starts_with("/available_phone_numbers?") => ok(json!({ "data": [
+                { "phone_number": "+13175550188", "record_type": "available_phone_number",
+                  "region_information": [
+                      { "region_type": "country_code", "region_name": "US" },
+                      { "region_type": "rate_center", "region_name": "INDIANAPOLIS" },
+                      { "region_type": "state", "region_name": "IN" },
+                      { "region_type": "location", "region_name": "INDIANAPOLIS" } ],
+                  "cost_information": { "currency": "USD", "upfront_cost": "1.00000", "monthly_cost": "1.00000" } },
+                { "phone_number": "+13175550189", "record_type": "available_phone_number",
+                  "region_information": [], "cost_information": {} },
+            ], "meta": { "total_results": 2 } })),
+            "POST" if path == "/number_orders" => {
+                if body["phone_numbers"][0]["phone_number"] == REFUSED_NUMBER {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(json!({ "errors": [{ "code": "85001", "title": "Number not available" }] })),
+                    )
+                        .into_response();
+                }
+                let n = self.made.fetch_add(1, Ordering::SeqCst) + 1;
+                ok(json!({ "data": { "id": format!("order-{n}"), "status": "pending" } }))
+            }
+            _ => self.telnyx_calling_answer(method, path, body),
+        }
+    }
+
+    fn telnyx_calling_answer(&self, method: &str, path: &str, body: &Value) -> Response {
         let ok = |body: Value| (StatusCode::OK, Json(body)).into_response();
         match method {
             "GET" if path.starts_with("/phone_numbers?") => {

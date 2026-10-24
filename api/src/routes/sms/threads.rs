@@ -485,7 +485,20 @@ pub async fn desktop_alerts(
     EmployeeUser(user): EmployeeUser,
     Path(provider): Path<SmsProvider>,
 ) -> ApiResult<Json<DesktopAlerts>> {
-    let pool = &state.pool;
+    let alerts = provider_alerts(&state.pool, provider, &user, provider).await?;
+    Ok(Json(DesktopAlerts { alerts }))
+}
+
+/// The caller's unread conversations through `provider` whose latest
+/// message came from the customer (at most 50), linking to the `inbox`
+/// page; none without a seat there or the company's connection.
+pub(super) async fn provider_alerts(
+    pool: &MySqlPool,
+    provider: SmsProvider,
+    user: &SessionUser,
+    inbox: SmsProvider,
+) -> ApiResult<Vec<DesktopAlert>> {
+    let user = user.clone();
     let features = company_features(pool, user.company_id).await?;
     let (enabled, texts) = match provider {
         SmsProvider::Cloudtalk => (features.cloudtalk, provider.can_send(&user)),
@@ -498,7 +511,7 @@ pub async fn desktop_alerts(
         ),
     };
     if !texts || !enabled {
-        return Ok(Json(DesktopAlerts { alerts: Vec::new() }));
+        return Ok(Vec::new());
     }
     let rows: Vec<AlertRow> = rollup(
         pool,
@@ -533,17 +546,13 @@ pub async fn desktop_alerts(
                     .get(&row.last_id)
                     .map(|l| l.text.clone())
                     .unwrap_or_default(),
-                href: format!(
-                    "/employee/{}/thread/{}",
-                    provider.as_str(),
-                    row.phone_digits
-                ),
+                href: format!("/employee/{}/thread/{}", inbox.as_str(), row.phone_digits),
                 sent_at: row.last_at,
                 phone_digits: row.phone_digits,
             }
         })
         .collect();
-    Ok(Json(DesktopAlerts { alerts }))
+    Ok(alerts)
 }
 
 /// List reps who text
