@@ -69051,7 +69051,7 @@
           },
           "music": {
             "type": "boolean",
-            "description": "The other party hears my hold music now (false: silence, because I\nchose none, or Telnyx did not take the music)."
+            "description": "This request started my hold music for the other party (false:\nsilence, because I chose none or Telnyx did not take the music; also\non a resume and on a repeat, which change nothing)."
           }
         }
       },
@@ -74906,14 +74906,14 @@
               "string",
               "null"
             ],
-            "description": "With `custom`: my uploaded track's URL (MP3 or WAV); else null."
+            "description": "My uploaded track's URL (MP3 or WAV), kept while another choice is\nmade so it can be chosen again; null until I upload one. It plays\nonly with `custom`."
           },
           "holdMusicName": {
             "type": [
               "string",
               "null"
             ],
-            "description": "With `custom`: the uploaded file's name, as shown; else null."
+            "description": "The uploaded file's name, as shown; null without an upload."
           }
         }
       },
