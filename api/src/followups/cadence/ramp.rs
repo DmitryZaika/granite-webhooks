@@ -15,11 +15,14 @@ use super::types::AiCadenceMode;
 use crate::re;
 
 pub(crate) const MINUTES_PER_DAY: f64 = 24.0 * 60.0;
-/// The monthly follow-up rhythm, in days.
+/// The monthly follow-up rhythm, in days: no wait between two messages is
+/// longer (only a hold may push the first send further out).
 pub const MAX_CADENCE_GAP_DAYS: f64 = 30.0;
-/// Automated Generate-with-AI flows must never be 1–2 messages.
-pub const MIN_AI_FOLLOWUP_MESSAGES: usize = 5;
-/// Last planned send must be at least this many days from now.
+/// The second message goes 2–4 days after the first: replies come after the
+/// first, so a customer who did not answer hears again while it is fresh.
+pub const SECOND_MESSAGE_MIN_GAP_DAYS: f64 = 2.0;
+pub const SECOND_MESSAGE_MAX_GAP_DAYS: f64 = 4.0;
+/// A spread-out plan's last send is at least this many days from now.
 pub const MIN_AI_FOLLOWUP_SPAN_DAYS: f64 = 30.0;
 /// The longest regular AI cadence gap (`AI_MAX_DELAY_MINUTES`).
 pub const AI_MAX_DELAY_MINUTES: f64 = 90.0 * 24.0 * 60.0;
@@ -69,14 +72,12 @@ pub fn is_old_followup_customer(pressure: Option<&FollowupContactPressure>) -> b
     })
 }
 
-/// Double an old customer's gap.
+/// Double an old customer's gap, up to the 30-day rhythm.
 pub fn widen_old_customer_followup_gap_minutes(delay_minutes: f64) -> f64 {
     if !delay_minutes.is_finite() || delay_minutes <= 0.0 {
         return 0.0;
     }
-    #[allow(clippy::cast_precision_loss)]
-    let cap = AI_HOLD_MAX_DELAY_MINUTES as f64;
-    js_round(delay_minutes * 2.0).min(cap)
+    js_round(delay_minutes * 2.0).min(MAX_CADENCE_GAP_DAYS * MINUTES_PER_DAY)
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -199,8 +200,33 @@ pub struct PreviewDelayInputs {
     pub days_since_last_contact: Option<f64>,
 }
 
-#[allow(clippy::cast_precision_loss)]
+/// The wait before a preview message, within the bounds of
+/// [`bound_cadence_gap_minutes`].
 pub fn resolve_cadence_preview_delay_minutes(params: &PreviewDelayInputs) -> f64 {
+    bound_cadence_gap_minutes(chosen_preview_delay_minutes(params), params)
+}
+
+/// No wait is over 30 days, and the second message goes 2–4 days after the
+/// first unless the company instruction sets the gap.
+pub fn bound_cadence_gap_minutes(delay_minutes: f64, params: &PreviewDelayInputs) -> f64 {
+    let delay = delay_minutes.min(MAX_CADENCE_GAP_DAYS * MINUTES_PER_DAY);
+    let second = !params.is_first_message
+        && params
+            .message_index
+            .is_some_and(|index| (index - 1.0).abs() < f64::EPSILON);
+    let instruction_gap = params
+        .instruction_gap_minutes
+        .is_some_and(|g| g.is_finite() && g >= 0.0);
+    if !second || instruction_gap {
+        return delay;
+    }
+    delay
+        .max(SECOND_MESSAGE_MIN_GAP_DAYS * MINUTES_PER_DAY)
+        .min(SECOND_MESSAGE_MAX_GAP_DAYS * MINUTES_PER_DAY)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn chosen_preview_delay_minutes(params: &PreviewDelayInputs) -> f64 {
     let cap = AI_HOLD_MAX_DELAY_MINUTES as f64;
     let stale_gap = params
         .stale_gap_days
@@ -280,7 +306,7 @@ pub(crate) fn cap_cadence_gap_days(gap: f64) -> f64 {
     if !gap.is_finite() || gap < 0.0 {
         0.0
     } else {
-        gap
+        gap.min(MAX_CADENCE_GAP_DAYS)
     }
 }
 
@@ -615,5 +641,80 @@ pub(crate) const fn phase_for_step(
                 P::ActivePursuit
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DAY: f64 = MINUTES_PER_DAY;
+
+    fn second() -> PreviewDelayInputs {
+        PreviewDelayInputs {
+            message_index: Some(1.0),
+            ..PreviewDelayInputs::default()
+        }
+    }
+
+    #[test]
+    fn no_wait_is_over_thirty_days_and_the_second_message_comes_in_two_to_four() {
+        // The model, the planner and the old-customer doubling are all capped.
+        let later = PreviewDelayInputs {
+            generated_delay_minutes: Some(60.0 * DAY),
+            message_index: Some(3.0),
+            ..PreviewDelayInputs::default()
+        };
+        assert_eq!(resolve_cadence_preview_delay_minutes(&later), 30.0 * DAY);
+        let widened = PreviewDelayInputs {
+            planned_delay_minutes: 21.0 * DAY,
+            widen_gap_for_old_customer: true,
+            message_index: Some(2.0),
+            ..PreviewDelayInputs::default()
+        };
+        assert_eq!(resolve_cadence_preview_delay_minutes(&widened), 30.0 * DAY);
+        assert_eq!(
+            widen_old_customer_followup_gap_minutes(25.0 * DAY),
+            30.0 * DAY
+        );
+        // A stale conversation's 14-day second gap, a 30-day old-customer gap
+        // and a model's next-day touch all land in the window.
+        let stale = PreviewDelayInputs {
+            stale_gap_days: Some(vec![0.0, 14.0, 30.0]),
+            ..second()
+        };
+        assert_eq!(resolve_cadence_preview_delay_minutes(&stale), 4.0 * DAY);
+        let thirty = PreviewDelayInputs {
+            use_thirty_day_gap: true,
+            ..second()
+        };
+        assert_eq!(resolve_cadence_preview_delay_minutes(&thirty), 4.0 * DAY);
+        let soon = PreviewDelayInputs {
+            generated_delay_minutes: Some(DAY),
+            ..second()
+        };
+        assert_eq!(resolve_cadence_preview_delay_minutes(&soon), 2.0 * DAY);
+        let fits = PreviewDelayInputs {
+            generated_delay_minutes: Some(3.0 * DAY),
+            ..second()
+        };
+        assert_eq!(resolve_cadence_preview_delay_minutes(&fits), 3.0 * DAY);
+        // The company's gap wins over the window, not over the cap.
+        let instructed = PreviewDelayInputs {
+            instruction_gap_minutes: Some(7.0 * DAY),
+            ..second()
+        };
+        assert_eq!(
+            resolve_cadence_preview_delay_minutes(&instructed),
+            7.0 * DAY
+        );
+        let too_long = PreviewDelayInputs {
+            instruction_gap_minutes: Some(45.0 * DAY),
+            ..second()
+        };
+        assert_eq!(resolve_cadence_preview_delay_minutes(&too_long), 30.0 * DAY);
+        // The planner's gaps are capped too.
+        assert_eq!(cap_cadence_gap_days(90.0), 30.0);
+        assert_eq!(cap_cadence_gap_days(-1.0), 0.0);
     }
 }
