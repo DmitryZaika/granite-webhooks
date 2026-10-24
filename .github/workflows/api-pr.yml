@@ -1,8 +1,8 @@
 name: API tests
 
 # Pull requests to main: the api crate's OpenAPI checks (every route
-# documented, api/openapi.json current) and the Granite Phone integration
-# tests. The tests make their own databases (test-db) on the MySQL below;
+# documented, api/openapi.json current), the Granite Phone integration
+# tests and the follow-up tests. The tests make their own databases (test-db) on the MySQL below;
 # .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local, where
 # common's query! macros check their SQL at compile time, so every migration
 # is applied there first, as in deploy-lambda.yml.
@@ -82,3 +82,12 @@ jobs:
           --test phone_web_recording
           --test telnyx_calls
           --test server_errors
+
+      - name: Follow-up tests
+        run: >-
+          cargo test -p api
+          --test followup_flows
+          --test followup_ai_cadence
+          --test followup_generation
+          --test followup_instruction
+          --test sms_flows
