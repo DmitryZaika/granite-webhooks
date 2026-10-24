@@ -10,6 +10,7 @@
 use crate::auth::{CurrentUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::routes::uploads::{self, schemas::UploadFolder};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
 use crate::webhooks_client::OutgoingEmail;
@@ -174,10 +175,13 @@ pub async fn create(
         .filter(|url| !url.is_empty())
         .collect();
     if files.iter().any(|url| {
-        !state
-            .storage
-            .key_for_url(url)
-            .is_some_and(|key| key.starts_with("bug-reports/"))
+        uploads::accepted_key(
+            &state.storage,
+            url,
+            UploadFolder::BugReports,
+            user.company_id,
+        )
+        .is_none()
     }) {
         return Err(ApiError::BadRequest(
             "Attach files uploaded for bug reports".into(),

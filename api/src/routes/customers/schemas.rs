@@ -129,6 +129,156 @@ pub enum ListResponse {
     Companies(Vec<CompanyRow>),
 }
 
+/// Query string of `GET /v1/customers/page`: the customers page URL's params.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PageQuery {
+    /// As in `GET /v1/customers`.
+    #[param(value_type = Option<CustomersView>, inline)]
+    pub view: Option<String>,
+    /// As in `GET /v1/customers`.
+    #[param(value_type = Option<i32>)]
+    pub sales_rep: Option<String>,
+    /// As in `GET /v1/customers`.
+    #[param(value_type = Option<String>, example = "1")]
+    pub show_invalid: Option<String>,
+    /// `walkin` (default), `leads`, `call-in`, `other` (with `user-input`) or
+    /// `all`. Any other value matches no customers.
+    #[param(example = "leads")]
+    pub tab: Option<String>,
+    /// Sort column: `name`, `phone`, `email`, `sales_rep_name`,
+    /// `company_name`, `created_date`, `assigned_date`, and in the companies
+    /// view `revenue_generated`, `projects_count`. Omitted or unknown: newest
+    /// first by the tab's date (leads by when they were assigned).
+    pub sort_by: Option<String>,
+    /// `asc` (default) or `desc`.
+    #[param(example = "desc")]
+    pub order: Option<String>,
+    /// 1-based page, default 1. Past the last page, the last page is returned.
+    #[param(value_type = Option<u32>)]
+    pub page: Option<String>,
+    /// Rows per page, default 20, at most 500.
+    #[param(value_type = Option<u32>)]
+    pub page_size: Option<String>,
+}
+
+/// The customers page's tabs, by lead source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomersTab {
+    Walkin,
+    Leads,
+    CallIn,
+    Other,
+    All,
+}
+
+/// How a page is ordered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageSort {
+    /// Newest first by the tab's date.
+    Default,
+    /// By a text column, case-insensitively; empty sorts as "".
+    Text(&'static str),
+    /// By the day created.
+    Created,
+    /// By the day assigned, or created when unassigned.
+    Assigned,
+    /// By a number column of the companies view.
+    Number(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageRequest {
+    pub filter: ListFilter,
+    /// `None` for an unknown tab: no rows.
+    pub tab: Option<CustomersTab>,
+    pub sort: PageSort,
+    pub descending: bool,
+    pub page: u32,
+    pub page_size: u32,
+}
+
+pub const DEFAULT_PAGE_SIZE: u32 = 20;
+pub const MAX_PAGE_SIZE: u32 = 500;
+
+impl TryFrom<PageQuery> for PageRequest {
+    type Error = ApiError;
+
+    fn try_from(query: PageQuery) -> Result<Self, ApiError> {
+        let filter = ListFilter::try_from(ListQuery {
+            view: query.view,
+            sales_rep: query.sales_rep,
+            show_invalid: query.show_invalid,
+        })?;
+        let tab = match query.tab.as_deref().unwrap_or("walkin") {
+            "walkin" => Some(CustomersTab::Walkin),
+            "leads" => Some(CustomersTab::Leads),
+            "call-in" => Some(CustomersTab::CallIn),
+            "other" => Some(CustomersTab::Other),
+            "all" => Some(CustomersTab::All),
+            _ => None,
+        };
+        let companies = filter.view == CustomersView::Companies;
+        let sort = match query.sort_by.as_deref() {
+            Some(column @ ("name" | "phone" | "email" | "sales_rep_name" | "company_name")) => {
+                PageSort::Text(column_name(column))
+            }
+            Some("created_date") => PageSort::Created,
+            Some("assigned_date") => PageSort::Assigned,
+            Some(column @ ("revenue_generated" | "projects_count")) if companies => {
+                PageSort::Number(column_name(column))
+            }
+            _ => PageSort::Default,
+        };
+        Ok(Self {
+            filter,
+            tab,
+            sort,
+            descending: query.order.as_deref().unwrap_or("asc") != "asc",
+            page: positive(query.page.as_deref()).unwrap_or(1),
+            page_size: positive(query.page_size.as_deref())
+                .unwrap_or(DEFAULT_PAGE_SIZE)
+                .min(MAX_PAGE_SIZE),
+        })
+    }
+}
+
+/// The column as a `'static` name, safe to put in SQL.
+fn column_name(column: &str) -> &'static str {
+    match column {
+        "name" => "name",
+        "phone" => "phone",
+        "email" => "email",
+        "sales_rep_name" => "sales_rep_name",
+        "company_name" => "company_name",
+        "revenue_generated" => "revenue_generated",
+        _ => "projects_count",
+    }
+}
+
+/// A whole number above 0; anything else falls back to the default.
+fn positive(raw: Option<&str>) -> Option<u32> {
+    raw?.trim().parse::<u32>().ok().filter(|n| *n > 0)
+}
+
+/// One page of the customers table.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CustomersPage {
+    /// The page's rows, shaped as in `GET /v1/customers`.
+    pub rows: ListResponse,
+    /// Every email of the page's customers, primary first, keyed by customer id.
+    #[schema(value_type = BTreeMap<String, Vec<String>>)]
+    pub emails: EmailsByCustomer,
+    /// Rows over all pages.
+    pub total: i64,
+    /// The page returned: the last one when `page` was past it.
+    pub page: u32,
+    /// For the "this month" counts per sales rep: the tab's customers whose
+    /// tab date falls in the current UTC month. Empty in the companies view
+    /// and the `other` tab, which show no counts.
+    pub month_rows: Vec<CustomerRow>,
+}
+
 /// Upper bound on ids per batch request; the customers page sends one id per row.
 pub const MAX_BATCH_IDS: usize = 20_000;
 

@@ -80,4 +80,3 @@ pub async fn slabs_by_ids(
     query.push(" ORDER BY slab.id");
     query.build_query_as::<SlabSummary>().fetch_all(pool).await
 }
-

@@ -486,6 +486,10 @@ async fn load_context(
     request.customer_email.clone_from(&thread.customer_email);
     request.preferred_deal_id = thread.deal_id.map(i64::from);
     let gathered = gather_followup_context(&state.pool, &request, Utc::now()).await?;
+    // A customer id of another company resolves to none.
+    if thread.customer_id.is_some() && gathered.customer_id.is_none() {
+        return Err(ApiError::BadRequest("Customer not found".into()));
+    }
     let rep: Option<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT phone_number, cloudtalk_phone_number, ringcentral_phone_number FROM users WHERE id = ? LIMIT 1",
     )
@@ -626,7 +630,7 @@ pub struct Completion {
     request_body = AutocompleteRequest,
     responses(
         (status = 200, description = "The suggestion", body = Completion),
-        (status = 400, description = "No customer, or an invalid phone", body = ErrorBody),
+        (status = 400, description = "No customer, not a customer of the company, or an invalid phone", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee", body = ErrorBody),
         (status = 502, description = "The model failed", body = ErrorBody),

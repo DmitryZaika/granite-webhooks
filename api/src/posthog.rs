@@ -28,23 +28,31 @@ pub async fn capture(http: &reqwest::Client, event: &str, distinct_id: &str, pro
     }
 }
 
-/// A request the API answered with a 5xx, as an `$exception` in Error
-/// Tracking next to the browser's. `route` is the route's template
-/// (`/v1/phone/texts/threads/{key}/read`), never the request's path, whose
-/// segments may be tokens or phone numbers; `detail` is what failed, when
-/// known.
-pub async fn capture_server_error(
-    http: &reqwest::Client,
+/// The route template that served a request, as `/v1/customers/{id}`, kept in
+/// the response extensions for `report_server_errors`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteTemplate(pub String);
+
+/// The properties of a 5xx `$exception`, with the route template and build.
+///
+/// They let the auto-fix agent go from the event to the code. `lookup` reads
+/// the Lambda runtime variables, so tests never touch the process environment.
+pub fn server_error_properties<F>(
     method: &str,
-    route: &str,
+    path: &str,
+    route: Option<&str>,
     status: u16,
     detail: Option<&crate::error::ErrorDetail>,
-) {
+    lookup: F,
+) -> Value
+where
+    F: Fn(&str) -> Option<String>,
+{
     let (kind, message) = detail.map_or_else(
-        || ("HttpError", format!("{method} {route} answered {status}")),
+        || ("HttpError", format!("{method} {path} answered {status}")),
         |detail| (detail.kind, detail.message.clone()),
     );
-    let properties = json!({
+    json!({
         "$exception_list": [{
             "type": kind,
             "value": message,
@@ -54,8 +62,90 @@ pub async fn capture_server_error(
         "$process_person_profile": false,
         "error_source": "api",
         "api_method": method,
-        "api_path": route,
+        "api_path": path,
+        // The template, not the concrete path: null for an unmatched route.
+        "api_route": route,
         "api_status": status,
+        // The git short sha baked in at build time (`GIT_SHA`).
+        "release": option_env!("GIT_SHA").unwrap_or("unknown"),
+        "lambda_function": lookup("AWS_LAMBDA_FUNCTION_NAME"),
+        "lambda_version": lookup("AWS_LAMBDA_FUNCTION_VERSION"),
+    })
+}
+
+/// A request the API answered with a 5xx, as an `$exception` in Error
+/// Tracking next to the browser's. `path` is what the event names as the
+/// path: `report_server_errors` passes the route's template
+/// (`/v1/phone/texts/threads/{key}/read`), never the request's path, whose
+/// segments may be tokens or phone numbers. `detail` is what failed, when
+/// known.
+pub async fn capture_server_error(
+    http: &reqwest::Client,
+    method: &str,
+    path: &str,
+    route: Option<&str>,
+    status: u16,
+    detail: Option<&crate::error::ErrorDetail>,
+) {
+    let properties = server_error_properties(method, path, route, status, detail, |key| {
+        std::env::var(key).ok()
     });
     capture(http, "$exception", "granite-api", properties).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lambda_env(key: &str) -> Option<String> {
+        match key {
+            "AWS_LAMBDA_FUNCTION_NAME" => Some("granite-api".into()),
+            "AWS_LAMBDA_FUNCTION_VERSION" => Some("42".into()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn properties_carry_route_build_and_the_existing_fields() {
+        let detail = crate::error::ErrorDetail {
+            kind: "Panic",
+            message: "boom".into(),
+        };
+        let props = server_error_properties(
+            "GET",
+            "/v1/customers/7",
+            Some("/v1/customers/{id}"),
+            500,
+            Some(&detail),
+            lambda_env,
+        );
+        assert_eq!(props["api_route"], "/v1/customers/{id}");
+        assert_eq!(props["api_path"], "/v1/customers/7");
+        assert_eq!(props["api_method"], "GET");
+        assert_eq!(props["api_status"], 500);
+        assert_eq!(props["error_source"], "api");
+        assert_eq!(props["$process_person_profile"], false);
+        assert_eq!(props["$exception_list"][0]["type"], "Panic");
+        assert_eq!(props["$exception_list"][0]["value"], "boom");
+        assert_eq!(props["lambda_function"], "granite-api");
+        assert_eq!(props["lambda_version"], "42");
+        assert_eq!(
+            props["release"],
+            option_env!("GIT_SHA").unwrap_or("unknown")
+        );
+    }
+
+    #[test]
+    fn missing_route_and_lambda_env_are_null() {
+        let props = server_error_properties("GET", "/nope", None, 502, None, |_| None);
+        assert!(props["api_route"].is_null());
+        assert!(props["lambda_function"].is_null());
+        assert!(props["lambda_version"].is_null());
+        assert!(props["release"].is_string());
+        assert_eq!(props["$exception_list"][0]["type"], "HttpError");
+        assert_eq!(
+            props["$exception_list"][0]["value"],
+            "GET /nope answered 502"
+        );
+    }
 }

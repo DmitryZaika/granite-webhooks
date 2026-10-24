@@ -554,3 +554,128 @@ async fn email_uploads_carry_a_token(pool: MySqlPool) {
         .await;
     assert!(deal.json::<Value>().get("token").is_none());
 }
+
+/// Mail leaves from the user's own address only when its domain is the
+/// company's mail domain (or a subdomain); any other address, notably one
+/// that merely contains the domain or is on another company's verified
+/// domain, goes out from the shared address.
+#[test_db::test(seed)]
+async fn the_from_address_is_the_users_only_on_the_companys_domain(pool: MySqlPool) {
+    let setup = setup(&pool, Reply::Sent).await;
+    let mut expected = Vec::new();
+    for (domain, email, from) in [
+        (Some("acme.test"), "dina@acme.test", "dina@acme.test"),
+        (
+            Some("acme.test"),
+            "dina@mail.acme.test",
+            "dina@mail.acme.test",
+        ),
+        (Some("ACME.test"), "dina@acme.TEST", "dina@acme.TEST"),
+        (Some("@acme.test"), "dina@acme.test", "dina@acme.test"),
+        (Some(" acme.test "), "dina@acme.test", "dina@acme.test"),
+        // Company 101's verified domain.
+        (
+            Some("acme.test"),
+            "dina@other.test",
+            "sales@granite-manager.com",
+        ),
+        (
+            Some("acme.test"),
+            "acme.test@other.test",
+            "sales@granite-manager.com",
+        ),
+        (
+            Some("acme.test"),
+            "dina@acme.test.other.test",
+            "sales@granite-manager.com",
+        ),
+        (
+            Some("acme.test"),
+            "dina@notacme.test",
+            "sales@granite-manager.com",
+        ),
+        (
+            Some("acme.test"),
+            "dina@acme.tes",
+            "sales@granite-manager.com",
+        ),
+        (
+            Some("other.test"),
+            "dina@acme.test",
+            "sales@granite-manager.com",
+        ),
+        (Some(""), "dina@acme.test", "sales@granite-manager.com"),
+        (None, "dina@acme.test", "sales@granite-manager.com"),
+    ] {
+        sqlx::query("UPDATE company SET domain = ? WHERE id = 100")
+            .bind(domain)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE users SET email = ? WHERE id = 107")
+            .bind(email)
+            .execute(&pool)
+            .await
+            .unwrap();
+        setup
+            .send(
+                DINA,
+                json!({ "to": ["a@one.test"], "subject": email, "body": "<p>Hi</p>" }),
+            )
+            .await
+            .assert_status_ok();
+        expected.push((email, from));
+    }
+    let sent = setup.sent();
+    assert_eq!(sent.len(), expected.len());
+    for (email, (subject, from)) in sent.iter().zip(&expected) {
+        assert_eq!(email.subject, *subject);
+        assert_eq!(email.from_address, *from, "{subject}");
+    }
+    let recorded: Vec<(String, String)> = sqlx::query_as(
+        "SELECT subject, sender_email FROM emails WHERE sender_user_id = 107 AND is_draft = 0
+          AND subject IS NOT NULL AND receiver_email = 'a@one.test' ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        recorded,
+        expected
+            .iter()
+            .map(|(email, from)| ((*email).to_string(), (*from).to_string()))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A draft's files go out when it is sent, without their upload tokens:
+/// the draft is the company's mail. Saving it checked them.
+#[test_db::test(seed)]
+async fn a_reopened_draft_sends_its_files(pool: MySqlPool) {
+    let setup = setup(&pool, Reply::Sent).await;
+    let url = "https://files.test/bucket/emails/100/plan.pdf";
+    let file = |token: Option<String>| json!({ "url": url, "filename": "plan.pdf", "content_type": "application/pdf", "token": token });
+    setup
+        .server
+        .post("/v1/emails/drafts")
+        .with_session(DINA)
+        .json(&json!({ "subject": "Plan", "attachments": [file(Some(attachment_token::sign(SECRET, url, 107)))] }))
+        .await
+        .assert_status(StatusCode::CREATED);
+    setup
+        .send(
+            DINA,
+            json!({ "to": ["a@one.test"], "subject": "Plan", "attachments": [file(None)] }),
+        )
+        .await
+        .assert_status_ok();
+    assert_eq!(setup.sent()[0].attachments[0].url, url);
+    // Not Olga's: it is not her company's mail.
+    setup
+        .send(
+            OLGA,
+            json!({ "to": ["a@one.test"], "attachments": [file(None)] }),
+        )
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}

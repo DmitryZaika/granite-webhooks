@@ -324,11 +324,7 @@ async fn build_message(
         }
         let bucket = state.signature_bucket.as_deref()?;
         // Only an intact signed file goes out.
-        let object = state
-            .storage
-            .get_url(&format!("s3://{bucket}/{key}"))
-            .await
-            .ok()??;
+        let object = state.storage.get_in(bucket, key).await.ok()??;
         if sha256_hex(&object.bytes) != hash {
             return None;
         }

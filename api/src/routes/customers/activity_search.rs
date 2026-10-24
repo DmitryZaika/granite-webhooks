@@ -10,7 +10,7 @@ use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::routes::calls::recording::transcribe_call;
-use crate::routes::calls::{cloudtalk_calls, to_e164};
+use crate::routes::calls::{cloudtalk_calls, ringcentral, to_e164};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -174,38 +174,42 @@ async fn sms_documents(
             "RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(CAST({column} AS CHAR), ' ', ''), '-', ''), '(', ''), ')', ''), 10)"
         )
     };
-    let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(
-        "SELECT CAST(id AS SIGNED) AS id, text, CAST(direction AS CHAR) AS direction, created_date,
-                CAST(sender AS CHAR) AS sender, CAST(recipient AS CHAR) AS recipient
-           FROM cloudtalk_sms WHERE company_id = ",
-    );
-    builder
-        .push_bind(company_id)
-        .push(" AND status IN ('received', 'sent') AND (");
-    for (index, column) in ["sender", "recipient"].into_iter().enumerate() {
-        if index > 0 {
-            builder.push(" OR ");
+    // Table, key prefix (RingCentral ids would collide with CloudTalk's), thread page.
+    let mut documents = Vec::new();
+    for (table, prefix, page) in [
+        ("cloudtalk_sms", "sms:", "cloudtalk"),
+        ("ringcentral_sms", "sms:rc", "ringcentral"),
+    ] {
+        let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(format!(
+            "SELECT CAST(id AS SIGNED) AS id, text, CAST(direction AS CHAR) AS direction, created_date,
+                    CAST(sender AS CHAR) AS sender, CAST(recipient AS CHAR) AS recipient
+               FROM {table} WHERE company_id = "
+        ));
+        builder
+            .push_bind(company_id)
+            .push(" AND status IN ('received', 'sent') AND (");
+        for (index, column) in ["sender", "recipient"].into_iter().enumerate() {
+            if index > 0 {
+                builder.push(" OR ");
+            }
+            builder.push(cleaned(column)).push(" IN (");
+            let mut list = builder.separated(", ");
+            for value in &wanted {
+                list.push_bind(value.clone());
+            }
+            builder.push(")");
         }
-        builder.push(cleaned(column)).push(" IN (");
-        let mut list = builder.separated(", ");
-        for value in &wanted {
-            list.push_bind(value.clone());
-        }
-        builder.push(")");
-    }
-    builder
-        .push(") ORDER BY created_date DESC LIMIT ")
-        .push_bind(MAX_SMS);
-    let rows: Vec<SmsRow> = builder.build_query_as().fetch_all(&state.pool).await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| {
+        builder
+            .push(") ORDER BY created_date DESC LIMIT ")
+            .push_bind(MAX_SMS);
+        let rows: Vec<SmsRow> = builder.build_query_as().fetch_all(&state.pool).await?;
+        documents.extend(rows.into_iter().map(|row| {
             let inbound = row.direction == "inbound";
             let other = if inbound { &row.sender } else { &row.recipient };
             let other = digits(other.as_deref().unwrap_or(""));
             let date = row.created_date;
             Document {
-                key: format!("sms:{}", row.id),
+                key: format!("{prefix}{}", row.id),
                 date,
                 label: format!("SMS · {}", when(date)),
                 content: truncate(
@@ -217,10 +221,22 @@ async fn sms_documents(
                     MAX_DOC_CHARS,
                 ),
                 href: (other.len() >= 10)
-                    .then(|| format!("/employee/cloudtalk/thread/{}", last10(&other))),
+                    .then(|| format!("/employee/{page}/thread/{}", last10(&other))),
             }
-        })
-        .collect())
+        }));
+    }
+    documents.sort_by_key(|document| std::cmp::Reverse(document.date));
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    documents.truncate(MAX_SMS as usize);
+    Ok(documents)
+}
+
+/// `CloudTalk`'s `2026-05-01 10:00:00` (UTC) or `RingCentral`'s RFC 3339.
+fn call_started(at: &str) -> Option<DateTime<Utc>> {
+    NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S")
+        .map(|at| at.and_utc())
+        .or_else(|_| DateTime::parse_from_rfc3339(at).map(|at| at.with_timezone(&Utc)))
+        .ok()
 }
 
 fn number(value: &Value) -> f64 {
@@ -254,13 +270,25 @@ async fn call_documents(
     if phones.is_empty() {
         return Vec::new();
     }
-    let Ok(mut calls) = cloudtalk_calls(state, company_id, &phones, None, None).await else {
-        return Vec::new();
+    let ringcentral = ringcentral::Fetch {
+        pool: &state.pool,
+        client: &state.telephony_http,
+        company_id,
     };
+    // A company without one of the providers just has no calls there.
+    let (cloudtalk, ringcentral) = tokio::join!(
+        cloudtalk_calls(state, company_id, &phones, None, None),
+        ringcentral.calls_for_phones(&phones, None, None),
+    );
+    let mut calls: Vec<Value> = cloudtalk
+        .unwrap_or_default()
+        .into_iter()
+        .chain(ringcentral.unwrap_or_default())
+        .collect();
     calls.retain(|call| {
         truthy(&call["Cdr"]["recorded"]) && number(&call["Cdr"]["billsec"]) >= MIN_CALL_SECONDS
     });
-    let started = |call: &Value| call["Cdr"]["started_at"].as_str().unwrap_or("").to_string();
+    let started = |call: &Value| call_started(call["Cdr"]["started_at"].as_str().unwrap_or(""));
     calls.sort_by_key(|call| std::cmp::Reverse(started(call)));
     calls.truncate(MAX_CALL_TRANSCRIPTS);
     let caller = Caller {
@@ -287,9 +315,7 @@ async fn call_documents(
         };
         #[allow(clippy::cast_possible_truncation)]
         let minutes = ((number(&cdr["billsec"]) / 60.0).round() as i64).max(1);
-        let date = NaiveDateTime::parse_from_str(&started(&call), "%Y-%m-%d %H:%M:%S")
-            .ok()
-            .map(|date| date.and_utc());
+        let date = started(&call);
         documents.push(Document {
             key: format!("call:{id}"),
             date,

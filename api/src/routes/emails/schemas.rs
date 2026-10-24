@@ -452,6 +452,11 @@ pub struct DraftAttachment {
     pub filename: String,
     /// MIME type, e.g. `application/pdf`.
     pub content_type: String,
+    /// When saving: the upload's `token` (from `POST /v1/uploads`, folder
+    /// `emails`). Without one the file must already be on a conversation of
+    /// the company, such as this draft. Never returned.
+    #[serde(default, skip_serializing)]
+    pub token: Option<String>,
 }
 
 /// Body of `POST /v1/emails/drafts` and `PUT /v1/emails/drafts/{id}`.

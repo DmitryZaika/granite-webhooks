@@ -1,6 +1,7 @@
 //! Customers.
 //!
 //! - `GET  /v1/customers`              → list rows (`view`, `sales_rep`, `show_invalid` query params)
+//! - `GET  /v1/customers/page`         → one page of the customers table, with emails and month rows
 //! - `POST /v1/customers/emails/batch` → every email of the given customers, primary first
 //! - `GET  /v1/customers/search`       → customers matching a name, phone, email or company
 //! - `GET  /v1/customers/{id}`         → one customer with contact details
@@ -34,6 +35,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(handlers::list, write::create))
+        .routes(routes!(handlers::page))
         .routes(routes!(handlers::emails_batch))
         .routes(routes!(handlers::search))
         .routes(routes!(duplicates::duplicates))

@@ -540,7 +540,7 @@ async fn same_message_already_stored(
             AND direction = ? \
             AND text = ? \
             AND recipient = ? \
-            AND sender <=> ? \
+            AND (sender <=> ? OR (direction = 'outbound' AND sender IS NULL)) \
             AND created_date >= (? - INTERVAL {PROVIDER_ID_REUSE_LOOKBACK_HOURS} HOUR) \
           LIMIT 1",
         provider.table(),
@@ -916,6 +916,48 @@ mod tests {
             .await
             .expect("first redelivery");
         assert_eq!(stored_texts(&pool, SmsProvider::Cloudtalk).await.len(), 2);
+    }
+
+    // The CRM stores its own sends without a sender; the provider's echo of
+    // the same text carries the line and must not be stored a second time.
+    #[test_db::test]
+    async fn echo_of_a_crm_send_without_sender_is_not_duplicated(pool: MySqlPool) {
+        let mut crm_send = row(
+            SmsDirection::Outbound,
+            SmsStatus::Sent,
+            COMPANY_LINE,
+            CUSTOMER,
+            "Hi Lisa, is your customer still looking?",
+            Some("540273"),
+            at(0, 0),
+        );
+        crm_send.sender = None;
+        crm_send.provider_id = Some(3_913_486_426_027);
+        insert_sms(&pool, SmsProvider::Ringcentral, &crm_send)
+            .await
+            .expect("crm send");
+
+        let mut echo = row(
+            SmsDirection::Outbound,
+            SmsStatus::Sent,
+            COMPANY_LINE,
+            CUSTOMER,
+            "Hi Lisa, is your customer still looking?",
+            Some("540273"),
+            at(0, 16),
+        );
+        echo.provider_id = Some(3_913_486_426_027);
+        insert_sms(&pool, SmsProvider::Ringcentral, &echo)
+            .await
+            .expect("echo");
+
+        assert_eq!(
+            stored_texts(&pool, SmsProvider::Ringcentral).await,
+            vec![(
+                Some(3_913_486_426_027),
+                "Hi Lisa, is your customer still looking?".to_string()
+            )],
+        );
     }
 
     #[test_db::test]

@@ -8,7 +8,7 @@
 //! - `POST /v1/quickbooks/connection/start`       → Intuit's consent link
 //! - `POST /v1/quickbooks/connection`             → finish: the code Intuit returned
 //! - `DELETE /v1/quickbooks/connection`           → disconnect
-//! - `POST /v1/public/quickbooks/disconnect`      → Intuit's disconnect link (no session)
+//! - `POST /v1/quickbooks/disconnected`           → Intuit's disconnect link (signed in)
 //! - `PUT  /v1/superuser/companies/{id}/quickbooks-app` → a company's own app keys
 //! - `POST /v1/ringcentral/connection/start`      → `RingCentral`'s sign-in link
 //! - `POST /v1/ringcentral/connection`            → finish: the code `RingCentral` returned
@@ -286,7 +286,13 @@ pub async fn save_settings(
         .filter(|url| !url.is_empty())
     {
         Some(url) => {
-            uploads::attach(&state.storage, url, UploadFolder::CompanyLogos).await?;
+            uploads::attach(
+                &state.storage,
+                url,
+                UploadFolder::CompanyLogos,
+                user.company_id,
+            )
+            .await?;
             Some(url.to_string())
         }
         None => existing,
@@ -631,7 +637,7 @@ pub async fn disconnect_quickbooks(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Body of `POST /v1/public/quickbooks/disconnect`.
+/// Body of `POST /v1/quickbooks/disconnected`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RealmDisconnect {
     /// `realmId` from Intuit's disconnect link; anything but 1-32 digits is
@@ -643,25 +649,31 @@ pub struct RealmDisconnect {
 /// QuickBooks was disconnected at Intuit
 ///
 /// Intuit sends users who disconnect the app to `/quickbooks/disconnect`
-/// with the `realmId`; the page posts it here and the company holding that
-/// `QuickBooks` company loses its connection. No session; always 204 (it
-/// never tells whether a company matched).
+/// with the `realmId`; the page posts it here and the caller's company loses
+/// its connection when it holds that `QuickBooks` company. A session is
+/// required: anyone could otherwise disconnect a company knowing its realm id
+/// (a signed-out visitor loses nothing: the app asks to reconnect once Intuit
+/// refuses the tokens). Always 204 (it never tells whether it matched).
 #[utoipa::path(
     post,
-    path = "/v1/public/quickbooks/disconnect",
+    path = "/v1/quickbooks/disconnected",
     operation_id = "quickbooks_disconnected",
     tag = "company",
     request_body = RealmDisconnect,
     responses(
-        (status = 204, description = "Done (whether or not a company matched)"),
+        (status = 204, description = "Done (whether or not the company matched)"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
-    )
+    ),
+    security(("session_cookie" = []))
 )]
 pub async fn quickbooks_disconnected(
     State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
     JsonBody(input): JsonBody<RealmDisconnect>,
 ) -> ApiResult<StatusCode> {
-    qbo::disconnect_realm(&state.pool, &input.realm_id).await?;
+    qbo::disconnect_realm(&state.pool, &input.realm_id, user.company_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

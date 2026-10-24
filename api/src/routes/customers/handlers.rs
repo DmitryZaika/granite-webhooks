@@ -1,9 +1,11 @@
 use super::queries::{
-    emails_by_customer_ids, find_customer, list_companies, list_customers, search_customers,
+    customers_page, emails_by_customer_ids, find_customer, list_companies, list_customers,
+    search_customers,
 };
 use super::schemas::{
-    CustomerDetail, CustomerQuery, CustomerSearchQuery, CustomerSearchRow, CustomersView,
-    EmailsBatchRequest, EmailsByCustomer, ListFilter, ListQuery, ListResponse, MAX_BATCH_IDS,
+    CustomerDetail, CustomerQuery, CustomerSearchQuery, CustomerSearchRow, CustomersPage,
+    CustomersView, EmailsBatchRequest, EmailsByCustomer, ListFilter, ListQuery, ListResponse,
+    MAX_BATCH_IDS, PageQuery, PageRequest,
 };
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -11,6 +13,7 @@ use crate::extract::MultiQuery;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use chrono::Utc;
 
 /// List the company's customers
 ///
@@ -49,6 +52,38 @@ pub async fn list(
         }
     };
     Ok(Json(response))
+}
+
+/// One page of the company's customers
+///
+/// The customers page's table, filtered, sorted and paged here instead of
+/// in the browser. Filters as `GET /v1/customers`, plus the tab's lead
+/// sources; the onboarding sample customer is left out. Each page carries
+/// every email of its customers, and `month_rows` the rows behind the
+/// "this month" counts per sales rep.
+#[utoipa::path(
+    get,
+    path = "/v1/customers/page",
+    operation_id = "list_customers_page",
+    tag = "customers",
+    params(PageQuery),
+    responses(
+        (status = 200, description = "The page", body = CustomersPage),
+        (status = 400, description = "`sales_rep` is not an integer", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn page(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Query(query): Query<PageQuery>,
+) -> ApiResult<Json<CustomersPage>> {
+    let request = PageRequest::try_from(query)?;
+    let page = customers_page(&state.pool, user.company_id, request, Utc::now()).await?;
+    Ok(Json(page))
 }
 
 /// Get all emails of several customers

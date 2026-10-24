@@ -219,3 +219,36 @@ async fn managers_delete_users_of_their_company(pool: MySqlPool) {
         .unwrap();
     assert!(deleted);
 }
+
+/// A user's address cannot be a SQL pattern or an address list: mail and
+/// notifications are matched to users by address.
+#[test_db::test(seed)]
+async fn user_addresses_are_single_plain_addresses(pool: MySqlPool) {
+    make_manager(&pool).await;
+    let server = server(pool.clone());
+    for email in [
+        "%@%.%",
+        "ian%@acme.test",
+        "Ian <ian@acme.test>",
+        "a@acme.test,b@acme.test",
+    ] {
+        let res = server
+            .post("/v1/admin/users")
+            .with_session(ADA)
+            .json(
+                &json!({ "name": "Ian", "email": email, "password": "secret1", "positions": [1] }),
+            )
+            .await;
+        res.assert_status(StatusCode::BAD_REQUEST);
+        assert_eq!(
+            res.json::<Value>()["error"],
+            "Enter a valid email",
+            "{email}"
+        );
+    }
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE name = 'Ian'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}

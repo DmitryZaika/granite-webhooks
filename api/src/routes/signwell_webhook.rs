@@ -453,7 +453,7 @@ async fn notify(state: &AppState, request_id: i64, company_id: i32, event: Notic
             reply_to: Vec::new(),
             in_reply_to: None,
             references: Vec::new(),
-            attachments: signed_copy(state, request_id, company_id, &row)
+            attachments: signed_copy(state, company_id, &row)
                 .await
                 .into_iter()
                 .collect(),
@@ -470,14 +470,19 @@ async fn notify(state: &AppState, request_id: i64, company_id: i32, event: Notic
 /// request is not signed, or when the copy cannot be reached.
 async fn signed_copy(
     state: &AppState,
-    request_id: i64,
     company_id: i32,
     row: &NoticeRow,
 ) -> Option<OutgoingAttachment> {
     if row.status != "signed" {
         return None;
     }
-    let filename = crate::routes::signatures::signed_pdf_filename(&row.filename);
+    let filename = crate::routes::signatures::signed_copy_filename(
+        &state.pool,
+        company_id,
+        row.customer_id,
+        &row.filename,
+    )
+    .await;
     let url = if row.provider == "native" {
         let key = row.completed_object_key.as_deref()?;
         let bucket = state.signature_bucket.as_deref()?;
@@ -495,7 +500,6 @@ async fn signed_copy(
         crate::routes::signatures::signwell_completed_pdf_url(state, company_id, document_id)
             .await?
     };
-    tracing::debug!(request = request_id, "Attaching the signed copy");
     Some(OutgoingAttachment {
         filename,
         content_type: "application/pdf".into(),

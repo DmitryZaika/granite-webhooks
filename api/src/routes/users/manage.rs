@@ -264,13 +264,7 @@ fn checked_phone(phone: Option<&str>) -> ApiResult<Option<String>> {
 
 fn checked_email(email: &str) -> ApiResult<String> {
     let email = email.trim().to_lowercase();
-    let valid = email.split_once('@').is_some_and(|(local, domain)| {
-        !local.is_empty()
-            && domain.contains('.')
-            && !domain.starts_with('.')
-            && !domain.ends_with('.')
-    });
-    if valid && !email.contains(char::is_whitespace) {
+    if crate::routes::me::account::valid_email(&email) {
         Ok(email)
     } else {
         Err(ApiError::BadRequest("Enter a valid email".into()))

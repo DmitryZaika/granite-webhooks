@@ -245,9 +245,11 @@ async fn load_customer_profile(
         "SELECT CAST(d.id AS SIGNED) AS id, CAST(d.amount AS CHAR) AS amount, d.lost_reason, l.name AS list_name,
                 CAST(d.is_won AS SIGNED) AS is_won, CAST(d.updated_at AS DATETIME) AS updated_at
            FROM deals d JOIN deals_list l ON l.id = d.list_id
+           JOIN customers c ON c.id = d.customer_id AND c.company_id = ?
           WHERE d.customer_id = ? AND d.deleted_at IS NULL AND l.deleted_at IS NULL
           ORDER BY d.id DESC LIMIT 8",
     )
+    .bind(company_id)
     .bind(customer_id)
     .fetch_all(pool)
     .await?;
@@ -831,8 +833,13 @@ pub async fn resolve_customer_id(
     pool: &MySqlPool,
     request: &FollowupRequest,
 ) -> Result<Option<i32>, sqlx::Error> {
-    if request.customer_id.is_some() {
-        return Ok(request.customer_id);
+    if let Some(customer_id) = request.customer_id {
+        // Ids come from request bodies: only a customer of the company.
+        return sqlx::query_scalar("SELECT id FROM customers WHERE id = ? AND company_id = ?")
+            .bind(customer_id)
+            .bind(request.company_id)
+            .fetch_optional(pool)
+            .await;
     }
     let Some(phone) = request.phone_digits.as_deref() else {
         return match request.customer_email.as_deref() {

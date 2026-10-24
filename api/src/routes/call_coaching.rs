@@ -18,11 +18,13 @@ use crate::phone::calls::{CallDirection, CallStatus};
 use crate::routes::calls::recording::transcribe_call;
 use crate::routes::calls::telnyx;
 use crate::routes::events::notify::display_phone;
-use crate::routes::users::call_activity::agent_calls;
+use crate::routes::users::call_activity::{
+    agent_calls, company_ringcentral_calls, ringcentral_item,
+};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
-use chrono::{Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -77,16 +79,18 @@ pub enum CoachingStatus {
 /// A call the coach can score.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CoachingCall {
-    /// `CloudTalk` call id, or `tx_<id>` for a Granite Phone call.
+    /// `CloudTalk` or `RingCentral` call id, or `tx_<id>` for a Granite Phone
+    /// call.
     pub call_id: String,
     pub status: CoachingStatus,
-    /// When it started (`CloudTalk` time; RFC 3339 UTC for Granite Phone).
+    /// When it started (`CloudTalk` time, or RFC 3339 for `RingCentral` and
+    /// Granite Phone).
     pub started_at: String,
     /// Seconds talked.
     pub talking_time: f64,
     /// `incoming` or `outgoing`.
     pub call_type: String,
-    /// The customer, from the CRM or `CloudTalk`.
+    /// The customer, from the CRM or the phone system.
     pub customer_name: Option<String>,
     /// The other party's number, dashed.
     pub phone_display: String,
@@ -103,8 +107,9 @@ pub struct CoachingCall {
 /// `GET`/`POST /v1/me/call-coaching`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Coaching {
-    /// The caller has a `CloudTalk` line (agent and number) or a Granite
-    /// Phone number (calling switched on for the company).
+    /// The caller has a `CloudTalk` line (agent and number), a `RingCentral`
+    /// line (extension and number) or a Granite Phone number (calling
+    /// switched on for the company).
     pub eligible: bool,
     /// Some call is being scored.
     pub analyzing: bool,
@@ -172,15 +177,37 @@ fn candidate(item: &Value) -> Option<Candidate> {
     })
 }
 
-fn has_line(user: &SessionUser) -> bool {
-    let present = |value: &Option<String>| value.as_deref().is_some_and(|v| !v.trim().is_empty());
-    present(&user.cloudtalk_agent_id) && present(&user.cloudtalk_phone_number)
+fn present(value: Option<&String>) -> Option<&str> {
+    value.map(|v| v.trim()).filter(|v| !v.is_empty())
 }
 
-/// Which providers' calls the caller has: a `CloudTalk` line, and a Granite
-/// Phone number of their company (calling switched on).
+fn has_cloudtalk_line(user: &SessionUser) -> bool {
+    present(user.cloudtalk_agent_id.as_ref()).is_some()
+        && present(user.cloudtalk_phone_number.as_ref()).is_some()
+}
+
+fn has_ringcentral_line(user: &SessionUser) -> bool {
+    present(user.ringcentral_extension_id.as_ref()).is_some()
+        && present(user.ringcentral_phone_number.as_ref()).is_some()
+}
+
+fn has_line(user: &SessionUser) -> bool {
+    has_cloudtalk_line(user) || has_ringcentral_line(user)
+}
+
+/// `CloudTalk`'s `2026-05-01 10:00:00` (UTC) or `RingCentral`'s RFC 3339.
+fn started(at: &str) -> Option<DateTime<Utc>> {
+    NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S")
+        .map(|at| at.and_utc())
+        .or_else(|_| DateTime::parse_from_rfc3339(at).map(|at| at.with_timezone(&Utc)))
+        .ok()
+}
+
+/// Which calls the caller has: a `CloudTalk` or `RingCentral` line
+/// ([`has_line`]), and a Granite Phone number of their company (calling
+/// switched on).
 async fn lines(state: &AppState, user: &SessionUser) -> Result<(bool, bool), sqlx::Error> {
-    let cloudtalk = has_line(user);
+    let line = has_line(user);
     let telnyx: bool = sqlx::query_scalar(
         "SELECT EXISTS (
             SELECT 1 FROM telnyx_number_users nu
@@ -192,20 +219,7 @@ async fn lines(state: &AppState, user: &SessionUser) -> Result<(bool, bool), sql
     .bind(user.id)
     .fetch_one(&state.pool)
     .await?;
-    Ok((cloudtalk, telnyx))
-}
-
-/// When a call started: `CloudTalk`'s `YYYY-MM-DD HH:MM:SS` (UTC), or
-/// RFC 3339.
-fn started(at: &str) -> Option<chrono::DateTime<Utc>> {
-    chrono::DateTime::parse_from_rfc3339(at)
-        .map(|at| at.with_timezone(&Utc))
-        .ok()
-        .or_else(|| {
-            NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S")
-                .ok()
-                .map(|at| at.and_utc())
-        })
+    Ok((line, telnyx))
 }
 
 /// The caller's Granite Phone calls the coach can score: answered by them,
@@ -254,32 +268,51 @@ async fn telnyx_candidates(
         .collect())
 }
 
+/// The caller's newest calls the coach can score: `CloudTalk` and
+/// `RingCentral` ones on the lines they have, and Granite Phone ones when
+/// `lines` says they have a number there.
 async fn candidates(
     state: &AppState,
     user: &SessionUser,
-    (cloudtalk, telnyx): (bool, bool),
+    (_, telnyx_line): (bool, bool),
 ) -> Result<Vec<Candidate>, sqlx::Error> {
-    let mut calls: Vec<Candidate> = Vec::new();
-    if cloudtalk {
-        let agent = user.cloudtalk_agent_id.as_deref().unwrap_or("").trim();
-        let from = (Utc::now() - Duration::days(LOOKBACK_DAYS))
-            .format("%Y-%m-%d")
-            .to_string();
-        calls.extend(
-            agent_calls(state, user.company_id, agent, &from)
-                .await
-                .iter()
-                .filter_map(candidate),
-        );
-    }
-    if telnyx {
-        calls.extend(telnyx_candidates(state, user).await?);
-    }
-    calls.sort_by(|a, b| {
-        started(&b.started_at)
-            .cmp(&started(&a.started_at))
-            .then_with(|| b.started_at.cmp(&a.started_at))
-    });
+    let since = Utc::now() - Duration::days(LOOKBACK_DAYS);
+    let cloudtalk = async {
+        if !has_cloudtalk_line(user) {
+            return Vec::new();
+        }
+        let agent = present(user.cloudtalk_agent_id.as_ref()).unwrap_or_default();
+        let from = since.format("%Y-%m-%d").to_string();
+        agent_calls(state, user.company_id, agent, &from).await
+    };
+    let ringcentral = async {
+        if !has_ringcentral_line(user) {
+            return Vec::new();
+        }
+        let extension = present(user.ringcentral_extension_id.as_ref());
+        let from = since.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        company_ringcentral_calls(state, user.company_id, extension, &from)
+            .await
+            .iter()
+            .map(ringcentral_item)
+            .collect()
+    };
+    let granite_phone = async {
+        if telnyx_line {
+            telnyx_candidates(state, user).await
+        } else {
+            Ok(Vec::new())
+        }
+    };
+    let (cloudtalk, ringcentral, granite_phone) =
+        tokio::join!(cloudtalk, ringcentral, granite_phone);
+    let mut calls: Vec<Candidate> = cloudtalk
+        .iter()
+        .chain(&ringcentral)
+        .filter_map(candidate)
+        .collect();
+    calls.extend(granite_phone?);
+    calls.sort_by_key(|call| std::cmp::Reverse(started(&call.started_at)));
     calls.truncate(DISPLAY_CALLS);
     Ok(calls)
 }
@@ -379,9 +412,9 @@ const fn not_eligible() -> Coaching {
 
 /// Get my call coaching
 ///
-/// The caller's last three real calls with their scores: `CloudTalk` calls
-/// when they have a `CloudTalk` line, and Granite Phone calls they placed or
-/// answered (`tx_<id>`) when they have a Granite Phone number.
+/// The caller's last three real calls with their scores: `CloudTalk` and
+/// `RingCentral` calls when they have either line, and Granite Phone calls
+/// they placed or answered (`tx_<id>`) when they have a Granite Phone number.
 #[utoipa::path(
     get,
     path = "/v1/me/call-coaching",

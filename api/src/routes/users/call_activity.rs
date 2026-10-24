@@ -1,25 +1,30 @@
-//! `GET /v1/users/call-activity`: the `CloudTalk` and Granite Phone calls of
-//! chosen reps over the last 90 days, for the admin users-activity page.
+//! `GET /v1/users/call-activity`: the `CloudTalk`, `RingCentral` and Granite
+//! Phone calls of chosen reps over the last 90 days, for the admin
+//! users-activity page.
 //! Remix: `api.users.activity.calls.tsx`.
 
+use super::activity::{customers_by_phone, last10};
 use crate::auth::AdminUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::phone::calls::{CallDirection, CallStatus};
+use crate::routes::calls::ringcentral::map_record;
 use crate::routes::calls::telnyx::{self, TelnyxCall};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Query, State};
 use chrono::{DateTime, NaiveDateTime, Utc};
-use common::telephony::cloudtalk;
+use common::telephony::{cloudtalk, ringcentral};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use utoipa::{IntoParams, ToSchema};
 
 const PAGE_SIZE: usize = 200;
 const MAX_PAGES_PER_AGENT: usize = 5;
 const DAYS_BACK: i64 = 90;
+const RINGCENTRAL_PAGE_SIZE: usize = 1000;
+const RINGCENTRAL_MAX_PAGES: usize = 5;
 /// Most Granite Phone calls listed per rep (`CloudTalk` lists 1,000 an agent).
 const TELNYX_CALLS_PER_REP: i64 = 1_000;
 
@@ -33,9 +38,13 @@ pub struct CallActivityQuery {
 /// One call, as a row of the users-activity feed.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CallActivity {
-    /// The `CloudTalk` call id, or our call id for a Granite Phone call.
+    /// The `CloudTalk` call id, or our call id for a Granite Phone call; 0
+    /// for `RingCentral`, whose ids are not numbers.
     pub id: i64,
-    /// `cloudtalk_call`, or `telnyx_call` for a Granite Phone call.
+    /// The provider's call id as text.
+    pub call_id: String,
+    /// `cloudtalk_call`, `ringcentral_call`, or `telnyx_call` for a Granite
+    /// Phone call.
     pub source: &'static str,
     /// The rep (for a Granite Phone call nobody answered: the owner of the
     /// direct line it rang).
@@ -44,12 +53,16 @@ pub struct CallActivity {
     pub user_name: String,
     /// `Made a call`, `Received a call` or `Missed a call`.
     pub action: &'static str,
-    /// When the call started, as `CloudTalk` reports it (RFC 3339 UTC for a
-    /// Granite Phone call).
+    /// When the call started, as `CloudTalk` reports it (RFC 3339 for a
+    /// `RingCentral` or Granite Phone call).
     pub created_at: String,
-    /// The `CloudTalk` contact's name, or the CRM customer of a Granite
-    /// Phone call.
+    /// The `CloudTalk` contact's name, for `RingCentral` the customer with
+    /// that number (else the caller-ID name), or the CRM customer of a
+    /// Granite Phone call.
     pub customer_name: Option<String>,
+    /// The customer with that number (`RingCentral`), or the CRM customer of
+    /// a Granite Phone call.
+    pub customer_id: Option<i64>,
     /// The other party's number.
     pub contact: Option<String>,
     /// Direction and outcome, like `Incoming · 2m 5s`.
@@ -61,8 +74,9 @@ pub struct CallActivity {
     pub tags: Vec<String>,
     /// Whether there is a recording.
     pub recorded: bool,
-    /// `CloudTalk`'s recording link, or `tx_<id>` for a recorded Granite
-    /// Phone call (`GET /v1/calls/telnyx/{media_id}/recording`).
+    /// `CloudTalk`'s recording link, a `RingCentral` media token (`rec_<id>`),
+    /// or `tx_<id>` for a recorded Granite Phone call
+    /// (`GET /v1/calls/telnyx/{media_id}/recording`).
     pub recording_link: Option<String>,
     /// The caller left a voicemail.
     pub is_voicemail: bool,
@@ -153,12 +167,14 @@ pub fn activity(item: &Value, user_id: i32, user_name: &str) -> CallActivity {
     let notes = names("Notes");
     CallActivity {
         id: text(&cdr["id"]).parse().unwrap_or(0),
+        call_id: text(&cdr["id"]),
         source: "cloudtalk_call",
         user_id,
         user_name: user_name.to_string(),
         action,
         created_at: text(&cdr["started_at"]),
         customer_name: non_empty(&item["Contact"]["name"]),
+        customer_id: None,
         contact: non_empty(&cdr["public_external"]),
         summary: format!("{direction} · {outcome}"),
         body: (!notes.is_empty()).then(|| notes.join("\n")),
@@ -212,6 +228,98 @@ pub async fn agent_calls(
     items
 }
 
+/// The rep's extension on a `RingCentral` call-log row.
+fn ringcentral_extension(record: &Value) -> String {
+    [
+        &record["extension"]["id"],
+        &record["from"]["extensionId"],
+        &record["to"]["extensionId"],
+    ]
+    .into_iter()
+    .map(text)
+    .find(|id| !id.is_empty())
+    .unwrap_or_default()
+}
+
+/// Maps one `RingCentral` call-log row. Like the call-points job, only a
+/// connected call (or a voicemail the rep left) has talk time; the rest of
+/// `duration` is ringing.
+pub fn ringcentral_activity(record: &Value, user_id: i32, user_name: &str) -> CallActivity {
+    let item = ringcentral_item(record);
+    let mut call = activity(&item, user_id, user_name);
+    call.id = 0;
+    call.source = "ringcentral_call";
+    call
+}
+
+/// One `RingCentral` call-log row as a `CloudTalk` `calls/index.json` item,
+/// with talk time only on a connected call and the other party as `Contact`.
+pub fn ringcentral_item(record: &Value) -> Value {
+    let mut record = record.clone();
+    let outbound = text(&record["direction"]).eq_ignore_ascii_case("outbound");
+    let result = text(&record["result"]).to_ascii_lowercase();
+    let connected = matches!(result.as_str(), "call connected" | "accepted")
+        || (outbound && result == "voicemail");
+    if !connected {
+        record["duration"] = json!(0);
+    }
+    let mut item = map_record(&record, None);
+    item["Contact"]["name"] = json!(text(&record[if outbound { "to" } else { "from" }]["name"]));
+    item
+}
+
+/// The `RingCentral` call log since `date_from` (RFC 3339) of the whole
+/// company, or of one extension; empty when `RingCentral` fails.
+pub async fn company_ringcentral_calls(
+    state: &AppState,
+    company_id: i32,
+    extension: Option<&str>,
+    date_from: &str,
+) -> Vec<Value> {
+    let encode = |value: &str| {
+        percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
+    };
+    let from = encode(date_from);
+    let scope = extension.map_or_else(
+        || "account/~".to_string(),
+        |extension| format!("account/~/extension/{}", encode(extension)),
+    );
+    let mut path =
+        format!("{scope}/call-log?view=Detailed&dateFrom={from}&perPage={RINGCENTRAL_PAGE_SIZE}");
+    let mut seen = HashSet::new();
+    let mut records = Vec::new();
+    for _ in 0..RINGCENTRAL_MAX_PAGES {
+        let Ok(body) = ringcentral::request(
+            &state.pool,
+            &state.telephony_http,
+            company_id,
+            Method::GET,
+            &path,
+            &ringcentral::Body::Empty,
+            None,
+        )
+        .await
+        else {
+            return Vec::new();
+        };
+        for record in body["records"].as_array().into_iter().flatten() {
+            if seen.insert(text(&record["id"])) {
+                records.push(record.clone());
+            }
+        }
+        // The next page is a full URI; keep what follows the API root.
+        let Some(next) = body["navigation"]["nextPage"]["uri"]
+            .as_str()
+            .and_then(|uri| uri.split_once("/restapi/v1.0/"))
+            .map(|(_, rest)| rest.to_string())
+        else {
+            break;
+        };
+        path = next;
+    }
+    records
+}
+
 /// A Granite Phone call as a row of the feed, for rep `user_id`.
 pub fn telnyx_activity(call: &TelnyxCall, user_id: i32, user_name: &str) -> CallActivity {
     let talk_seconds = i64::from(call.duration_secs.unwrap_or(0).max(0));
@@ -246,6 +354,7 @@ pub fn telnyx_activity(call: &TelnyxCall, user_id: i32, user_name: &str) -> Call
     tags.extend(call.line_label.clone());
     CallActivity {
         id: call.id,
+        call_id: call.id.to_string(),
         source: "telnyx_call",
         user_id,
         user_name: user_name.to_string(),
@@ -257,6 +366,7 @@ pub fn telnyx_activity(call: &TelnyxCall, user_id: i32, user_name: &str) -> Call
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(str::to_string),
+        customer_id: call.customer_id.map(i64::from),
         contact: Some(call.other_number.clone()).filter(|number| !number.is_empty()),
         summary: format!("{direction} · {outcome}"),
         body: call
@@ -286,11 +396,12 @@ fn started(row: &CallActivity) -> Option<DateTime<Utc>> {
 
 /// List reps' calls
 ///
-/// The `CloudTalk` calls of the given users of the caller's company over the
-/// last 90 days, and their Granite Phone calls (placed or answered by them,
-/// and unanswered calls of their direct lines; `source` `telnyx_call`),
-/// newest first. Users without a `CloudTalk` agent, and companies without
-/// `CloudTalk`, have no `CloudTalk` calls.
+/// The `CloudTalk` and `RingCentral` calls of the given users of the caller's
+/// company over the last 90 days, and their Granite Phone calls (placed or
+/// answered by them, and unanswered calls of their direct lines; `source`
+/// `telnyx_call`), newest first. Users without a `CloudTalk` agent or
+/// `RingCentral` extension, and companies without either, have no
+/// `CloudTalk` or `RingCentral` calls.
 #[utoipa::path(
     get,
     path = "/v1/users/call-activity",
@@ -320,7 +431,8 @@ pub async fn call_activity(
         return Ok(Json(Vec::new()));
     }
     let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(
-        "SELECT id, name, cloudtalk_agent_id FROM users WHERE is_deleted = 0 AND company_id = ",
+        "SELECT id, name, cloudtalk_agent_id, ringcentral_extension_id FROM users
+          WHERE is_deleted = 0 AND company_id = ",
     );
     builder.push_bind(user.company_id).push(" AND id IN (");
     let mut list = builder.separated(", ");
@@ -328,13 +440,13 @@ pub async fn call_activity(
         list.push_bind(id);
     }
     builder.push(")");
-    let reps: Vec<(i32, Option<String>, Option<String>)> =
+    let reps: Vec<(i32, Option<String>, Option<String>, Option<String>)> =
         builder.build_query_as().fetch_all(&state.pool).await?;
     let since = chrono::Utc::now() - chrono::Duration::days(DAYS_BACK);
     let date_from = since.format("%Y-%m-%d").to_string();
     let names: HashMap<i32, String> = reps
         .iter()
-        .map(|(id, name, _)| (*id, name.clone().unwrap_or_default()))
+        .map(|(id, name, _, _)| (*id, name.clone().unwrap_or_default()))
         .collect();
     let rep_ids: Vec<i32> = names.keys().copied().collect();
     let phone_calls = if rep_ids.is_empty() {
@@ -353,18 +465,25 @@ pub async fn call_activity(
         )
         .await?
     };
+    let trimmed = |value: Option<String>| {
+        value
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
     let mut tasks = Vec::new();
-    for (id, name, agent) in reps {
-        let Some(agent) = agent
-            .map(|agent| agent.trim().to_string())
-            .filter(|agent| !agent.is_empty())
-        else {
+    // RingCentral extension → (user id, name).
+    let mut extensions = HashMap::new();
+    for (id, name, agent, extension) in reps {
+        let name = name.unwrap_or_default();
+        if let Some(extension) = trimmed(extension) {
+            extensions.insert(extension, (id, name.clone()));
+        }
+        let Some(agent) = trimmed(agent) else {
             continue;
         };
         let (state, date_from) = (state.clone(), date_from.clone());
         let company_id = user.company_id;
         tasks.push(tokio::spawn(async move {
-            let name = name.unwrap_or_default();
             agent_calls(&state, company_id, &agent, &date_from)
                 .await
                 .iter()
@@ -379,6 +498,34 @@ pub async fn call_activity(
             Some(telnyx_activity(call, owner, names.get(&owner)?))
         })
         .collect();
+    if !extensions.is_empty() {
+        let date_from = since.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let records = company_ringcentral_calls(&state, user.company_id, None, &date_from).await;
+        let mut ringcentral_calls: Vec<CallActivity> = records
+            .iter()
+            .filter_map(|record| {
+                let (id, name) = extensions.get(&ringcentral_extension(record))?;
+                Some(ringcentral_activity(record, *id, name))
+            })
+            .collect();
+        if !ringcentral_calls.is_empty() {
+            let customers = customers_by_phone(&state.pool, user.company_id).await?;
+            for call in &mut ringcentral_calls {
+                let customer = call
+                    .contact
+                    .as_deref()
+                    .and_then(last10)
+                    .and_then(|key| customers.get(&key));
+                if let Some(customer) = customer {
+                    call.customer_id = Some(customer.id);
+                    if customer.name.is_some() {
+                        call.customer_name.clone_from(&customer.name);
+                    }
+                }
+            }
+        }
+        calls.extend(ringcentral_calls);
+    }
     for task in tasks {
         calls.extend(task.await.unwrap_or_default());
     }
@@ -388,4 +535,52 @@ pub async fn call_activity(
             .then_with(|| b.created_at.cmp(&a.created_at))
     });
     Ok(Json(calls))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_ringcentral_calls() {
+        let answered = json!({
+            "id": "Y3s3vKBq", "direction": "Inbound", "result": "Accepted", "duration": 125,
+            "startTime": "2026-05-01T10:00:00.000Z", "extension": { "id": 601 },
+            "from": { "phoneNumber": "+13175550100", "name": "ALICE LEAD" },
+            "to": { "phoneNumber": "+13175550998", "name": "Rita Rep" },
+            "recording": { "id": "77" },
+        });
+        assert_eq!(ringcentral_extension(&answered), "601");
+        let call = ringcentral_activity(&answered, 100, "Rita Rep");
+        assert_eq!(call.source, "ringcentral_call");
+        assert_eq!(call.call_id, "Y3s3vKBq");
+        assert_eq!(call.action, "Received a call");
+        assert_eq!(call.summary, "Incoming · 2m 5s");
+        assert_eq!(call.customer_name.as_deref(), Some("ALICE LEAD"));
+        assert_eq!(call.contact.as_deref(), Some("+13175550100"));
+        assert_eq!(call.recording_link.as_deref(), Some("rec_77"));
+        assert!(call.recorded);
+
+        // Ringing time is not talk time.
+        let missed = json!({
+            "id": "a1", "direction": "Inbound", "result": "Missed", "duration": 20,
+            "startTime": "2026-05-02T10:00:00.000Z",
+            "from": { "phoneNumber": "+13175550100" }, "to": { "extensionId": "601" },
+        });
+        assert_eq!(ringcentral_extension(&missed), "601");
+        let call = ringcentral_activity(&missed, 100, "Rita Rep");
+        assert_eq!(call.action, "Missed a call");
+        assert_eq!(call.talk_seconds, 0);
+
+        let unanswered = json!({
+            "id": "a2", "direction": "Outbound", "result": "No Answer", "duration": 30,
+            "startTime": "2026-05-03T10:00:00.000Z",
+            "from": { "extensionId": "601", "name": "Rita Rep" },
+            "to": { "phoneNumber": "+13175550100", "name": "Alice" },
+        });
+        let call = ringcentral_activity(&unanswered, 100, "Rita Rep");
+        assert_eq!(call.action, "Made a call");
+        assert_eq!(call.summary, "Outgoing · No answer");
+        assert_eq!(call.customer_name.as_deref(), Some("Alice"));
+    }
 }

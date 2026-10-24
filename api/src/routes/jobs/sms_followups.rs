@@ -7,7 +7,7 @@
 use super::JobCaller;
 use crate::auth::session::find_user;
 use crate::error::{ApiResult, ErrorBody};
-use crate::followups::processor::{FollowupRun, process_due_followups};
+use crate::followups::processor::{FollowupRun, process_due_followups, rep_sms_provider};
 use crate::routes::calls::to_e164;
 use crate::routes::delayed::{DueRun, process_due_in};
 use crate::routes::sms::flows::variable_names;
@@ -213,18 +213,16 @@ async fn send_drip(state: &AppState, row: &DueDrip) -> Result<bool, sqlx::Error>
             return Ok(false);
         }
     };
+    let Some(rep) = find_user(&state.pool, row.user_id, row.company_id).await? else {
+        mark_failed(state, row.id, "Sales rep is not linked").await?;
+        return Ok(false);
+    };
     // The rep's provider: Telnyx when they have a Telnyx line there.
-    let Some(provider) =
-        crate::routes::sms::send::user_provider(&state.pool, row.company_id, row.user_id).await?
-    else {
+    let Some(provider) = rep_sms_provider(state, row.company_id, &rep).await? else {
         mark_failed(state, row.id, "SMS is not enabled").await?;
         return Ok(false);
     };
-    let seat = match find_user(&state.pool, row.user_id, row.company_id).await? {
-        Some(rep) => crate::routes::sms::send::seat(&state.pool, provider, &rep).await?,
-        None => None,
-    };
-    let Some(seat) = seat else {
+    let Some(seat) = crate::routes::sms::send::seat(&state.pool, provider, &rep).await? else {
         mark_failed(state, row.id, "Sales rep is not linked").await?;
         return Ok(false);
     };

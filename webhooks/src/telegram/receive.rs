@@ -9,6 +9,7 @@ use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_tele
 use crate::libs::constants::{ERR_DB, ERR_SEND_EMAIL, OK_RESPONSE};
 use crate::libs::constants::{FORBIDDEN_RESPONSE, internal_error};
 use crate::libs::types::BasicResponse;
+use crate::ringcentral::api::sync_customer_to_ring_central;
 use crate::telegram::utils::extract_message;
 use crate::telegram::utils::parse_code;
 use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
@@ -315,7 +316,10 @@ async fn handle_assign_lead<T: Telegram>(
     }
     let client = Client::new();
     // For right now we log but ignore errors
-    sync_customer_to_cloud_talk(pool, &client, lead_id).await;
+    tokio::join!(
+        sync_customer_to_cloud_talk(pool, &client, lead_id),
+        sync_customer_to_ring_central(pool, &client, lead_id),
+    );
 
     let deal_id = result.last_insert_id();
     let lead_link = lead_url(deal_id);

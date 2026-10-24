@@ -38,9 +38,6 @@ pub struct AppState {
     pub sms_upkeep: Arc<Mutex<HashMap<(&'static str, i32), Instant>>>,
     /// Recent texts sent per user, for the per-minute limit.
     pub sms_sends: Arc<Mutex<HashMap<i32, VecDeque<Instant>>>>,
-    /// When each customer page (or unknown address) may get its next login
-    /// code, in Unix milliseconds.
-    pub customer_view_cooldown: Arc<Mutex<HashMap<String, i64>>>,
     /// Recent SMS flow starts per user, for the per-minute limit.
     pub flow_starts: Arc<Mutex<HashMap<i32, VecDeque<Instant>>>>,
     /// Threads the composer's autocomplete gathered in the last minute.
@@ -106,6 +103,8 @@ pub struct AppState {
     /// Granite Phone settings (`PHONE_*`, `TELNYX_PUBLIC_KEY`,
     /// `TELNYX_FALLBACK_TEXML_URL`).
     pub phone: PhoneConfig,
+    /// The PostHog auto-fix intake and callbacks (`POSTHOG_AUTOFIX_*`).
+    pub autofix: crate::posthog_autofix::Autofix,
 }
 
 /// Where the SES identity lists come from.
@@ -158,7 +157,6 @@ impl AppState {
             webhooks: WebhooksClient::disabled(),
             sms_upkeep: Arc::default(),
             sms_sends: Arc::default(),
-            customer_view_cooldown: Arc::default(),
             flow_starts: Arc::default(),
             compose_contexts: Arc::default(),
             maps: Maps::disabled(),
@@ -187,6 +185,7 @@ impl AppState {
             telnyx: Telnyx::disabled(),
             push: Push::disabled(),
             phone: PhoneConfig::default(),
+            autofix: crate::posthog_autofix::Autofix::disabled(),
         }
     }
 
@@ -205,6 +204,12 @@ impl AppState {
     #[must_use]
     pub fn with_phone_config(mut self, phone: PhoneConfig) -> Self {
         self.phone = phone;
+        self
+    }
+
+    #[must_use]
+    pub fn with_autofix(mut self, autofix: crate::posthog_autofix::Autofix) -> Self {
+        self.autofix = autofix;
         self
     }
 
@@ -250,6 +255,7 @@ impl AppState {
     pub fn with_signature_bucket(mut self, bucket: &str) -> Self {
         let bucket = bucket.trim();
         self.signature_bucket = (!bucket.is_empty()).then(|| Arc::from(bucket));
+        self.storage = self.storage.keeping_private(bucket);
         self
     }
 
@@ -270,7 +276,8 @@ impl AppState {
 
     #[must_use]
     pub fn with_storage(mut self, storage: Storage) -> Self {
-        self.storage = storage;
+        self.storage =
+            storage.keeping_private(self.signature_bucket.as_deref().unwrap_or_default());
         self
     }
 
@@ -412,7 +419,8 @@ impl AppState {
             .with_ses(SesIdentities::Aws)
             .with_signing_session_secret(
                 &std::env::var("SIGNATURE_SESSION_SECRET").unwrap_or_default(),
-            ))
+            )
+            .with_autofix(crate::posthog_autofix::Autofix::from_env()))
     }
 
     /// Credentialed CORS: the browser sends the `__session` cookie, so the

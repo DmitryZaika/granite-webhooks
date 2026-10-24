@@ -1,9 +1,9 @@
 //! The notification bell.
 //!
 //! - `GET /v1/notifications` → unread mail, activity and billing
-//!   notifications (911 alerts included), missed `CloudTalk` calls, and
-//!   unseen missed Granite Phone calls, voicemails and AI messages, newest
-//!   first
+//!   notifications (911 alerts included), missed `CloudTalk` and
+//!   `RingCentral` calls, and unseen missed Granite Phone calls, voicemails
+//!   and AI messages, newest first
 //! - `POST /v1/notifications/done` → dismiss notifications, or all of them
 //!
 //! Replaces the Remix `api.notifications` loader and `api.notifications.done`
@@ -46,8 +46,8 @@ pub enum NotificationKind {
 pub struct NotificationRef {
     /// `notif-<id>` for activities, `billing-<id>` for billing, the thread
     /// id for email, `telnyx-call-<id>` for a Granite Phone call (marked
-    /// seen, as the phone app's Recents shows it). `CloudTalk` calls are
-    /// dismissed in the browser only.
+    /// seen, as the phone app's Recents shows it). `CloudTalk` and
+    /// `RingCentral` calls are dismissed in the browser only.
     pub id: String,
     pub kind: NotificationKind,
 }
@@ -120,21 +120,35 @@ fn push_bell_calls(builder: &mut QueryBuilder<MySql>, user: &SessionUser) {
     push_in_recents(builder, user.id);
 }
 
+/// Mail addressed to the bound address (bare or `Name <address>`) of the
+/// bound company (stamped, else its sender's). Addresses are matched
+/// exactly: a pattern match would let an address like `%@%.%` see every
+/// company's mail. [`push_incoming`] pushes the same condition.
+fn addressed_sql(alias: &str) -> String {
+    format!(
+        "(COALESCE({alias}.company_id, (SELECT us.company_id FROM users us WHERE us.id = {alias}.sender_user_id)) = ?
+          AND (LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX({alias}.receiver_email, '<', -1), '>', 1))) = ?
+               OR ({alias}.receiver_email NOT LIKE '%<%' AND LOWER(TRIM({alias}.receiver_email)) = ?)))"
+    )
+}
+
 /// Pushes the CRM's `dismissIncomingEmailSql`: customer mail to the user or
 /// on their deal, and coworkers' mail addressed to them.
 fn push_incoming(builder: &mut QueryBuilder<MySql>, user: &SessionUser) {
     let email = user.email.trim().to_lowercase();
-    let like = format!("%<{email}>");
     let addressed = |builder: &mut QueryBuilder<MySql>| {
         builder
             .push("e.receiver_user_id = ")
             .push_bind(user.id)
-            .push(" OR LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(e.receiver_email, '<', -1), '>', 1))) = ")
+            .push(
+                " OR (COALESCE(e.company_id, (SELECT us.company_id FROM users us WHERE us.id = e.sender_user_id)) = ",
+            )
+            .push_bind(user.company_id)
+            .push(" AND (LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(e.receiver_email, '<', -1), '>', 1))) = ")
             .push_bind(email.clone())
             .push(" OR (e.receiver_email NOT LIKE '%<%' AND LOWER(TRIM(e.receiver_email)) = ")
             .push_bind(email.clone())
-            .push(") OR e.receiver_email LIKE ")
-            .push_bind(like.clone());
+            .push(")))");
     };
     builder
         .push("((e.sender_user_id IS NULL AND (d.user_id = ")
@@ -281,8 +295,9 @@ const TELEGRAM_SENT_MARKER: &str = "__telegram_sent__";
 /// A notification of the bell.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct NotificationItem {
-    /// `notif-<id>`, `billing-<id>`, `call-<id>` (`CloudTalk`),
-    /// `telnyx-call-<id>` (Granite Phone), or the email thread id.
+    /// `notif-<id>`, `billing-<id>`, `call-<id>` (`CloudTalk`), `rc-call-<id>`
+    /// (`RingCentral`), `telnyx-call-<id>` (Granite Phone), or the email
+    /// thread id.
     pub id: String,
     /// Usually the customer's name.
     pub title: String,
@@ -408,20 +423,16 @@ async fn unread_email(
     user: &SessionUser,
 ) -> Result<Vec<NotificationItem>, sqlx::Error> {
     let email = user.email.trim().to_lowercase();
-    let like = format!("%<{email}>");
-    let rows: Vec<EmailRow> = sqlx::query_as(
+    let rows: Vec<EmailRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT e.thread_id, CAST(COALESCE(e.deal_id, td.deal_id) AS SIGNED) AS deal_id, e.subject,
                 DATE_FORMAT(e.sent_at, '%Y-%m-%dT%H:%i:%sZ') AS sent_at, c.name AS customer_name
            FROM emails e
            JOIN (
-             SELECT thread_id, MAX(sent_at) AS max_sent_at FROM emails
-              WHERE deleted_at IS NULL AND thread_id IS NOT NULL AND sent_at > NOW() - INTERVAL 14 DAY
-                AND (sender_user_id IS NULL OR (sender_user_id <> ? AND (
-                      receiver_user_id = ?
-                      OR LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(receiver_email, '<', -1), '>', 1))) = ?
-                      OR (receiver_email NOT LIKE '%<%' AND LOWER(TRIM(receiver_email)) = ?)
-                      OR receiver_email LIKE ?)))
-              GROUP BY thread_id
+             SELECT e2.thread_id, MAX(e2.sent_at) AS max_sent_at FROM emails e2
+              WHERE e2.deleted_at IS NULL AND e2.thread_id IS NOT NULL AND e2.sent_at > NOW() - INTERVAL 14 DAY
+                AND (e2.sender_user_id IS NULL OR (e2.sender_user_id <> ? AND (
+                      e2.receiver_user_id = ? OR {inner})))
+              GROUP BY e2.thread_id
            ) last_e ON last_e.thread_id = e.thread_id AND last_e.max_sent_at = e.sent_at
            LEFT JOIN (
              SELECT thread_id, MAX(deal_id) AS deal_id FROM emails
@@ -434,26 +445,25 @@ async fn unread_email(
           WHERE e.deleted_at IS NULL AND e.thread_id IS NOT NULL AND e.employee_read_at IS NULL
             AND e.sent_at > NOW() - INTERVAL 14 DAY
             AND (e.sender_user_id IS NULL OR e.sender_user_id <> ?)
-            AND (e.receiver_user_id = ? OR d.user_id = ?
-                 OR LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(e.receiver_email, '<', -1), '>', 1))) = ?
-                 OR (e.receiver_email NOT LIKE '%<%' AND LOWER(TRIM(e.receiver_email)) = ?)
-                 OR e.receiver_email LIKE ?)
+            AND (e.receiver_user_id = ? OR d.user_id = ? OR {outer})
             AND NOT EXISTS (
                   SELECT 1 FROM notification_email_hides h
                    WHERE h.user_id = ? AND h.thread_id = e.thread_id AND h.hidden_at >= e.sent_at)
           ORDER BY e.sent_at DESC LIMIT 50",
-    )
+        inner = addressed_sql("e2"),
+        outer = addressed_sql("e"),
+    )))
     .bind(user.id)
     .bind(user.id)
+    .bind(user.company_id)
     .bind(&email)
     .bind(&email)
-    .bind(&like)
     .bind(user.id)
     .bind(user.id)
     .bind(user.id)
+    .bind(user.company_id)
     .bind(&email)
     .bind(&email)
-    .bind(&like)
     .bind(user.id)
     .fetch_all(&state.pool)
     .await?;
@@ -670,102 +680,107 @@ async fn billing(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem>
 }
 
 /// Missed calls and voicemail of the last three days on the caller's
-/// `CloudTalk` line (`RingCentral` has none yet).
+/// `CloudTalk` line and `RingCentral` extension.
 async fn missed_calls(state: &AppState, user: &SessionUser) -> Vec<NotificationItem> {
-    let Some(agent) = user
-        .cloudtalk_agent_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|agent| !agent.is_empty())
-    else {
-        return Vec::new();
+    use crate::routes::users::call_activity::{
+        CallActivity, activity, agent_calls, company_ringcentral_calls, ringcentral_activity,
     };
-    let from = (chrono::Utc::now() - chrono::Duration::days(3))
-        .format("%Y-%m-%d")
-        .to_string();
-    let calls =
-        crate::routes::users::call_activity::agent_calls(state, user.company_id, agent, &from)
-            .await;
-    calls
-        .iter()
-        .filter(|item| {
-            let cdr = &item["Cdr"];
-            cdr["type"] == "incoming"
-                && (cdr["is_voicemail"] == true || number(&cdr["talking_time"]) == 0.0)
-        })
+    let present = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let since = chrono::Utc::now() - chrono::Duration::days(3);
+    let cloudtalk = async {
+        let Some(agent) = present(&user.cloudtalk_agent_id) else {
+            return Vec::new();
+        };
+        let from = since.format("%Y-%m-%d").to_string();
+        agent_calls(state, user.company_id, &agent, &from)
+            .await
+            .iter()
+            .map(|item| activity(item, user.id, ""))
+            .collect::<Vec<CallActivity>>()
+    };
+    let ringcentral = async {
+        let Some(extension) = present(&user.ringcentral_extension_id) else {
+            return Vec::new();
+        };
+        let from = since.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        company_ringcentral_calls(state, user.company_id, Some(&extension), &from)
+            .await
+            .iter()
+            .map(|record| ringcentral_activity(record, user.id, ""))
+            .collect::<Vec<CallActivity>>()
+    };
+    let (cloudtalk, ringcentral) = tokio::join!(cloudtalk, ringcentral);
+    cloudtalk
+        .into_iter()
+        .chain(ringcentral)
+        .filter(|call| call.action == "Missed a call")
         .take(30)
-        .filter_map(|item| {
-            let cdr = &item["Cdr"];
-            let id = match &cdr["id"] {
-                serde_json::Value::String(id) => id.clone(),
-                serde_json::Value::Number(id) => id.to_string(),
-                _ => return None,
-            };
-            let contact = item["Contact"]["name"]
-                .as_str()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_string);
-            let external = match &cdr["public_external"] {
-                serde_json::Value::String(phone) => phone.clone(),
-                serde_json::Value::Number(phone) => phone.to_string(),
-                _ => String::new(),
-            };
-            let digits: String = external.chars().filter(char::is_ascii_digit).collect();
-            let digits = &digits[digits.len().saturating_sub(10)..];
-            let voicemail = cdr["is_voicemail"] == true;
-            let started = cdr["started_at"].as_str().unwrap_or("");
-            Some(NotificationItem {
-                id: format!("call-{id}"),
-                title: contact.clone().unwrap_or_else(|| {
-                    if external.is_empty() {
-                        "Unknown caller".into()
-                    } else {
-                        external.clone()
-                    }
-                }),
-                message: if voicemail {
-                    "New voicemail"
-                } else {
-                    "Missed call"
-                }
-                .into(),
-                href: if digits.len() >= 10 {
-                    format!("/employee/cloudtalk/thread/{digits}")
-                } else {
-                    "/employee/cloudtalk".into()
-                },
-                sent_at: chrono::NaiveDateTime::parse_from_str(started, "%Y-%m-%d %H:%M:%S")
-                    .map_or_else(
-                        |_| started.to_string(),
-                        |at| {
-                            at.and_utc()
-                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-                        },
-                    ),
-                kind: NotificationKind::Call,
-                notification_type: None,
-                actor_name: None,
-                customer_name: contact,
-                type_title: Some(
-                    if voicemail {
-                        "CloudTalk voicemail"
-                    } else {
-                        "Missed CloudTalk call"
-                    }
-                    .into(),
-                ),
-                action_label: None,
-            })
-        })
+        .map(|call| missed_call_item(&call))
         .collect()
 }
 
-fn number(value: &serde_json::Value) -> f64 {
-    match value {
-        serde_json::Value::Number(number) => number.as_f64().unwrap_or(0.0),
-        serde_json::Value::String(text) => text.trim().parse().unwrap_or(0.0),
-        _ => 0.0,
+fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) -> NotificationItem {
+    let ringcentral = call.source == "ringcentral_call";
+    let (provider, path) = if ringcentral {
+        ("RingCentral", "ringcentral")
+    } else {
+        ("CloudTalk", "cloudtalk")
+    };
+    let external = call.contact.clone().unwrap_or_default();
+    let digits: String = external.chars().filter(char::is_ascii_digit).collect();
+    let digits = &digits[digits.len().saturating_sub(10)..];
+    let started = call.created_at.as_str();
+    // CloudTalk sends `2026-05-01 10:00:00` (UTC), RingCentral RFC 3339.
+    let sent_at = chrono::NaiveDateTime::parse_from_str(started, "%Y-%m-%d %H:%M:%S")
+        .map(|at| at.and_utc())
+        .or_else(|_| {
+            chrono::DateTime::parse_from_rfc3339(started).map(|at| at.with_timezone(&chrono::Utc))
+        })
+        .map_or_else(
+            |_| started.to_string(),
+            |at| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        );
+    NotificationItem {
+        id: if ringcentral {
+            format!("rc-call-{}", call.call_id)
+        } else {
+            format!("call-{}", call.call_id)
+        },
+        title: call.customer_name.clone().unwrap_or_else(|| {
+            if external.is_empty() {
+                "Unknown caller".into()
+            } else {
+                external.clone()
+            }
+        }),
+        message: if call.is_voicemail {
+            "New voicemail"
+        } else {
+            "Missed call"
+        }
+        .into(),
+        href: if digits.len() >= 10 {
+            format!("/employee/{path}/thread/{digits}")
+        } else {
+            format!("/employee/{path}")
+        },
+        sent_at,
+        kind: NotificationKind::Call,
+        notification_type: None,
+        actor_name: None,
+        customer_name: call.customer_name.clone(),
+        type_title: Some(if call.is_voicemail {
+            format!("{provider} voicemail")
+        } else {
+            format!("Missed {provider} call")
+        }),
+        action_label: None,
     }
 }
 
@@ -779,12 +794,12 @@ fn number(value: &serde_json::Value) -> f64 {
 /// registrations; `tendlc_status` for the company's admins and Managers,
 /// opening `/admin/phone`), number port news (`phone_port`, for the
 /// company's admins, opening `/admin/phone`), open billing notices,
-/// missed `CloudTalk` calls, and Granite Phone calls of the last 3 days that
-/// nobody answered and the caller has not seen (missed calls, voicemails
-/// and AI messages of their direct lines and of the lines that ring them;
-/// `telnyx-call-<id>`, `type_title` names the line), newest first. The
-/// onboarding tour's sample notifications are left out unless `samples` is
-/// set.
+/// missed `CloudTalk` and `RingCentral` calls, and Granite Phone calls of
+/// the last 3 days that nobody answered and the caller has not seen (missed
+/// calls, voicemails and AI messages of their direct lines and of the lines
+/// that ring them; `telnyx-call-<id>`, `type_title` names the line), newest
+/// first. The onboarding tour's sample notifications are left out unless
+/// `samples` is set.
 #[utoipa::path(
     get,
     path = "/v1/notifications",

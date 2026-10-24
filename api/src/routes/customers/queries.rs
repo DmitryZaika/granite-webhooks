@@ -1,8 +1,10 @@
 use super::fuzzy::matches_name_fuzzy;
 use super::schemas::{
     CompanyRow, CustomerDetail, CustomerRow, CustomerSearchBy, CustomerSearchQuery,
-    CustomerSearchRow, CustomersView, EmailsByCustomer, ListFilter,
+    CustomerSearchRow, CustomersPage, CustomersTab, CustomersView, EmailsByCustomer, ListFilter,
+    ListResponse, PageRequest, PageSort,
 };
+use chrono::{DateTime, Datelike, Months, NaiveTime, Utc};
 use sqlx::{FromRow, MySql, MySqlPool, QueryBuilder};
 
 const CUSTOMER_COLUMNS: &str = "
@@ -37,6 +39,11 @@ fn list_query(company_id: i32, filter: ListFilter) -> QueryBuilder<MySql> {
     if filter.view == CustomersView::Companies {
         query.push(COMPANY_TOTALS);
     }
+    push_list_filter(&mut query, company_id, filter);
+    query
+}
+
+fn push_list_filter(query: &mut QueryBuilder<MySql>, company_id: i32, filter: ListFilter) {
     query.push(CUSTOMER_JOINS).push_bind(company_id);
     if filter.view == CustomersView::Companies {
         query.push(" AND (c.company_name IS NOT NULL AND c.company_name != '')");
@@ -47,7 +54,174 @@ fn list_query(company_id: i32, filter: ListFilter) -> QueryBuilder<MySql> {
     if !filter.include_invalid && filter.view != CustomersView::Companies {
         query.push(" AND (c.invalid_lead IS NULL OR c.invalid_lead = '')");
     }
+}
+
+/// The onboarding sample customer: the page shows its own made-up copy, so
+/// real rows with its id or name are left out.
+const SAMPLE_CUSTOMER_ID: i32 = 990_000_021;
+const SAMPLE_CUSTOMER_NAME: &str = "Onboarding Sample Customer";
+
+/// The date a tab shows and counts by: leads by when they were assigned.
+fn tab_date(tab: CustomersTab) -> &'static str {
+    match tab {
+        CustomersTab::Leads => "c.assigned_date",
+        CustomersTab::All => "IF(c.source = 'leads', c.assigned_date, c.created_date)",
+        CustomersTab::Walkin | CustomersTab::CallIn | CustomersTab::Other => "c.created_date",
+    }
+}
+
+/// `FROM … WHERE` of a page: the list's filter, the tab's sources, no sample.
+fn push_page_filter(
+    query: &mut QueryBuilder<MySql>,
+    company_id: i32,
+    filter: ListFilter,
+    tab: CustomersTab,
+) {
+    push_list_filter(query, company_id, filter);
+    query.push(match tab {
+        CustomersTab::Walkin => " AND c.source = 'check-in'",
+        CustomersTab::Leads => " AND c.source = 'leads'",
+        CustomersTab::CallIn => " AND c.source = 'call-in'",
+        CustomersTab::Other => " AND c.source IN ('other', 'user-input')",
+        CustomersTab::All => "",
+    });
     query
+        .push(" AND c.id != ")
+        .push_bind(SAMPLE_CUSTOMER_ID)
+        .push(" AND (c.name IS NULL OR c.name != ")
+        .push_bind(SAMPLE_CUSTOMER_NAME)
+        .push(")");
+}
+
+/// `ORDER BY` over the page's derived table. Ties go by id, so pages never
+/// overlap. Days compare by UTC calendar date, as the page shows them.
+fn page_order(sort: PageSort, descending: bool) -> String {
+    let dir = if descending { "DESC" } else { "ASC" };
+    match sort {
+        PageSort::Default => "DATE(COALESCE(tab_date, created_date)) DESC, id DESC".to_owned(),
+        PageSort::Created => format!("DATE(created_date) {dir}, id {dir}"),
+        PageSort::Assigned => {
+            format!("DATE(COALESCE(assigned_date, created_date)) {dir}, id {dir}")
+        }
+        PageSort::Text(column) => format!("COALESCE({column}, '') {dir}, id ASC"),
+        PageSort::Number(column) => {
+            format!("CAST(COALESCE({column}, 0) AS DECIMAL(20, 2)) {dir}, id ASC")
+        }
+    }
+}
+
+async fn page_rows<T>(
+    pool: &MySqlPool,
+    company_id: i32,
+    request: PageRequest,
+    tab: CustomersTab,
+    page: u32,
+) -> Result<Vec<T>, sqlx::Error>
+where
+    T: for<'r> FromRow<'r, sqlx::mysql::MySqlRow> + Send + Unpin,
+{
+    let mut query = QueryBuilder::<MySql>::new("SELECT * FROM (SELECT");
+    query.push(CUSTOMER_COLUMNS);
+    if request.filter.view == CustomersView::Companies {
+        query.push(COMPANY_TOTALS);
+    }
+    query.push(", ").push(tab_date(tab)).push(" AS tab_date");
+    push_page_filter(&mut query, company_id, request.filter, tab);
+    query
+        .push(") page ORDER BY ")
+        .push(page_order(request.sort, request.descending))
+        .push(" LIMIT ")
+        .push_bind(i64::from(request.page_size))
+        .push(" OFFSET ")
+        .push_bind(i64::from(page - 1) * i64::from(request.page_size));
+    query.build_query_as::<T>().fetch_all(pool).await
+}
+
+/// The tab's customers whose tab date is in `now`'s UTC month.
+async fn month_rows(
+    pool: &MySqlPool,
+    company_id: i32,
+    filter: ListFilter,
+    tab: CustomersTab,
+    now: DateTime<Utc>,
+) -> Result<Vec<CustomerRow>, sqlx::Error> {
+    let start = now
+        .date_naive()
+        .with_day(1)
+        .expect("day 1 exists")
+        .and_time(NaiveTime::MIN);
+    let end = start
+        .checked_add_months(Months::new(1))
+        .expect("next month exists");
+    let mut query = QueryBuilder::<MySql>::new("SELECT");
+    query.push(CUSTOMER_COLUMNS);
+    push_page_filter(&mut query, company_id, filter, tab);
+    query
+        .push(" AND ")
+        .push(tab_date(tab))
+        .push(" >= ")
+        .push_bind(start)
+        .push(" AND ")
+        .push(tab_date(tab))
+        .push(" < ")
+        .push_bind(end);
+    query.build_query_as().fetch_all(pool).await
+}
+
+/// One page of the customers table, sorted, with its customers' emails and
+/// the month's rows for the per-rep counts. `now` picks the month.
+pub async fn customers_page(
+    pool: &MySqlPool,
+    company_id: i32,
+    request: PageRequest,
+    now: DateTime<Utc>,
+) -> Result<CustomersPage, sqlx::Error> {
+    let companies = request.filter.view == CustomersView::Companies;
+    let Some(tab) = request.tab else {
+        return Ok(CustomersPage {
+            rows: if companies {
+                ListResponse::Companies(Vec::new())
+            } else {
+                ListResponse::Customers(Vec::new())
+            },
+            emails: EmailsByCustomer::new(),
+            total: 0,
+            page: 1,
+            month_rows: Vec::new(),
+        });
+    };
+
+    let mut count = QueryBuilder::<MySql>::new("SELECT COUNT(*)");
+    push_page_filter(&mut count, company_id, request.filter, tab);
+    let total: i64 = count.build_query_scalar().fetch_one(pool).await?;
+    let last_page =
+        u32::try_from((total + i64::from(request.page_size) - 1) / i64::from(request.page_size))
+            .unwrap_or(u32::MAX)
+            .max(1);
+    let page = request.page.min(last_page);
+
+    let (rows, ids) = if companies {
+        let rows: Vec<CompanyRow> = page_rows(pool, company_id, request, tab, page).await?;
+        let ids: Vec<i32> = rows.iter().map(|row| row.customer.id).collect();
+        (ListResponse::Companies(rows), ids)
+    } else {
+        let rows: Vec<CustomerRow> = page_rows(pool, company_id, request, tab, page).await?;
+        let ids: Vec<i32> = rows.iter().map(|row| row.id).collect();
+        (ListResponse::Customers(rows), ids)
+    };
+    let emails = emails_by_customer_ids(pool, company_id, &ids).await?;
+    let month_rows = if companies || tab == CustomersTab::Other {
+        Vec::new()
+    } else {
+        month_rows(pool, company_id, request.filter, tab, now).await?
+    };
+    Ok(CustomersPage {
+        rows,
+        emails,
+        total,
+        page,
+        month_rows,
+    })
 }
 
 async fn fetch_list<T>(

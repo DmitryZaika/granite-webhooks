@@ -1,7 +1,8 @@
 mod common;
 
+use api::routes::emails::attachment_token;
 use axum::http::StatusCode;
-use common::{WithSession, server, sessions};
+use common::{SECRET, WithSession, server, sessions};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
 
@@ -53,7 +54,8 @@ async fn drafts_are_saved_reopened_updated_and_deleted(pool: MySqlPool) {
             "attachments": [{
                 "url": "https://files.test/bucket/emails/a.pdf",
                 "filename": "a.pdf",
-                "content_type": "application/pdf"
+                "content_type": "application/pdf",
+                "token": attachment_token::sign(SECRET, "https://files.test/bucket/emails/a.pdf", 107),
             }],
         }))
         .await;
@@ -170,4 +172,183 @@ async fn empty_drafts_and_foreign_deals_are_refused(pool: MySqlPool) {
         .await;
     res.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(res.json::<Value>()["error"], "Deal not found");
+}
+
+/// A draft takes only files the caller may send: uploaded by them (the
+/// upload's token) or already on the company's mail. A saved draft's files
+/// are trusted when it is sent or previewed, so any other URL (another
+/// company's file, the private signatures bucket) is refused.
+#[test_db::test(seed)]
+async fn drafts_take_only_files_the_caller_may_send(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO emails (id, thread_id, subject, body, sender_email, receiver_email, sent_at, company_id, message_id) VALUES
+           (9801, 'other-files', 'Plans', 'x', 'buyer@other-customer.test', 'rep@other.test', NOW(), 101, '<f1@x>');
+         INSERT INTO email_attachments (id, email_id, content_type, content_subtype, filename, url) VALUES
+           (9811, 9801, 'application', 'pdf', 'plans.pdf', 'https://files.test/bucket/emails/101/plans.pdf');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool);
+    let draft = |url: &str, token: Option<String>| {
+        json!({
+            "subject": "Files",
+            "attachments": [{ "url": url, "filename": "f.pdf", "content_type": "application/pdf", "token": token }],
+        })
+    };
+    let own = "https://files.test/bucket/emails/100/mine.pdf";
+    for (url, token) in [
+        ("https://files.test/bucket/emails/101/plans.pdf", None),
+        (
+            "https://files.test/bucket/emails/101/plans.pdf",
+            Some(attachment_token::sign(
+                SECRET,
+                "https://files.test/bucket/emails/101/plans.pdf",
+                106,
+            )),
+        ),
+        ("s3://granite-signatures/signatures/9/completed-x.pdf", None),
+        (own, None),
+        (own, Some("00".repeat(32))),
+        // Another user's token.
+        (own, Some(attachment_token::sign(SECRET, own, 100))),
+    ] {
+        let res = server
+            .post("/v1/emails/drafts")
+            .with_session(DINA)
+            .json(&draft(url, token))
+            .await;
+        res.assert_status(StatusCode::BAD_REQUEST);
+        assert_eq!(res.json::<Value>()["error"], "You cannot attach f.pdf");
+    }
+
+    let res = server
+        .post("/v1/emails/drafts")
+        .with_session(DINA)
+        .json(&draft(own, Some(attachment_token::sign(SECRET, own, 107))))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    // Reopened and saved again, without a token: the file is on the draft.
+    server
+        .put(&format!("/v1/emails/drafts/{id}"))
+        .with_session(DINA)
+        .json(&draft(own, None))
+        .await
+        .assert_status_ok();
+    let reopened: Value = server
+        .get(&format!("/v1/emails/drafts/{id}"))
+        .with_session(DINA)
+        .await
+        .json();
+    assert_eq!(
+        reopened["attachments"],
+        json!([{ "url": own, "filename": "f.pdf", "content_type": "application/pdf" }])
+    );
+    // Nothing planted on the other company's file either.
+    server
+        .put(&format!("/v1/emails/drafts/{id}"))
+        .with_session(DINA)
+        .json(&draft(
+            "https://files.test/bucket/emails/101/plans.pdf",
+            None,
+        ))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+/// A file of the company's mail (forwarding an attachment) needs no token;
+/// another company's never does, and a token proves only its own URL.
+#[test_db::test(seed)]
+async fn draft_files_follow_the_send_rules(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let draft = |url: &str, token: Option<String>| {
+        json!({
+            "subject": "Files",
+            "attachments": [{ "url": url, "filename": "f.png", "content_type": "image/png", "token": token }],
+        })
+    };
+    // Seeded attachment 8810 is on Olga's company's thread.
+    let sketch = "https://example.test/sketch.png";
+    server
+        .post("/v1/emails/drafts")
+        .with_session(OLGA)
+        .json(&draft(sketch, None))
+        .await
+        .assert_status(StatusCode::CREATED);
+    server
+        .post("/v1/emails/drafts")
+        .with_session(DINA)
+        .json(&draft(sketch, None))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    // Dina's token for one upload does not cover another URL.
+    let mine = "https://files.test/bucket/emails/100/a.png";
+    server
+        .post("/v1/emails/drafts")
+        .with_session(DINA)
+        .json(&draft(
+            sketch,
+            Some(attachment_token::sign(SECRET, mine, 107)),
+        ))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+/// One file the caller may not attach refuses the whole save: no draft is
+/// created, and an existing draft keeps its content and files.
+#[test_db::test(seed)]
+async fn a_refused_file_saves_nothing(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let good = "https://files.test/bucket/emails/100/good.pdf";
+    let token = attachment_token::sign(SECRET, good, 107);
+    let files = |bad: bool| {
+        let mut list = vec![
+            json!({ "url": good, "filename": "good.pdf", "content_type": "application/pdf", "token": token }),
+        ];
+        if bad {
+            list.push(json!({ "url": "https://example.test/sketch.png", "filename": "sketch.png", "content_type": "image/png" }));
+        }
+        list
+    };
+    let drafts = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM emails WHERE sender_user_id = 107 AND is_draft = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    let before = drafts().await;
+    server
+        .post("/v1/emails/drafts")
+        .with_session(DINA)
+        .json(&json!({ "subject": "Both", "attachments": files(true) }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(drafts().await, before);
+
+    let res = server
+        .post("/v1/emails/drafts")
+        .with_session(DINA)
+        .json(&json!({ "subject": "Good", "attachments": files(false) }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    server
+        .put(&format!("/v1/emails/drafts/{id}"))
+        .with_session(DINA)
+        .json(&json!({ "subject": "Changed", "attachments": files(true) }))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    let draft: Value = server
+        .get(&format!("/v1/emails/drafts/{id}"))
+        .with_session(DINA)
+        .await
+        .json();
+    assert_eq!(draft["subject"], "Good");
+    assert_eq!(
+        draft["attachments"],
+        json!([{ "url": good, "filename": "good.pdf", "content_type": "application/pdf" }])
+    );
 }
