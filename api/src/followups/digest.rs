@@ -85,7 +85,7 @@ pub async fn quiet_deals(
     company_id: i32,
     now: Instant,
 ) -> Result<Vec<QuietDeal>, sqlx::Error> {
-    let phone = "RIGHT(REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', ''), 10)";
+    let phone = "RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(c.phone, ''), ' ', ''), '-', ''), '(', ''), ')', ''), '.', ''), 10)";
     let last_sms = |table: &str, direction: &str| {
         format!(
             "(SELECT MAX(s.created_date) FROM {table} s
@@ -97,20 +97,20 @@ pub async fn quiet_deals(
         "SELECT deal_id, customer, list_name, last_out, last_in, replied_to_followup FROM (
            SELECT CAST(d.id AS SIGNED) AS deal_id, COALESCE(NULLIF(TRIM(c.name), ''), 'Customer') AS customer,
                   COALESCE(l.name, '') AS list_name,
-                  CAST(NULLIF(GREATEST(COALESCE({ct_out}, '1970-01-01'), COALESCE({rc_out}, '1970-01-01'),
-                                       COALESCE({tx_out}, '1970-01-01'),
+                  CAST(NULLIF(GREATEST(COALESCE(CAST({ct_out} AS DATETIME), CAST('1970-01-01' AS DATETIME)), COALESCE(CAST({rc_out} AS DATETIME), CAST('1970-01-01' AS DATETIME)),
+                                       COALESCE(CAST({tx_out} AS DATETIME), CAST('1970-01-01' AS DATETIME)),
                                        COALESCE((SELECT MAX(e.sent_at) FROM email_participants ep
                                                    JOIN emails e ON e.id = ep.email_id AND e.deleted_at IS NULL
                                                   WHERE ep.customer_id = c.id AND e.sender_user_id IS NOT NULL
-                                                    AND e.is_draft = 0), '1970-01-01')),
-                              '1970-01-01') AS DATETIME) AS last_out,
-                  CAST(NULLIF(GREATEST(COALESCE({ct_in}, '1970-01-01'), COALESCE({rc_in}, '1970-01-01'),
-                                       COALESCE({tx_in}, '1970-01-01'),
+                                                    AND e.is_draft = 0), CAST('1970-01-01' AS DATETIME))),
+                              CAST('1970-01-01' AS DATETIME)) AS DATETIME) AS last_out,
+                  CAST(NULLIF(GREATEST(COALESCE(CAST({ct_in} AS DATETIME), CAST('1970-01-01' AS DATETIME)), COALESCE(CAST({rc_in} AS DATETIME), CAST('1970-01-01' AS DATETIME)),
+                                       COALESCE(CAST({tx_in} AS DATETIME), CAST('1970-01-01' AS DATETIME)),
                                        COALESCE((SELECT MAX(e.sent_at) FROM email_participants ep
                                                    JOIN emails e ON e.id = ep.email_id AND e.deleted_at IS NULL
                                                   WHERE ep.customer_id = c.id AND ep.type = 'from'
-                                                    AND e.sender_user_id IS NULL), '1970-01-01')),
-                              '1970-01-01') AS DATETIME) AS last_in,
+                                                    AND e.sender_user_id IS NULL), CAST('1970-01-01' AS DATETIME))),
+                              CAST('1970-01-01' AS DATETIME)) AS DATETIME) AS last_in,
                   EXISTS (SELECT 1 FROM sms_flow_enrollments f
                            WHERE f.customer_id = c.id AND f.status = 'stopped_by_reply') AS replied_to_followup
              FROM deals d
@@ -124,7 +124,7 @@ pub async fn quiet_deals(
               AND (COALESCE(TRIM(c.phone), '') <> ''
                    OR EXISTS (SELECT 1 FROM customers_emails ce WHERE ce.customer_id = c.id))
          ) quiet
-         WHERE COALESCE(GREATEST(COALESCE(last_out, '1970-01-01'), COALESCE(last_in, '1970-01-01')), '1970-01-01')
+         WHERE COALESCE(GREATEST(COALESCE(last_out, CAST('1970-01-01' AS DATETIME)), COALESCE(last_in, CAST('1970-01-01' AS DATETIME))), CAST('1970-01-01' AS DATETIME))
                < ? - INTERVAL {QUIET_DAYS} DAY
          LIMIT 200",
         ct_out = last_sms("cloudtalk_sms", "outbound"),
