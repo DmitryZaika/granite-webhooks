@@ -18923,6 +18923,73 @@
         ]
       }
     },
+    "/v1/emails/inbound-push": {
+      "post": {
+        "tags": [
+          "emails"
+        ],
+        "summary": "Push a new inbound email to its recipients' phones",
+        "description": "Called by the `webhooks` Lambda (job key), not by the CRM or the app:\nafter it stored an email SES received, it sends the new email's id. The\nemail is pushed to the signed-in phones of the users whose inbox shows it\nunread (as `GET /v1/emails/unread` counts it) as data\n`{granite: \"1\", type: \"email\", emailId, threadId}`: ids only, never the\nsubject, sender or text. The app opens it with\n`GET /v1/emails/threads/{thread_id}`. Nothing is pushed (`pushed: 0`) for\nan unknown, deleted or draft email, one sent by an employee, a company\nwithout inbound email, or when nobody's inbox shows it. Calling it again\npushes again.",
+        "operationId": "push_inbound_email",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboundPush"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Phones told",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundPushSent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
     "/v1/emails/drafts/{id}": {
       "get": {
         "tags": [
@@ -47420,7 +47487,7 @@
           "phone"
         ],
         "summary": "Set this phone's push token",
-        "description": "Saves the phone's FCM registration token (after it changes), for our\npushes: missed calls, voicemails, AI messages, sign-outs. No other phone\nkeeps the token. 404 when `id` is not this session's phone. The native\ncalling module calls it too.",
+        "description": "Saves the phone's FCM registration token (after it changes), for our\npushes: missed calls, voicemails, AI messages, new emails, sign-outs. No\nother phone keeps the token. 404 when `id` is not this session's phone. The native\ncalling module calls it too.",
         "operationId": "set_phone_push_token",
         "parameters": [
           {
@@ -68085,6 +68152,34 @@
           "stored": {
             "type": "integer",
             "description": "Files downloaded and attached; a file that failed is left out.",
+            "minimum": 0
+          }
+        }
+      },
+      "InboundPush": {
+        "type": "object",
+        "description": "Body of `POST /v1/emails/inbound-push`.",
+        "required": [
+          "email_id"
+        ],
+        "properties": {
+          "email_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The stored inbound email (`emails` row id, the `id` of a message in\n`GET /v1/emails/threads`)."
+          }
+        }
+      },
+      "InboundPushSent": {
+        "type": "object",
+        "description": "How many phones were told.",
+        "required": [
+          "pushed"
+        ],
+        "properties": {
+          "pushed": {
+            "type": "integer",
+            "description": "Phones FCM accepted the push for; 0 when nobody is told (unknown,\ndeleted, draft or outbound email, a company without inbound email,\nnobody whose inbox shows it, or no signed-in phone).",
             "minimum": 0
           }
         }

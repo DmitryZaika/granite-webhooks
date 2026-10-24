@@ -405,8 +405,8 @@ pub async fn mint_device_token(
 /// Set this phone's push token
 ///
 /// Saves the phone's FCM registration token (after it changes), for our
-/// pushes: missed calls, voicemails, AI messages, sign-outs. No other phone
-/// keeps the token. 404 when `id` is not this session's phone. The native
+/// pushes: missed calls, voicemails, AI messages, new emails, sign-outs. No
+/// other phone keeps the token. 404 when `id` is not this session's phone. The native
 /// calling module calls it too.
 #[utoipa::path(
     put,

@@ -17,6 +17,8 @@
 //! - `GET  /v1/emails/{id}/reads`                  → every time the recipient opened a sent email
 //! - `POST /v1/emails/drafts`, `GET|PUT|DELETE /v1/emails/drafts/{id}` → the caller's drafts
 //! - `GET  /v1/superuser/sales-emails[/{thread_id}]` → the sales mailbox (super admins)
+//! - `POST /v1/emails/inbound-push`                → push a stored inbound email to its
+//!   recipients' phones (the `webhooks` Lambda, by its key)
 //!
 //! Replaces the Remix `employee.emails*` and `admin.emails*` loaders and `api.emails.*` routes.
 //! The `webhooks` Lambda builds and sends the MIME message (it owns SES).
@@ -29,6 +31,7 @@ mod conversation;
 pub mod deal_history;
 mod drafts;
 mod handlers;
+mod inbound_push;
 mod list;
 mod names;
 mod reads;
@@ -67,6 +70,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(reads::email_reads))
         .routes(routes!(attachment_preview::preview))
         .routes(routes!(conversation::conversation))
+        .routes(routes!(inbound_push::inbound_push))
         .routes(routes!(
             drafts::get_draft,
             drafts::update_draft,

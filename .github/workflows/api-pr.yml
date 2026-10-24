@@ -66,6 +66,7 @@ jobs:
           --test phone_calls
           --test phone_contacts
           --test phone_devices
+          --test phone_email_push
           --test phone_jobs
           --test phone_revocation
           --test phone_settings

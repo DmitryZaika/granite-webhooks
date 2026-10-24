@@ -385,7 +385,8 @@ that flag, so copy any new variable to both. The browser reaches it at
 `time-triggered` (every minute) posts to `<API_URL>/v1/jobs/*` with
 `Authorization: <LAMBDA_KEY>`, the API's `LAMBDA_KEY`. `webhooks` asks the API
 whether a called customer answered (`<API_URL>/v1/followups/call-check`, same
-key); the API sends mail and texts through `webhooks` (`WEBHOOKS_URL`, and
+key) and, after storing an inbound email, has it pushed to the recipients'
+phones (`<API_URL>/v1/emails/inbound-push`, same key); the API sends mail and texts through `webhooks` (`WEBHOOKS_URL`, and
 `WEBHOOKS_KEY` = the webhooks Lambda's `REMIX_KEY`).
 
 ## Phone (Telnyx)
