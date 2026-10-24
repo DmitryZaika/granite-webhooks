@@ -88,7 +88,7 @@ fn well_formed(token: &str) -> bool {
 }
 
 /// The device token of a request, when it has the header.
-fn device_token(parts: &Parts) -> Option<String> {
+pub(super) fn device_token(parts: &Parts) -> Option<String> {
     parts
         .headers
         .get(DEVICE_HEADER)
@@ -119,7 +119,10 @@ struct LiveSession {
 }
 
 /// The device session of `token`, when it still signs in.
-async fn authenticate_device(token: &str, state: &AppState) -> Result<DeviceUser, ApiError> {
+pub(super) async fn authenticate_device(
+    token: &str,
+    state: &AppState,
+) -> Result<DeviceUser, ApiError> {
     if !well_formed(token) {
         return Err(ApiError::Unauthorized);
     }

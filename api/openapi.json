@@ -20584,6 +20584,379 @@
         ]
       }
     },
+    "/v1/sms/mine/threads": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "List my conversations over every provider",
+        "description": "The caller's own SMS conversations through every provider they text\nthrough or have texted through (a `CloudTalk` agent id, a `RingCentral`\nextension, a Telnyx line), merged by phone: unread first, then latest.\nEach provider's part is what its own inbox shows the caller. A search\nmatches phone digits, message text and customer or supplier names.",
+        "operationId": "list_my_sms_threads",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Phone digits, message text, or a customer's or supplier's name.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 100 (default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Threads to skip.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`all` for the whole company (admins only).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose conversations to list.",
+              "enum": [
+                "mine",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "description": "With `scope=all`, one rep's conversations (their agent id).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of conversations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/mine/threads/{phone}": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Get my conversation over every provider",
+        "description": "The newest messages with one phone through every provider the caller\ntexts through (as `GET /v1/sms/mine/threads`), oldest first, each with\nthe provider that carried it (page back by raising `limit`;\n`before_id` is ignored); the customer or supplier it belongs to and the\nSMS flow running on it. `replyProvider` is the provider to answer\nthrough: the one of the latest message the caller can text through,\nelse the first they can; `canSend` is false when they can text through\nnone. Opening it in the caller's own inbox marks it read (`unreadCount`\nis 0).",
+        "operationId": "get_my_sms_thread",
+        "parameters": [
+          {
+            "name": "phone",
+            "in": "path",
+            "description": "The other party's phone digits",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Messages, 1 to 200 (default 30), newest first before reversing.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before_id",
+            "in": "query",
+            "description": "Only messages older than this one (paging back).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`all` to read as an admin (anyone else reads their own).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose conversations to list.",
+              "enum": [
+                "mine",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "description": "With `scope=all`, read as one rep (their agent id).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The onboarding sample",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/mine/unread-count": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Count my unread conversations over every provider",
+        "description": "The caller's own conversations with unread messages through every\nprovider they text through (as `GET /v1/sms/mine/threads`), for the\nsidebar badge. A phone with unread texts through two providers counts\ntwice.",
+        "operationId": "count_my_unread_sms_threads",
+        "responses": {
+          "200": {
+            "description": "The count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreadCount"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/mine/desktop-alerts": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "My unread texts to alert about, over every provider",
+        "description": "As `GET /v1/sms/{provider}/desktop-alerts` for every provider the caller\ntexts through: one alert per phone (the latest), newest first, at most\n50, each opening the conversation on the caller's `inbox` page.",
+        "operationId": "list_my_sms_desktop_alerts",
+        "parameters": [
+          {
+            "name": "inbox",
+            "in": "query",
+            "description": "The SMS page the alerts open (the caller's inbox); default `telnyx`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "The SMS provider a company texts through: `cloudtalk`, `ringcentral`, or\n`telnyx` (Granite Phone: texts from the company's Telnyx numbers).",
+              "enum": [
+                "cloudtalk",
+                "ringcentral",
+                "telnyx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Alerts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopAlerts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/sms/{provider}/threads": {
       "get": {
         "tags": [
@@ -50157,7 +50530,7 @@
           "phone"
         ],
         "summary": "Get the company's business hours",
-        "description": "The main line's business hours and holidays. 404 until a superuser has\nset up Telnyx for the company. Company admins (and super admins,\nsuperusers) only.",
+        "description": "The main line's business hours and holidays. 404 until Telnyx is\nconnected for the company. Company admins (and super admins,\nsuperusers) only.",
         "operationId": "get_phone_admin_hours",
         "responses": {
           "200": {
@@ -50222,7 +50595,7 @@
           "phone"
         ],
         "summary": "Save the company's business hours",
-        "description": "Saves the main line's business hours and holidays and returns them.\nChecks: a valid IANA time zone, at least one range, `HH:MM` with start\nbefore end, `YYYY-MM-DD` holidays (at most 366); 400 with a message\notherwise. 404 until a superuser has set up Telnyx for the company.\nWritten to the phone audit log. Company admins (and super admins,\nsuperusers) only.",
+        "description": "Saves the main line's business hours and holidays and returns them.\nChecks: a valid IANA time zone, at least one range, `HH:MM` with start\nbefore end, `YYYY-MM-DD` holidays (at most 366); 400 with a message\notherwise. 404 until Telnyx is connected for the company.\nWritten to the phone audit log. Company admins (and super admins,\nsuperusers) only.",
         "operationId": "save_phone_admin_hours",
         "requestBody": {
           "content": {
@@ -50309,7 +50682,7 @@
           "phone"
         ],
         "summary": "Get the company's call recording",
-        "description": "Which calls are recorded and the notice played on recorded outgoing\ncalls. 404 until a superuser has set up Telnyx for the company. Company\nadmins (and super admins, superusers) only.",
+        "description": "Which calls are recorded and the notice played on recorded outgoing\ncalls. 404 until Telnyx is connected for the company. Company\nadmins (and super admins, superusers) only.",
         "operationId": "get_phone_admin_recording",
         "responses": {
           "200": {
@@ -50374,7 +50747,7 @@
           "phone"
         ],
         "summary": "Save the company's call recording",
-        "description": "Saves which calls are recorded and the notice audio, and returns them.\nThe notice is an `http(s)://` URL (at most 512 characters; blank =\nspoken); 400 otherwise. 404 until a superuser has set up Telnyx for the\ncompany. Written to the phone audit log. Company admins (and super\nadmins, superusers) only.",
+        "description": "Saves which calls are recorded and the notice audio, and returns them.\nThe notice is an `http(s)://` URL (at most 512 characters; blank =\nspoken); 400 otherwise. 404 until Telnyx is connected for the\ncompany. Written to the phone audit log. Company admins (and super\nadmins, superusers) only.",
         "operationId": "save_phone_admin_recording",
         "requestBody": {
           "content": {
@@ -50636,7 +51009,7 @@
           "phone"
         ],
         "summary": "Buy a number",
-        "description": "Buys a number for the caller's company in Telnyx (on its TeXML app,\nmessaging profile and billing group) and adds it as an unassigned direct\nline; answers it (assign it with `PUT /v1/phone/admin/numbers/{id}`).\nThe company is charged by Telnyx's price for it. 400 when Telnyx is not\nconnected for the company or the number is not a US or Canadian one,\n403 once the company has 25 numbers (a superuser can buy more), 409 when\nthe company has it already, 502 when Telnyx fails (the number may be\ntaken: search again). Written to the phone audit log. Company admins\n(and super admins, superusers) only.",
+        "description": "Buys a number for the caller's company in Telnyx (on its TeXML app,\nmessaging profile and billing group) and adds it as an unassigned direct\nline; answers it (assign it with `PUT /v1/phone/admin/numbers/{id}`).\nThe company is charged by Telnyx's price for it. 400 when Telnyx is not\nconnected for the company or the number is not a US or Canadian one,\n403 while its calling is switched off or once it has 25 numbers (a\nsuperuser can buy either way), 409 when\nthe company has it already, 502 when Telnyx fails (the number may be\ntaken: search again). Written to the phone audit log. Company admins\n(and super admins, superusers) only.",
         "operationId": "buy_phone_admin_number",
         "requestBody": {
           "content": {

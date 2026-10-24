@@ -15,6 +15,14 @@
 //!
 //! *`CurrentUser` also applies the super-admin elevation and company switch, so
 //! `company_id` is always the company the request acts in.
+//!
+//! On [`DEVICE_ROUTES`] (the app's Emails and Schedule screens) the cookie
+//! extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
+//! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
+//! the device session's company, with the same rights as their CRM session.
+//! There the header decides alone (a bad token is 401 even with a cookie); on
+//! every other route they ignore it. `device::DeviceUser` and
+//! `device::PhoneCaller` take the token on any route, as before.
 
 pub mod cookie;
 pub mod device;
@@ -34,10 +42,29 @@ async fn authenticate(parts: &Parts, state: &AppState) -> Result<SessionUser, Ap
         .map(|(user, _)| user)
 }
 
+/// The CRM routes the Granite Phone app also calls with its device token:
+/// these prefixes and everything under them.
+pub const DEVICE_ROUTES: [&str; 3] = ["/v1/emails", "/v1/schedule", "/v1/events"];
+
+/// `path` is one of [`DEVICE_ROUTES`] or under one (`/v1/emailsx` is not).
+fn device_route(path: &str) -> bool {
+    DEVICE_ROUTES.iter().any(|prefix| {
+        path.strip_prefix(prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
 async fn authenticate_with_positions(
     parts: &Parts,
     state: &AppState,
 ) -> Result<(SessionUser, Vec<session::UserPositionRow>), ApiError> {
+    if device_route(parts.uri.path())
+        && let Some(token) = device::device_token(parts)
+    {
+        let device = device::authenticate_device(&token, state).await?;
+        let positions = user_positions(&state.pool, device.user.id).await?;
+        return Ok((device.user, positions));
+    }
     let session = parts
         .headers
         .get_all(COOKIE)
@@ -201,6 +228,33 @@ impl FromRequestParts<AppState> for CompanyManager {
             Ok(Self(user))
         } else {
             Err(ApiError::Forbidden)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::device_route;
+
+    #[test]
+    fn device_routes_are_whole_prefixes() {
+        for path in [
+            "/v1/emails",
+            "/v1/emails/threads",
+            "/v1/schedule/events",
+            "/v1/events/7/details",
+        ] {
+            assert!(device_route(path), "{path}");
+        }
+        for path in [
+            "/v1/emailsx",
+            "/v1/eventsfoo/1",
+            "/v1/customers",
+            "/v1/me/devices",
+            "/emails",
+            "",
+        ] {
+            assert!(!device_route(path), "{path}");
         }
     }
 }
