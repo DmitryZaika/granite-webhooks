@@ -151,7 +151,7 @@ async fn a_phone_signs_in_with_the_crm_password(pool: MySqlPool) {
             "expiresAt": expires_at,
             "user": {
                 "id": 100, "name": "Rita Rep", "email": "rep@acme.test",
-                "companyId": 100, "companyName": "Acme Stone", "isAdmin": false,
+                "companyId": 100, "companyName": "Acme Stone", "isAdmin": false, "portal": null,
             },
         })
     );
@@ -325,7 +325,7 @@ async fn only_employees_and_admins_get_a_phone(pool: MySqlPool) {
     assert_eq!(
         body["user"],
         json!({ "id": 103, "name": "Sam Super", "email": "super@other.test",
-                "companyId": 101, "companyName": "Other Granite Co", "isAdmin": true })
+                "companyId": 101, "companyName": "Other Granite Co", "isAdmin": true, "portal": null })
     );
 }
 

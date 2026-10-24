@@ -74762,6 +74762,13 @@
           "isAdmin": {
             "type": "boolean",
             "description": "Company admin (or superuser / super admin): sees the admin screens."
+          },
+          "portal": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The portal a position locks the user into on the web, if any.\n\nThe same rule as `GET /v1/app/shell` `portal` (`installer`,\n`check-in`, `marketing`, `shop_worker`, `template`); null for everyone\nelse. For `installer` and `template` the app shows only the user's own\nschedule (`GET /v1/me/schedule`) and does not set the phone up for\ncalls."
           }
         }
       },

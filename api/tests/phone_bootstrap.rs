@@ -180,7 +180,7 @@ async fn the_bootstrap_has_everything_the_app_needs(pool: MySqlPool) {
             "minAppVersion": "1.2.0",
             "callingEnabled": true,
             "user": { "id": 100, "name": "Rita Rep", "email": "rep@acme.test", "companyId": 100,
-                      "companyName": "Acme Stone", "isAdmin": false },
+                      "companyName": "Acme Stone", "isAdmin": false, "portal": null },
             "device": { "id": 960_061, "sipUsername": "gencred61", "pushTokenSet": true,
                         "createdAt": "2026-10-01T09:00:00.000Z" },
             "callerIds": [
@@ -232,7 +232,7 @@ async fn a_new_user_without_calling_gets_the_defaults(pool: MySqlPool) {
         "minAppVersion": null,
         "callingEnabled": false,
         "user": { "id": 106, "name": "Olga Other", "email": "rep@other.test", "companyId": 101,
-                  "companyName": "Other Granite Co", "isAdmin": false },
+                  "companyName": "Other Granite Co", "isAdmin": false, "portal": null },
         "device": null,
         "callerIds": [],
         "settings": { "defaultCallerNumberId": null, "aiNotes": true, "workingHours": null,
@@ -259,7 +259,7 @@ async fn a_new_user_without_calling_gets_the_defaults(pool: MySqlPool) {
     assert_eq!(
         sam["user"],
         json!({ "id": 103, "name": "Sam Super", "email": "super@other.test", "companyId": 101,
-                "companyName": "Other Granite Co", "isAdmin": true })
+                "companyName": "Other Granite Co", "isAdmin": true, "portal": null })
     );
     // An unverified cell is no cell; a switched-off company calls nothing.
     set_settings(
