@@ -38,6 +38,7 @@ use super::send_window::{FollowupChannel, StepTiming, expected_followup_send_ats
 use super::style::format_style_preference_prompt_block;
 use crate::ai::{Ai, AiError, Caller, Chat, ChatReply};
 use crate::re;
+use crate::routes::followups::signature::with_text_signature;
 use sqlx::MySqlPool;
 use std::time::Duration;
 
@@ -136,11 +137,12 @@ fn sms_text(body: &str) -> String {
     js_slice(body, 0, SMS_MAX_TEXT)
 }
 
-/// One flow message, or why not.
+/// One flow message (texts signed with the rep's sign-off), or why not.
 pub async fn complete_followup(
     writer: Writer<'_>,
     request: &FollowupRequest,
     gathered: &GatheredContext,
+    now: Instant,
 ) -> Result<GeneratedFollowup, GenerationError> {
     if let FollowupGenerationDecision::DoNotGenerate { reason } = &gathered.generation_decision {
         return Ok(GeneratedFollowup::Skip {
@@ -164,6 +166,7 @@ pub async fn complete_followup(
         rep_voice: gathered.rep_voice.examples.clone(),
         force_generate: false,
     });
+    let user_prompt = with_offer_line(user_prompt, gathered, now);
     let reply = writer
         .complete(&build_followup_system_prompt(), &user_prompt)
         .await?;
@@ -171,7 +174,7 @@ pub async fn complete_followup(
         GeneratedFollowup::Message { body, subject, .. } => Ok(GeneratedFollowup::Message {
             skip: false,
             body: if request.channel == FollowupChannel::Sms {
-                sms_text(&body)
+                sms_text(&with_text_signature(&body, &gathered.sms_signature))
             } else {
                 strip_followup_email_signature(&body)
             },
@@ -179,6 +182,26 @@ pub async fn complete_followup(
                 .then(|| js_slice(subject.as_deref().unwrap_or("Following up"), 0, 300)),
         }),
         skip @ GeneratedFollowup::Skip { .. } => Ok(skip),
+    }
+}
+
+/// A `LEGACY` user prompt with the company's current offer, while it stands.
+fn with_offer_line(user_prompt: String, gathered: &GatheredContext, now: Instant) -> String {
+    match gathered.offer_for_prompt(now) {
+        Some(offer) => format!(
+            "{user_prompt}\n\nCURRENT OFFER (the company's real offer: it may be the reason to reply where it fits, stated as written, never in a message sent after its end date): {offer}"
+        ),
+        None => user_prompt,
+    }
+}
+
+/// The rep's sign-off under a text; emails as they are (they get the email
+/// signature when sent).
+pub fn signed_body(body: &str, channel: FollowupChannel, gathered: &GatheredContext) -> String {
+    if channel == FollowupChannel::Sms {
+        sms_text(&with_text_signature(body, &gathered.sms_signature))
+    } else {
+        body.to_string()
     }
 }
 
@@ -259,12 +282,15 @@ fn send_ats(
         .enumerate()
         .map(|(index, step)| {
             let generated = parsed.get(index).filter(|g| !g.skip);
+            #[allow(clippy::cast_precision_loss)]
             StepTiming {
                 delay_minutes: resolve_cadence_preview_delay_minutes(&PreviewDelayInputs {
                     generated_delay_minutes: generated.and_then(|g| g.delay_minutes),
                     planned_delay_minutes: step.delay_minutes,
                     floor_to_planned_delay: floor,
                     instruction_gap_minutes: gap,
+                    is_first_message: index == 0,
+                    message_index: Some(index as f64),
                     ..PreviewDelayInputs::default()
                 }),
                 channel: step.channel,
@@ -356,7 +382,8 @@ pub async fn complete_cadence(
     };
     if mode == CopyGenerationMode::NewContext {
         let messages =
-            complete_cadence_new_context(writer, request, &gathered, steps, now, timer).await?;
+            complete_cadence_new_context(writer, request, &gathered, steps, now, timer, None)
+                .await?;
         timer.followups_generated = messages
             .iter()
             .filter(|m| !m.skip && !trim(&m.body).is_empty())
@@ -396,6 +423,7 @@ pub async fn complete_cadence(
         },
         now,
     );
+    let user_prompt = with_offer_line(user_prompt, &gathered, now);
     timer.prompt_components = Some(prompt_component_metrics(&PromptParts {
         system_prompt: &system_prompt,
         user_prompt: &user_prompt,
@@ -491,8 +519,48 @@ pub async fn complete_cadence(
     Ok(messages)
 }
 
-/// The `NEW_CONTEXT` cadence: the model context and Markdown instructions,
-/// then one repair of only the messages that failed the copy checks.
+/// One due message of a running AI follow-up, written again because the
+/// conversation changed after the rep approved it: the preview's
+/// `NEW_CONTEXT` writer, told what the approved draft was for. `None` when
+/// nothing is worth sending now.
+pub async fn complete_due_rewrite(
+    writer: Writer<'_>,
+    request: &FollowupRequest,
+    gathered: &GatheredContext,
+    step: &PlannedAiCadenceStep,
+    approved: &str,
+    now: Instant,
+) -> Result<Option<GeneratedCadenceFollowup>, GenerationError> {
+    if matches!(
+        gathered.generation_decision,
+        FollowupGenerationDecision::DoNotGenerate { .. }
+    ) {
+        return Ok(None);
+    }
+    let note = format!(
+        "SEND-TIME REWRITE: this message goes out now instead of the draft the rep approved earlier. The conversation or the CRM changed since (see RECENT CONVERSATION and FROM THE CRM). Keep the draft's purpose only if it still fits, never repeat what was said or asked since, and skip it when nothing useful is left to say.\nApproved draft:\n\"\"\"{}\"\"\"",
+        trim(approved)
+    );
+    let mut timer = PipelineTimer::default();
+    let messages = complete_cadence_new_context(
+        writer,
+        request,
+        gathered,
+        std::slice::from_ref(step),
+        now,
+        &mut timer,
+        Some(&note),
+    )
+    .await?;
+    Ok(messages
+        .into_iter()
+        .next()
+        .filter(|m| !m.skip && !trim(&m.body).is_empty()))
+}
+
+/// The `NEW_CONTEXT` cadence: the model context and Markdown instructions
+/// (and `note`, when given), then one repair of only the messages that
+/// failed the copy checks.
 #[allow(clippy::too_many_lines)]
 async fn complete_cadence_new_context(
     writer: Writer<'_>,
@@ -501,8 +569,10 @@ async fn complete_cadence_new_context(
     steps: &[PlannedAiCadenceStep],
     now: Instant,
     timer: &mut PipelineTimer,
+    note: Option<&str>,
 ) -> Result<Vec<GeneratedCadenceFollowup>, GenerationError> {
     let writable_steps: Vec<PlannedAiCadenceStep> = writable(steps).into_iter().cloned().collect();
+    let offer = gathered.offer_for_prompt(now);
     let source = ModelContextSource {
         profile: &gathered.profile,
         timeline: &gathered.timeline,
@@ -510,12 +580,16 @@ async fn complete_cadence_new_context(
         admin_instruction: Some(&gathered.admin_instruction),
         contact_pressure: &gathered.contact_pressure,
         style_profile: gathered.style_profile.as_ref(),
+        current_offer: offer.as_deref(),
     };
     let context = build_cadence_model_context(&source, &writable_steps, now);
     let mut prompt = build_refactored_cadence_prompt(AI_FOLLOWUP_PROMPT, &context);
     let voice = super::rep_voice::format_voice_block(&gathered.rep_voice.examples);
     if !voice.is_empty() {
         prompt.user_prompt = format!("{}\n\n{voice}", prompt.user_prompt);
+    }
+    if let Some(note) = note {
+        prompt.user_prompt = format!("{}\n\n{note}", prompt.user_prompt);
     }
     let system_prompt = if request.force_generate {
         format!(
@@ -769,6 +843,7 @@ pub async fn regenerate_cadence_message(
         },
         now,
     );
+    let user_prompt = with_offer_line(user_prompt, &gathered, now);
     let subject_line = avoid_subject
         .map(trim)
         .filter(|s| !s.is_empty())

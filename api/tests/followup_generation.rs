@@ -285,7 +285,7 @@ async fn one_flow_message_is_cut_to_the_sms_limit_or_skipped(pool: MySqlPool) {
     let long = "x".repeat(2000);
     let (ai, model) = stub_model(vec![json!({ "skip": false, "subject": "", "body": long })]).await;
     let GeneratedFollowup::Message { body, subject, .. } =
-        complete_followup(writer(&pool, &ai), &request, &gathered)
+        complete_followup(writer(&pool, &ai), &request, &gathered, now())
             .await
             .unwrap()
     else {

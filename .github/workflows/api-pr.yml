@@ -91,4 +91,5 @@ jobs:
           --test followup_ai_cadence
           --test followup_generation
           --test followup_instruction
+          --test followup_settings
           --test sms_flows

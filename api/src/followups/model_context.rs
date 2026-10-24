@@ -122,6 +122,9 @@ pub struct SharedModelContext {
     pub voice_samples: Vec<VoiceSample>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub admin_instruction: Option<String>,
+    /// The company's current offer, while it stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_offer: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -161,6 +164,8 @@ pub struct ModelContextSource<'a> {
     pub admin_instruction: Option<&'a str>,
     pub contact_pressure: &'a FollowupContactPressure,
     pub style_profile: Option<&'a FollowupStyleProfile>,
+    /// The company's current offer, while it stands ("… (until <day>)").
+    pub current_offer: Option<&'a str>,
 }
 
 /// The task text for an objective; with an unknown product scope it never
@@ -1121,6 +1126,11 @@ pub fn build_shared_model_context(source: &ModelContextSource<'_>) -> SharedMode
             .map(trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
+        current_offer: source
+            .current_offer
+            .map(trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
     }
 }
 
@@ -1524,6 +1534,9 @@ pub fn format_cadence_model_context(context: &CadenceModelContext) -> String {
             "This user instruction has higher priority than the planned timing.".into(),
             instruction.to_string(),
         ]);
+    }
+    if let Some(offer) = &shared.current_offer {
+        s.extend([String::new(), "CURRENT OFFER".into(), offer.clone()]);
     }
     if !shared.voice_samples.is_empty() {
         s.extend([String::new(), "VOICE SAMPLES".into()]);
