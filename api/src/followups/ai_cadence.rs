@@ -835,8 +835,8 @@ pub async fn start(
     if let Err(err) = record_edits(state, user, &gathered, flow_id, preview).await {
         tracing::warn!(?err, flow_id, "ai follow-up edits not recorded");
     }
-    let provider =
-        crate::routes::sms::send::user_provider(&state.pool, user.company_id, user.id).await?;
+    // The rep's own line, as their sends use it (not the company's first).
+    let provider = super::processor::rep_sms_provider(state, user.company_id, user).await?;
     super::enrollments::start(
         &state.pool,
         user,
