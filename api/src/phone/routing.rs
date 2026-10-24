@@ -1,22 +1,31 @@
 //! Who an incoming call rings, and what follows when nobody answers.
 //!
 //! A call rings the number's ringing users who are live, in the number's
-//! company, still an employee or admin, and available now (not
-//! Do not disturb, inside their working hours); for the main line only while
-//! the company is open (business hours, not a holiday). Their signed-in
-//! phones with a SIP user ring together; the verified cells of those with
-//! cell fallback on are rung after them, behind a "press 1" screen. A call
-//! nobody answers then takes the number's no-answer action: the AI
-//! Assistant (voicemail when the company has none), voicemail, or a forward.
+//! company, still an employee or admin, and whose part of the call is to
+//! ring (`call_rules::decide`: not Do not disturb; "Forward all calls" off;
+//! a custom rule that says ring, or none and inside their working hours);
+//! for the main line only while the company is open (business hours, not a
+//! holiday). Their signed-in phones with a SIP user ring together; the
+//! verified cells of those with cell fallback on are rung after them,
+//! behind a "press 1" (or their PIN) screen. A call nobody answers then
+//! takes the number's no-answer action: the AI Assistant (voicemail when the
+//! company has none), voicemail, or a forward.
+//!
+//! On a user's own direct line (a direct number that rings nobody else),
+//! their forward, voicemail or message decision takes the whole call
+//! ([`Route::takeover`]). On shared and main lines, and direct lines that
+//! ring several people, it only keeps their own phones from ringing: one
+//! person's forward or rule never takes the call from the others.
 //!
 //! Nothing rings while the company's calling is switched off (or the
 //! company is deleted) or the number is inactive: such calls go straight to
 //! the no-answer action.
 
+use super::call_rules::{self, Decision, Incoming};
 use super::company::{CompanyConfig, time_zone_of};
 use super::devices::LIVE_DEVICE;
 use super::lines::NumberKind;
-use super::numbers::{is_nanp, to_e164};
+use super::numbers::{is_nanp, last10, to_e164};
 use super::settings::{self, DEFAULT_RING_TIMEOUT_SECS, RING_TIMEOUT_SECS, UserSettings};
 use super::wire_enum;
 use chrono::{DateTime, Utc};
@@ -47,6 +56,8 @@ pub struct Line {
     pub company_id: i32,
     /// E.164.
     pub e164: String,
+    /// Its name, e.g. "Sales"; may be empty.
+    pub label: String,
     #[sqlx(try_from = "String")]
     pub kind: NumberKind,
     #[sqlx(try_from = "String")]
@@ -57,10 +68,23 @@ pub struct Line {
     pub active: bool,
 }
 
-const LINE_COLUMNS: &str = "SELECT id, company_id, e164, CAST(kind AS CHAR) AS kind,
+const LINE_COLUMNS: &str = "SELECT id, company_id, e164, label, CAST(kind AS CHAR) AS kind,
         CAST(no_answer_action AS CHAR) AS no_answer_action, forward_to, greeting,
         active <> 0 AS active
    FROM telnyx_numbers";
+
+impl Line {
+    /// What an announcement calls the line: its name, else its number read
+    /// out digit by digit.
+    pub fn label_or_number(&self) -> String {
+        let label = self.label.trim();
+        if label.is_empty() {
+            super::numbers::spoken_digits(&self.e164)
+        } else {
+            label.to_string()
+        }
+    }
+}
 
 /// The number `e164`, whatever company it belongs to.
 pub async fn line_by_e164(pool: &MySqlPool, e164: &str) -> sqlx::Result<Option<Line>> {
@@ -123,19 +147,31 @@ pub(crate) const PHONE_USER: &str =
       OR COALESCE(u.is_superuser, 0) <> 0
       OR EXISTS (SELECT 1 FROM users_positions sp WHERE sp.user_id = u.id AND sp.position_id = 9))";
 
-/// The users a call to `line` rings at `now`, by id.
-pub async fn ringers(
+/// Who an incoming call rings, or who takes it whole.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Route {
+    /// The users whose phones ring, by id.
+    pub ringers: Vec<Ringer>,
+    /// On a user's own direct line: that user, and their decision when it
+    /// is not to ring (forward, voicemail or a message).
+    pub takeover: Option<(i32, Decision)>,
+}
+
+/// Where an incoming call to `line` from `caller` (E.164; None when hidden)
+/// goes at `now`: who rings, or who takes it whole (module docs).
+pub async fn route(
     pool: &MySqlPool,
     config: &CompanyConfig,
     line: &Line,
+    caller: Option<&str>,
     now: DateTime<Utc>,
-) -> sqlx::Result<Vec<Ringer>> {
+) -> sqlx::Result<Route> {
     let ours = line.company_id == config.company_id;
     if !(ours && config.calling_on() && line.active) {
-        return Ok(Vec::new());
+        return Ok(Route::default());
     }
     if line.kind == NumberKind::Main && !open(config, now) {
-        return Ok(Vec::new());
+        return Ok(Route::default());
     }
     let users: Vec<i32> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT u.id FROM telnyx_number_users nu
@@ -148,14 +184,46 @@ pub async fn ringers(
     .bind(config.company_id)
     .fetch_all(pool)
     .await?;
-    let mut ringers = Vec::with_capacity(users.len());
+    let rules = call_rules::enabled_for(pool, config.company_id, &users).await?;
+    let named = call_rules::named_customers(rules.values().flatten());
+    let caller_last10 = caller.and_then(last10);
+    let customers = call_rules::customers_with_number(
+        pool,
+        config.company_id,
+        &named,
+        caller_last10.as_deref(),
+    )
+    .await?;
+    let call = Incoming {
+        caller_last10: caller_last10.as_deref(),
+        caller_customers: &customers,
+        number_id: line.id,
+        now,
+    };
+    let own_line = line.kind == NumberKind::Direct && users.len() == 1;
+    let mut route = Route::default();
     for user_id in users {
         let settings = settings::load(pool, user_id, config.company_id).await?;
-        if settings.availability(now).rings() {
-            ringers.push(Ringer { user_id, settings });
+        let mine = rules.get(&user_id).map_or(&[][..], Vec::as_slice);
+        match call_rules::decide(&settings, mine, &call) {
+            Decision::Ring => route.ringers.push(Ringer { user_id, settings }),
+            Decision::Away => {}
+            other if own_line => route.takeover = Some((user_id, other)),
+            _ => {}
         }
     }
-    Ok(ringers)
+    Ok(route)
+}
+
+/// The users a call to `line` from `caller` rings at `now`, by id.
+pub async fn ringers(
+    pool: &MySqlPool,
+    config: &CompanyConfig,
+    line: &Line,
+    caller: Option<&str>,
+    now: DateTime<Utc>,
+) -> sqlx::Result<Vec<Ringer>> {
+    Ok(route(pool, config, line, caller, now).await?.ringers)
 }
 
 /// The signed-in phones of `user_ids` in the company that can ring (with a
@@ -215,6 +283,28 @@ pub enum NoAnswer {
     Voicemail(String),
     /// Forward to this number (E.164, US or Canada).
     Forward(String),
+    /// Say this, then hang up (a user's rule).
+    Message(String),
+}
+
+/// What callers hear before a voicemail on `line`.
+pub fn greeting(line: &Line) -> String {
+    line.greeting
+        .as_deref()
+        .map(str::trim)
+        .filter(|greeting| !greeting.is_empty())
+        .unwrap_or(DEFAULT_GREETING)
+        .to_string()
+}
+
+/// The step a user's decision takes the whole call to, on their own line.
+pub fn takeover_step(line: &Line, decision: &Decision) -> Option<NoAnswer> {
+    match decision {
+        Decision::Forward(number) => Some(NoAnswer::Forward(number.clone())),
+        Decision::Voicemail => Some(NoAnswer::Voicemail(greeting(line))),
+        Decision::Message(text) => Some(NoAnswer::Message(text.clone())),
+        Decision::Ring | Decision::Away => None,
+    }
 }
 
 /// The next step for a call to `line` nobody answered.
@@ -233,16 +323,7 @@ pub fn no_answer(
     if !cells_tried && !declined && !cells.is_empty() {
         return NoAnswer::Cells(cells);
     }
-    let voicemail = || {
-        NoAnswer::Voicemail(
-            line.greeting
-                .as_deref()
-                .map(str::trim)
-                .filter(|greeting| !greeting.is_empty())
-                .unwrap_or(DEFAULT_GREETING)
-                .to_string(),
-        )
-    };
+    let voicemail = || NoAnswer::Voicemail(greeting(line));
     match line.no_answer_action {
         NoAnswerAction::Ai => config
             .ai_assistant_id
@@ -292,6 +373,7 @@ mod tests {
             id: 1,
             company_id: 100,
             e164: "+13175550150".into(),
+            label: "Main line".into(),
             kind: NumberKind::Main,
             no_answer_action: action,
             forward_to: forward_to.map(str::to_string),

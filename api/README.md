@@ -622,3 +622,12 @@ aws cloudformation deploy --region us-east-1 --stack-name granite-api-dev \
 ```
 
 The frontend's `make deploy-dev` builds against `api-dev.granite-manager.com`.
+
+Call settings (the app's Settings: incoming call rules, forward all calls,
+incoming call information, hold music; the company's spam and blocked
+numbers for admins) are `phone/call_rules.rs`, `phone/blocking.rs` and
+`phone/hold_music.rs`; `phone::routing::route` applies them to every
+incoming call before anything rings. Semantics, and what Telnyx's docs
+confirm versus what needs a real call: `docs/call-settings.md` in
+granite-phone. The built-in hold music (`data/hold-music/`, CC0) is served
+at `GET /v1/public/hold-music/{track}.mp3`.

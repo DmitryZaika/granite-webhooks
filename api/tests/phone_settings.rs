@@ -41,6 +41,10 @@ fn defaults() -> Value {
     json!({
         "defaultCallerNumberId": null, "aiNotes": true, "workingHours": null,
         "cellNumber": null, "cellVerified": false, "cellFallback": false, "ringTimeoutSecs": 25,
+        "forwardAll": false, "forwardAllTo": "voicemail", "forwardAllNumber": null,
+                          "displayNumber": "caller", "unknownShowMine": false, "announceDirect": false,
+                          "announceShared": false, "announceLineName": true, "requirePin": false,
+                          "holdMusic": "calm", "holdMusicUrl": null, "holdMusicName": null,
     })
 }
 
@@ -128,6 +132,10 @@ async fn settings_change_only_what_is_sent(pool: MySqlPool) {
             { "day": 6, "start": "09:00", "end": "24:00" },
         ] },
         "cellNumber": null, "cellVerified": false, "cellFallback": false, "ringTimeoutSecs": 40,
+        "forwardAll": false, "forwardAllTo": "voicemail", "forwardAllNumber": null,
+                          "displayNumber": "caller", "unknownShowMine": false, "announceDirect": false,
+                          "announceShared": false, "announceLineName": true, "requirePin": false,
+                          "holdMusic": "calm", "holdMusicUrl": null, "holdMusicName": null,
     });
     assert_eq!(changed.json::<Value>(), expected);
     // What is left out stays; null clears.

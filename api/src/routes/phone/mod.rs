@@ -13,6 +13,11 @@
 //! - `PUT  /v1/phone/settings`                 → change my phone settings
 //! - `PUT  /v1/phone/availability`             → Available / Do not disturb
 //! - `POST /v1/phone/notices/accept`           → accept the recording or 911 notice
+//! - `GET  /v1/phone/lines`                   → my lines and what their unanswered calls do
+//! - `GET|POST /v1/phone/call-rules`, `PUT|DELETE /v1/phone/call-rules/{id}` → my incoming call rules
+//! - `GET|PUT /v1/phone/call-blocking`         → the company's spam and blocked numbers (admins)
+//! - `GET  /v1/phone/hold-music`, `POST /v1/phone/hold-music/upload` → hold music tracks, my upload
+//! - `PUT  /v1/phone/calls/hold`               → I held or resumed my live call: hold music on or off
 //! - `POST /v1/phone/cell/verify`, `/confirm`  → verify my cell with a code call
 //! - `GET  /v1/phone/contacts/index`           → the offline contact index (paged, since, ETag)
 //! - `POST /v1/phone/contacts/lookup`          → who these numbers are
@@ -63,11 +68,14 @@
 //! `docs/api-contract.md` of the granite-phone repo.
 
 mod admin;
+mod blocking;
 mod bootstrap;
+mod call_rules;
 mod calls;
 mod cell;
 mod contacts;
 mod devices;
+mod hold;
 mod porting;
 mod recording;
 mod settings;
@@ -141,6 +149,22 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(web::set_web_phone_presence))
         .routes(routes!(web::decline_web_phone_call))
         .routes(routes!(recording::set_live_call_recording))
+        .routes(routes!(hold::set_live_call_hold))
+        .routes(routes!(hold::list_hold_music))
+        .routes(routes!(hold::start_hold_music_upload))
+        .routes(routes!(call_rules::list_lines))
+        .routes(routes!(
+            call_rules::list_call_rules,
+            call_rules::create_call_rule
+        ))
+        .routes(routes!(
+            call_rules::update_call_rule,
+            call_rules::delete_call_rule
+        ))
+        .routes(routes!(
+            blocking::get_call_blocking,
+            blocking::save_call_blocking
+        ))
         .merge(tendlc::router())
 }
 

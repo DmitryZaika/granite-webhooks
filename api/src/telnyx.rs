@@ -597,6 +597,36 @@ impl Telnyx {
             .await
     }
 
+    /// Plays the audio at `url` in an endless loop to `target_legs`
+    /// (`self`: this leg; `opposite`: the leg bridged to it) of a call
+    /// (`actions/playback_start`, `loop: infinity`): hold music.
+    pub async fn play_loop(
+        &self,
+        call_control_id: &str,
+        url: &str,
+        target_legs: &str,
+        command_id: &str,
+    ) -> Result<(), TelnyxError> {
+        let body = json!({
+            "audio_url": url, "loop": "infinity", "target_legs": target_legs,
+            "command_id": command_id,
+        });
+        self.call_action(call_control_id, "playback_start", &body)
+            .await
+    }
+
+    /// Stops every audio playing on a call and clears its queue
+    /// (`actions/playback_stop`, `stop: all`).
+    pub async fn stop_playback(
+        &self,
+        call_control_id: &str,
+        command_id: &str,
+    ) -> Result<(), TelnyxError> {
+        let body = json!({ "stop": "all", "command_id": command_id });
+        self.call_action(call_control_id, "playback_stop", &body)
+            .await
+    }
+
     /// A form-encoded request (the Twilio-style TeXML REST API).
     async fn send_form(
         &self,

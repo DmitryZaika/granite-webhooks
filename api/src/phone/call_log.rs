@@ -488,7 +488,7 @@ pub async fn finalize(
                 duration_secs = CASE WHEN answered_at IS NOT NULL
                     THEN LEAST({MAX_TALK_SECS}, GREATEST(0,
                            COALESCE(?, TIMESTAMPDIFF(SECOND, answered_at, ended_at)))) END,
-                hangup_cause = COALESCE(?, hangup_cause)
+                hangup_cause = COALESCE(?, hangup_cause), on_hold = 0
           WHERE id = ?"
     )))
     .bind(status.as_str())

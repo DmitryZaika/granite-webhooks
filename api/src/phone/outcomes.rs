@@ -71,11 +71,14 @@ async fn recipients(state: &AppState, call: &CallFacts) -> sqlx::Result<Vec<i32>
     ) else {
         return Ok(Vec::new());
     };
-    Ok(routing::ringers(pool, &config, &line, Utc::now())
-        .await?
-        .into_iter()
-        .map(|ringer| ringer.user_id)
-        .collect())
+    let caller = super::numbers::to_e164(&call.other_number);
+    Ok(
+        routing::ringers(pool, &config, &line, caller.as_deref(), Utc::now())
+            .await?
+            .into_iter()
+            .map(|ringer| ringer.user_id)
+            .collect(),
+    )
 }
 
 /// Pushes `kind` about an incoming call (`{granite: "1", type, callId}`) to

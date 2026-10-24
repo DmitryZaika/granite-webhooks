@@ -5,10 +5,12 @@ use crate::auth::device::DeviceUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::phone::availability::{Availability, WorkingHours};
+use crate::phone::call_rules::{self, ForwardAllTo};
+use crate::phone::hold_music;
 use crate::phone::lines::{self, CallerId, default_caller_id};
 use crate::phone::settings::{
-    self, E911_NOTICE_VERSION, NoticeKind, PhoneSettings, RECORDING_NOTICE_VERSION,
-    RING_TIMEOUT_SECS,
+    self, DisplayNumber, E911_NOTICE_VERSION, NoticeKind, PIN_DIGITS, PhoneSettings,
+    RECORDING_NOTICE_VERSION, RING_TIMEOUT_SECS,
 };
 use crate::phone::wire_enum;
 use crate::serde_helpers::double_option;
@@ -17,6 +19,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::{DateTime, Duration, SubsecRound, Utc};
+use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -90,15 +93,131 @@ pub struct SettingsPatch {
     /// How long calls ring my phones, 15 to 60 seconds.
     #[serde(default)]
     pub ring_timeout_secs: Option<i64>,
+    /// "Forward all calls" on or off; on with `number` needs a number
+    /// (400 `invalid_phone`).
+    #[serde(default)]
+    pub forward_all: Option<bool>,
+    /// Where "Forward all calls" sends calls: `voicemail` or `number`.
+    #[serde(default)]
+    pub forward_all_to: Option<ForwardAllTo>,
+    /// The number to forward all calls to: a US or Canada number, any
+    /// format (400 `invalid_phone` otherwise); null clears it.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<String>)]
+    pub forward_all_number: Option<Option<String>>,
+    /// What my phones show for an incoming call: `caller` or `called`.
+    #[serde(default)]
+    pub display_number: Option<DisplayNumber>,
+    /// When the caller hides their number, show the number they called.
+    #[serde(default)]
+    pub unknown_show_mine: Option<bool>,
+    /// Announce calls to my direct lines before they connect.
+    #[serde(default)]
+    pub announce_direct: Option<bool>,
+    /// Announce calls to shared lines and the main line.
+    #[serde(default)]
+    pub announce_shared: Option<bool>,
+    /// The announcement names the line called.
+    #[serde(default)]
+    pub announce_line_name: Option<bool>,
+    /// My answer PIN for my fallback cell: exactly 4 digits (400
+    /// `invalid_pin` otherwise); null clears it (and turns `requirePin`
+    /// off). It is never sent back.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<String>)]
+    pub answer_pin: Option<Option<String>>,
+    /// My fallback cell asks for the PIN instead of "press 1"; turning it
+    /// on needs a PIN, sent now or before (400 `pin_required`).
+    #[serde(default)]
+    pub require_pin: Option<bool>,
+    /// Hold music: a built-in track id (`GET /v1/phone/hold-music`),
+    /// `custom` (with `holdMusicUrl`) or `none` (400 `invalid_hold_music`
+    /// otherwise).
+    #[serde(default)]
+    pub hold_music: Option<String>,
+    /// With `custom`: the `url` from `POST /v1/phone/hold-music/upload`,
+    /// once the file was put there; it must be my upload, an MP3 or WAV of
+    /// at most 5 MB (400 `invalid_hold_music`). Left out with `custom`: my
+    /// current upload stays.
+    #[serde(default)]
+    pub hold_music_url: Option<String>,
+    /// With `custom` and a new `holdMusicUrl`: the file's name to show (at
+    /// most 100 characters).
+    #[serde(default)]
+    pub hold_music_name: Option<String>,
+}
+
+/// The new hold music of `patch` once checked: (choice, url, name); None
+/// when the patch leaves it as it is.
+async fn hold_music_change(
+    state: &AppState,
+    user: &crate::auth::session::SessionUser,
+    patch: &SettingsPatch,
+    current: &settings::UserSettings,
+) -> ApiResult<Option<(String, Option<String>, Option<String>)>> {
+    let Some(choice) = patch.hold_music.as_deref().map(str::trim) else {
+        return Ok(None);
+    };
+    let invalid = || bad_request("invalid_hold_music");
+    if choice == hold_music::NONE || hold_music::track(choice).is_some() {
+        return Ok(Some((
+            choice.to_string(),
+            current.hold_music_url.clone(),
+            current.hold_music_name.clone(),
+        )));
+    }
+    if choice != hold_music::CUSTOM {
+        return Err(invalid());
+    }
+    let Some(url) = patch.hold_music_url.as_deref().map(str::trim) else {
+        return match &current.hold_music_url {
+            Some(_) => Ok(Some((
+                choice.to_string(),
+                current.hold_music_url.clone(),
+                current.hold_music_name.clone(),
+            ))),
+            None => Err(invalid()),
+        };
+    };
+    let key = state
+        .storage
+        .key_for_url(url)
+        .filter(|key| key.starts_with(&hold_music::upload_prefix(user.company_id, user.id)))
+        .ok_or_else(invalid)?;
+    let file = state.storage.get(&key).await?.ok_or_else(invalid)?;
+    let size = u64::try_from(file.bytes.len()).unwrap_or(u64::MAX);
+    if size == 0 || size > hold_music::MAX_UPLOAD_BYTES || hold_music::sniff(&file.bytes).is_none()
+    {
+        // Not something Telnyx can play: gone, so it cannot be used later.
+        if let Err(err) = state.storage.delete(&key).await {
+            tracing::warn!(error = %err, "refused hold music not deleted");
+        }
+        return Err(invalid());
+    }
+    let name = patch
+        .hold_music_name
+        .as_deref()
+        .map(|name| name.trim().chars().take(100).collect::<String>())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "My hold music".to_string());
+    Ok(Some((
+        choice.to_string(),
+        Some(url.to_string()),
+        Some(name),
+    )))
 }
 
 /// Change my phone settings
 ///
 /// Changes only the fields sent: default caller ID, AI notes, working
-/// hours, cell fallback, ring timeout; returns all the settings. The cell
-/// number changes only through `POST /v1/phone/cell/verify` and `/confirm`.
-/// 400 `not_a_caller_id`, `cell_not_verified`, or a message for bad hours or
-/// timeouts. Device token only.
+/// hours, cell fallback, ring timeout, "Forward all calls", incoming call
+/// information (display number, announcements, answer PIN) and hold music;
+/// returns all the settings. The cell number changes only through
+/// `POST /v1/phone/cell/verify` and `/confirm`; Do not disturb through
+/// `PUT /v1/phone/availability`; custom rules through
+/// `/v1/phone/call-rules`. 400 `not_a_caller_id`, `cell_not_verified`,
+/// `invalid_phone`, `invalid_pin`, `pin_required`, `invalid_hold_music`, or
+/// a message for bad hours or timeouts. Device token only.
 #[utoipa::path(
     put,
     path = "/v1/phone/settings",
@@ -107,12 +226,13 @@ pub struct SettingsPatch {
     request_body = SettingsPatch,
     responses(
         (status = 200, description = "The settings now", body = PhoneSettings),
-        (status = 400, description = "`not_a_caller_id`, `cell_not_verified`, or what is wrong", body = ErrorBody),
+        (status = 400, description = "`not_a_caller_id`, `cell_not_verified`, `invalid_phone`, `invalid_pin`, `pin_required`, `invalid_hold_music`, or what is wrong", body = ErrorBody),
         (status = 401, description = "No valid device token", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("device_token" = []))
 )]
+#[allow(clippy::too_many_lines)]
 pub async fn update_settings(
     State(state): State<AppState>,
     device: DeviceUser,
@@ -127,6 +247,7 @@ pub async fn update_settings(
     {
         return Err(bad_request("not_a_caller_id"));
     }
+    let hold = hold_music_change(&state, user, &patch, &current).await?;
     let working_hours = match patch.working_hours {
         Some(Some(hours)) => {
             if let Some(problem) = hours.problem() {
@@ -149,6 +270,39 @@ pub async fn update_settings(
         return Err(ApiError::BadRequest(
             "ringTimeoutSecs must be 15 to 60".into(),
         ));
+    }
+    let forward_all_number = match &patch.forward_all_number {
+        Some(Some(number)) => Some(Some(
+            call_rules::forward_number(Some(number)).ok_or_else(|| bad_request("invalid_phone"))?,
+        )),
+        Some(None) => Some(None),
+        None => None,
+    };
+    let forwards_to_number = patch.forward_all.unwrap_or(current.forward_all)
+        && patch.forward_all_to.unwrap_or(current.forward_all_to) == ForwardAllTo::Number;
+    let number_after = forward_all_number
+        .clone()
+        .unwrap_or_else(|| current.forward_all_number.clone());
+    if forwards_to_number && number_after.is_none() {
+        return Err(bad_request("invalid_phone"));
+    }
+    let pin_hash = match &patch.answer_pin {
+        Some(Some(pin)) => {
+            let pin = pin.trim();
+            if pin.len() != PIN_DIGITS || !pin.chars().all(|c| c.is_ascii_digit()) {
+                return Err(bad_request("invalid_pin"));
+            }
+            Some(Some(settings::pin_hash(user.id, pin)))
+        }
+        Some(None) => Some(None),
+        None => None,
+    };
+    let has_pin = match &pin_hash {
+        Some(hash) => hash.is_some(),
+        None => settings::has_pin(pool, user.id, user.company_id).await?,
+    };
+    if patch.require_pin == Some(true) && !has_pin {
+        return Err(bad_request("pin_required"));
     }
     let mut tx = pool.begin().await?;
     settings::ensure_row(&mut tx, user.id, user.company_id).await?;
@@ -173,6 +327,51 @@ pub async fn update_settings(
     if let Some(secs) = patch.ring_timeout_secs {
         update.push(", ring_timeout_secs = ").push_bind(secs);
     }
+    if let Some(on) = patch.forward_all {
+        update.push(", forward_all = ").push_bind(on);
+    }
+    if let Some(to) = patch.forward_all_to {
+        update.push(", forward_all_to = ").push_bind(to.as_str());
+    }
+    if let Some(number) = forward_all_number {
+        update.push(", forward_all_number = ").push_bind(number);
+    }
+    if let Some(display) = patch.display_number {
+        update
+            .push(", display_number = ")
+            .push_bind(display.as_str());
+    }
+    for (column, value) in [
+        ("unknown_show_mine", patch.unknown_show_mine),
+        ("announce_direct", patch.announce_direct),
+        ("announce_shared", patch.announce_shared),
+        ("announce_line_name", patch.announce_line_name),
+    ] {
+        if let Some(value) = value {
+            update.push(format!(", {column} = ")).push_bind(value);
+        }
+    }
+    match pin_hash {
+        Some(Some(hash)) => {
+            update.push(", answer_pin_hash = ").push_bind(hash);
+        }
+        Some(None) => {
+            update.push(", answer_pin_hash = NULL, require_pin = 0");
+        }
+        None => {}
+    }
+    if let Some(require) = patch.require_pin.filter(|_| has_pin) {
+        update.push(", require_pin = ").push_bind(require);
+    }
+    if let Some((choice, url, name)) = &hold {
+        update
+            .push(", hold_music = ")
+            .push_bind(choice.clone())
+            .push(", hold_music_url = ")
+            .push_bind(url.clone())
+            .push(", hold_music_name = ")
+            .push_bind(name.clone());
+    }
     update
         .push(" WHERE user_id = ")
         .push_bind(user.id)
@@ -180,6 +379,17 @@ pub async fn update_settings(
         .push_bind(user.company_id);
     update.build().execute(&mut *tx).await?;
     tx.commit().await?;
+    // A replaced upload is not needed any more (only this user's own).
+    if let (Some((_, Some(url), _)), Some(old)) = (&hold, current.hold_music_url.as_deref())
+        && url != old
+        && let Some(key) = state
+            .storage
+            .key_for_url(old)
+            .filter(|key| key.starts_with(&hold_music::upload_prefix(user.company_id, user.id)))
+        && let Err(err) = state.storage.delete(&key).await
+    {
+        tracing::warn!(error = %err, "old hold music not deleted");
+    }
     let stored = settings::load(pool, user.id, user.company_id).await?;
     Ok(Json(stored.wire(&caller_ids)))
 }
