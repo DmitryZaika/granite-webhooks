@@ -66,7 +66,8 @@ struct Due {
 const DUE_COLUMNS: &str = "e.id, e.flow_id, e.company_id, e.customer_id, e.user_id, e.current_step_position, e.attempt_count,
     CAST(e.started_at AS DATETIME) AS started_at, CAST(e.customer_phone_digits AS CHAR) AS phone_digits, e.customer_email";
 
-async fn due_enrollments(state: &AppState) -> Result<Vec<Due>, sqlx::Error> {
+/// Due by the run's clock (a test's, or now), like every send time it sets.
+async fn due_enrollments(state: &AppState, now: Instant) -> Result<Vec<Due>, sqlx::Error> {
     sqlx::query_as(
         "SELECT id, flow_id, company_id, customer_id, user_id, current_step_position, attempt_count, started_at,
                 phone_digits, customer_email
@@ -77,25 +78,31 @@ async fn due_enrollments(state: &AppState) -> Result<Vec<Due>, sqlx::Error> {
                     ROW_NUMBER() OVER (PARTITION BY e.company_id ORDER BY e.next_send_at ASC) AS rn
                FROM sms_flow_enrollments e
                JOIN sms_flows f ON f.id = e.flow_id AND f.deleted_at IS NULL AND f.company_id = e.company_id
-              WHERE e.status = 'active' AND e.next_send_at <= UTC_TIMESTAMP()
+              WHERE e.status = 'active' AND e.next_send_at <= ?
            ) ranked
           WHERE rn <= ?
           ORDER BY next_send_at ASC
           LIMIT ?",
     )
+    .bind(now.naive_utc())
     .bind(PER_COMPANY_BATCH_LIMIT)
     .bind(DISPATCH_BATCH_LIMIT)
     .fetch_all(&state.pool)
     .await
 }
 
-async fn due_enrollment(state: &AppState, id: i32) -> Result<Option<Due>, sqlx::Error> {
+async fn due_enrollment(
+    state: &AppState,
+    id: i32,
+    now: Instant,
+) -> Result<Option<Due>, sqlx::Error> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {DUE_COLUMNS} FROM sms_flow_enrollments e
            JOIN sms_flows f ON f.id = e.flow_id AND f.deleted_at IS NULL AND f.company_id = e.company_id
-          WHERE e.id = ? AND e.status = 'active' AND e.next_send_at <= UTC_TIMESTAMP() LIMIT 1"
+          WHERE e.id = ? AND e.status = 'active' AND e.next_send_at <= ? LIMIT 1"
     )))
     .bind(id)
+    .bind(now.naive_utc())
     .fetch_optional(&state.pool)
     .await
 }
@@ -322,11 +329,12 @@ async fn advance(
         at = next_send_at_avoiding_sunday(at, next.channel(), None);
     }
     sqlx::query(
-        "UPDATE sms_flow_enrollments SET current_step_position = ?, anchor_at = UTC_TIMESTAMP(), next_send_at = ?,
+        "UPDATE sms_flow_enrollments SET current_step_position = ?, anchor_at = ?, next_send_at = ?,
                 attempt_count = 0, error_message = NULL
           WHERE id = ? AND status IN ('active', 'paused')",
     )
     .bind(next.position)
+    .bind(now.naive_utc())
     .bind(at.naive_utc())
     .bind(id)
     .execute(&state.pool)
@@ -428,7 +436,9 @@ fn process_one<'a>(
             Outcome::Sent => {
                 run.sent += 1;
                 // A zero-delay next step goes out in the same run.
-                if let Some(next) = due_enrollment(state, due.id).await? {
+                if let Some(next) =
+                    due_enrollment(state, due.id, clock.unwrap_or_else(Utc::now)).await?
+                {
                     process_one(state, next, run, clock).await?;
                 }
             }
@@ -658,10 +668,13 @@ async fn send_step(state: &AppState, due: &Due, now: Instant) -> Result<Outcome,
         );
     }
     if next.is_some_and(|n| n.delay_minutes == 0) {
-        sqlx::query("UPDATE sms_flow_enrollments SET next_send_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'active'")
-            .bind(due.id)
-            .execute(&state.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE sms_flow_enrollments SET next_send_at = ? WHERE id = ? AND status = 'active'",
+        )
+        .bind(now.naive_utc())
+        .bind(due.id)
+        .execute(&state.pool)
+        .await?;
     }
     Ok(Outcome::Sent)
 }
@@ -880,7 +893,7 @@ pub async fn process_due_enrollment_at(
     clock: Option<Instant>,
 ) -> FollowupRun {
     let mut run = FollowupRun::default();
-    match due_enrollment(state, enrollment_id).await {
+    match due_enrollment(state, enrollment_id, clock.unwrap_or_else(Utc::now)).await {
         Ok(Some(due)) => {
             run.processed = 1;
             if let Err(err) = process_one(state, due, &mut run, clock).await {
@@ -907,7 +920,7 @@ pub async fn process_due_followups_at(
     state: &AppState,
     clock: Option<Instant>,
 ) -> Result<FollowupRun, sqlx::Error> {
-    let due = due_enrollments(state).await?;
+    let due = due_enrollments(state, clock.unwrap_or_else(Utc::now)).await?;
     let mut run = FollowupRun {
         processed: due.len(),
         ..FollowupRun::default()

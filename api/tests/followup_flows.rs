@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 
 const FIXTURE: &str = "
 UPDATE company SET cloudtalk_access_key = 'ct-key', cloudtalk_access_secret = 'ct-secret' WHERE id = 100;
-UPDATE users SET cloudtalk_agent_id = '5001' WHERE id = 100;
+UPDATE users SET cloudtalk_agent_id = '5001', cloudtalk_phone_number = '3175550000' WHERE id = 100;
 INSERT INTO customers (id, name, phone, company_id, source, sales_rep, created_date)
   VALUES (9600, 'Paula Prospect', '317-555-0177', 100, 'leads', 100, '2026-09-01 08:00:00');
 INSERT INTO customers_emails (id, customer_id, email, created_at, created_by)
@@ -619,7 +619,7 @@ async fn only_the_starter_the_sales_rep_or_an_admin_changes_a_flow(pool: MySqlPo
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("UPDATE users SET cloudtalk_agent_id = '5002' WHERE id = 101")
+    sqlx::query("UPDATE users SET cloudtalk_agent_id = '5002', cloudtalk_phone_number = '3175550001' WHERE id = 101")
         .execute(&pool)
         .await
         .unwrap();
@@ -798,4 +798,52 @@ async fn send_now_makes_the_next_step_due(pool: MySqlPool) {
         assert_eq!(setup.texts()[0].text, "Tomorrow");
         assert_eq!((status.as_str(), next), ("completed", None));
     }
+}
+
+#[test_db::test(seed)]
+async fn a_cloudtalk_rep_starts_a_text_flow_where_ringcentral_is_connected_too(pool: MySqlPool) {
+    let setup = setup(&pool).await;
+    // The company texts through both; Rita has only a CloudTalk line.
+    sqlx::query(
+        "UPDATE company SET ringcentral_client_id = 'rc-id', ringcentral_client_secret = 'rc-secret',
+                            ringcentral_jwt = 'rc-jwt' WHERE id = 100",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let res = post_flow(
+        &setup,
+        sessions::REP,
+        "/v1/customers/9600/flow",
+        json!({ "intent": "start", "flow_id": 9704 }),
+    )
+    .await;
+    res.assert_status_ok();
+    assert_eq!(res.json::<Value>()["active_flow"]["status"], "active");
+}
+
+#[test_db::test(seed)]
+async fn a_rep_without_a_texting_number_cannot_start_a_text_flow(pool: MySqlPool) {
+    let setup = setup(&pool).await;
+    sqlx::query("UPDATE users SET cloudtalk_phone_number = NULL WHERE id = 100")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let res = post_flow(
+        &setup,
+        sessions::REP,
+        "/v1/customers/9600/flow",
+        json!({ "intent": "start", "flow_id": 9704 }),
+    )
+    .await;
+    res.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(res.json::<Value>()["error"], "agent_not_linked");
+    let started: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM sms_flow_enrollments WHERE customer_id = 9600")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(started, 0);
 }
