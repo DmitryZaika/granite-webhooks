@@ -6,7 +6,7 @@
 //! so the app gets the data while it is not running.
 //!
 //! Credentials are the Firebase service account: `FCM_SERVICE_ACCOUNT_JSON`
-//! (the whole JSON), or `FCM_SERVICE_ACCOUNT_S3_KEY`, an object in
+//! (the whole JSON), or `FCM_SERVICE_ACCOUNT_S3_KEY` (default `config/fcm-sa.json`), an object in
 //! `PHONE_RECORDINGS_BUCKET` read on the first send (Lambda environment
 //! variables max out at 4 KB). Its private key signs an RS256 JWT that the
 //! token endpoint swaps for an OAuth access token, cached about 55 minutes.
@@ -30,6 +30,9 @@ use std::time::{Duration, Instant};
 
 /// FCM's API root.
 pub const FCM_BASE_URL: &str = "https://fcm.googleapis.com";
+/// The service-account object in `PHONE_RECORDINGS_BUCKET` when
+/// `FCM_SERVICE_ACCOUNT_S3_KEY` is unset (prod's Lambda env is at its 4 KB cap).
+const DEFAULT_S3_KEY: &str = "config/fcm-sa.json";
 /// Google's OAuth token endpoint, when the account names none.
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 /// What the access token may do: send FCM messages.
@@ -107,8 +110,9 @@ impl Push {
         Self { inner: None }
     }
 
-    /// `FCM_SERVICE_ACCOUNT_JSON`, else `FCM_SERVICE_ACCOUNT_S3_KEY` in
-    /// `PHONE_RECORDINGS_BUCKET` (read through `storage`), else disabled;
+    /// `FCM_SERVICE_ACCOUNT_JSON`, else `FCM_SERVICE_ACCOUNT_S3_KEY` (default
+    /// `config/fcm-sa.json`) in `PHONE_RECORDINGS_BUCKET` (read through
+    /// `storage`), else disabled;
     /// `FCM_BASE_URL` overrides the FCM root.
     pub fn from_env(storage: &Storage) -> Self {
         let var = |name: &str| {
@@ -121,19 +125,17 @@ impl Push {
         if let Some(json) = var("FCM_SERVICE_ACCOUNT_JSON") {
             return Self::new(Source::Json(json), &base);
         }
-        match (
-            var("FCM_SERVICE_ACCOUNT_S3_KEY"),
-            var("PHONE_RECORDINGS_BUCKET"),
-        ) {
-            (Some(key), Some(bucket)) => Self::new(
+        match var("PHONE_RECORDINGS_BUCKET") {
+            Some(bucket) => Self::new(
                 Source::Bucket {
                     storage: storage.clone(),
                     bucket,
-                    key,
+                    key: var("FCM_SERVICE_ACCOUNT_S3_KEY")
+                        .unwrap_or_else(|| DEFAULT_S3_KEY.to_string()),
                 },
                 &base,
             ),
-            _ => Self::disabled(),
+            None => Self::disabled(),
         }
     }
 
