@@ -37,6 +37,12 @@ pub const REMINDER_EMAILS_PER_TICK: usize = 20;
 pub const REMINDER_TICK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(40);
 /// The first-charge email goes out this many days before `trial_end_at`.
 pub const FIRST_CHARGE_NOTICE_DAYS: i64 = 7;
+/// A first-charge cycle Stripe says needs no email is asked again after this.
+pub const FIRST_CHARGE_RECHECK_HOURS: i64 = 6;
+/// A refused send is tried again once its last attempt is this old.
+pub const REMINDER_RETRY_AFTER_MINUTES: i64 = 5;
+/// `billing_reminder_emails.user_id` of a company-level `skipped` row.
+pub const NO_USER: i32 = 0;
 
 /// Why a company is being reminded (`billing_reminder_emails.cycle_kind`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,6 +122,9 @@ pub enum ReminderStatus {
     Failed,
     /// It may or may not have gone out: never resent.
     Unknown,
+    /// Company-level marker (`NO_USER`): Stripe said no email is due for
+    /// this cycle; asked again after `FIRST_CHARGE_RECHECK_HOURS`.
+    Skipped,
 }
 
 impl ReminderStatus {
@@ -125,6 +134,7 @@ impl ReminderStatus {
             Self::Sent => "sent",
             Self::Failed => "failed",
             Self::Unknown => "unknown",
+            Self::Skipped => "skipped",
         }
     }
 
@@ -134,6 +144,7 @@ impl ReminderStatus {
             "sent" => Some(Self::Sent),
             "failed" => Some(Self::Failed),
             "unknown" => Some(Self::Unknown),
+            "skipped" => Some(Self::Skipped),
             _ => None,
         }
     }
@@ -178,6 +189,8 @@ pub struct ReminderRow {
     pub key: ReminderKey,
     pub status: ReminderStatus,
     pub attempts: i32,
+    /// When the last attempt was claimed.
+    pub claimed_at: NaiveDateTime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,6 +216,8 @@ pub struct ChargeLine {
 /// The first charge of a trialing subscription, as Stripe has it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FirstChargeQuote {
+    /// When Stripe charges it (the subscription's `trial_end`).
+    pub charge_at: NaiveDateTime,
     /// Before sales tax.
     pub amount_cents: i64,
     pub lines: Vec<ChargeLine>,
@@ -265,7 +280,9 @@ pub trait ReminderStore {
     /// an open cycle or a recently settled one (`LIMIT 500`).
     async fn candidate_company_ids(&self, now: NaiveDateTime) -> StoreResult<Vec<i32>>;
     /// Companies whose trialing subscription's `trial_end_at` is after `now`
-    /// and at most `FIRST_CHARGE_NOTICE_DAYS` away (`LIMIT 500`).
+    /// and at most `FIRST_CHARGE_NOTICE_DAYS` away, not cancelled by then,
+    /// and without a `skipped` row for that cycle newer than
+    /// `FIRST_CHARGE_RECHECK_HOURS` (`LIMIT 500`).
     async fn first_charge_company_ids(&self, now: NaiveDateTime) -> StoreResult<Vec<i32>>;
     async fn snapshot(&self, company_id: i32) -> StoreResult<CompanyBillingSnapshot>;
     /// Non-deleted users with the Manager position in the company, by id.
@@ -284,9 +301,18 @@ pub trait ReminderStore {
         cycle: DunningCycle,
     ) -> StoreResult<Vec<ReminderRow>>;
     /// Inserts the row as `sending` (or re-takes a `failed` one with attempts
-    /// left). The unique key makes this the only way to send: `None` means
-    /// another run owns it or it is done.
+    /// left, last claimed `REMINDER_RETRY_AFTER_MINUTES` ago). The unique key
+    /// makes this the only way to send: `None` means another run owns it, it
+    /// is done, or its retry is not due yet.
     async fn claim(&self, key: &ReminderKey, now: NaiveDateTime) -> StoreResult<Option<i64>>;
+    /// Records (or re-stamps) the company-level `skipped` row of a cycle.
+    async fn skip_cycle(
+        &self,
+        company_id: i32,
+        cycle: DunningCycle,
+        step: ReminderStep,
+        now: NaiveDateTime,
+    ) -> StoreResult<()>;
     async fn mark_sent(
         &self,
         row: ClaimedReminder,
@@ -516,31 +542,46 @@ fn prospective_reminder(
     })
 }
 
-/// A self-serve subscription whose free period ends within the notice window.
-///
-/// Stripe charges whether or not the company is flagged `billing_required`,
-/// so only the record decides. A new `trial_end_at` is a new cycle.
-pub fn first_charge_due(record: &CompanyBilling, now: NaiveDateTime) -> Option<DueReminder> {
-    let trial_end = record.trial_end_at?;
-    if record.subscription_status != "trialing"
-        || now >= trial_end
-        || trial_end - now > Duration::days(FIRST_CHARGE_NOTICE_DAYS)
-    {
+/// The first-charge notice for a charge at `charge_at`, when it is inside
+/// the notice window. A new charge date is a new cycle.
+fn first_charge_notice(charge_at: NaiveDateTime, now: NaiveDateTime) -> Option<DueReminder> {
+    if now >= charge_at || charge_at - now > Duration::days(FIRST_CHARGE_NOTICE_DAYS) {
         return None;
     }
     Some(DueReminder {
         cycle: DunningCycle {
             kind: DunningKind::FirstCharge,
-            started_at: trial_end,
+            started_at: charge_at,
         },
         step: ReminderStep::Upcoming,
-        pauses_at: Some(trial_end),
+        pauses_at: Some(charge_at),
     })
 }
 
-fn can_claim(row: Option<&ReminderRow>) -> bool {
+/// A self-serve subscription whose free period ends within the notice window
+/// and is not cancelled by then.
+///
+/// Stripe charges whether or not the company is flagged `billing_required`,
+/// so only the record decides.
+pub fn first_charge_due(record: &CompanyBilling, now: NaiveDateTime) -> Option<DueReminder> {
+    let trial_end = record.trial_end_at?;
+    if record.subscription_status != "trialing"
+        || record
+            .cancel_at
+            .is_some_and(|cancel_at| cancel_at <= trial_end)
+    {
+        return None;
+    }
+    first_charge_notice(trial_end, now)
+}
+
+/// No row yet, or a refused one with attempts left whose last try is
+/// `REMINDER_RETRY_AFTER_MINUTES` old.
+fn can_claim(row: Option<&ReminderRow>, now: NaiveDateTime) -> bool {
     row.is_none_or(|row| {
-        row.status == ReminderStatus::Failed && row.attempts < REMINDER_MAX_ATTEMPTS
+        row.status == ReminderStatus::Failed
+            && row.attempts < REMINDER_MAX_ATTEMPTS
+            && now - row.claimed_at >= Duration::minutes(REMINDER_RETRY_AFTER_MINUTES)
     })
 }
 
@@ -572,12 +613,12 @@ async fn recipients<S: ReminderStore>(
     Ok(unique_by_email(store.contacts(company_id, &ids).await?))
 }
 
-/// The contacts who still need the step: no row yet, or a failed one with
-/// attempts left.
+/// The contacts who still need the step (see `can_claim`).
 fn open_contacts(
     contacts: Vec<ReminderContact>,
     rows: &[ReminderRow],
     step: ReminderStep,
+    now: NaiveDateTime,
 ) -> Vec<ReminderContact> {
     contacts
         .into_iter()
@@ -585,6 +626,7 @@ fn open_contacts(
             can_claim(
                 rows.iter()
                     .find(|row| row.key.user_id == contact.user_id && row.key.step == step),
+                now,
             )
         })
         .collect()
@@ -616,7 +658,7 @@ async fn plan_reminder<S: ReminderStore>(
     if due.step == ReminderStep::Resolved && !emailed_about_cycle(&rows) {
         return Ok(None);
     }
-    let contacts = open_contacts(recipients(store, company_id).await?, &rows, due.step);
+    let contacts = open_contacts(recipients(store, company_id).await?, &rows, due.step, now);
     Ok((!contacts.is_empty()).then_some(ReminderPlan { due, contacts }))
 }
 
@@ -666,9 +708,11 @@ fn ends_before_first_charge(subscription: &Value) -> bool {
     }
 }
 
-/// The first charge of a trialing Stripe subscription object; `None` when it
-/// is not trialing, cancels before the charge, or has no priced item.
-/// Discounts are not applied (v1 has no coupons).
+/// The first charge of a trialing Stripe subscription object, on its
+/// `trial_end`.
+///
+/// `None` when it is not trialing, cancels before the charge, or has no
+/// priced item. Discounts are not applied (v1 has no coupons).
 pub fn first_charge_quote_from(
     subscription: &Value,
     payment_method: Option<String>,
@@ -677,6 +721,8 @@ pub fn first_charge_quote_from(
     {
         return None;
     }
+    let charge_at =
+        chrono::DateTime::from_timestamp(subscription["trial_end"].as_i64()?, 0)?.naive_utc();
     let lines: Vec<ChargeLine> = subscription["items"]["data"]
         .as_array()?
         .iter()
@@ -694,6 +740,7 @@ pub fn first_charge_quote_from(
         return None;
     }
     Some(FirstChargeQuote {
+        charge_at,
         amount_cents: lines.iter().map(|line| line.amount_cents).sum(),
         lines,
         payment_method,
@@ -889,6 +936,11 @@ async fn dunning_company<S: ReminderStore, E: ReminderEffects>(
 
 /// One company's first-charge notices. No company lock: there is nothing to
 /// settle, and the unique claim is the idempotency.
+///
+/// The stored `trial_end_at` picks the candidate; Stripe's `trial_end` dates
+/// the email and keys its cycle. When Stripe says nothing is due, or its date
+/// differs from the stored one, the stored cycle gets a `skipped` row so it
+/// is not asked again before `FIRST_CHARGE_RECHECK_HOURS`.
 async fn first_charge_company<S: ReminderStore, E: ReminderEffects>(
     store: &S,
     effects: &E,
@@ -900,30 +952,41 @@ async fn first_charge_company<S: ReminderStore, E: ReminderEffects>(
     let Some(record) = store.snapshot(company_id).await?.record else {
         return Ok(());
     };
-    let Some(due) = first_charge_due(&record, now) else {
+    let Some(stored) = first_charge_due(&record, now) else {
         return Ok(());
     };
-    let (Some(trial_end_at), cycle) = (due.pauses_at, due.cycle) else {
-        return Ok(());
-    };
-    let rows = store.reminders(company_id, cycle).await?;
-    let contacts = open_contacts(recipients(store, company_id).await?, &rows, due.step);
-    if contacts.is_empty() {
+    let contacts = recipients(store, company_id).await?;
+    let stored_rows = store.reminders(company_id, stored.cycle).await?;
+    if open_contacts(contacts.clone(), &stored_rows, stored.step, now).is_empty() {
         return Ok(());
     }
-    // Never claim without a quote: the email states the amount.
-    let Some(quote) = effects.first_charge_quote(&record).await? else {
+    // Never claim without a quote: the email states the amount and date.
+    let quote = effects.first_charge_quote(&record).await?;
+    let Some((quote, due)) = quote.and_then(|quote| {
+        let due = first_charge_notice(quote.charge_at, now)?;
+        Some((quote, due))
+    }) else {
+        store
+            .skip_cycle(company_id, stored.cycle, stored.step, now)
+            .await?;
         return Ok(());
     };
+    let stale = due.cycle != stored.cycle;
+    let open = if stale {
+        let rows = store.reminders(company_id, due.cycle).await?;
+        open_contacts(contacts, &rows, due.step, now)
+    } else {
+        open_contacts(contacts, &stored_rows, due.step, now)
+    };
     let company_name = store.company_name(company_id).await?;
-    for contact in contacts {
+    for contact in open {
         if limit_reached(effects, limits, result) {
-            break;
+            return Ok(());
         }
         let key = ReminderKey {
             company_id,
             user_id: contact.user_id,
-            cycle,
+            cycle: due.cycle,
             step: due.step,
         };
         let Some(id) = store.claim(&key, now).await? else {
@@ -934,7 +997,6 @@ async fn first_charge_company<S: ReminderStore, E: ReminderEffects>(
         let rendered = render_first_charge_email(&FirstChargeEmailInput {
             company_name: &company_name,
             user_name: contact.name.as_deref(),
-            trial_end_at,
             quote: &quote,
             app_url: effects.app_url(),
         });
@@ -944,8 +1006,15 @@ async fn first_charge_company<S: ReminderStore, E: ReminderEffects>(
             html: rendered.html,
             text: rendered.text,
         };
-        let context = send_context(claimed, contact.user_id, cycle, due.step);
+        let context = send_context(claimed, contact.user_id, due.cycle, due.step);
         send_claimed(store, effects, claimed, &email, &context, now, result).await?;
+    }
+    // Every manager is handled under Stripe's date: the stale stored one can
+    // rest until the webhook (or a recheck) brings the record in line.
+    if stale {
+        store
+            .skip_cycle(company_id, stored.cycle, stored.step, now)
+            .await?;
     }
     Ok(())
 }
@@ -1097,14 +1166,16 @@ mod tests {
     }
 
     enum QuoteMode {
+        /// Stripe agrees with the stored `trial_end_at`.
         Quote(FirstChargeQuote),
+        /// Stripe's `trial_end` differs from the stored one.
+        StripeSays(NaiveDateTime),
         Missing,
         Fails,
     }
 
     struct Stored {
         row: ReminderRow,
-        claimed_at: NaiveDateTime,
     }
 
     struct Fake {
@@ -1138,6 +1209,7 @@ mod tests {
 
     fn sample_quote() -> FirstChargeQuote {
         FirstChargeQuote {
+            charge_at: trial_ends(),
             amount_cents: 30_000,
             lines: vec![ChargeLine {
                 label: "Base plan, up to 10 users".into(),
@@ -1190,7 +1262,16 @@ mod tests {
                 .records
                 .borrow()
                 .values()
-                .filter(|record| first_charge_due(record, now).is_some())
+                .filter(|record| {
+                    first_charge_due(record, now).is_some_and(|due| {
+                        !self.rows.borrow().iter().any(|stored| {
+                            stored.row.status == ReminderStatus::Skipped
+                                && stored.row.key.cycle == due.cycle
+                                && now - stored.row.claimed_at
+                                    < Duration::hours(FIRST_CHARGE_RECHECK_HOURS)
+                        })
+                    })
+                })
                 .map(|record| record.company_id)
                 .collect())
         }
@@ -1238,14 +1319,12 @@ mod tests {
         async fn claim(&self, key: &ReminderKey, now: NaiveDateTime) -> StoreResult<Option<i64>> {
             let mut rows = self.rows.borrow_mut();
             if let Some(stored) = rows.iter_mut().find(|stored| stored.row.key == *key) {
-                if stored.row.status != ReminderStatus::Failed
-                    || stored.row.attempts >= REMINDER_MAX_ATTEMPTS
-                {
+                if !can_claim(Some(&stored.row), now) {
                     return Ok(None);
                 }
                 stored.row.status = ReminderStatus::Sending;
                 stored.row.attempts += 1;
-                stored.claimed_at = now;
+                stored.row.claimed_at = now;
                 return Ok(Some(stored.row.id));
             }
             let id = i64::try_from(rows.len()).unwrap_or(0) + 1;
@@ -1255,10 +1334,40 @@ mod tests {
                     key: *key,
                     status: ReminderStatus::Sending,
                     attempts: 1,
+                    claimed_at: now,
                 },
-                claimed_at: now,
             });
             Ok(Some(id))
+        }
+        async fn skip_cycle(
+            &self,
+            company_id: i32,
+            cycle: DunningCycle,
+            step: ReminderStep,
+            now: NaiveDateTime,
+        ) -> StoreResult<()> {
+            let key = ReminderKey {
+                company_id,
+                user_id: NO_USER,
+                cycle,
+                step,
+            };
+            let mut rows = self.rows.borrow_mut();
+            if let Some(stored) = rows.iter_mut().find(|stored| stored.row.key == key) {
+                stored.row.claimed_at = now;
+                return Ok(());
+            }
+            let id = i64::try_from(rows.len()).unwrap_or(0) + 1;
+            rows.push(Stored {
+                row: ReminderRow {
+                    id,
+                    key,
+                    status: ReminderStatus::Skipped,
+                    attempts: 0,
+                    claimed_at: now,
+                },
+            });
+            Ok(())
         }
         async fn mark_sent(
             &self,
@@ -1280,7 +1389,7 @@ mod tests {
         async fn sweep_stuck(&self, cutoff: NaiveDateTime) -> StoreResult<Vec<ReminderRow>> {
             let mut swept = Vec::new();
             for stored in self.rows.borrow_mut().iter_mut() {
-                if stored.row.status == ReminderStatus::Sending && stored.claimed_at < cutoff {
+                if stored.row.status == ReminderStatus::Sending && stored.row.claimed_at < cutoff {
                     stored.row.status = ReminderStatus::Unknown;
                     swept.push(stored.row);
                 }
@@ -1353,11 +1462,18 @@ mod tests {
         }
         async fn first_charge_quote(
             &self,
-            _: &CompanyBilling,
+            record: &CompanyBilling,
         ) -> Result<Option<FirstChargeQuote>, ReminderError> {
             self.quote_calls.set(self.quote_calls.get() + 1);
             match &*self.quote.borrow() {
-                QuoteMode::Quote(quote) => Ok(Some(quote.clone())),
+                QuoteMode::Quote(quote) => Ok(Some(FirstChargeQuote {
+                    charge_at: record.trial_end_at.unwrap_or(quote.charge_at),
+                    ..quote.clone()
+                })),
+                QuoteMode::StripeSays(charge_at) => Ok(Some(FirstChargeQuote {
+                    charge_at: *charge_at,
+                    ..sample_quote()
+                })),
                 QuoteMode::Missing => Ok(None),
                 QuoteMode::Fails => Err(ReminderError::Stripe("down".into())),
             }
@@ -1437,6 +1553,8 @@ mod tests {
                 unit_amount_cents: Some(30_000),
                 company_id: Some(1),
                 deleted: false,
+                trial_end: None,
+                cancel_at: None,
             },
         }
     }
@@ -1676,7 +1794,12 @@ mod tests {
         fake.mode.set(SendMode::Rejected);
         fake.fail().await;
 
-        for minute in 1..=6 {
+        // A refused send waits 5 minutes before its next try.
+        for minute in 1..=5 {
+            fake.tick(t(0, minute * 60)).await;
+        }
+        assert_eq!(fake.send_calls.get(), 2);
+        for minute in 6..=20 {
             fake.tick(t(0, minute * 60)).await;
         }
 
@@ -2062,6 +2185,16 @@ mod tests {
         };
         assert!(first_charge_due(&active, trial_ends() - Duration::days(3)).is_none());
         assert!(first_charge_due(&trialing(None), trial_ends() - Duration::days(3)).is_none());
+        let cancelled = CompanyBilling {
+            cancel_at: Some(trial_ends()),
+            ..trialing(Some(trial_ends()))
+        };
+        assert!(first_charge_due(&cancelled, trial_ends() - Duration::days(3)).is_none());
+        let cancelled_later = CompanyBilling {
+            cancel_at: Some(trial_ends() + Duration::days(30)),
+            ..trialing(Some(trial_ends()))
+        };
+        assert!(first_charge_due(&cancelled_later, trial_ends() - Duration::days(3)).is_some());
     }
 
     #[tokio::test]
@@ -2109,22 +2242,75 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_quote_means_nothing_is_claimed() {
+    async fn no_charge_is_skipped_and_stripe_is_asked_again_after_six_hours() {
         let fake = fake();
         with_trial(&fake);
         *fake.quote.borrow_mut() = QuoteMode::Missing;
+        let start = trial_ends() - Duration::days(7);
 
-        let missing = fake.tick(trial_ends() - Duration::days(7)).await;
+        let missing = fake.tick(start).await;
+        fake.tick(start + Duration::minutes(1)).await;
+        fake.tick(start + Duration::hours(5)).await;
+
         assert_eq!(missing, ReminderTickResult::default());
+        assert_eq!(fake.quote_calls.get(), 1);
+        assert_eq!(fake.statuses(), vec![(NO_USER, ReminderStatus::Skipped, 0)]);
+        fake.tick(start + Duration::hours(6) + Duration::minutes(1))
+            .await;
+        assert_eq!(fake.quote_calls.get(), 2);
+        assert_eq!(fake.sent_count(), 0);
+    }
 
+    #[tokio::test]
+    async fn a_failing_quote_claims_nothing() {
+        let fake = fake();
+        with_trial(&fake);
         *fake.quote.borrow_mut() = QuoteMode::Fails;
+
         let failing = fake.tick(trial_ends() - Duration::days(7)).await;
+
         assert_eq!(failing.company_errors, 1);
         assert_eq!(failing.processed, 0);
-
         assert!(fake.rows.borrow().is_empty());
+    }
+
+    #[tokio::test]
+    async fn stripes_trial_end_dates_and_keys_the_email() {
+        let fake = fake();
+        with_trial(&fake);
+        let stripe_date = trial_ends() + Duration::days(2);
+        *fake.quote.borrow_mut() = QuoteMode::StripeSays(stripe_date);
+        let now = trial_ends() - Duration::days(5);
+
+        fake.tick(now).await;
+        fake.tick(now + Duration::minutes(1)).await;
+
+        assert_eq!(
+            fake.subjects(),
+            first_charge_subjects(&["October 22, 2026"])
+        );
+        assert!(fake.rows.borrow().iter().all(|stored| {
+            stored.row.key.cycle.started_at
+                == if stored.row.status == ReminderStatus::Skipped {
+                    trial_ends()
+                } else {
+                    stripe_date
+                }
+        }));
+        // The stale stored date rests: Stripe is not asked every minute.
+        assert_eq!(fake.quote_calls.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn stripes_trial_end_outside_the_window_sends_nothing() {
+        let fake = fake();
+        with_trial(&fake);
+        *fake.quote.borrow_mut() = QuoteMode::StripeSays(trial_ends() + Duration::days(30));
+
+        fake.tick(trial_ends() - Duration::days(5)).await;
+
         assert_eq!(fake.sent_count(), 0);
-        assert_eq!(fake.quote_calls.get(), 2);
+        assert_eq!(fake.statuses(), vec![(NO_USER, ReminderStatus::Skipped, 0)]);
     }
 
     #[tokio::test]
@@ -2161,6 +2347,7 @@ mod tests {
     fn the_quote_comes_from_a_trialing_subscription() {
         let subscription = json!({
             "status": "trialing",
+            "trial_end": 1_800_000_000,
             "items": {"data": [
                 {"quantity": 1, "price": {"unit_amount": 30000, "metadata": {"kind": "base"}}},
                 {"quantity": 4, "price": {"unit_amount": 3000, "metadata": {"kind": "seat"}}},
@@ -2196,6 +2383,10 @@ mod tests {
             30_000 + 12_000 + 3_000 + 2_000 + 1_000 + 500 + 700
         );
         assert_eq!(quote.payment_method.as_deref(), Some("Visa ending in 4242"));
+        assert_eq!(quote.charge_at, at("2027-01-15 08:00:00"));
+        let mut undated = subscription;
+        undated["trial_end"] = Value::Null;
+        assert_eq!(first_charge_quote_from(&undated, None), None);
     }
 
     #[test]

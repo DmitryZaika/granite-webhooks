@@ -2,8 +2,9 @@
 
 use super::reminders::{
     ClaimedReminder, CompanyBillingSnapshot, DunningCycle, DunningKind, FIRST_CHARGE_NOTICE_DAYS,
-    RECOVERED_NOTICE_WINDOW_DAYS, REMINDER_CYCLE_MAX_AGE_DAYS, REMINDER_MAX_ATTEMPTS,
-    ReminderContact, ReminderKey, ReminderRow, ReminderStatus, ReminderStep, ReminderStore,
+    FIRST_CHARGE_RECHECK_HOURS, NO_USER, RECOVERED_NOTICE_WINDOW_DAYS, REMINDER_CYCLE_MAX_AGE_DAYS,
+    REMINDER_MAX_ATTEMPTS, REMINDER_RETRY_AFTER_MINUTES, ReminderContact, ReminderKey, ReminderRow,
+    ReminderStatus, ReminderStep, ReminderStore,
 };
 use super::store::{BillingStore, MySqlBillingStore, StoreResult};
 use chrono::{Duration, NaiveDateTime};
@@ -21,6 +22,7 @@ struct ReminderDbRow {
     step: String,
     status: String,
     attempts: i32,
+    claimed_at: NaiveDateTime,
 }
 
 impl ReminderDbRow {
@@ -39,12 +41,13 @@ impl ReminderDbRow {
             },
             status: ReminderStatus::parse(&self.status)?,
             attempts: self.attempts,
+            claimed_at: self.claimed_at,
         })
     }
 }
 
 const REMINDER_SELECT: &str = "SELECT id, company_id, user_id, cycle_kind, cycle_started_at, step,
-        status, attempts
+        status, attempts, claimed_at
    FROM billing_reminder_emails";
 
 const KEY_WHERE: &str = "company_id = ? AND user_id = ? AND cycle_kind = ?
@@ -125,11 +128,18 @@ impl ReminderStore for MySqlReminderStore<'_> {
                JOIN company c ON c.id = cb.company_id
               WHERE c.deleted_at IS NULL AND cb.subscription_status = 'trialing'
                 AND cb.trial_end_at > ? AND cb.trial_end_at <= ?
+                AND (cb.cancel_at IS NULL OR cb.cancel_at > cb.trial_end_at)
+                AND NOT EXISTS (
+                  SELECT 1 FROM billing_reminder_emails r
+                   WHERE r.company_id = cb.company_id AND r.cycle_kind = 'first_charge'
+                     AND r.cycle_started_at = cb.trial_end_at AND r.status = 'skipped'
+                     AND r.claimed_at > ?)
               ORDER BY cb.trial_end_at, cb.company_id
               LIMIT 500",
         )
         .bind(now)
         .bind(now + Duration::days(FIRST_CHARGE_NOTICE_DAYS))
+        .bind(now - Duration::hours(FIRST_CHARGE_RECHECK_HOURS))
         .fetch_all(self.0)
         .await
     }
@@ -230,11 +240,12 @@ impl ReminderStore for MySqlReminderStore<'_> {
             Err(err) if is_duplicate(&err) => {}
             Err(err) => return Err(err),
         }
-        // Only a rejected send with attempts left may be taken again.
+        // Only a rejected send with attempts left, last tried a while ago, may
+        // be taken again.
         let retried = sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE billing_reminder_emails
                 SET status = 'sending', attempts = attempts + 1, claimed_at = ?, error_code = NULL
-              WHERE {KEY_WHERE} AND status = 'failed' AND attempts < ?"
+              WHERE {KEY_WHERE} AND status = 'failed' AND attempts < ? AND claimed_at <= ?"
         )))
         .bind(now)
         .bind(key.company_id)
@@ -243,6 +254,7 @@ impl ReminderStore for MySqlReminderStore<'_> {
         .bind(key.cycle.started_at)
         .bind(key.step.as_str())
         .bind(REMINDER_MAX_ATTEMPTS)
+        .bind(now - Duration::minutes(REMINDER_RETRY_AFTER_MINUTES))
         .execute(self.0)
         .await?;
         if retried.rows_affected() != 1 {
@@ -258,6 +270,30 @@ impl ReminderStore for MySqlReminderStore<'_> {
         .bind(key.step.as_str())
         .fetch_optional(self.0)
         .await
+    }
+
+    async fn skip_cycle(
+        &self,
+        company_id: i32,
+        cycle: DunningCycle,
+        step: ReminderStep,
+        now: NaiveDateTime,
+    ) -> StoreResult<()> {
+        sqlx::query(
+            "INSERT INTO billing_reminder_emails
+               (company_id, user_id, cycle_kind, cycle_started_at, step, status, attempts, claimed_at)
+             VALUES (?, ?, ?, ?, ?, 'skipped', 0, ?)
+             ON DUPLICATE KEY UPDATE claimed_at = VALUES(claimed_at)",
+        )
+        .bind(company_id)
+        .bind(NO_USER)
+        .bind(cycle.kind.as_str())
+        .bind(cycle.started_at)
+        .bind(step.as_str())
+        .bind(now)
+        .execute(self.0)
+        .await?;
+        Ok(())
     }
 
     async fn mark_sent(

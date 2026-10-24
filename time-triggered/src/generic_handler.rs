@@ -297,6 +297,15 @@ pub(crate) async fn function_handler(
     // This will now print the full JSON structure to your CloudWatch logs
     tracing::info!("Received event: {:?}", event.payload);
 
+    // First: every later job may abort the tick with `?`.
+    let billing_reminder_count = match process_billing_reminders().await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(?error, "Failed to process billing reminders; continuing");
+            0
+        }
+    };
+
     cancel_pending_emails_left_list(pool).await?;
     cancel_pending_emails_for_non_leads(pool).await?;
     let ready_emails = get_ready_scheduled_emails(pool).await?;
@@ -332,14 +341,6 @@ pub(crate) async fn function_handler(
                 ?error,
                 "Failed to send activity deadline reminders; continuing scheduled work"
             );
-            0
-        }
-    };
-    // Before the jobs that abort the tick with `?`.
-    let billing_reminder_count = match process_billing_reminders().await {
-        Ok(count) => count,
-        Err(error) => {
-            tracing::error!(?error, "Failed to process billing reminders; continuing");
             0
         }
     };
@@ -417,10 +418,11 @@ mod tests {
         let billing = handler
             .find("process_billing_reminders().await")
             .expect("billing reminders call");
-        let estimate = handler
-            .find("process_estimate_appointment_reminders().await?")
-            .expect("estimate reminders call");
-        assert!(billing < estimate, "billing must run before the `?` jobs");
+        let first_fallible = handler.find(".await?").expect("a `?` job");
+        assert!(
+            billing < first_fallible,
+            "billing must run before the `?` jobs"
+        );
         assert!(!handler.contains("process_billing_reminders().await?"));
     }
 

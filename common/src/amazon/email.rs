@@ -135,6 +135,32 @@ pub async fn send_raw_message(raw: Vec<u8>, destinations: Vec<String>) -> Result
     ))
 }
 
+/// How SES refused a send it did not take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SesRefusal {
+    /// Sending rate or quota: try again later.
+    Throttled,
+    /// The message, the sender or the account was refused.
+    Rejected,
+}
+
+/// `None` when SES may or may not have sent the email (5xx, network,
+/// timeout).
+pub const fn ses_refusal(err: &Error) -> Option<SesRefusal> {
+    match err {
+        Error::TooManyRequestsException(_) | Error::LimitExceededException(_) => {
+            Some(SesRefusal::Throttled)
+        }
+        Error::MessageRejected(_)
+        | Error::MailFromDomainNotVerifiedException(_)
+        | Error::AccountSuspendedException(_)
+        | Error::SendingPausedException(_)
+        | Error::BadRequestException(_)
+        | Error::NotFoundException(_) => Some(SesRefusal::Rejected),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

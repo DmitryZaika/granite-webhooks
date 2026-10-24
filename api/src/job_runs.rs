@@ -79,6 +79,84 @@ impl Claim {
     }
 }
 
+/// A pass of a batched job (companies by id, a batch per tick) this tick is
+/// working on: a pass in progress, or a new one once the last finished
+/// `every` ago (or never).
+#[derive(Debug)]
+pub struct BatchClaim {
+    key: String,
+    /// Work on ids after this one.
+    pub after: i32,
+}
+
+/// Takes the next batch of `key`'s pass.
+pub async fn claim_batch(
+    pool: &MySqlPool,
+    key: &str,
+    every: Duration,
+    now: NaiveDateTime,
+) -> Result<Option<BatchClaim>, sqlx::Error> {
+    sqlx::query("INSERT IGNORE INTO job_runs (job_key) VALUES (?)")
+        .bind(key)
+        .execute(pool)
+        .await?;
+    let mut tx = pool.begin().await?;
+    let (finished, cursor): (Option<NaiveDateTime>, Option<i32>) = sqlx::query_as(
+        "SELECT last_finished_at, cursor_id FROM job_runs WHERE job_key = ? FOR UPDATE",
+    )
+    .bind(key)
+    .fetch_one(&mut *tx)
+    .await?;
+    let after = match cursor {
+        Some(after) => after,
+        None if finished.is_some_and(|at| at > now - every) => {
+            tx.commit().await?;
+            return Ok(None);
+        }
+        None => 0,
+    };
+    sqlx::query("UPDATE job_runs SET last_started_at = ?, cursor_id = ? WHERE job_key = ?")
+        .bind(now)
+        .bind(after)
+        .bind(key)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Some(BatchClaim {
+        key: key.to_string(),
+        after,
+    }))
+}
+
+impl BatchClaim {
+    /// Records how far the batch got: the pass ends when `done`, else the
+    /// next tick starts after `last_id` (or retries this batch without one).
+    pub async fn advance(
+        self,
+        pool: &MySqlPool,
+        last_id: Option<i32>,
+        done: bool,
+        now: NaiveDateTime,
+    ) -> Result<(), sqlx::Error> {
+        if done {
+            sqlx::query(
+                "UPDATE job_runs SET cursor_id = NULL, last_finished_at = ? WHERE job_key = ?",
+            )
+            .bind(now)
+            .bind(&self.key)
+            .execute(pool)
+            .await?;
+        } else if let Some(last_id) = last_id.filter(|id| *id > self.after) {
+            sqlx::query("UPDATE job_runs SET cursor_id = ? WHERE job_key = ?")
+                .bind(last_id)
+                .bind(&self.key)
+                .execute(pool)
+                .await?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +199,41 @@ mod tests {
         assert_eq!(started(&pool, "t").await, Some(at(9)));
         later.undo(&pool).await.unwrap();
         assert_eq!(started(&pool, "t").await, Some(at(2)));
+    }
+
+    #[test_db::test]
+    async fn a_batched_pass_resumes_after_its_cursor_then_waits_its_interval(pool: MySqlPool) {
+        let every = Duration::hours(6);
+        let first = claim_batch(&pool, "b", every, at(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.after, 0);
+        first.advance(&pool, Some(50), false, at(1)).await.unwrap();
+        let second = claim_batch(&pool, "b", every, at(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.after, 50);
+        // No progress (a failed listing): the same batch comes back.
+        second.advance(&pool, None, false, at(1)).await.unwrap();
+        let third = claim_batch(&pool, "b", every, at(2))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(third.after, 50);
+        third.advance(&pool, Some(80), true, at(2)).await.unwrap();
+        assert!(
+            claim_batch(&pool, "b", every, at(7))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let next = claim_batch(&pool, "b", every, at(8))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.after, 0);
     }
 
     #[test_db::test]

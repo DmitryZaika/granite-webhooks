@@ -180,7 +180,12 @@ impl WebhooksClient {
             .await
             .map(|reply| reply.error)
             .unwrap_or_default();
-        if status == reqwest::StatusCode::BAD_REQUEST && !error.is_empty() {
+        // A refusal (or SES throttling): nothing was sent, safe to retry.
+        if matches!(
+            status,
+            reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::TOO_MANY_REQUESTS
+        ) && !error.is_empty()
+        {
             return Err(SendFailure::Rejected(error));
         }
         Err(SendFailure::Failed(format!("{status} {error}")))
@@ -439,8 +444,8 @@ struct ErrorReply {
 
 #[derive(Debug)]
 pub enum SendFailure {
-    /// The message was refused (bad address, unreadable attachment): the
-    /// reason is for the user.
+    /// The message was refused (bad address, unreadable attachment) or SES
+    /// is throttling: nothing was sent, and the reason is for the user.
     Rejected(String),
     /// SES or the Lambda failed.
     Failed(String),

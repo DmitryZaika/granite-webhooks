@@ -152,9 +152,10 @@ Each company's billing writes run under `billing/lock.rs` (a MySQL named lock
 on its own connection, since the Lambda pool has one).
 
 `POST /v1/jobs/billing-reminders` prunes old webhook event ids (daily) and
-reconciles with Stripe (6-hourly), both throttled through `job_runs`, then
-emails Managers (`billing/reminders.rs`, deduped in `billing_reminder_emails`):
-the dunning countdown and, 7 days before `trial_end_at`, the first charge.
+reconciles with Stripe (a pass every 6 hours, 50 companies per run, cursor in
+`job_runs`), then emails Managers (`billing/reminders.rs`, deduped in
+`billing_reminder_emails`): the dunning countdown and, 7 days before Stripe's
+`trial_end` (synced to `trial_end_at`), the first charge.
 `GET /v1/superuser/billing/setup` checks the env and the Stripe webhook and
 prices. Optional env: `BILLING_EMAIL_FROM_ADDRESS`.
 

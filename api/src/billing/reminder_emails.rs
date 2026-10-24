@@ -286,7 +286,6 @@ pub fn format_money(cents: i64) -> String {
 pub struct FirstChargeEmailInput<'a> {
     pub company_name: &'a str,
     pub user_name: Option<&'a str>,
-    pub trial_end_at: NaiveDateTime,
     pub quote: &'a FirstChargeQuote,
     pub app_url: &'a str,
 }
@@ -295,7 +294,7 @@ pub struct FirstChargeEmailInput<'a> {
 pub fn render_first_charge_email(input: &FirstChargeEmailInput<'_>) -> RenderedEmail {
     let company = company_or_default(input.company_name);
     let link = billing_link(input.app_url);
-    let date = format_billing_date(input.trial_end_at);
+    let date = format_billing_date(input.quote.charge_at);
     let amount = format_money(input.quote.amount_cents);
     let method = input
         .quote
@@ -474,6 +473,7 @@ mod tests {
 
     fn quote() -> FirstChargeQuote {
         FirstChargeQuote {
+            charge_at: at("2026-10-08 15:00:00"),
             amount_cents: 123_450,
             lines: vec![
                 ChargeLine {
@@ -495,7 +495,6 @@ mod tests {
         let email = render_first_charge_email(&FirstChargeEmailInput {
             company_name: "Rock & Co",
             user_name: Some("Ann"),
-            trial_end_at: at("2026-10-08 15:00:00"),
             quote: &quote,
             app_url: "https://app.example.com/",
         });
@@ -546,7 +545,6 @@ mod tests {
         let email = render_first_charge_email(&FirstChargeEmailInput {
             company_name: " ",
             user_name: None,
-            trial_end_at: at("2026-10-08 15:00:00"),
             quote: &quote,
             app_url: APP_URL,
         });

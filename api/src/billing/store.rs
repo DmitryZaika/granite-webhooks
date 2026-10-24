@@ -57,6 +57,7 @@ struct BillingRow {
     trial_end_at: Option<NaiveDateTime>,
     extra_user_item_id: Option<String>,
     billable_users: Option<i64>,
+    cancel_at: Option<NaiveDateTime>,
 }
 
 /// Blank strings read as missing, like the CRM's `readString`.
@@ -91,6 +92,7 @@ impl From<BillingRow> for CompanyBilling {
             trial_end_at: row.trial_end_at,
             extra_user_item_id: present(row.extra_user_item_id),
             billable_users: row.billable_users,
+            cancel_at: row.cancel_at,
         }
     }
 }
@@ -103,7 +105,7 @@ const BILLING_SELECT: &str =
         CAST(user_count AS SIGNED) AS user_count,
         CAST(outstanding_balance_cents AS SIGNED) AS outstanding_balance_cents,
         recovered_failed_at, recovered_at, trial_end_at, extra_user_item_id,
-        CAST(billable_users AS SIGNED) AS billable_users
+        CAST(billable_users AS SIGNED) AS billable_users, cancel_at
    FROM company_billing";
 
 #[derive(FromRow)]
@@ -163,8 +165,8 @@ impl BillingStore for MySqlBillingStore<'_> {
                payment_status, current_period_start, current_period_end, last_successful_payment_at,
                failed_payment_at, grace_period_ends_at, plan_name, monthly_price_cents, user_count,
                outstanding_balance_cents, recovered_failed_at, recovered_at, trial_end_at,
-               extra_user_item_id, billable_users
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               extra_user_item_id, billable_users, cancel_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                stripe_customer_id = VALUES(stripe_customer_id),
                stripe_subscription_id = VALUES(stripe_subscription_id),
@@ -186,7 +188,8 @@ impl BillingStore for MySqlBillingStore<'_> {
                recovered_at = VALUES(recovered_at),
                trial_end_at = VALUES(trial_end_at),
                extra_user_item_id = VALUES(extra_user_item_id),
-               billable_users = VALUES(billable_users)",
+               billable_users = VALUES(billable_users),
+               cancel_at = VALUES(cancel_at)",
         )
         .bind(record.company_id)
         .bind(&record.stripe_customer_id)
@@ -210,6 +213,7 @@ impl BillingStore for MySqlBillingStore<'_> {
         .bind(record.trial_end_at)
         .bind(&record.extra_user_item_id)
         .bind(record.billable_users)
+        .bind(record.cancel_at)
         .execute(self.0)
         .await?;
         Ok(())

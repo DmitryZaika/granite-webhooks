@@ -41277,7 +41277,7 @@
           "jobs"
         ],
         "summary": "Run the billing upkeep and reminder emails",
-        "description": "Called by the `time-triggered` Lambda every minute with\n`Authorization: <LAMBDA_KEY>`. Three steps run in order and each fails on\nits own: it prunes Stripe webhook event ids older than 90 days (at most\nonce a day), reconciles Stripe-billed companies with Stripe (at most every\n6 hours), then sends the billing reminder emails to each company's\nManagers. Reminders are a failed renewal or a first payment asked for\n(day 0, three days left, paused tomorrow, paused, settled) and one notice\n7 days before the first charge of a self-serve subscription. Each\nrecipient gets each reminder once; an email whose outcome is unknown is\nnever resent. A run sends at most 20 emails and starts no new company\nafter 40 seconds. Reminders are skipped while the mail service is not\nconfigured.",
+        "description": "Called by the `time-triggered` Lambda every minute with\n`Authorization: <LAMBDA_KEY>`. Three steps run in order and each fails on\nits own: it prunes Stripe webhook event ids older than 90 days (at most\nonce a day), reconciles Stripe-billed companies with Stripe (a pass every\n6 hours, at most 50 companies or 15 seconds per run), then sends the\nbilling reminder emails to each company's Managers. Reminders are a failed\nrenewal or a first payment asked for (day 0, three days left, paused\ntomorrow, paused, settled) and one notice 7 days before the first charge\nof a self-serve subscription (dated by Stripe's trial end; none when the\nsubscription is set to cancel by then). Each recipient gets each reminder\nonce; a refused email is retried up to 3 times, 5 minutes apart; an email\nwhose outcome is unknown is never resent. A run sends at most 20 emails\nand starts no new company after 40 seconds. Reminders are skipped while the mail service is not\nconfigured.",
         "operationId": "run_billing_reminders",
         "responses": {
           "200": {
@@ -48314,7 +48314,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ReconcileRun",
-                "description": "The Stripe reconciliation, or null when it was not due this run (it\nruns every 6 hours) or Stripe is not configured."
+                "description": "This run's batch of the Stripe reconciliation (up to 50 companies; a\npass starts every 6 hours and continues over the next runs), or null\nwhen no pass is running or Stripe is not configured."
               },
               {
                 "type": "null"
@@ -66095,7 +66095,7 @@
       },
       "ReconcileRun": {
         "type": "object",
-        "description": "What one reconciliation with Stripe did.",
+        "description": "What this run's batch of the Stripe reconciliation did.",
         "required": [
           "checked",
           "failed"

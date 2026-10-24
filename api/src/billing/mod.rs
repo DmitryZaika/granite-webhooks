@@ -98,6 +98,8 @@ pub struct CompanyBilling {
     pub extra_user_item_id: Option<String>,
     /// The billable user count last pushed to Stripe.
     pub billable_users: Option<i64>,
+    /// When the subscription is scheduled to end (a cancellation request).
+    pub cancel_at: Option<NaiveDateTime>,
 }
 
 impl CompanyBilling {
@@ -126,6 +128,7 @@ impl CompanyBilling {
             trial_end_at: None,
             extra_user_item_id: None,
             billable_users: None,
+            cancel_at: None,
         }
     }
 }
@@ -174,6 +177,11 @@ pub struct SubscriptionSnapshot {
     /// `metadata.company_id`.
     pub company_id: Option<i32>,
     pub deleted: bool,
+    /// When the free period ends (the first charge), while one is set.
+    pub trial_end: Option<NaiveDateTime>,
+    /// When the subscription is scheduled to end: `cancel_at`, or the period
+    /// end with `cancel_at_period_end`.
+    pub cancel_at: Option<NaiveDateTime>,
 }
 
 /// What a Stripe invoice says.

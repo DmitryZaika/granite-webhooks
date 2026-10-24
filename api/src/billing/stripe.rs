@@ -585,6 +585,12 @@ pub fn subscription_snapshot(subscription: &Value) -> SubscriptionSnapshot {
         unit_amount_cents: price["unit_amount"].as_i64(),
         company_id: positive_int(&subscription["metadata"]["company_id"]),
         deleted: false,
+        trial_end: unix_date(&subscription["trial_end"]),
+        cancel_at: unix_date(&subscription["cancel_at"]).or_else(|| {
+            (subscription["cancel_at_period_end"].as_bool() == Some(true))
+                .then(|| unix_date(&item["current_period_end"]))
+                .flatten()
+        }),
     }
 }
 
@@ -746,6 +752,36 @@ mod tests {
             verify_signature(payload, &rotated, "whsec_test_secret", 1_000),
             Ok(())
         );
+    }
+
+    #[test]
+    fn subscriptions_read_their_trial_end_and_scheduled_end() {
+        let base = |extra: Value| {
+            let mut subscription = json!({
+                "id": "sub_1", "status": "trialing", "trial_end": 1_800_000_000,
+                "items": { "data": [{ "current_period_end": 1_800_000_000 }] },
+            });
+            if let (Some(target), Some(extra)) = (subscription.as_object_mut(), extra.as_object()) {
+                target.extend(extra.clone());
+            }
+            subscription_snapshot(&subscription)
+        };
+        let date = DateTime::from_timestamp(1_800_000_000, 0)
+            .unwrap()
+            .naive_utc();
+        assert_eq!(base(json!({})).trial_end, Some(date));
+        assert_eq!(base(json!({})).cancel_at, None);
+        assert_eq!(
+            base(json!({"cancel_at_period_end": true})).cancel_at,
+            Some(date)
+        );
+        assert_eq!(
+            base(json!({"cancel_at": 1_700_000_000}))
+                .cancel_at
+                .map(|at| at < date),
+            Some(true)
+        );
+        assert_eq!(base(json!({"trial_end": null})).trial_end, None);
     }
 
     #[test]
