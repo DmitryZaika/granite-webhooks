@@ -148,6 +148,14 @@ pub struct PhoneUser {
     pub company_name: String,
     /// Company admin (or superuser / super admin): sees the admin screens.
     pub is_admin: bool,
+    /// The portal a position locks the user into on the web, if any.
+    ///
+    /// The same rule as `GET /v1/app/shell` `portal` (`installer`,
+    /// `check-in`, `marketing`, `shop_worker`, `template`); null for everyone
+    /// else. For `installer` and `template` the app shows only the user's own
+    /// schedule (`GET /v1/me/schedule`) and does not set the phone up for
+    /// calls.
+    pub portal: Option<String>,
 }
 
 /// The [`PhoneUser`] of a signed-in user.
@@ -156,7 +164,9 @@ pub async fn phone_user(pool: &MySqlPool, user: &SessionUser) -> sqlx::Result<Ph
         .bind(user.company_id)
         .fetch_optional(pool)
         .await?;
+    let positions = user_positions(pool, user.id).await?;
     Ok(PhoneUser {
+        portal: crate::routes::app_shell::user_portal(user, &positions),
         id: user.id,
         name: user.name.clone().unwrap_or_default(),
         email: user.email.clone(),

@@ -1,13 +1,16 @@
 //! The company admin's Granite Phone page: the company's numbers, who they
-//! ring and who may call from them, and the company's signed-in phones.
+//! ring and who may call from them, the main line's business hours and
+//! holidays, call recording, and the company's signed-in phones.
 //! Session cookie only; company admins, super admins and superusers
 //! (`AdminUser`, which covers every user manager). Changes are written to
 //! `phone_audit_log`.
 
+use super::superuser::{checked_holidays, checked_hours, http_url};
 use super::{audit, telnyx_failed};
 use crate::auth::AdminUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::phone::availability::WorkingHours;
 use crate::phone::company::{self, RecordingMode};
 use crate::phone::lines::NumberKind;
 use crate::phone::numbers::{is_nanp, last10, to_e164};
@@ -207,7 +210,10 @@ pub struct AdminDevices {
 }
 
 /// The company's numbers with their assignments, as the page lists them.
-async fn company_numbers(pool: &MySqlPool, company_id: i32) -> sqlx::Result<Vec<AdminNumber>> {
+pub(super) async fn company_numbers(
+    pool: &MySqlPool,
+    company_id: i32,
+) -> sqlx::Result<Vec<AdminNumber>> {
     let rows: Vec<NumberRow> = sqlx::query_as(
         "SELECT id, e164, label, CAST(kind AS CHAR) AS kind,
                 CAST(no_answer_action AS CHAR) AS no_answer_action, forward_to, greeting,
@@ -253,7 +259,7 @@ async fn company_numbers(pool: &MySqlPool, company_id: i32) -> sqlx::Result<Vec<
 }
 
 /// One number of the company.
-async fn company_number(
+pub(super) async fn company_number(
     pool: &MySqlPool,
     company_id: i32,
     id: i32,
@@ -534,18 +540,35 @@ pub async fn import_admin_numbers(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
 ) -> ApiResult<Json<ImportedNumbers>> {
-    let pool = &state.pool;
-    let app_id = company::load(pool, user.company_id)
+    let app_id = company::load(&state.pool, user.company_id)
         .await?
         .and_then(|config| config.texml_app_id)
         .ok_or_else(|| {
             ApiError::BadRequest(
-                "Telnyx is not set up for this company yet. Ask a superuser.".into(),
+                "Telnyx is not connected for this company yet. Click Connect Telnyx first.".into(),
             )
         })?;
+    let imported = import_numbers(&state, user.company_id, user.id, &app_id).await?;
+    Ok(Json(ImportedNumbers {
+        imported,
+        numbers: company_numbers(&state.pool, user.company_id).await?,
+    }))
+}
+
+/// Adds the numbers on the company's TeXML app (`app_id`) that are missing
+/// here, as unassigned direct lines; how many were added. Numbers already
+/// here keep their settings (and get their Telnyx id when they had none);
+/// numbers another company has are left out.
+pub(super) async fn import_numbers(
+    state: &AppState,
+    company_id: i32,
+    actor: i32,
+    app_id: &str,
+) -> ApiResult<usize> {
+    let pool = &state.pool;
     let listed = state
         .telnyx
-        .list_numbers_for_connection(&app_id)
+        .list_numbers_for_connection(app_id)
         .await
         .map_err(|err| telnyx_failed(&err, "list the TeXML app's numbers"))?;
     let mut wanted: Vec<(String, String, String)> = Vec::new();
@@ -571,14 +594,14 @@ pub async fn import_admin_numbers(
                 .fetch_optional(&mut *tx)
                 .await?;
         match owner {
-            Some(owner) if owner == user.company_id => {
+            Some(owner) if owner == company_id => {
                 sqlx::query(
                     "UPDATE telnyx_numbers SET telnyx_number_id = ?
                       WHERE e164 = ? AND company_id = ? AND telnyx_number_id IS NULL",
                 )
                 .bind(telnyx_id)
                 .bind(e164)
-                .bind(user.company_id)
+                .bind(company_id)
                 .execute(&mut *tx)
                 .await?;
             }
@@ -589,7 +612,7 @@ pub async fn import_admin_numbers(
                        (company_id, e164, last10, telnyx_number_id, label, kind)
                      VALUES (?, ?, ?, ?, '', 'direct')",
                 )
-                .bind(user.company_id)
+                .bind(company_id)
                 .bind(e164)
                 .bind(digits)
                 .bind(telnyx_id)
@@ -602,8 +625,8 @@ pub async fn import_admin_numbers(
     if imported > 0 {
         audit(
             &mut *tx,
-            user.company_id,
-            user.id,
+            company_id,
+            actor,
             "numbers_imported",
             &format!("texml_app:{app_id}"),
             &json!({ "imported": imported }),
@@ -613,15 +636,12 @@ pub async fn import_admin_numbers(
     tx.commit().await?;
     if elsewhere > 0 {
         tracing::warn!(
-            company_id = user.company_id,
+            company_id,
             numbers = elsewhere,
             "TeXML app numbers belong to another company; not imported"
         );
     }
-    Ok(Json(ImportedNumbers {
-        imported: usize::try_from(imported).unwrap_or(usize::MAX),
-        numbers: company_numbers(pool, user.company_id).await?,
-    }))
+    Ok(usize::try_from(imported).unwrap_or(usize::MAX))
 }
 
 /// List the company's signed-in phones
@@ -716,4 +736,212 @@ pub async fn revoke_admin_device(
     )
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// When the company's main line rings: `GET` and `PUT /v1/phone/admin/hours`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanyHours {
+    /// The main line's hours (a valid IANA `tz`, at least one range, `HH:MM`
+    /// with start before end); null = always.
+    #[serde(default)]
+    pub business_hours: Option<WorkingHours>,
+    /// Dates the main line rings nobody, `YYYY-MM-DD` in the company time
+    /// zone (at most 366; sorted, repeats dropped).
+    #[serde(default)]
+    pub holidays: Vec<String>,
+}
+
+/// Get the company's business hours
+///
+/// The main line's business hours and holidays. 404 until Telnyx is
+/// connected for the company. Company admins (and super admins,
+/// superusers) only.
+#[utoipa::path(
+    get,
+    path = "/v1/phone/admin/hours",
+    operation_id = "get_phone_admin_hours",
+    tag = "phone",
+    responses(
+        (status = 200, description = "The hours and holidays", body = CompanyHours),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "Telnyx is not set up for the company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn get_admin_hours(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+) -> ApiResult<Json<CompanyHours>> {
+    let config = company::load(&state.pool, user.company_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(CompanyHours {
+        business_hours: config.business_hours,
+        holidays: config.holidays,
+    }))
+}
+
+/// Save the company's business hours
+///
+/// Saves the main line's business hours and holidays and returns them.
+/// Checks: a valid IANA time zone, at least one range, `HH:MM` with start
+/// before end, `YYYY-MM-DD` holidays (at most 366); 400 with a message
+/// otherwise. 404 until Telnyx is connected for the company.
+/// Written to the phone audit log. Company admins (and super admins,
+/// superusers) only.
+#[utoipa::path(
+    put,
+    path = "/v1/phone/admin/hours",
+    operation_id = "save_phone_admin_hours",
+    tag = "phone",
+    request_body = CompanyHours,
+    responses(
+        (status = 200, description = "The hours as saved", body = CompanyHours),
+        (status = 400, description = "What is wrong", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "Telnyx is not set up for the company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn save_admin_hours(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    JsonBody(input): JsonBody<CompanyHours>,
+) -> ApiResult<Json<CompanyHours>> {
+    let hours = CompanyHours {
+        business_hours: checked_hours(input.business_hours)?,
+        holidays: checked_holidays(&input.holidays)?,
+    };
+    if company::load(&state.pool, user.company_id).await?.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "UPDATE telnyx_company_config SET business_hours = ?, holidays = ? WHERE company_id = ?",
+    )
+    .bind(hours.business_hours.as_ref().map(WorkingHours::to_json))
+    .bind(serde_json::to_string(&hours.holidays).unwrap_or_else(|_| "[]".into()))
+    .bind(user.company_id)
+    .execute(&mut *tx)
+    .await?;
+    audit(
+        &mut *tx,
+        user.company_id,
+        user.id,
+        "business_hours_saved",
+        &format!("company:{}", user.company_id),
+        &serde_json::to_value(&hours).unwrap_or_default(),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(hours))
+}
+
+/// Which calls the company records: `GET` and `PUT /v1/phone/admin/recording`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanyRecording {
+    /// `off`, `inbound` (incoming calls) or `both` (incoming and outgoing).
+    /// Callers hear "This call may be recorded" before it rings.
+    pub recording_mode: RecordingMode,
+    /// The notice played to the customer on recorded outgoing calls, an
+    /// audio file URL (`http(s)://`, at most 512 characters); null or blank
+    /// = "This call may be recorded." is said instead.
+    #[serde(default)]
+    pub recording_notice_url: Option<String>,
+}
+
+/// Get the company's call recording
+///
+/// Which calls are recorded and the notice played on recorded outgoing
+/// calls. 404 until Telnyx is connected for the company. Company
+/// admins (and super admins, superusers) only.
+#[utoipa::path(
+    get,
+    path = "/v1/phone/admin/recording",
+    operation_id = "get_phone_admin_recording",
+    tag = "phone",
+    responses(
+        (status = 200, description = "The recording setting", body = CompanyRecording),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "Telnyx is not set up for the company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn get_admin_recording(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+) -> ApiResult<Json<CompanyRecording>> {
+    let config = company::load(&state.pool, user.company_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(CompanyRecording {
+        recording_mode: config.recording_mode,
+        recording_notice_url: config.recording_notice_url,
+    }))
+}
+
+/// Save the company's call recording
+///
+/// Saves which calls are recorded and the notice audio, and returns them.
+/// The notice is an `http(s)://` URL (at most 512 characters; blank =
+/// spoken); 400 otherwise. 404 until Telnyx is connected for the
+/// company. Written to the phone audit log. Company admins (and super
+/// admins, superusers) only.
+#[utoipa::path(
+    put,
+    path = "/v1/phone/admin/recording",
+    operation_id = "save_phone_admin_recording",
+    tag = "phone",
+    request_body = CompanyRecording,
+    responses(
+        (status = 200, description = "The recording setting as saved", body = CompanyRecording),
+        (status = 400, description = "What is wrong", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 404, description = "Telnyx is not set up for the company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn save_admin_recording(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    JsonBody(input): JsonBody<CompanyRecording>,
+) -> ApiResult<Json<CompanyRecording>> {
+    let recording = CompanyRecording {
+        recording_mode: input.recording_mode,
+        recording_notice_url: http_url(input.recording_notice_url.as_ref(), "recording notice")?,
+    };
+    if company::load(&state.pool, user.company_id).await?.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "UPDATE telnyx_company_config SET recording_mode = ?, recording_notice_url = ?
+          WHERE company_id = ?",
+    )
+    .bind(recording.recording_mode.as_str())
+    .bind(&recording.recording_notice_url)
+    .bind(user.company_id)
+    .execute(&mut *tx)
+    .await?;
+    audit(
+        &mut *tx,
+        user.company_id,
+        user.id,
+        "recording_saved",
+        &format!("company:{}", user.company_id),
+        &serde_json::to_value(&recording).unwrap_or_default(),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(recording))
 }

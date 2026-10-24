@@ -217,19 +217,12 @@ impl Created {
     }
 }
 
-/// The caller may send documents for signature here.
-pub async fn check_access(state: &AppState, user: &SessionUser) -> ApiResult<()> {
+/// The caller may send documents for signature: eSignatures are given per
+/// user, with no company switch.
+pub fn check_access(user: &SessionUser) -> ApiResult<()> {
     if !user.is_signature_available {
         return Err(ApiError::Denied(
             "You do not have access to send documents for signature. Ask a superuser to turn on eSignatures for you in Superuser › Feature access."
-                .into(),
-        ));
-    }
-    let features =
-        crate::routes::company::queries::company_features(&state.pool, user.company_id).await?;
-    if !features.e_signature {
-        return Err(ApiError::Denied(
-            "eSignatures are turned off for this company. A superuser can turn them on in Superuser › Companies › Edit company › eSignatures."
                 .into(),
         ));
     }

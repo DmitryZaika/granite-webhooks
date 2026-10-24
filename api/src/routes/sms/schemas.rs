@@ -233,4 +233,8 @@ pub struct ThreadDetail {
     /// Older messages exist (page with `before_id`).
     pub has_older: bool,
     pub active_flow: Option<ActiveFlow>,
+    /// The caller's own inbox over every provider (`/v1/sms/mine/...`): the
+    /// provider to answer through; null elsewhere and when they can text
+    /// through none.
+    pub reply_provider: Option<SmsProvider>,
 }

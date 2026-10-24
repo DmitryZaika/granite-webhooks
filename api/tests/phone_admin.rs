@@ -527,14 +527,14 @@ fn setup() -> Value {
         "enabled": true, "credentialConnectionId": " 2001 ", "texmlAppId": "2002",
         "outboundVoiceProfileId": "2003", "billingGroupId": "", "telnyxAccountId": " acct-uuid-1 ",
         "aiAssistantId": "assistant-1",
-        "fallbackTexmlUrl": "https://bin.test/fallback", "recordingMode": "both",
-        "recordingNoticeUrl": null, "messagingProfileId": " profile-1 ",
-        "businessHours": { "tz": " America/Indiana/Indianapolis ",
-                           "days": [{ "day": 1, "start": "08:00", "end": "17:00" }] },
-        "holidays": ["2026-12-25", "2026-01-01", "2026-12-25"],
+        "fallbackTexmlUrl": "https://bin.test/fallback", "messagingProfileId": " profile-1 ",
         "minAppVersion": "1.4.0", "dailyCallLimit": 250,
-        // Read-only: ignored.
+        // Read-only, or the company admins' (PUT /v1/phone/admin/hours and
+        // /recording): ignored.
         "webhookBase": "https://evil.test",
+        "recordingMode": "both", "recordingNoticeUrl": "https://audio.test/notice.mp3",
+        "businessHours": { "tz": "UTC", "days": [{ "day": 1, "start": "08:00", "end": "17:00" }] },
+        "holidays": ["2026-12-25"],
     })
 }
 
@@ -591,11 +591,9 @@ async fn superusers_set_up_a_companys_telnyx(pool: MySqlPool) {
         "enabled": true, "credentialConnectionId": "2001", "texmlAppId": "2002",
         "outboundVoiceProfileId": "2003", "billingGroupId": null, "telnyxAccountId": "acct-uuid-1",
         "aiAssistantId": "assistant-1",
-        "fallbackTexmlUrl": "https://bin.test/fallback", "recordingMode": "both",
+        "fallbackTexmlUrl": "https://bin.test/fallback", "recordingMode": "inbound",
         "recordingNoticeUrl": null, "messagingProfileId": "profile-1",
-        "businessHours": { "tz": "America/Indiana/Indianapolis",
-                           "days": [{ "day": 1, "start": "08:00", "end": "17:00" }] },
-        "holidays": ["2026-01-01", "2026-12-25"],
+        "businessHours": null, "holidays": [],
         "minAppVersion": "1.4.0", "dailyCallLimit": 250,
         "webhookBase": format!("{PUBLIC_API}/v1/webhooks/telnyx/{token}"),
     });
@@ -638,13 +636,17 @@ async fn superusers_set_up_a_companys_telnyx(pool: MySqlPool) {
         .clone();
     assert_eq!(
         status,
-        json!({ "enabled": true, "recordingMode": "both", "configured": true })
+        json!({ "enabled": true, "recordingMode": "inbound", "configured": true })
     );
-    // A second save keeps the token; switched off, no hours.
+    // A second save keeps the token, and the hours the company's admins set.
+    server
+        .put("/v1/phone/admin/hours")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "businessHours": null, "holidays": ["2026-12-25"] }))
+        .await
+        .assert_status_ok();
     let mut off = setup();
     off["enabled"] = json!(false);
-    off["businessHours"] = json!(null);
-    off["holidays"] = json!([]);
     let again = server
         .put(path)
         .with_session(sessions::SUPER_ADMIN)
@@ -652,16 +654,10 @@ async fn superusers_set_up_a_companys_telnyx(pool: MySqlPool) {
         .await
         .json::<Value>();
     assert_eq!(
-        (
-            &again["enabled"],
-            &again["businessHours"],
-            &again["holidays"],
-            &again["webhookBase"]
-        ),
+        (&again["enabled"], &again["holidays"], &again["webhookBase"]),
         (
             &json!(false),
-            &json!(null),
-            &json!([]),
+            &json!(["2026-12-25"]),
             &expected["webhookBase"]
         )
     );
@@ -673,19 +669,8 @@ async fn superusers_set_up_a_companys_telnyx(pool: MySqlPool) {
         ("aiAssistantId", json!("a".repeat(129))),
         ("messagingProfileId", json!("profile 1")),
         ("fallbackTexmlUrl", json!("ftp://bin.test")),
-        ("recordingNoticeUrl", json!("notice.mp3")),
-        (
-            "businessHours",
-            json!({ "tz": "Mars/Base", "days": [{ "day": 1, "start": "08:00", "end": "17:00" }] }),
-        ),
-        (
-            "businessHours",
-            json!({ "tz": "UTC", "days": [{ "day": 1, "start": "17:00", "end": "08:00" }] }),
-        ),
-        ("holidays", json!(["2026-02-30"])),
         ("minAppVersion", json!("latest")),
         ("dailyCallLimit", json!(-1)),
-        ("recordingMode", json!("all")),
     ] {
         let mut bad = setup();
         bad[field] = value;
@@ -703,14 +688,220 @@ async fn superusers_set_up_a_companys_telnyx(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NOT_FOUND);
     let log = audit_log(&pool, 100).await;
-    assert_eq!(log.len(), 2);
+    assert_eq!(log.len(), 3);
     assert_eq!(
         (&log[0].0, log[0].1.as_str(), log[0].2.as_deref()),
         (&Some(103), "telnyx_config_saved", Some("company:100"))
     );
     assert_eq!(
-        (&log[0].3["created"], &log[1].3["created"]),
+        (&log[0].3["created"], &log[2].3["created"]),
         (&json!(true), &json!(false))
     );
-    assert_eq!(log[1].3["enabled"], false);
+    assert_eq!(log[2].3["enabled"], false);
+}
+
+#[test_db::test(seed)]
+async fn company_admins_set_their_business_hours(pool: MySqlPool) {
+    let (server, _) = phone_server(pool.clone()).await;
+    let path = "/v1/phone/admin/hours";
+    let hours = json!({
+        "businessHours": { "tz": " America/Indiana/Indianapolis ",
+                           "days": [{ "day": 1, "start": "08:00", "end": "17:00" }] },
+        "holidays": ["2026-12-25", "2026-01-01", "2026-12-25"],
+    });
+    // Telnyx not set up yet.
+    server
+        .get(path)
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    server
+        .put(path)
+        .with_session(sessions::ADMIN)
+        .json(&hours)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    sql(
+        &pool,
+        "INSERT INTO telnyx_company_config (company_id, webhook_token) VALUES (100, 'hours-token')",
+    )
+    .await;
+    // Not an admin, or not signed in.
+    server
+        .get(path)
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .put(path)
+        .with_session(sessions::REP)
+        .json(&hours)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .get(path)
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    let expected = json!({
+        "businessHours": { "tz": "America/Indiana/Indianapolis",
+                           "days": [{ "day": 1, "start": "08:00", "end": "17:00" }] },
+        "holidays": ["2026-01-01", "2026-12-25"],
+    });
+    let saved = server
+        .put(path)
+        .with_session(sessions::ADMIN)
+        .json(&hours)
+        .await;
+    saved.assert_status_ok();
+    assert_eq!(saved.json::<Value>(), expected);
+    let read = server.get(path).with_session(sessions::ADMIN).await;
+    assert_eq!(read.json::<Value>(), expected);
+    // Saving the same again works; switched off, no holidays.
+    for body in [
+        hours.clone(),
+        json!({ "businessHours": null, "holidays": [] }),
+    ] {
+        server
+            .put(path)
+            .with_session(sessions::ADMIN)
+            .json(&body)
+            .await
+            .assert_status_ok();
+    }
+    assert_eq!(
+        server
+            .get(path)
+            .with_session(sessions::ADMIN)
+            .await
+            .json::<Value>(),
+        json!({ "businessHours": null, "holidays": [] })
+    );
+    for (field, value) in [
+        (
+            "businessHours",
+            json!({ "tz": "Mars/Base", "days": [{ "day": 1, "start": "08:00", "end": "17:00" }] }),
+        ),
+        (
+            "businessHours",
+            json!({ "tz": "UTC", "days": [{ "day": 1, "start": "17:00", "end": "08:00" }] }),
+        ),
+        ("holidays", json!(["2026-02-30"])),
+    ] {
+        let mut bad = hours.clone();
+        bad[field] = value;
+        server
+            .put(path)
+            .with_session(sessions::ADMIN)
+            .json(&bad)
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+    let log = audit_log(&pool, 100).await;
+    assert_eq!(log.len(), 3);
+    assert_eq!(
+        (&log[0].0, log[0].1.as_str(), log[0].2.as_deref()),
+        (&Some(102), "business_hours_saved", Some("company:100"))
+    );
+    assert_eq!(log[0].3, expected);
+}
+
+#[test_db::test(seed)]
+async fn company_admins_choose_what_is_recorded(pool: MySqlPool) {
+    let (server, _) = phone_server(pool.clone()).await;
+    let path = "/v1/phone/admin/recording";
+    let both =
+        json!({ "recordingMode": "both", "recordingNoticeUrl": " https://audio.test/notice.mp3 " });
+    // Telnyx not set up yet.
+    server
+        .get(path)
+        .with_session(sessions::ADMIN)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    server
+        .put(path)
+        .with_session(sessions::ADMIN)
+        .json(&both)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    sql(
+        &pool,
+        "INSERT INTO telnyx_company_config (company_id, webhook_token) VALUES (100, 'rec-token')",
+    )
+    .await;
+    // The table's default until the company chooses.
+    assert_eq!(
+        server
+            .get(path)
+            .with_session(sessions::ADMIN)
+            .await
+            .json::<Value>(),
+        json!({ "recordingMode": "inbound", "recordingNoticeUrl": null })
+    );
+    // Not an admin, or not signed in.
+    server
+        .put(path)
+        .with_session(sessions::REP)
+        .json(&both)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    server
+        .get(path)
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    let expected =
+        json!({ "recordingMode": "both", "recordingNoticeUrl": "https://audio.test/notice.mp3" });
+    let saved = server
+        .put(path)
+        .with_session(sessions::ADMIN)
+        .json(&both)
+        .await;
+    saved.assert_status_ok();
+    assert_eq!(saved.json::<Value>(), expected);
+    assert_eq!(
+        server
+            .get(path)
+            .with_session(sessions::ADMIN)
+            .await
+            .json::<Value>(),
+        expected
+    );
+    // The page's status shows it.
+    let status = server
+        .get("/v1/phone/admin/numbers")
+        .with_session(sessions::ADMIN)
+        .await
+        .json::<Value>()["config"]["recordingMode"]
+        .clone();
+    assert_eq!(status, json!("both"));
+    // Off, spoken notice.
+    let off = server
+        .put(path)
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "recordingMode": "off", "recordingNoticeUrl": "  " }))
+        .await;
+    assert_eq!(
+        off.json::<Value>(),
+        json!({ "recordingMode": "off", "recordingNoticeUrl": null })
+    );
+    for bad in [
+        json!({ "recordingMode": "all" }),
+        json!({ "recordingMode": "both", "recordingNoticeUrl": "notice.mp3" }),
+    ] {
+        let status = server
+            .put(path)
+            .with_session(sessions::ADMIN)
+            .json(&bad)
+            .await
+            .status_code();
+        assert!(status.is_client_error(), "{bad}: {status}");
+    }
+    let log = audit_log(&pool, 100).await;
+    assert_eq!(log.len(), 2);
+    assert_eq!(
+        (&log[0].0, log[0].1.as_str(), log[0].2.as_deref()),
+        (&Some(102), "recording_saved", Some("company:100"))
+    );
+    assert_eq!(log[0].3, expected);
 }

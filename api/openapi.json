@@ -20699,6 +20699,379 @@
         ]
       }
     },
+    "/v1/sms/mine/threads": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "List my conversations over every provider",
+        "description": "The caller's own SMS conversations through every provider they text\nthrough or have texted through (a `CloudTalk` agent id, a `RingCentral`\nextension, a Telnyx line), merged by phone: unread first, then latest.\nEach provider's part is what its own inbox shows the caller. A search\nmatches phone digits, message text and customer or supplier names.",
+        "operationId": "list_my_sms_threads",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Phone digits, message text, or a customer's or supplier's name.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 100 (default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Threads to skip.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`all` for the whole company (admins only).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose conversations to list.",
+              "enum": [
+                "mine",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "description": "With `scope=all`, one rep's conversations (their agent id).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of conversations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/mine/threads/{phone}": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Get my conversation over every provider",
+        "description": "The newest messages with one phone through every provider the caller\ntexts through (as `GET /v1/sms/mine/threads`), oldest first, each with\nthe provider that carried it (page back by raising `limit`;\n`before_id` is ignored); the customer or supplier it belongs to and the\nSMS flow running on it. `replyProvider` is the provider to answer\nthrough: the one of the latest message the caller can text through,\nelse the first they can; `canSend` is false when they can text through\nnone. Opening it in the caller's own inbox marks it read (`unreadCount`\nis 0).",
+        "operationId": "get_my_sms_thread",
+        "parameters": [
+          {
+            "name": "phone",
+            "in": "path",
+            "description": "The other party's phone digits",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Messages, 1 to 200 (default 30), newest first before reversing.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before_id",
+            "in": "query",
+            "description": "Only messages older than this one (paging back).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`all` to read as an admin (anyone else reads their own).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose conversations to list.",
+              "enum": [
+                "mine",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "description": "With `scope=all`, read as one rep (their agent id).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a phone number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The onboarding sample",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/mine/unread-count": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "Count my unread conversations over every provider",
+        "description": "The caller's own conversations with unread messages through every\nprovider they text through (as `GET /v1/sms/mine/threads`), for the\nsidebar badge. A phone with unread texts through two providers counts\ntwice.",
+        "operationId": "count_my_unread_sms_threads",
+        "responses": {
+          "200": {
+            "description": "The count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreadCount"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/sms/mine/desktop-alerts": {
+      "get": {
+        "tags": [
+          "sms"
+        ],
+        "summary": "My unread texts to alert about, over every provider",
+        "description": "As `GET /v1/sms/{provider}/desktop-alerts` for every provider the caller\ntexts through: one alert per phone (the latest), newest first, at most\n50, each opening the conversation on the caller's `inbox` page.",
+        "operationId": "list_my_sms_desktop_alerts",
+        "parameters": [
+          {
+            "name": "inbox",
+            "in": "query",
+            "description": "The SMS page the alerts open (the caller's inbox); default `telnyx`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "The SMS provider a company texts through: `cloudtalk`, `ringcentral`, or\n`telnyx` (Granite Phone: texts from the company's Telnyx numbers).",
+              "enum": [
+                "cloudtalk",
+                "ringcentral",
+                "telnyx"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Alerts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopAlerts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/sms/{provider}/threads": {
       "get": {
         "tags": [
@@ -32349,7 +32722,7 @@
           "superuser"
         ],
         "summary": "List signature access",
-        "description": "The companies that have signatures switched on and their users with\nwhether each may send documents for signature; `company_id` narrows the\nusers to one of those companies. Super admins only.",
+        "description": "Every company and its users with whether each may send documents for\nsignature (eSignatures are given per user, with no company switch);\n`company_id` narrows the users to one company. Super admins only.",
         "operationId": "list_signature_access",
         "parameters": [
           {
@@ -50266,6 +50639,701 @@
         ]
       }
     },
+    "/v1/phone/admin/hours": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Get the company's business hours",
+        "description": "The main line's business hours and holidays. 404 until Telnyx is\nconnected for the company. Company admins (and super admins,\nsuperusers) only.",
+        "operationId": "get_phone_admin_hours",
+        "responses": {
+          "200": {
+            "description": "The hours and holidays",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyHours"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Telnyx is not set up for the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Save the company's business hours",
+        "description": "Saves the main line's business hours and holidays and returns them.\nChecks: a valid IANA time zone, at least one range, `HH:MM` with start\nbefore end, `YYYY-MM-DD` holidays (at most 366); 400 with a message\notherwise. 404 until Telnyx is connected for the company.\nWritten to the phone audit log. Company admins (and super admins,\nsuperusers) only.",
+        "operationId": "save_phone_admin_hours",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyHours"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The hours as saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyHours"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "What is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Telnyx is not set up for the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/admin/recording": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Get the company's call recording",
+        "description": "Which calls are recorded and the notice played on recorded outgoing\ncalls. 404 until Telnyx is connected for the company. Company\nadmins (and super admins, superusers) only.",
+        "operationId": "get_phone_admin_recording",
+        "responses": {
+          "200": {
+            "description": "The recording setting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyRecording"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Telnyx is not set up for the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Save the company's call recording",
+        "description": "Saves which calls are recorded and the notice audio, and returns them.\nThe notice is an `http(s)://` URL (at most 512 characters; blank =\nspoken); 400 otherwise. 404 until Telnyx is connected for the\ncompany. Written to the phone audit log. Company admins (and super\nadmins, superusers) only.",
+        "operationId": "save_phone_admin_recording",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyRecording"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The recording setting as saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyRecording"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "What is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Telnyx is not set up for the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/admin/connect": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Connect Telnyx",
+        "description": "Sets the caller's company up for Granite Phone calls and texts in one\ngo (see the module): billing group, outbound voice profile, TeXML\napplication, credential connection and messaging profile, each made\nwhen missing and pointed at the company's webhooks; the company's\nnumbers are put on them and the TeXML app's numbers imported. Safe to\nrun again: it repairs what changed in Telnyx. A company connecting for\nthe first time gets calling switched on. 409 while another connect of\nthe company runs, 502 when Telnyx fails (what was made is kept; try\nagain), 503 when Telnyx is not set up on the server. Written to the\nphone audit log. Company admins (and super admins, superusers) only.",
+        "operationId": "connect_phone_admin_telnyx",
+        "responses": {
+          "200": {
+            "description": "Connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelnyxConnection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another connect is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Telnyx failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Telnyx is not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/admin/numbers/available": {
+      "get": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Find numbers to buy",
+        "description": "Local US numbers with calls and texts for sale in an area code (at most\n12), with their monthly and up-front price. 400 unless `areaCode` is\nthree digits, 502 when Telnyx fails, 503 when Telnyx is not set up on\nthe server. Company admins (and super admins, superusers) only.",
+        "operationId": "search_phone_admin_numbers",
+        "parameters": [
+          {
+            "name": "areaCode",
+            "in": "query",
+            "description": "A US area code, like `317`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Numbers for sale",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuyableNumbers"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an area code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Telnyx failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Telnyx is not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/admin/numbers/buy": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Buy a number",
+        "description": "Buys a number for the caller's company in Telnyx (on its TeXML app,\nmessaging profile and billing group) and adds it as an unassigned direct\nline; answers it (assign it with `PUT /v1/phone/admin/numbers/{id}`).\nThe company is charged by Telnyx's price for it. 400 when Telnyx is not\nconnected for the company or the number is not a US or Canadian one,\n403 while its calling is switched off or once it has 25 numbers (a\nsuperuser can buy either way), 409 when\nthe company has it already, 502 when Telnyx fails (the number may be\ntaken: search again). Written to the phone audit log. Company admins\n(and super admins, superusers) only.",
+        "operationId": "buy_phone_admin_number",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuyNumber"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The number, bought",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminNumber"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not connected, or not a number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin, or the company has its most numbers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The company has the number already",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Telnyx did not sell it; try another",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Telnyx is not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/telnyx/connect": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Connect a company's Telnyx",
+        "description": "As `POST /v1/phone/admin/connect`, for any company; answers the\ncompany's whole setup. 404 for an unknown or deleted company.\nSuperusers only.",
+        "operationId": "connect_company_telnyx",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The setup after connecting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelnyxCompanyConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another connect is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Telnyx failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Telnyx is not set up on the server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/superuser/companies/{id}/telnyx": {
       "get": {
         "tags": [
@@ -50349,7 +51417,7 @@
           "phone"
         ],
         "summary": "Save a company's Telnyx setup",
-        "description": "Saves the whole setup (every field of `TelnyxCompanyConfig` but\n`webhookBase`; blank text is null) and returns it. The first save makes\nthe company's webhook token (32 random characters, kept from then on),\nso `webhookBase` is known from then on. A `telnyxAccountId` makes every\nTeXML request to the company's webhooks carry that `AccountSid` (403\notherwise). Checks: Telnyx ids without spaces (64 characters, the AI\nAssistant's 128), `http(s)://` URLs,\nvalid business hours, `YYYY-MM-DD` holidays, a version like `1.4.0`,\na daily limit of 0 to 1,000,000; 400 with a message otherwise. Written\nto the phone audit log. Superusers only.",
+        "description": "Saves the whole setup and returns it: every field of\n`TelnyxCompanyConfig` but the read-only `webhookBase` and what the\ncompany's admins decide (`businessHours` and `holidays` with `PUT\n/v1/phone/admin/hours`, `recordingMode` and `recordingNoticeUrl` with\n`PUT /v1/phone/admin/recording`); blank text is null. The first save makes\nthe company's webhook token (32 random characters, kept from then on),\nso `webhookBase` is known from then on. A `telnyxAccountId` makes every\nTeXML request to the company's webhooks carry that `AccountSid` (403\notherwise). Checks: Telnyx ids without spaces (64 characters, the AI\nAssistant's 128), `http(s)://` URLs,\na version like `1.4.0`,\na daily limit of 0 to 1,000,000; 400 with a message otherwise. Written\nto the phone audit log. Superusers only.",
         "operationId": "save_company_telnyx_config",
         "parameters": [
           {
@@ -58832,6 +59900,76 @@
           }
         }
       },
+      "BuyNumber": {
+        "type": "object",
+        "description": "Body of `POST /v1/phone/admin/numbers/buy`.",
+        "required": [
+          "e164"
+        ],
+        "properties": {
+          "e164": {
+            "type": "string",
+            "description": "The number to buy, from `GET /v1/phone/admin/numbers/available`."
+          }
+        }
+      },
+      "BuyableNumber": {
+        "type": "object",
+        "description": "A number the company can buy.",
+        "required": [
+          "e164"
+        ],
+        "properties": {
+          "e164": {
+            "type": "string",
+            "description": "E.164, like `+13175550101`."
+          },
+          "locality": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its town, when Telnyx gives one."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its state, like `IN`."
+          },
+          "monthlyCost": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Dollars a month (`\"1.00\"`), when Telnyx gives it."
+          },
+          "upfrontCost": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Dollars up front, when Telnyx gives it."
+          }
+        }
+      },
+      "BuyableNumbers": {
+        "type": "object",
+        "description": "Numbers for sale in an area code.",
+        "required": [
+          "numbers"
+        ],
+        "properties": {
+          "numbers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BuyableNumber"
+            },
+            "description": "At most 12, in Telnyx's order."
+          }
+        }
+      },
       "CadenceChannel": {
         "type": "string",
         "description": "SMS or email.",
@@ -61150,7 +62288,7 @@
           },
           "signature_enabled": {
             "type": "boolean",
-            "description": "E-signature switch (own setting, else on with a `SignWell` key)."
+            "description": "The old company eSignatures switch; no longer used (eSignatures are\ngiven per user)."
           },
           "billing_required": {
             "type": "boolean",
@@ -61294,6 +62432,30 @@
           }
         }
       },
+      "CompanyHours": {
+        "type": "object",
+        "description": "When the company's main line rings: `GET` and `PUT /v1/phone/admin/hours`.",
+        "properties": {
+          "businessHours": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkingHours",
+                "description": "The main line's hours (a valid IANA `tz`, at least one range, `HH:MM`\nwith start before end); null = always."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "holidays": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Dates the main line rings nobody, `YYYY-MM-DD` in the company time\nzone (at most 366; sorted, repeats dropped)."
+          }
+        }
+      },
       "CompanyInput": {
         "type": "object",
         "description": "Body of `POST /v1/superuser/companies` and `PUT /v1/superuser/companies/{id}`.",
@@ -61416,7 +62578,7 @@
               "boolean",
               "null"
             ],
-            "description": "E-signature switch; edit only (omit to leave it)."
+            "description": "The old company eSignatures switch; edit only (omit to leave it). No\nlonger used: eSignatures are given per user."
           }
         },
         "additionalProperties": false
@@ -61460,6 +62622,26 @@
               "null"
             ],
             "description": "Its name."
+          }
+        }
+      },
+      "CompanyRecording": {
+        "type": "object",
+        "description": "Which calls the company records: `GET` and `PUT /v1/phone/admin/recording`.",
+        "required": [
+          "recordingMode"
+        ],
+        "properties": {
+          "recordingMode": {
+            "$ref": "#/components/schemas/RecordingMode",
+            "description": "`off`, `inbound` (incoming calls) or `both` (incoming and outgoing).\nCallers hear \"This call may be recorded\" before it rings."
+          },
+          "recordingNoticeUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The notice played to the customer on recorded outgoing calls, an\naudio file URL (`http(s)://`, at most 512 characters); null or blank\n= \"This call may be recorded.\" is said instead."
           }
         }
       },
@@ -67426,7 +68608,7 @@
           },
           "signature": {
             "type": "boolean",
-            "description": "E-signatures are on."
+            "description": "The old company eSignatures switch; no longer used (eSignatures are\ngiven per user)."
           },
           "onboarding": {
             "type": "boolean",
@@ -74954,6 +76136,13 @@
           "isAdmin": {
             "type": "boolean",
             "description": "Company admin (or superuser / super admin): sees the admin screens."
+          },
+          "portal": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The portal a position locks the user into on the web, if any.\n\nThe same rule as `GET /v1/app/shell` `portal` (`installer`,\n`check-in`, `marketing`, `shop_worker`, `template`); null for everyone\nelse. For `installer` and `template` the app shows only the user's own\nschedule (`GET /v1/me/schedule`) and does not set the phone up for\ncalls."
           }
         }
       },
@@ -82462,7 +83651,7 @@
             "items": {
               "$ref": "#/components/schemas/CompanyOption"
             },
-            "description": "Companies with signatures on, by name."
+            "description": "Every company, by name."
           },
           "users": {
             "type": "array",
@@ -86007,7 +87196,6 @@
         "description": "Body of `PUT /v1/superuser/companies/{id}/telnyx`: the whole setup (as\n`TelnyxCompanyConfig`, without `webhookBase`). Blank text counts as\nnull.",
         "required": [
           "enabled",
-          "recordingMode",
           "dailyCallLimit"
         ],
         "properties": {
@@ -86064,41 +87252,12 @@
             ],
             "description": "The fallback TeXML URL (`http(s)://`, at most 512 characters)."
           },
-          "recordingMode": {
-            "$ref": "#/components/schemas/RecordingMode",
-            "description": "`off`, `inbound` or `both`."
-          },
-          "recordingNoticeUrl": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The recording notice's audio URL (`http(s)://`, at most 512\ncharacters); null or blank = the spoken notice."
-          },
           "messagingProfileId": {
             "type": [
               "string",
               "null"
             ],
             "description": "Telnyx messaging profile id (at most 64 characters, no spaces); null\nor blank = no texting through Telnyx."
-          },
-          "businessHours": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/WorkingHours",
-                "description": "The main line's hours (a valid IANA `tz`, at least one range,\n`HH:MM` with start before end); null = always."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "holidays": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "`YYYY-MM-DD` dates (at most 366; repeats are dropped)."
           },
           "minAppVersion": {
             "type": [
@@ -86111,6 +87270,33 @@
             "type": "integer",
             "format": "int32",
             "description": "0 to 1,000,000 outgoing calls per user per day."
+          }
+        }
+      },
+      "TelnyxConnection": {
+        "type": "object",
+        "description": "What connecting did.",
+        "required": [
+          "configured",
+          "created",
+          "imported"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "Calls can ring and be placed: the TeXML app and the credential\nconnection are set."
+          },
+          "created": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What Telnyx made this time, of `billingGroup`, `voiceProfile`,\n`texmlApp`, `credentialConnection` and `messagingProfile`; empty when\neverything was there already and was only pointed at us again."
+          },
+          "imported": {
+            "type": "integer",
+            "description": "Numbers added from the TeXML app.",
+            "minimum": 0
           }
         }
       },

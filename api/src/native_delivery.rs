@@ -127,13 +127,14 @@ pub fn frozen_settings_valid(settings: &Value) -> bool {
         && crate::native_signing::FrozenSettings::parse(settings).is_some()
 }
 
-/// The company may sign and the user may send (`authorize`).
+/// The user may send (`authorize`): eSignatures are given per user, with no
+/// company switch.
 async fn authorize<'e, E>(executor: E, company_id: i32, user_id: i32) -> Result<(), NativeError>
 where
     E: sqlx::Executor<'e, Database = MySql>,
 {
-    let owner: Option<(Option<i8>, Option<String>, i8)> = sqlx::query_as(
-        "SELECT c.signature_enabled, c.signwell_api_key, u.is_signature_available
+    let available: Option<i8> = sqlx::query_scalar(
+        "SELECT u.is_signature_available
            FROM company c INNER JOIN users u ON u.company_id = c.id
           WHERE c.id = ? AND c.deleted_at IS NULL AND u.id = ? AND u.is_deleted = 0",
     )
@@ -141,22 +142,11 @@ where
     .bind(user_id)
     .fetch_optional(executor)
     .await?;
-    let allowed = owner.is_some_and(|(enabled, key, available)| {
-        signature_enabled(enabled, key.as_deref()) && available != 0
-    });
-    if allowed {
+    if available.is_some_and(|available| available != 0) {
         Ok(())
     } else {
         Err(refused("Signature access denied"))
     }
-}
-
-/// `companySignatureEnabled`: switched on, or (never set) with a `SignWell` key.
-pub fn signature_enabled(enabled: Option<i8>, signwell_key: Option<&str>) -> bool {
-    enabled.map_or_else(
-        || signwell_key.is_some_and(|key| !key.trim().is_empty()),
-        |value| value != 0,
-    )
 }
 
 fn key_valid(key: &str) -> bool {
@@ -492,8 +482,9 @@ async fn insert_request(
     {
         return Err(refused("Signed date must be supplied by the server"));
     }
-    let owner: Option<(Option<i8>, Option<String>, i8)> = sqlx::query_as(
-        "SELECT c.signature_enabled, c.signwell_api_key, u.is_signature_available
+    // Per user only: there is no company eSignatures switch.
+    let available: Option<i8> = sqlx::query_scalar(
+        "SELECT u.is_signature_available
            FROM company c INNER JOIN users u ON u.company_id = c.id
           WHERE c.id = ? AND c.deleted_at IS NULL AND u.id = ? AND u.is_deleted = 0
           FOR SHARE",
@@ -502,9 +493,7 @@ async fn insert_request(
     .bind(value.user_id)
     .fetch_optional(&mut **tx)
     .await?;
-    if !owner.is_some_and(|(enabled, key, available)| {
-        signature_enabled(enabled, key.as_deref()) && available != 0
-    }) {
+    if !available.is_some_and(|available| available != 0) {
         return Err(refused("Signature access denied"));
     }
     if let Some(customer_id) = value.customer_id {
@@ -868,13 +857,5 @@ mod tests {
         assert!(key_valid("delayed:12"));
         assert!(!key_valid("delayed:012"));
         assert!(!key_valid("composer:nope"));
-    }
-
-    #[test]
-    fn signing_is_on_when_switched_on_or_with_a_key() {
-        assert!(signature_enabled(Some(1), None));
-        assert!(!signature_enabled(Some(0), Some("key")));
-        assert!(signature_enabled(None, Some("key")));
-        assert!(!signature_enabled(None, Some(" ")));
     }
 }

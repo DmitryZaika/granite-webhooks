@@ -587,7 +587,7 @@ pub async fn deliver(
     let mut created: Option<Created> = None;
     let mut signature_customer = None;
     if !email.signature_requests.is_empty() {
-        signatures::check_access(state, user).await?;
+        signatures::check_access(user)?;
         if email.batches().len() > 1 {
             return Err(ApiError::BadRequest(
                 "Send signature emails as one message so the signature request is not duplicated."

@@ -16,7 +16,8 @@
 //! *`CurrentUser` also applies the super-admin elevation and company switch, so
 //! `company_id` is always the company the request acts in.
 //!
-//! On [`DEVICE_ROUTES`] (the app's Emails and Schedule screens) the cookie
+//! On [`DEVICE_ROUTES`] (the app's Emails and Schedule screens, and the
+//! installers' and template makers' own schedule) the cookie
 //! extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -42,9 +43,16 @@ async fn authenticate(parts: &Parts, state: &AppState) -> Result<SessionUser, Ap
         .map(|(user, _)| user)
 }
 
-/// The CRM routes the Granite Phone app also calls with its device token:
-/// these prefixes and everything under them.
-pub const DEVICE_ROUTES: [&str; 3] = ["/v1/emails", "/v1/schedule", "/v1/events"];
+/// The CRM routes the Granite Phone app also calls with its device token.
+///
+/// These prefixes and everything under them. `/v1/me/schedule` is the
+/// schedule-only app of installers and template makers (their web portal).
+pub const DEVICE_ROUTES: [&str; 4] = [
+    "/v1/emails",
+    "/v1/schedule",
+    "/v1/events",
+    "/v1/me/schedule",
+];
 
 /// `path` is one of [`DEVICE_ROUTES`] or under one (`/v1/emailsx` is not).
 fn device_route(path: &str) -> bool {
@@ -243,6 +251,7 @@ mod tests {
             "/v1/emails/threads",
             "/v1/schedule/events",
             "/v1/events/7/details",
+            "/v1/me/schedule",
         ] {
             assert!(device_route(path), "{path}");
         }
@@ -251,6 +260,9 @@ mod tests {
             "/v1/eventsfoo/1",
             "/v1/customers",
             "/v1/me/devices",
+            "/v1/me",
+            "/v1/me/schedulex",
+            "/v1/me/todos",
             "/emails",
             "",
         ] {

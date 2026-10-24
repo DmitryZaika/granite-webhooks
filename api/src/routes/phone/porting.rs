@@ -404,7 +404,7 @@ async fn port_setup(state: &AppState, company_id: i32) -> ApiResult<CompanyConfi
         .filter(|config| config.texml_app_id.is_some())
         .ok_or_else(|| {
             ApiError::BadRequest(
-                "Telnyx is not set up for this company yet. Ask a superuser.".into(),
+                "Telnyx is not connected for this company yet. Click Connect Telnyx on the Phone page first.".into(),
             )
         })?;
     if !state.telnyx.is_enabled() {

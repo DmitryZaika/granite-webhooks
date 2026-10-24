@@ -8,7 +8,7 @@
 //! `/v1/suppliers?has=`.
 
 use crate::auth::CurrentUser;
-use crate::auth::session::{SUPER_ADMIN_POSITION, SessionUser, user_positions};
+use crate::auth::session::{SUPER_ADMIN_POSITION, SessionUser, UserPositionRow, user_positions};
 use crate::error::{ApiResult, ErrorBody};
 use crate::routes::company::queries::company_features;
 use crate::state::AppState;
@@ -138,6 +138,16 @@ fn portal(user: &SessionUser, super_admin: bool, positions: &[i32]) -> Option<(S
             SHOP_WORKER => ("shop_worker".into(), "/shop/transactions".into()),
             _ => ("template".into(), format!("/templates/{company}/schedule")),
         })
+}
+
+/// The portal a position locks `user` into ([`AppShell::portal`]).
+///
+/// From all their position rows: `installer`, `check-in`, `marketing`,
+/// `shop_worker` or `template`; `None` for everyone else. The Granite Phone
+/// app shows only the schedule for `installer` and `template`.
+pub fn user_portal(user: &SessionUser, rows: &[UserPositionRow]) -> Option<String> {
+    let all: Vec<i32> = rows.iter().map(|row| row.position_id).collect();
+    portal(user, all.contains(&SUPER_ADMIN_POSITION), &all).map(|(name, _)| name)
 }
 
 /// The app frame

@@ -796,7 +796,7 @@ pub async fn complete(state: &AppState, row: &PortRow, deadline: Instant) -> sql
             pool,
             row.id,
             "The numbers were added, but Telnyx is not set up for this company, so they \
-             are not connected to calling yet. Ask a superuser.",
+             are not connected to calling yet. Click Connect Telnyx on the Phone page.",
         )
         .await?;
         return Ok(false);

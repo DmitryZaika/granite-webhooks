@@ -31,14 +31,13 @@ fn filled(column: &str) -> String {
     format!("(COALESCE(TRIM({column}), '') <> '')")
 }
 
-/// `companySignatureEnabled`: the company's signature switch, or (unset) a
-/// saved `SignWell` key.
-pub fn signature_on() -> String {
-    format!(
-        "(IF(c.signature_enabled IS NULL, {}, c.signature_enabled <> 0))",
-        filled("c.signwell_api_key")
-    )
-}
+/// `companySignatureEnabled`: the company uses eSignatures, i.e. at least one
+/// of its users may send for signature. Access is given per user
+/// (`users.is_signature_available`, Superuser › Feature access); the old
+/// company switch (`company.signature_enabled`) is no longer read.
+pub const SIGNATURE_ON: &str = "EXISTS (SELECT 1 FROM users su
+                                 WHERE su.company_id = c.id AND su.is_deleted = 0
+                                   AND COALESCE(su.is_signature_available, 0) <> 0)";
 
 /// Remix: `loadCompanyFeatures`, `isCompanyQboConnected`,
 /// `companyHasInboundEmail`, `companyHasCloudTalk`, `companyHasRingCentral`.
@@ -58,7 +57,7 @@ pub async fn company_features(
                  AND c.qbo_refresh_expires IS NOT NULL) AS quickbooks_connected,
                 {ONBOARDING_ON} AS onboarding,
                 {LEADERBOARD_ON} AS leaderboard,
-                {signature} AS e_signature,
+                {SIGNATURE_ON} AS e_signature,
                 c.domain,
                 ({ct_key} AND {ct_secret}) AS cloudtalk,
                 ((c.ringcentral_access_token IS NOT NULL
@@ -75,7 +74,6 @@ pub async fn company_features(
            {ROLLOUT_JOINS}
           WHERE c.id = ?",
         qbo_realm = filled("c.qbo_realm_id"),
-        signature = signature_on(),
         ct_key = filled("c.cloudtalk_access_key"),
         ct_secret = filled("c.cloudtalk_access_secret"),
         rc_id = filled("c.ringcentral_client_id"),

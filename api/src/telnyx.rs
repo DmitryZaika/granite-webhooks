@@ -16,9 +16,12 @@
 //! Nothing here logs phone numbers, tokens or Telnyx's error details.
 //! Texting (`POST /messages`, inbound MMS files, the messaging webhook's
 //! events) is in [`messaging`]; texting registration (10DLC brands,
-//! campaigns, number assignments) in [`tendlc`].
+//! campaigns, number assignments) in [`tendlc`]; setting a company up
+//! (its applications, connection, profiles) and buying numbers in
+//! [`provision`].
 
 pub mod messaging;
+pub mod provision;
 pub mod tendlc;
 
 use axum::http::header::CONTENT_TYPE;
