@@ -74,6 +74,16 @@ pub enum CatalogError {
     Invalid(String),
 }
 
+impl CatalogError {
+    /// Safe to log: Stripe's error code, never its message.
+    pub fn reason(&self) -> String {
+        match self {
+            Self::Stripe(err) => format!("stripe {}", err.code()),
+            Self::Invalid(_) => self.to_string(),
+        }
+    }
+}
+
 /// The live prices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Catalog {
@@ -116,6 +126,7 @@ pub struct QuoteLine {
     pub key: Option<AddonKey>,
     /// Display label, e.g. "Base plan (up to 10 users)", "2 extra users", "Quotes".
     pub label: String,
+    /// How many: 1 for the base and add-ons, the extra users otherwise.
     pub quantity: i64,
     /// Price of one, in cents.
     pub unit_cents: i64,
@@ -123,6 +134,7 @@ pub struct QuoteLine {
     pub amount_cents: i64,
 }
 
+/// What a quote line charges for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QuoteLineKind {
@@ -136,9 +148,11 @@ pub enum QuoteLineKind {
 pub struct Quote {
     /// The user estimate the quote was made for.
     pub users: i64,
+    /// Users the base price covers (10).
     pub included_users: i64,
     /// Users above the included ones.
     pub extra_users: i64,
+    /// Base, then extra users (when any), then each add-on.
     pub lines: Vec<QuoteLine>,
     /// Base + add-ons, without extra users: the fixed part of each charge.
     pub base_and_addons_cents: i64,

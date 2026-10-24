@@ -13,8 +13,10 @@ use utoipa::ToSchema;
 /// Path of our Stripe webhook route.
 pub const WEBHOOK_PATH: &str = "/v1/webhooks/stripe";
 
-/// The Stripe events `normalize_event` acts on.
-pub const REQUIRED_EVENTS: [&str; 7] = [
+/// The Stripe events the webhook endpoint must send: the ones
+/// `normalize_event` acts on, and the self-serve subscription signals
+/// (02-architecture.md section 5).
+pub const REQUIRED_EVENTS: [&str; 9] = [
     "checkout.session.completed",
     "customer.subscription.created",
     "customer.subscription.updated",
@@ -22,6 +24,8 @@ pub const REQUIRED_EVENTS: [&str; 7] = [
     "invoice.paid",
     "invoice.payment_failed",
     "payment_method.updated",
+    "customer.subscription.trial_will_end",
+    "invoice.finalization_failed",
 ];
 
 /// One line of the billing setup report.
@@ -321,6 +325,31 @@ pub fn price_check(
             );
         }
     };
+    let mut problems = price_problems(price, key_mode);
+    let amount = price["unit_amount"].as_i64();
+    if let (Some(configured), Some(amount)) = (plan.monthly_price_cents, amount)
+        && configured != amount
+    {
+        problems.push(format!(
+            "Stripe charges {} USD but STRIPE_BILLING_PLANS says {} USD",
+            money(amount),
+            money(configured)
+        ));
+    }
+    let detail = if problems.is_empty() {
+        amount.map_or_else(
+            || "monthly price".to_string(),
+            |cents| format!("{} USD per month", money(cents)),
+        )
+    } else {
+        problems.join(", ")
+    };
+    check(&key, &label, problems.is_empty(), detail)
+}
+
+/// What is wrong with a monthly price: inactive, not monthly, not USD, or
+/// in the other mode than the key.
+fn price_problems(price: &Value, key_mode: Option<KeyMode>) -> Vec<String> {
     let mut problems = Vec::new();
     if price["active"] != true {
         problems.push("inactive".to_string());
@@ -345,25 +374,75 @@ pub fn price_check(
             .into(),
         );
     }
-    let amount = price["unit_amount"].as_i64();
-    if let (Some(configured), Some(amount)) = (plan.monthly_price_cents, amount)
-        && configured != amount
-    {
-        problems.push(format!(
-            "Stripe charges {} USD but STRIPE_BILLING_PLANS says {} USD",
-            money(amount),
-            money(configured)
-        ));
-    }
-    let detail = if problems.is_empty() {
-        amount.map_or_else(
-            || "monthly price".to_string(),
-            |cents| format!("{} USD per month", money(cents)),
-        )
-    } else {
-        problems.join(", ")
+    problems
+}
+
+/// The checks of the self-serve prices by lookup key (`billing::catalog`).
+///
+/// One check per key (found, active, monthly, USD, per unit, same mode as the
+/// key), then whether the catalog still says what the consent texts state.
+/// `prices` is what `GET /v1/prices?lookup_keys[]=` answered, or why it failed.
+pub fn catalog_checks(
+    lookup_keys: &[&str],
+    prices: Result<&[Value], &str>,
+    key_mode: Option<KeyMode>,
+    consent_mismatch: Option<&str>,
+) -> Vec<SetupCheck> {
+    let prices = match prices {
+        Ok(prices) => prices,
+        Err(error) => {
+            return vec![check(
+                "signup_prices",
+                "Self-serve prices",
+                false,
+                format!("Could not read the self-serve prices: {error}"),
+            )];
+        }
     };
-    check(&key, &label, problems.is_empty(), detail)
+    let mut checks: Vec<SetupCheck> = lookup_keys
+        .iter()
+        .map(|lookup_key| {
+            let key = format!("signup_price_{lookup_key}");
+            let label = format!("Self-serve price {lookup_key}");
+            let Some(price) = prices
+                .iter()
+                .find(|price| price["lookup_key"] == *lookup_key)
+            else {
+                return check(
+                    &key,
+                    &label,
+                    false,
+                    "No active price has this lookup key: self-serve signup is unavailable",
+                );
+            };
+            let mut problems = price_problems(price, key_mode);
+            if price["billing_scheme"] != "per_unit" {
+                problems.push("not a per-unit price".into());
+            }
+            let amount = price["unit_amount"].as_i64();
+            if amount.is_none() {
+                problems.push("no unit amount".into());
+            }
+            let detail = if problems.is_empty() {
+                amount.map_or_else(String::new, |cents| {
+                    format!("{} USD per month", money(cents))
+                })
+            } else {
+                problems.join(", ")
+            };
+            check(&key, &label, problems.is_empty(), detail)
+        })
+        .collect();
+    checks.push(check(
+        "signup_consents",
+        "Self-serve prices match the consent texts",
+        consent_mismatch.is_none(),
+        consent_mismatch.map_or_else(
+            || "the extra-user price and included users are what the checkboxes state".into(),
+            |mismatch| format!("Signup is refused until a new consent version ships: {mismatch}"),
+        ),
+    ));
+    checks
 }
 
 #[cfg(test)]
@@ -572,5 +651,68 @@ mod tests {
         );
         let missing = price_check(&plan(None), Err("No such price"), None);
         assert!(!missing.ok && missing.detail.contains("No such price"));
+    }
+
+    #[test]
+    fn the_self_serve_events_are_required() {
+        let without_trial: Vec<&str> = REQUIRED_EVENTS
+            .into_iter()
+            .filter(|e| *e != "customer.subscription.trial_will_end")
+            .collect();
+        let list = [endpoint(
+            "https://x/v1/webhooks/stripe",
+            "enabled",
+            &without_trial,
+            API_VERSION,
+        )];
+        let checks = webhook_checks(Ok(&list));
+        assert_eq!(
+            by_key(&checks, "webhook_events").detail,
+            "Missing events: customer.subscription.trial_will_end"
+        );
+        assert!(REQUIRED_EVENTS.contains(&"invoice.finalization_failed"));
+    }
+
+    fn lookup_price(key: &str, cents: i64) -> Value {
+        json!({ "id": format!("price_{key}"), "lookup_key": key, "active": true,
+                "currency": "usd", "billing_scheme": "per_unit", "unit_amount": cents,
+                "recurring": { "interval": "month", "interval_count": 1 }, "livemode": false })
+    }
+
+    #[test]
+    fn self_serve_prices_are_checked_by_lookup_key() {
+        let keys = ["granite_base_monthly_v1", "granite_extra_user_monthly_v1"];
+        let mut tiered = lookup_price("granite_extra_user_monthly_v1", 3_000);
+        tiered["billing_scheme"] = json!("tiered");
+        let prices = [lookup_price("granite_base_monthly_v1", 30_000), tiered];
+        let checks = catalog_checks(&keys, Ok(&prices), Some(KeyMode::Test), None);
+        let base = by_key(&checks, "signup_price_granite_base_monthly_v1");
+        assert!(base.ok);
+        assert_eq!(base.detail, "300.00 USD per month");
+        let extra = by_key(&checks, "signup_price_granite_extra_user_monthly_v1");
+        assert!(!extra.ok);
+        assert_eq!(extra.detail, "not a per-unit price");
+        assert!(by_key(&checks, "signup_consents").ok);
+
+        let missing = catalog_checks(&keys, Ok(&prices[..1]), None, None);
+        assert!(!by_key(&missing, "signup_price_granite_extra_user_monthly_v1").ok);
+        let live = catalog_checks(&keys[..1], Ok(&prices[..1]), Some(KeyMode::Live), None);
+        assert!(!by_key(&live, "signup_price_granite_base_monthly_v1").ok);
+    }
+
+    #[test]
+    fn prices_that_differ_from_the_consent_texts_fail_the_report() {
+        let checks = catalog_checks(
+            &[],
+            Ok(&[]),
+            None,
+            Some("the extra-user price is $35.00 but the consent texts say $30.00"),
+        );
+        let consents = by_key(&checks, "signup_consents");
+        assert!(!consents.ok);
+        assert!(consents.detail.contains("$35.00"));
+        let unreadable = catalog_checks(&["granite_base_monthly_v1"], Err("api_error"), None, None);
+        assert_eq!(unreadable.len(), 1);
+        assert!(!unreadable[0].ok);
     }
 }

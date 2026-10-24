@@ -55,6 +55,12 @@ async fn a_self_serve_company_has_no_subdomain_and_requires_billing(pool: MySqlP
         (subdomain, plan.as_str(), required, at_set),
         (None, "subscription", 1, 1)
     );
+    let max_users: Option<i32> = sqlx::query_scalar("SELECT max_users FROM company WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(max_users, None, "per-user pricing: no user limit");
     let (email, is_system, password): (String, i32, String) = sqlx::query_as(
         "SELECT email, is_system, password FROM users WHERE company_id = ? AND name = 'Walk-in'",
     )
@@ -73,13 +79,16 @@ async fn a_legacy_company_keeps_the_column_defaults(pool: MySqlPool) {
     let id = create_company_tx(&mut conn, &init(Some("legacy-co"), PlanSource::Legacy))
         .await
         .unwrap();
-    let (plan, required): (String, i32) =
-        sqlx::query_as("SELECT plan_source, billing_required FROM company WHERE id = ?")
+    let (plan, required, max_users): (String, i32, Option<i32>) =
+        sqlx::query_as("SELECT plan_source, billing_required, max_users FROM company WHERE id = ?")
             .bind(id)
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!((plan.as_str(), required), ("legacy", 0));
+    assert_eq!(
+        (plan.as_str(), required, max_users),
+        ("legacy", 0, Some(10))
+    );
     let email: String =
         sqlx::query_scalar("SELECT email FROM users WHERE company_id = ? AND name = 'Walk-in'")
             .bind(id)

@@ -72,6 +72,7 @@ pub struct CompanyDetails {
     pub website: Option<String>,
     /// Street address.
     pub street: String,
+    /// City.
     pub city: String,
     /// Two-letter US state code.
     pub state: String,

@@ -45,15 +45,16 @@ pub struct CompanyInit {
 /// Seeds: system calendars, default email templates with the apex inventory
 /// link, customer sources, and the Walk-in system user with an unusable
 /// password. A subscription company also gets `plan_source =
-/// 'subscription'`, `billing_required = 1` and `billing_required_at = now`.
+/// 'subscription'`, `billing_required = 1`, `billing_required_at = now` and
+/// no user limit (`max_users = NULL`: it pays per user).
 pub async fn create_company_tx(conn: &mut MySqlConnection, init: &CompanyInit) -> ApiResult<i32> {
     let subscription = init.plan_source == PlanSource::Subscription;
     let sql = if subscription {
         "INSERT INTO company (name, subdomain, address, state_taxes, domain, cloudtalk_access_key,
                               cloudtalk_access_secret, ringcentral_client_id, ringcentral_client_secret,
                               ringcentral_jwt, ringcentral_server_url, statistics_widgets_hidden,
-                              plan_source, billing_required, billing_required_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'subscription', 1, UTC_TIMESTAMP())"
+                              plan_source, billing_required, billing_required_at, max_users)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'subscription', 1, UTC_TIMESTAMP(), NULL)"
     } else {
         "INSERT INTO company (name, subdomain, address, state_taxes, domain, cloudtalk_access_key,
                               cloudtalk_access_secret, ringcentral_client_id, ringcentral_client_secret,

@@ -179,9 +179,6 @@ pub struct PaymentRequiredBody {
     pub code: String,
 }
 
-/// Body of a 403 that may be about the plan: `addon` names the add-on the
-/// company needs (`signatures`, `quotes` or `quickbooks`) and is absent when
-/// the caller lacks a permission instead.
 /// An error the page tells apart by `code`; some codes add fields
 /// (`attempts_left`, `retry_after_seconds`).
 #[derive(Debug, Serialize, ToSchema)]
@@ -192,6 +189,9 @@ pub struct CodedErrorBody {
     pub code: String,
 }
 
+/// Body of a 403 that may be about the plan: `addon` names the add-on the
+/// company needs (`signatures`, `quotes` or `quickbooks`) and is absent when
+/// the caller lacks a permission instead.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AddonRequiredBody {
     /// E.g. `Quotes is an add-on for your plan.`, or `forbidden`.

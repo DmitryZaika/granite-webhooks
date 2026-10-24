@@ -41,7 +41,7 @@ fn invalid_state() -> ApiError {
 
 fn stripe_failed(err: &StripeError, signup_id: &str) -> ApiError {
     tracing::warn!(
-        error = %err,
+        stripe_code = err.code(),
         signup = %super::funnel::distinct_id(signup_id),
         "signup payment setup failed at Stripe"
     );

@@ -110,6 +110,15 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
 
 /// Runs a scheduled job of the API (`POST <API_URL>/v1/jobs/<job>`).
 async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
+    post_api_job_within(job, label, None).await
+}
+
+/// [`post_api_job`] that gives up after `timeout`.
+async fn post_api_job_within(
+    job: &str,
+    label: &str,
+    timeout: Option<std::time::Duration>,
+) -> Result<usize, Error> {
     let api_url = match std::env::var("API_URL") {
         Ok(value) => value,
         Err(error) => {
@@ -125,9 +134,12 @@ async fn post_api_job(job: &str, label: &str) -> Result<usize, Error> {
         }
     };
     let url = format!("{}/v1/jobs/{job}", api_url.trim_end_matches('/'));
-    let response = Client::new()
-        .post(url)
-        .header("Authorization", lambda_key)
+    let request = Client::new().post(url).header("Authorization", lambda_key);
+    let request = match timeout {
+        Some(timeout) => request.timeout(timeout),
+        None => request,
+    };
+    let response = request
         .send()
         .await
         .map_err(|error| Error::from(error.to_string()))?;
@@ -181,8 +193,17 @@ async fn process_billing_reminders() -> Result<usize, Error> {
     post_api_job("billing-reminders", "billing reminders").await
 }
 
+/// The job stops starting work after 40 s; this leaves the tick (120 s) room
+/// for everything else.
+const SUBSCRIPTION_MAINTENANCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(55);
+
 async fn process_subscription_maintenance() -> Result<usize, Error> {
-    post_api_job("subscription-maintenance", "subscription maintenance").await
+    post_api_job_within(
+        "subscription-maintenance",
+        "subscription maintenance",
+        Some(SUBSCRIPTION_MAINTENANCE_TIMEOUT),
+    )
+    .await
 }
 
 /// Self-serve signups and seats; a failure never aborts the tick.
@@ -311,6 +332,8 @@ pub(crate) async fn function_handler(
 ) -> Result<OutgoingMessage, Error> {
     // This will now print the full JSON structure to your CloudWatch logs
     tracing::info!("Received event: {:?}", event.payload);
+    // First: everything below can end the tick early with `?`.
+    run_subscription_maintenance().await;
 
     cancel_pending_emails_left_list(pool).await?;
     cancel_pending_emails_for_non_leads(pool).await?;
@@ -358,7 +381,6 @@ pub(crate) async fn function_handler(
             0
         }
     };
-    run_subscription_maintenance().await;
     let estimate_reminder_count = process_estimate_appointment_reminders().await?;
     let maintenance_reminder_count = process_maintenance_due_reminders().await?;
     let sms_followup_count = process_sms_followups().await?;

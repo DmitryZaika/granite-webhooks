@@ -3,9 +3,11 @@
 //! - `GET /v1/superuser/billing/setup` → env variables, webhook endpoint and plan prices
 
 use crate::auth::CurrentUser;
+use crate::billing::catalog::{BASE_LOOKUP_KEY, Catalog, EXTRA_USER_LOOKUP_KEY};
 use crate::billing::setup::{
-    EnvFacts, SetupCheck, env_checks, key_mode, price_check, webhook_checks,
+    EnvFacts, SetupCheck, catalog_checks, env_checks, key_mode, price_check, webhook_checks,
 };
+use crate::entitlements::AddonKey;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::state::AppState;
 use axum::Json;
@@ -50,8 +52,10 @@ pub struct BillingSetup {
 /// for the webhook endpoint (exactly one enabled endpoint for
 /// `/v1/webhooks/stripe`, with every handled event and the api's Stripe API
 /// version) and for each configured plan price (active, monthly, USD, same
-/// mode as the key). A Stripe call that fails becomes a failed check, not an
-/// error. Stripe checks are skipped without `STRIPE_SECRET_KEY`. The report
+/// mode as the key), each self-serve price by lookup key (same checks, per
+/// unit) and whether those prices still match what the signup consent texts
+/// state (signup refuses with 503 when not). A Stripe call that fails becomes
+/// a failed check, not an error. Stripe checks are skipped without `STRIPE_SECRET_KEY`. The report
 /// is cached for 5 minutes. Super admins only.
 #[utoipa::path(
     get,
@@ -90,6 +94,27 @@ pub async fn billing_setup(
     Ok(Json(report))
 }
 
+/// The self-serve price list by lookup key, and whether it still says what
+/// the consent texts state (signup refuses with 503 otherwise).
+async fn self_serve_checks(
+    state: &AppState,
+    mode: Option<crate::billing::setup::KeyMode>,
+) -> Vec<SetupCheck> {
+    let mut keys = vec![BASE_LOOKUP_KEY, EXTRA_USER_LOOKUP_KEY];
+    keys.extend(AddonKey::ALL.map(AddonKey::lookup_key));
+    let mismatch = match Catalog::load(&state.stripe).await {
+        Ok(catalog) => crate::signup::consent::catalog_mismatch(&catalog),
+        Err(err) => Some(format!(
+            "the price list cannot be loaded ({})",
+            err.reason()
+        )),
+    };
+    match state.stripe.prices_by_lookup_keys(&keys).await {
+        Ok(prices) => catalog_checks(&keys, Ok(&prices), mode, mismatch.as_deref()),
+        Err(err) => catalog_checks(&keys, Err(err.code()), mode, mismatch.as_deref()),
+    }
+}
+
 fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_default()
 }
@@ -120,6 +145,7 @@ async fn build(state: &AppState) -> BillingSetup {
                 Err(err) => price_check(plan, Err(&err.to_string()), mode),
             });
         }
+        checks.extend(self_serve_checks(state, mode).await);
     }
     BillingSetup {
         checks,

@@ -24,7 +24,6 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
-use lambda_http::tracing;
 use serde_json::json;
 use sha2::Sha256;
 
@@ -65,10 +64,7 @@ async fn live(state: &AppState, id: &str) -> ApiResult<Intent> {
 }
 
 async fn catalog(state: &AppState) -> ApiResult<Catalog> {
-    Catalog::load(&state.stripe).await.map_err(|err| {
-        tracing::error!(error = %err, "signup catalog unavailable");
-        crate::signup::unavailable()
-    })
+    crate::signup::signup_catalog(&state.stripe).await
 }
 
 fn email_masked(email: &str) -> String {
@@ -162,7 +158,7 @@ fn addon_keys(plan: &PlanChoice) -> Vec<&'static str> {
     plan.addons.iter().map(|key| key.as_str()).collect()
 }
 
-fn addon_description(key: AddonKey) -> &'static str {
+const fn addon_description(key: AddonKey) -> &'static str {
     match key {
         AddonKey::Signatures => "eSignatures and an email signature block",
         AddonKey::Quotes => "Quote editor, price lists and online quotes",
@@ -278,7 +274,7 @@ async fn email_conflict(state: &AppState, email: &str) -> ApiResult<Option<ApiEr
         (status = 400, description = "A field is missing or invalid; the message names it", body = ErrorBody),
         (status = 409, description = "An account already uses the email (code email_taken)", body = CodedErrorBody),
         (status = 502, description = "The code email could not be sent; the signup was dropped", body = ErrorBody),
-        (status = 503, description = "Signups are switched off or busy (code signup_unavailable)", body = CodedErrorBody),
+        (status = 503, description = "Signups are switched off, busy, or prices unavailable (code signup_unavailable)", body = CodedErrorBody),
     )
 )]
 pub async fn create(
@@ -288,6 +284,9 @@ pub async fn create(
 ) -> ApiResult<(StatusCode, Json<CreatedSignup>)> {
     ensure_enabled(&state.signup)?;
     let valid = body.validate()?;
+    // Fails closed (503) before any write when the prices are unavailable or
+    // no longer match the consent texts.
+    catalog(&state).await?;
     let password = valid.password.clone();
     let password_hash = tokio::task::spawn_blocking(move || bcrypt::hash(password, 10))
         .await
@@ -676,15 +675,23 @@ pub async fn payment_setup(
     }
     let setup = payment::setup(&state, &intent).await?;
     let (mode, body) = match setup {
-        Setup::Test => ("test", PaymentSetup::Test),
+        Setup::Test => (
+            "test",
+            PaymentSetup {
+                mode: PaymentMode::Test,
+                client_secret: None,
+                publishable_key: None,
+            },
+        ),
         Setup::Stripe {
             client_secret,
             publishable_key,
         } => (
             "stripe",
-            PaymentSetup::Stripe {
-                client_secret,
-                publishable_key,
+            PaymentSetup {
+                mode: PaymentMode::Stripe,
+                client_secret: Some(client_secret),
+                publishable_key: Some(publishable_key),
             },
         ),
     };

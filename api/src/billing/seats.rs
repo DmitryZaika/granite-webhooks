@@ -65,6 +65,18 @@ pub enum SeatError {
     Catalog(#[from] super::catalog::CatalogError),
 }
 
+impl SeatError {
+    /// Safe to log: no Stripe message text.
+    pub fn reason(&self) -> String {
+        match self {
+            Self::Database(_) => "database error".into(),
+            Self::Lock(err) => err.to_string(),
+            Self::Stripe(err) => format!("stripe {}", err.code()),
+            Self::Catalog(err) => err.reason(),
+        }
+    }
+}
+
 /// The company's billable users.
 pub async fn billable_users(pool: &MySqlPool, company_id: i32) -> sqlx::Result<i64> {
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
@@ -101,7 +113,9 @@ async fn seat_row(pool: &MySqlPool, company_id: i32) -> sqlx::Result<Option<Seat
 
 /// A Stripe 400 for an idempotency key reused with other parameters.
 fn is_key_reuse(err: &StripeError) -> bool {
-    matches!(err, StripeError::Api(message) if message.starts_with("Keys for idempotent requests"))
+    matches!(err, StripeError::Api(failure)
+        if failure.code == "idempotency_error"
+            || failure.message.starts_with("Keys for idempotent requests"))
 }
 
 /// What a push changed: the extra-user item afterwards, and whether Stripe
@@ -281,6 +295,10 @@ pub async fn after_user_change(state: &AppState, company_id: i32) {
         return;
     }
     if let Err(err) = sync_seats(state, company_id).await {
-        tracing::warn!(company_id, error = %err, "seat sync failed; the daily reconcile retries");
+        tracing::warn!(
+            company_id,
+            error = %err.reason(),
+            "seat sync failed; the daily reconcile retries"
+        );
     }
 }

@@ -71,7 +71,11 @@ pub async fn after_signup(state: &AppState, intent: &Intent, company_id: i32, us
         welcome_html(intent, &state.app_url),
     );
     if let Err(err) = state.webhooks.send_email(&welcome).await {
-        tracing::warn!(company_id, kind = failure_kind(&err), "signup welcome email failed");
+        tracing::warn!(
+            company_id,
+            kind = failure_kind(&err),
+            "signup welcome email failed"
+        );
     }
     if let Some(staff) = state.signup.notify_user_id
         && !state
@@ -88,7 +92,55 @@ pub async fn after_signup(state: &AppState, intent: &Intent, company_id: i32, us
             staff_html(intent, company_id, user_id),
         );
         if let Err(err) = state.webhooks.send_email(&notice).await {
-            tracing::warn!(company_id, kind = failure_kind(&err), "signup staff email failed");
+            tracing::warn!(
+                company_id,
+                kind = failure_kind(&err),
+                "signup staff email failed"
+            );
+        }
+    }
+}
+
+/// Tells staff a signup's provisioning was given up on (Telegram and email),
+/// with the hashed signup id (`signup` = `funnel::distinct_id`), never the id
+/// or the buyer's details. Best effort.
+pub async fn provisioning_given_up(
+    state: &AppState,
+    signup: &str,
+    company_id: Option<i32>,
+    last_error: Option<&str>,
+) {
+    let company = company_id.map_or_else(
+        || "none yet (the signup expired; the buyer starts again)".to_string(),
+        |id| format!("{id} (finish its subscription by hand)"),
+    );
+    let error = last_error.unwrap_or("unknown");
+    let text = format!(
+        "Signup provisioning gave up after 26 hours\nSignup: {signup}\nCompany: {company}\nLast error: {error}"
+    );
+    if let Some(staff) = state.signup.notify_user_id
+        && !state.webhooks.notify_telegram(staff, &text).await
+    {
+        tracing::warn!(?company_id, "signup give-up Telegram notice failed");
+    }
+    if let Some(to) = state.signup.notify_email.as_deref() {
+        let body = format!(
+            r#"<div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+  <h2 style="color: #1e293b;">Signup provisioning gave up</h2>
+  <p style="color: #475569; line-height: 1.6;">The maintenance job stopped retrying a self-serve signup 26 hours after the buyer accepted the terms.</p>
+  <p style="color: #475569; line-height: 1.6;">Signup: {}<br>Company: {}<br>Last error: {}</p>
+</div>"#,
+            escape(signup),
+            escape(&company),
+            escape(error)
+        );
+        let notice = email(to, "Signup provisioning gave up".into(), body);
+        if let Err(err) = state.webhooks.send_email(&notice).await {
+            tracing::warn!(
+                ?company_id,
+                kind = failure_kind(&err),
+                "signup give-up email failed"
+            );
         }
     }
 }

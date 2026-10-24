@@ -33,7 +33,7 @@ pub struct SignupConfig {
     /// `SIGNUP_TEST_PAYMENT_METHOD` (e.g. `pm_card_visa`): with a `sk_test_`
     /// key, payment setup confirms a SetupIntent with it server-side.
     pub test_payment_method: Option<Arc<str>>,
-    /// `STRIPE_PUBLISHABLE_KEY`, for the Payment Element.
+    /// `STRIPE_PUBLIC_KEY` (the publishable key), for the Payment Element.
     pub publishable_key: Option<Arc<str>>,
     /// `SIGNUP_NOTIFY_USER_ID`: the Granite Manager user (Dima) told about
     /// each new company on Telegram.
@@ -56,7 +56,7 @@ impl SignupConfig {
         Self {
             enabled: on("SELF_SERVE_SIGNUP_ENABLED"),
             test_payment_method: text("SIGNUP_TEST_PAYMENT_METHOD").map(Arc::from),
-            publishable_key: text("STRIPE_PUBLISHABLE_KEY").map(Arc::from),
+            publishable_key: text("STRIPE_PUBLIC_KEY").map(Arc::from),
             notify_user_id: text("SIGNUP_NOTIFY_USER_ID").and_then(|id| id.parse().ok()),
             notify_email: text("SIGNUP_NOTIFY_EMAIL").map(Arc::from),
             automatic_tax: on("STRIPE_AUTOMATIC_TAX"),
@@ -100,9 +100,15 @@ impl RequestMeta {
 /// out of MySQL's lock list, and the name fits its 64 characters).
 pub fn email_lock_name(email: &str) -> String {
     use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
     let digest = Sha256::digest(email.trim().to_lowercase().as_bytes());
-    let hex: String = digest.iter().take(20).map(|b| format!("{b:02x}")).collect();
-    format!("signup_email:{hex}")
+    digest
+        .iter()
+        .take(20)
+        .fold(String::from("signup_email:"), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
 }
 
 /// `POST /v1/public/signups*` answer this while `SELF_SERVE_SIGNUP_ENABLED` is off.
@@ -121,4 +127,25 @@ pub fn unavailable() -> crate::error::ApiError {
         "signup_unavailable",
         "Signup is not available yet.",
     )
+}
+
+/// The price list signups quote and charge.
+///
+/// Refused (503 `signup_unavailable`) when it is unavailable or no longer
+/// says what the consent texts state (the extra-user price and the included
+/// users are written into them).
+pub async fn signup_catalog(
+    stripe: &crate::billing::stripe::Stripe,
+) -> crate::error::ApiResult<crate::billing::catalog::Catalog> {
+    let catalog = crate::billing::catalog::Catalog::load(stripe)
+        .await
+        .map_err(|err| {
+            lambda_http::tracing::error!(error = %err.reason(), "signup catalog unavailable");
+            unavailable()
+        })?;
+    if let Some(mismatch) = consent::catalog_mismatch(&catalog) {
+        lambda_http::tracing::error!(%mismatch, "signup prices differ from the consent texts");
+        return Err(unavailable());
+    }
+    Ok(catalog)
 }

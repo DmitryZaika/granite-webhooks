@@ -165,6 +165,14 @@ Session routes check `user.plan.require(AddonKey::...)` (the session query
 loads the plan); a refusal is 403 with `addon`. Superusers grant one free
 with `PUT /v1/superuser/companies/{id}/addons/{key}`.
 
+Self-serve signup (`src/signup/`, `routes/signup/`, `/v1/public/plans` and
+`/v1/public/signups/...`) is off until `SELF_SERVE_SIGNUP_ENABLED=1`; it
+prices from the Stripe lookup keys in `billing/catalog.rs` and also reads
+`STRIPE_PUBLIC_KEY`, `STRIPE_AUTOMATIC_TAX`, `SIGNUP_NOTIFY_USER_ID`,
+`SIGNUP_NOTIFY_EMAIL` and, with a `sk_test_` key only,
+`SIGNUP_TEST_PAYMENT_METHOD`. `POST /v1/jobs/subscription-maintenance`
+resumes stuck provisioning, expires abandoned signups and reconciles seats.
+
 ### Uploads and storage
 
 Images go straight from the browser to the bucket with a presigned PUT

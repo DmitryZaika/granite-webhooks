@@ -296,7 +296,8 @@ async fn duplicate_emails_are_refused(pool: MySqlPool) {
 #[test_db::test(seed)]
 async fn invalid_details_are_refused_before_any_write(pool: MySqlPool) {
     let env = env(pool).await;
-    let edits: [(&str, Box<dyn Fn(&mut Value)>, &str); 8] = [
+    type Edit = (&'static str, Box<dyn Fn(&mut Value)>, &'static str);
+    let edits: [Edit; 8] = [
         (
             "short password",
             Box::new(|b| b["owner"]["password"] = json!("123456789")),
@@ -861,7 +862,10 @@ async fn a_full_signup_ends_signed_in(pool: MySqlPool) {
     .fetch_one(&env.pool)
     .await
     .unwrap();
-    assert_eq!((plan_source.as_str(), billing_required), ("subscription", true));
+    assert_eq!(
+        (plan_source.as_str(), billing_required),
+        ("subscription", true)
+    );
     let manager: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM users u JOIN users_positions up ON up.user_id = u.id
           WHERE u.company_id = ? AND up.position_id = 5 AND u.is_admin = 1 AND u.is_employee = 1",
@@ -892,4 +896,53 @@ async fn a_full_signup_ends_signed_in(pool: MySqlPool) {
     let stripe = env.stripe.lock().unwrap();
     assert_eq!(stripe.calls("POST", "/v1/subscriptions").len(), 1);
     assert_eq!(stripe.subscriptions.len(), 1);
+}
+
+/// An extra-user price the consent texts do not state closes signup (503).
+#[test_db::test(seed)]
+async fn prices_that_differ_from_the_consent_texts_close_signup(pool: MySqlPool) {
+    let env = env(pool).await;
+    {
+        let mut stripe = env.stripe.lock().unwrap();
+        let extra = stripe
+            .prices
+            .iter_mut()
+            .find(|price| price["lookup_key"] == "granite_extra_user_monthly_v1")
+            .unwrap();
+        extra["unit_amount"] = json!(3500);
+    }
+    let plans = env.server.get("/v1/public/plans").await;
+    plans.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(plans.json::<Value>()["code"], "signup_unavailable");
+    let create = env
+        .server
+        .post("/v1/public/signups")
+        .json(&body("owner@prices.test"))
+        .await;
+    create.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM signup_intents")
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+}
+
+/// Sign-in caps passwords at 200 bytes: a longer one is refused at signup.
+#[test_db::test(seed)]
+async fn passwords_are_capped_in_bytes_like_sign_in(pool: MySqlPool) {
+    let env = env(pool).await;
+    let mut long = body("owner@bytes.test");
+    long["owner"]["password"] = json!("é".repeat(101));
+    env.server
+        .post("/v1/public/signups")
+        .json(&long)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    let mut fits = body("owner@bytes.test");
+    fits["owner"]["password"] = json!("é".repeat(100));
+    env.server
+        .post("/v1/public/signups")
+        .json(&fits)
+        .await
+        .assert_status(StatusCode::CREATED);
 }

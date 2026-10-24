@@ -66,9 +66,10 @@ pub struct PlansResponse {
 pub struct OwnerDetails {
     /// Full name, up to 100 characters.
     pub name: String,
-    /// Email, up to 254 characters. Receives the code; used to sign in.
+    /// Email, up to 254 bytes. Receives the code; used to sign in.
     pub email: String,
-    /// Password, 10 to 200 characters (surrounding spaces are dropped).
+    /// Password: at least 10 characters and at most 200 bytes (as sign-in
+    /// counts them; surrounding spaces are dropped).
     pub password: String,
 }
 
@@ -117,10 +118,12 @@ pub enum PaymentMode {
 /// A signup in progress.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Signup {
+    /// The signup id (the flow's secret).
     pub id: String,
     pub status: SignupStatus,
     /// The email with its local part hidden, e.g. `a***@acme.com`.
     pub email_masked: String,
+    /// The company name from step 2.
     pub company_name: String,
     pub plan: PlanChoice,
     /// The price of `plan` today.
@@ -137,19 +140,19 @@ pub struct ConsentsResponse {
     pub consents: Vec<RenderedConsent>,
 }
 
-/// Answer of `POST /v1/public/signups/{id}/payment-setup`.
+/// Answer of `POST /v1/public/signups/{id}/payment-setup`:
+/// `{"mode": "test"}` or `{"mode": "stripe", "client_secret", "publishable_key"}`.
 #[derive(Debug, Serialize, ToSchema)]
-#[serde(tag = "mode", rename_all = "snake_case")]
-pub enum PaymentSetup {
-    /// A test payment method was attached; nothing for the page to do.
-    Test,
-    /// Confirm the SetupIntent in the browser with the Payment Element.
-    Stripe {
-        /// The SetupIntent's client secret.
-        client_secret: String,
-        /// The Stripe publishable key.
-        publishable_key: String,
-    },
+pub struct PaymentSetup {
+    /// `test`: a test payment method was attached, nothing for the page to
+    /// do. `stripe`: confirm the SetupIntent with the Payment Element.
+    pub mode: PaymentMode,
+    /// The SetupIntent's client secret; only in `stripe` mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+    /// The Stripe publishable key; only in `stripe` mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publishable_key: Option<String>,
 }
 
 /// Body of `POST /v1/public/signups/{id}/completion`.
@@ -174,6 +177,9 @@ pub struct ValidCreate {
     pub email: String,
     pub password: String,
 }
+
+/// The longest password sign-in accepts (`POST /v1/auth/login`), in bytes.
+const MAX_PASSWORD_BYTES: usize = 200;
 
 fn bad(message: &str) -> ApiError {
     ApiError::BadRequest(message.into())
@@ -240,16 +246,19 @@ impl CreateSignupBody {
         };
         let owner_name = required(&self.owner.name, "owner name", 100)?;
         let email = checked_email(&self.owner.email)?;
-        if email.chars().count() > 254 {
+        // Bytes, as sign-in counts them.
+        if email.len() > 254 {
             return Err(bad("The email can be up to 254 characters."));
         }
         let password = self.owner.password.trim().to_string();
-        let length = password.chars().count();
-        if length < 10 {
+        if password.chars().count() < 10 {
             return Err(bad("Password must be at least 10 characters long."));
         }
-        if length > 200 {
-            return Err(bad("Password can be up to 200 characters."));
+        // Bytes, as sign-in counts them: a longer one could never sign in.
+        if password.len() > MAX_PASSWORD_BYTES {
+            return Err(bad(
+                "Password is too long: use up to 200 letters, fewer with accents or symbols.",
+            ));
         }
         if password.contains('\0') {
             return Err(bad("Password has a character we cannot accept."));

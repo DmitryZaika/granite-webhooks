@@ -96,7 +96,11 @@ pub struct NamedLock {
 const NAMED_LOCK: &str = "LEFT(CONCAT(?, ':', COALESCE(DATABASE(), '')), 64)";
 
 impl NamedLock {
-    pub async fn acquire(pool: &MySqlPool, name: &str, timeout_secs: u32) -> Result<Self, LockError> {
+    pub async fn acquire(
+        pool: &MySqlPool,
+        name: &str,
+        timeout_secs: u32,
+    ) -> Result<Self, LockError> {
         let mut conn = MySqlConnection::connect_with(&pool.connect_options()).await?;
         let acquired: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT GET_LOCK({NAMED_LOCK}, ?)"

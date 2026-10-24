@@ -6,12 +6,13 @@
 
 use super::funnel;
 use super::intent::BANK_VERIFICATION_DAYS;
+use super::notify;
 use super::provision::{self, RunOutcome, record_failure};
 use crate::billing::stripe::StripeError;
 use crate::billing::{self, seats};
 use crate::job_runs;
 use crate::state::AppState;
-use chrono::Duration;
+use chrono::{Duration, NaiveDateTime};
 use lambda_http::tracing;
 use serde::Serialize;
 use std::time::Instant;
@@ -19,10 +20,16 @@ use utoipa::ToSchema;
 
 /// No new work starts after this long.
 const TIME_BUDGET: std::time::Duration = std::time::Duration::from_secs(40);
-/// A `provisioning` signup untouched this long is resumed.
+/// The first wait before a stuck signup is resumed; it doubles with every
+/// failed run, up to [`MAX_RESUME_WAIT_MINUTES`].
 const RESUME_AFTER_MINUTES: i64 = 10;
-/// Resumes stop after this many failed runs.
-pub const MAX_PROVISION_ATTEMPTS: u8 = 10;
+const MAX_RESUME_WAIT_MINUTES: i64 = 120;
+/// Resumes go on this long after the acceptance, then stop and alert staff.
+///
+/// Longer than the 24 hours Stripe replays a saved answer (a 500 too) under
+/// the same idempotency key, and than the 23 hours after which provisioning
+/// looks for an earlier subscription before creating one.
+pub const GIVE_UP_AFTER_HOURS: i64 = 26;
 const RESUME_BATCH: i64 = 5;
 const EXPIRE_BATCH: i64 = 50;
 const SEATS_JOB_KEY: &str = "subscription-maintenance:seats";
@@ -37,15 +44,19 @@ pub struct MaintenanceRun {
     pub resumed: usize,
     /// Resumed signups this run completed.
     pub completed: usize,
+    /// Stuck signups given up on (staff were alerted).
+    pub given_up: usize,
     /// Abandoned signups expired.
     pub expired: usize,
+    /// Stripe customers of expired signups deleted.
+    pub customers_deleted: usize,
     /// Subscription companies whose seats were reconciled (0 except on the
     /// daily reconcile).
     pub seat_companies: usize,
     /// Seat reconciles that failed.
     pub seat_errors: usize,
-    /// Resumes that failed and abandoned signups whose Stripe customer could
-    /// not be deleted (retried on a later run).
+    /// Resumes that failed and Stripe customers that could not be deleted
+    /// (retried on a later run).
     pub errors: usize,
 }
 
@@ -53,8 +64,10 @@ pub struct MaintenanceRun {
 pub async fn run(state: &AppState) -> sqlx::Result<MaintenanceRun> {
     let started = Instant::now();
     let mut outcome = MaintenanceRun::default();
+    give_up(state, &mut outcome).await?;
     resume(state, started, &mut outcome).await?;
     expire(state, started, &mut outcome).await?;
+    delete_customers(state, started, &mut outcome).await?;
     reconcile_seats(state, started, &mut outcome).await?;
     outcome.processed = outcome.resumed + outcome.expired;
     Ok(outcome)
@@ -64,23 +77,71 @@ fn out_of_time(started: Instant) -> bool {
     started.elapsed() >= TIME_BUDGET
 }
 
+/// How long a stuck signup waits after its last run: 10 minutes, doubling
+/// with each failed run, at most 2 hours.
+pub fn resume_wait(attempts: u8) -> Duration {
+    let doubled = RESUME_AFTER_MINUTES << u32::from(attempts.min(4));
+    Duration::minutes(doubled.min(MAX_RESUME_WAIT_MINUTES))
+}
+
+/// Provisioning signups accepted more than [`GIVE_UP_AFTER_HOURS`] ago stop
+/// being resumed: staff get one alert. Without a company the signup expires
+/// (its Stripe customer is deleted next); with one, staff finish it by hand.
+/// The password hash goes either way.
+async fn give_up(state: &AppState, outcome: &mut MaintenanceRun) -> sqlx::Result<()> {
+    let now = billing::now();
+    let stuck: Vec<(String, Option<i32>, Option<String>)> = sqlx::query_as(
+        "SELECT id, company_id, last_error FROM signup_intents
+          WHERE status = 'provisioning' AND gave_up_at IS NULL AND accepted_at <= ?
+          ORDER BY accepted_at, id LIMIT ?",
+    )
+    .bind(now - Duration::hours(GIVE_UP_AFTER_HOURS))
+    .bind(RESUME_BATCH)
+    .fetch_all(&state.pool)
+    .await?;
+    for (id, company_id, last_error) in stuck {
+        let marked = sqlx::query(
+            "UPDATE signup_intents
+                SET gave_up_at = ?, password_hash = '', updated_at = ?,
+                    status = IF(company_id IS NULL, 'expired', status)
+              WHERE id = ? AND status = 'provisioning' AND gave_up_at IS NULL",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+        if marked.rows_affected() != 1 {
+            continue;
+        }
+        outcome.given_up += 1;
+        let signup = funnel::distinct_id(&id);
+        tracing::error!(?company_id, %signup, "signup provisioning given up; staff alerted");
+        notify::provisioning_given_up(state, &signup, company_id, last_error.as_deref()).await;
+    }
+    Ok(())
+}
+
 async fn resume(
     state: &AppState,
     started: Instant,
     outcome: &mut MaintenanceRun,
 ) -> sqlx::Result<()> {
     let now = billing::now();
-    let stuck: Vec<(String, u8, Option<i32>)> = sqlx::query_as(
-        "SELECT id, provision_attempts, company_id FROM signup_intents
-          WHERE status = 'provisioning' AND updated_at <= ? AND provision_attempts < ?
+    let candidates: Vec<(String, u8, Option<i32>, NaiveDateTime)> = sqlx::query_as(
+        "SELECT id, provision_attempts, company_id, updated_at FROM signup_intents
+          WHERE status = 'provisioning' AND gave_up_at IS NULL AND updated_at <= ?
           ORDER BY updated_at, id LIMIT ?",
     )
     .bind(now - Duration::minutes(RESUME_AFTER_MINUTES))
-    .bind(MAX_PROVISION_ATTEMPTS)
-    .bind(RESUME_BATCH)
+    .bind(RESUME_BATCH * 4)
     .fetch_all(&state.pool)
     .await?;
-    for (id, attempts, company_id) in stuck {
+    let due = candidates
+        .into_iter()
+        .filter(|(_, attempts, _, updated_at)| *updated_at + resume_wait(*attempts) <= now)
+        .take(usize::try_from(RESUME_BATCH).unwrap_or(5));
+    for (id, _, company_id, _) in due {
         if out_of_time(started) {
             break;
         }
@@ -93,27 +154,22 @@ async fn resume(
                 let signup = funnel::distinct_id(&id);
                 tracing::warn!(?company_id, %signup, error = %err, "signup provisioning resume failed");
                 record_failure(&state.pool, &id, &err).await?;
-                if attempts.saturating_add(1) >= MAX_PROVISION_ATTEMPTS {
-                    tracing::warn!(
-                        ?company_id,
-                        %signup,
-                        "signup provisioning gave up after {MAX_PROVISION_ATTEMPTS} attempts; finish it by hand"
-                    );
-                }
             }
         }
     }
     Ok(())
 }
 
+/// Abandoned signups expire (password hash and code dropped); their Stripe
+/// customers are deleted by [`delete_customers`].
 async fn expire(
     state: &AppState,
     started: Instant,
     outcome: &mut MaintenanceRun,
 ) -> sqlx::Result<()> {
     let now = billing::now();
-    let abandoned: Vec<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, CAST(status AS CHAR) AS status, stripe_customer_id FROM signup_intents
+    let abandoned: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, CAST(status AS CHAR) AS status FROM signup_intents
           WHERE (status IN ('started', 'verified', 'payment_ready') AND expires_at <= ?)
              OR (status = 'awaiting_bank_verification' AND updated_at <= ?)
           ORDER BY created_at, id LIMIT ?",
@@ -123,24 +179,11 @@ async fn expire(
     .bind(EXPIRE_BATCH)
     .fetch_all(&state.pool)
     .await?;
-    for (id, status, customer) in abandoned {
+    for (id, status) in abandoned {
         if out_of_time(started) {
             break;
         }
-        if let Some(customer) = customer.as_deref().filter(|customer| !customer.is_empty()) {
-            match state.stripe.delete_customer(customer).await {
-                Ok(_) | Err(StripeError::Missing(_)) => {}
-                Err(err) => {
-                    outcome.errors += 1;
-                    tracing::warn!(
-                        signup = %funnel::distinct_id(&id),
-                        error = %err,
-                        "abandoned signup's Stripe customer not deleted"
-                    );
-                    continue;
-                }
-            }
-        }
+        // Expired first: a signup being deleted can no longer be accepted.
         let expired = sqlx::query(
             "UPDATE signup_intents
                 SET status = 'expired', password_hash = '', code_hash = NULL, updated_at = ?
@@ -156,6 +199,64 @@ async fn expire(
         }
     }
     Ok(())
+}
+
+/// Deletes the Stripe customer of every expired signup without a company
+/// that still has one, retrying the ones a refusal or an earlier run could
+/// not delete.
+async fn delete_customers(
+    state: &AppState,
+    started: Instant,
+    outcome: &mut MaintenanceRun,
+) -> sqlx::Result<()> {
+    let leftovers: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, stripe_customer_id FROM signup_intents
+          WHERE status = 'expired' AND company_id IS NULL AND stripe_customer_id IS NOT NULL
+          ORDER BY updated_at, id LIMIT ?",
+    )
+    .bind(EXPIRE_BATCH)
+    .fetch_all(&state.pool)
+    .await?;
+    for (id, customer) in leftovers {
+        if out_of_time(started) {
+            break;
+        }
+        if delete_signup_customer(state, &id, &customer).await? {
+            outcome.customers_deleted += 1;
+        } else {
+            outcome.errors += 1;
+        }
+    }
+    Ok(())
+}
+
+/// Deletes an expired signup's Stripe customer and forgets it; false when
+/// Stripe failed (the next run retries).
+pub(super) async fn delete_signup_customer(
+    state: &AppState,
+    signup_id: &str,
+    customer: &str,
+) -> sqlx::Result<bool> {
+    match state.stripe.delete_customer(customer).await {
+        Ok(_) | Err(StripeError::Missing(_)) => {}
+        Err(err) => {
+            tracing::warn!(
+                signup = %funnel::distinct_id(signup_id),
+                stripe_code = err.code(),
+                "expired signup's Stripe customer not deleted"
+            );
+            return Ok(false);
+        }
+    }
+    sqlx::query(
+        "UPDATE signup_intents SET stripe_customer_id = NULL
+          WHERE id = ? AND status = 'expired' AND company_id IS NULL AND stripe_customer_id = ?",
+    )
+    .bind(signup_id)
+    .bind(customer)
+    .execute(&state.pool)
+    .await?;
+    Ok(true)
 }
 
 /// Once per [`SEATS_EVERY_HOURS`] (the `job_runs` row): every subscription
@@ -196,7 +297,7 @@ async fn reconcile_seats(
             Ok(_) => outcome.seat_companies += 1,
             Err(err) => {
                 outcome.seat_errors += 1;
-                tracing::warn!(company_id, error = %err, "seat reconcile failed");
+                tracing::warn!(company_id, error = %err.reason(), "seat reconcile failed");
             }
         }
     }

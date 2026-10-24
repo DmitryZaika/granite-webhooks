@@ -9,7 +9,6 @@
 use super::consent::{self, ConsentAcceptance, PaymentFacts};
 use super::intent::{self, CompanyDetails, Intent, SignupStatus};
 use super::{RequestMeta, email_lock_name, funnel, notify, unavailable};
-use crate::billing::catalog::Catalog;
 use crate::billing::lock::{CompanyLock, LockError, NamedLock};
 use crate::billing::machine::apply_subscription_change;
 use crate::billing::store::MySqlBillingStore;
@@ -66,8 +65,10 @@ fn payment_not_ready() -> ApiError {
     )
 }
 
+/// Stripe's error code only: the message can quote the buyer's details, and
+/// this text is logged and stored in `last_error`.
 fn stripe_failure(err: &StripeError) -> ApiError {
-    ApiError::Upstream(err.to_string())
+    ApiError::Upstream(format!("Stripe error {}", err.code()))
 }
 
 fn lock_failure(err: LockError) -> ApiError {
@@ -159,7 +160,7 @@ async fn accept(
         Ok(setup) => setup,
         Err(StripeError::Missing(_) | StripeError::Api(_)) => return Err(payment_not_ready()),
         Err(err) => {
-            tracing::warn!(error = %err, "signup SetupIntent read failed");
+            tracing::warn!(stripe_code = err.code(), "signup SetupIntent read failed");
             return Err(unavailable());
         }
     };
@@ -173,10 +174,7 @@ async fn accept(
         .as_deref()
         .and_then(|kind| method[kind]["last4"].as_str())
         .map(str::to_string);
-    let catalog = Catalog::load(&state.stripe).await.map_err(|err| {
-        tracing::warn!(error = %err, "signup catalog load failed");
-        unavailable()
-    })?;
+    let catalog = super::signup_catalog(&state.stripe).await?;
     let now = Utc::now().trunc_subsecs(0);
     let facts = consent::facts(&catalog, intent, now);
     let rendered = consent::render(&facts, &state.app_url);
@@ -191,13 +189,16 @@ async fn accept(
     let price_ids = catalog.subscription_price_ids(&intent.plan.addons);
     let price_ids =
         serde_json::to_string(&price_ids).map_err(|err| ApiError::Internal(err.to_string()))?;
+    let plan =
+        serde_json::to_string(&intent.plan).map_err(|err| ApiError::Internal(err.to_string()))?;
     let mut tx = state.pool.begin().await?;
     let moved = sqlx::query(
         "UPDATE signup_intents
             SET status = 'provisioning', payment_method_id = ?, accepted_at = ?, trial_end_at = ?,
                 fee_cents = ?, deadline_at = ?, price_ids = CAST(? AS JSON), last_error = NULL,
                 updated_at = ?
-          WHERE id = ? AND status = 'payment_ready' AND expires_at > ?",
+          WHERE id = ? AND status = 'payment_ready' AND expires_at > ?
+            AND plan = CAST(? AS JSON)",
     )
     .bind(&payment_method_id)
     .bind(accepted_at)
@@ -209,6 +210,9 @@ async fn accept(
     .bind(&intent.id)
     // Fresh: the job deletes the customer of a signup past `expires_at`.
     .bind(Utc::now().naive_utc())
+    // The plan the consents were rendered for: a change in between reloads,
+    // and the new texts no longer match.
+    .bind(&plan)
     .execute(&mut *tx)
     .await?;
     if moved.rows_affected() != 1 {
@@ -305,7 +309,7 @@ pub async fn run(state: &AppState, signup_id: &str) -> ApiResult<RunOutcome> {
     let subscription = subscription(state, &intent, company_id, customer, payment_method).await?;
     apply(pool, company_id, &subscription).await?;
     if let Err(err) = seats::sync_seats(state, company_id).await {
-        tracing::warn!(company_id, error = %err, "signup seat sync failed");
+        tracing::warn!(company_id, error = %err.reason(), "signup seat sync failed");
     }
     let now = billing::now();
     let completed = sqlx::query(
@@ -485,15 +489,9 @@ async fn refuse(state: &AppState, intent: &Intent) -> sqlx::Result<()> {
     .bind(&intent.id)
     .execute(&state.pool)
     .await?;
+    // A failed delete is retried by the maintenance job.
     if let Some(customer) = intent.stripe_customer_id.as_deref() {
-        match state.stripe.delete_customer(customer).await {
-            Ok(_) | Err(StripeError::Missing(_)) => {}
-            Err(err) => tracing::warn!(
-                signup = %funnel::distinct_id(&intent.id),
-                error = %err,
-                "refused signup's Stripe customer not deleted"
-            ),
-        }
+        super::maintenance::delete_signup_customer(state, &intent.id, customer).await?;
     }
     tracing::info!(signup = %funnel::distinct_id(&intent.id), "signup refused: email taken");
     Ok(())

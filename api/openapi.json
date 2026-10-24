@@ -4870,6 +4870,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "A signup of the same email is being set up; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -11295,6 +11305,774 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/plans": {
+      "get": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "List plans and price a choice",
+        "description": "The self-serve catalog (base plan, price of each extra user, add-ons, free\nmonths, user bounds) and a quote for the choice in the query. Money is in\ncents, before sales tax. `users` defaults to 5 and is clamped to 1..=500;\nrepeat `addon` for each add-on and unknown values are ignored. Works even\nwhile signups are switched off. No session needed.",
+        "operationId": "get_public_plans",
+        "parameters": [
+          {
+            "name": "users",
+            "in": "query",
+            "description": "Estimated active users, 1 to 500 (default 5; out-of-range values are\nclamped, unreadable ones fall back to the default).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "addon",
+            "in": "query",
+            "description": "Chosen add-ons (repeat the parameter): `signatures`, `quotes` or\n`quickbooks`. Unknown values are ignored.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The catalog and the quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlansResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed query string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Prices are unavailable (code signup_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/signups": {
+      "post": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "Start a signup",
+        "description": "Step 1 of self-serve signup. Checks the company and owner details, refuses\nan email that already has an account (deleted accounts included), stores\nthe signup and emails a 6-digit code (valid 15 minutes). The returned `id`\nis the secret of the rest of the flow: next call `POST\n/v1/public/signups/{id}/verification` with the code. The signup expires\nafter 24 hours. Answers 503 while signups are switched off.",
+        "operationId": "create_signup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSignupBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Signup created, code emailed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedSignup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is missing or invalid; the message names it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An account already uses the email (code email_taken)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The code email could not be sent; the signup was dropped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Signups are switched off, busy, or prices unavailable (code signup_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/signups/{id}": {
+      "get": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "Read a signup",
+        "description": "The state of a signup: status, masked email, company name, plan, today's\nquote, how payment will be collected (`payment_mode`) and seconds until\nanother code can be sent. Never returns the full email. 404 for an unknown\nid, 410 once expired (both code `signup_expired`: start again).",
+        "operationId": "get_signup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Signup id from `create_signup`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The signup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Signup"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Expired signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Signups are switched off or prices unavailable (code signup_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/signups/{id}/plan": {
+      "put": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "Change the plan of a signup",
+        "description": "Replaces the user estimate and add-ons (\"Change plan\" in step 3). Allowed\nuntil payment is set up and the signup is completed: statuses `started`,\n`verified` and `payment_ready`; otherwise 409 `invalid_state`. Users are\nclamped to 1..=500. The consent texts change with the price: fetch them\nagain with `get_signup_consents`.",
+        "operationId": "update_signup_plan",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Signup id from `create_signup`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanChoice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The signup with the new plan and quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Signup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The signup can no longer change plan (code invalid_state)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Expired signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Signups are switched off or prices unavailable (code signup_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/signups/{id}/code": {
+      "post": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "Send the email code again",
+        "description": "Emails a new 6-digit code (the old one stops working and the wrong-code\ncount restarts). Only while the email is not verified yet. At most one per\n60 seconds (429 `resend_limited` with `retry_after_seconds`) and 5 codes per\nsignup (429 `resend_limited`).",
+        "operationId": "resend_signup_code",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Signup id from `create_signup`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A new code was emailed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResentCode"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The email is already verified (code invalid_state)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Expired signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too soon or too many codes (code resend_limited; retry_after_seconds when too soon)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The email could not be sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Signups are switched off (code signup_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/signups/{id}/verification": {
+      "post": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "Verify the email code",
+        "description": "Checks the 6-digit code from the email and moves the signup from `started`\nto `verified`. Five wrong codes lock the signup (429 `too_many_attempts`,\neven for the right code) until `resend_signup_code` sends a new one. A wrong\ncode answers 422 `invalid_code` with `attempts_left`; an old one 422\n`code_expired`. An already verified signup is returned as is.",
+        "operationId": "verify_signup_code",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Signup id from `create_signup`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The verified signup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Signup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The signup is past verification (code invalid_state)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Expired signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Wrong or old code (codes invalid_code with attempts_left, code_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Five wrong codes (code too_many_attempts)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Signups are switched off or prices unavailable (code signup_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/signups/{id}/consents": {
+      "get": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "Read the consent texts",
+        "description": "The four checkboxes (terms, auto_renewal, per_user_pricing, onboarding_fee)\nrendered by the server for this signup's plan and dates, in the order to\nshow them. The page shows `text` verbatim and sends `kind`, `version` and\n`sha256` back as `text_sha256` to `complete_signup`. Texts change when the\nplan or the prices do: fetch them again after `update_signup_plan`. Only\nafter the email is verified (409 `invalid_state` before).",
+        "operationId": "get_signup_consents",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Signup id from `create_signup`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The checkbox texts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The email is not verified yet (code invalid_state)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Expired signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Signups are switched off or prices unavailable (code signup_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/signups/{id}/payment-setup": {
+      "post": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "Set up payment",
+        "description": "Creates the signup's Stripe customer (once) and a new SetupIntent, and moves\nthe signup to `payment_ready`. Answers `{\"mode\": \"test\"}` when the api\nattached a sandbox payment method itself, or `{\"mode\": \"stripe\",\n\"client_secret\", \"publishable_key\"}` for the page to confirm with Stripe's\nPayment Element. Call again after a failed confirmation: at most 5 setups\nper signup (429 `setup_limited`). Only for verified signups.",
+        "operationId": "create_signup_payment_setup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Signup id from `create_signup`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How to collect the payment method",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentSetup"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The email is not verified yet (code invalid_state)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Expired signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Five setups used (code setup_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Stripe failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Signups or card payments are not available (code signup_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/public/signups/{id}/completion": {
+      "post": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "Complete the signup",
+        "description": "Final step. Sends the checkboxes the buyer ticked (`kind`, `version`,\n`text_sha256` as `get_signup_consents` returned them); the server renders\nthem again and refuses with 409 `consents_changed` when anything differs\n(fetch the texts again). Then creates the company, the owner account and the\nsubscription with a free period, signs the owner in (the session cookie is\nset on this response) and returns where to go next. Safe to retry: one\nsignup never makes two companies. 409 codes: `consents_changed`,\n`invalid_state`, `email_taken`, `payment_not_ready`; 503 `provisioning_retry`\nmeans call again shortly.",
+        "operationId": "complete_signup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Signup id from `create_signup`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompletionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The company exists; Set-Cookie signs the owner in unless the signup was already completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Completion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Texts changed, wrong state, email taken or payment not ready (codes consents_changed, invalid_state, email_taken, payment_not_ready)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Expired signup (code signup_expired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Stripe failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Switched off or still provisioning (codes signup_unavailable, provisioning_retry)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
                 }
               }
             }
@@ -41308,6 +42086,53 @@
         ]
       }
     },
+    "/v1/jobs/subscription-maintenance": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Resume stuck signups, expire abandoned ones and reconcile seats",
+        "description": "One run, which starts no new work after 40 seconds:\n1. Resumes up to 5 signups stuck in provisioning for 10 minutes or more\n   (oldest first; a signup is given up after 10 failed runs).\n2. Expires up to 50 abandoned signups (24 hours after they started, or 11\n   days waiting for bank verification) and deletes their Stripe customers.\n3. Once every 23 hours, pushes each subscription company's extra-user\n   quantity to Stripe where it differs from its billable users.\n\nReturns the counts; `processed` is `resumed` + `expired`.",
+        "operationId": "run_subscription_maintenance",
+        "responses": {
+          "200": {
+            "description": "What the run did",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
     "/v1/me/call-coaching": {
       "get": {
         "tags": [
@@ -44564,7 +45389,7 @@
             }
           },
           "400": {
-            "description": "Missing name, bad subdomain or tax",
+            "description": "Missing name, bad or reserved subdomain, or bad tax",
             "content": {
               "application/json": {
                 "schema": {
@@ -44733,7 +45558,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "Missing name, bad subdomain, tax, limit or logo",
+            "description": "Missing name, bad or newly reserved subdomain, tax, limit or logo",
             "content": {
               "application/json": {
                 "schema": {
@@ -45603,7 +46428,7 @@
           "superuser"
         ],
         "summary": "Check the Stripe billing setup",
-        "description": "Reports whether billing is set up correctly: the Stripe secret and\npublishable keys (only whether they are set and live or test, never their\nvalues), the webhook signing secret, the configured plans, `APP_URL`,\nemail sending and the scheduled jobs key, then what Stripe itself reports\nfor the webhook endpoint (exactly one enabled endpoint for\n`/v1/webhooks/stripe`, with every handled event and the api's Stripe API\nversion) and for each configured plan price (active, monthly, USD, same\nmode as the key). A Stripe call that fails becomes a failed check, not an\nerror. Stripe checks are skipped without `STRIPE_SECRET_KEY`. The report\nis cached for 5 minutes. Super admins only.",
+        "description": "Reports whether billing is set up correctly: the Stripe secret and\npublishable keys (only whether they are set and live or test, never their\nvalues), the webhook signing secret, the configured plans, `APP_URL`,\nemail sending and the scheduled jobs key, then what Stripe itself reports\nfor the webhook endpoint (exactly one enabled endpoint for\n`/v1/webhooks/stripe`, with every handled event and the api's Stripe API\nversion) and for each configured plan price (active, monthly, USD, same\nmode as the key), each self-serve price by lookup key (same checks, per\nunit) and whether those prices still match what the signup consent texts\nstate (signup refuses with 503 when not). A Stripe call that fails becomes\na failed check, not an error. Stripe checks are skipped without `STRIPE_SECRET_KEY`. The report\nis cached for 5 minutes. Super admins only.",
         "operationId": "get_billing_setup",
         "responses": {
           "200": {
@@ -47268,6 +48093,34 @@
         },
         "additionalProperties": false
       },
+      "AddonInfo": {
+        "type": "object",
+        "description": "A paid add-on of the catalog.",
+        "required": [
+          "key",
+          "name",
+          "description",
+          "monthly_cents"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/AddonKey"
+          },
+          "name": {
+            "type": "string",
+            "description": "Name people see, e.g. `QuickBooks`."
+          },
+          "description": {
+            "type": "string",
+            "description": "One line: what it unlocks."
+          },
+          "monthly_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monthly price in cents, before sales tax."
+          }
+        }
+      },
       "AddonKey": {
         "type": "string",
         "description": "A paid add-on: `signatures`, `quotes` or `quickbooks`.",
@@ -48128,6 +48981,31 @@
               "null"
             ],
             "description": "When (ISO 8601)."
+          }
+        }
+      },
+      "BasePlan": {
+        "type": "object",
+        "description": "The base plan.",
+        "required": [
+          "name",
+          "monthly_cents",
+          "included_users"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Always `Base plan`."
+          },
+          "monthly_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monthly price in cents, before sales tax."
+          },
+          "included_users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Active users the base price covers."
           }
         }
       },
@@ -49793,6 +50671,24 @@
           "error"
         ]
       },
+      "CodedErrorBody": {
+        "type": "object",
+        "description": "An error the page tells apart by `code`; some codes add fields\n(`attempts_left`, `retry_after_seconds`).",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "A sentence the page can show as is."
+          },
+          "code": {
+            "type": "string",
+            "description": "Machine-readable reason, e.g. `email_taken`, `invalid_code`."
+          }
+        }
+      },
       "Color": {
         "type": "object",
         "description": "A stone color tag.",
@@ -50111,166 +51007,46 @@
       },
       "CompanyDetails": {
         "type": "object",
-        "description": "A company's settings as super admins edit them.",
+        "description": "The company in step 2.",
         "required": [
-          "id",
           "name",
-          "quickbooks_enabled",
-          "signature_enabled",
-          "billing_required",
-          "plan_source",
-          "comp_addons",
-          "onboarding_enabled",
-          "leaderboard_enabled"
+          "phone",
+          "street",
+          "city",
+          "state",
+          "zip"
         ],
         "properties": {
-          "id": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Company id."
-          },
           "name": {
             "type": "string",
             "description": "Company name."
           },
-          "subdomain": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Subdomain, or null."
-          },
-          "address": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Address, or null."
-          },
-          "domain": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Email domain, or null."
-          },
-          "logo_url": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Logo, or null."
-          },
-          "logo_height": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32",
-            "description": "Logo height in pixels as saved, or null."
-          },
-          "sales_tax_percent": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double",
-            "description": "Sales tax in percent, or null."
-          },
-          "max_users": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32",
-            "description": "User limit, or null."
-          },
-          "cloudtalk_access_key": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`CloudTalk` API key id, or null."
-          },
-          "cloudtalk_access_secret": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`CloudTalk` API secret, or null."
-          },
-          "ringcentral_client_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`RingCentral` JWT app client id, or null."
-          },
-          "ringcentral_client_secret": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`RingCentral` JWT app client secret, or null."
-          },
-          "ringcentral_jwt": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`RingCentral` JWT, or null."
-          },
-          "ringcentral_server_url": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`RingCentral` server override, or null."
-          },
-          "qbo_realm_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Linked `QuickBooks` company, or null."
-          },
-          "signwell_api_key": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`SignWell` API key, or null."
-          },
-          "quickbooks_enabled": {
-            "type": "boolean",
-            "description": "QuickBooks switch."
-          },
-          "signature_enabled": {
-            "type": "boolean",
-            "description": "E-signature switch (own setting, else on with a `SignWell` key)."
-          },
-          "billing_required": {
-            "type": "boolean",
-            "description": "Stripe payment required."
-          },
-          "plan_source": {
+          "phone": {
             "type": "string",
-            "description": "`legacy` (every add-on included) or `subscription` (only bought or\ngranted add-ons)."
+            "description": "Phone, E.164 (`+13175550100`)."
           },
-          "comp_addons": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Add-on keys (`signatures`, `quotes`, `quickbooks`) granted free by a\nsuperuser and in force now. Change with\n`PUT /v1/superuser/companies/{id}/addons/{key}`."
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Website, or null."
           },
-          "onboarding_enabled": {
-            "type": "boolean",
-            "description": "Guided tours switch (own setting, else the platform default)."
+          "street": {
+            "type": "string",
+            "description": "Street address."
           },
-          "leaderboard_enabled": {
-            "type": "boolean",
-            "description": "Points leaderboard switch (own setting, else the platform default)."
+          "city": {
+            "type": "string",
+            "description": "City."
+          },
+          "state": {
+            "type": "string",
+            "description": "Two-letter US state code."
+          },
+          "zip": {
+            "type": "string",
+            "description": "ZIP code."
           }
         }
       },
@@ -50910,43 +51686,30 @@
       },
       "Completion": {
         "type": "object",
-        "description": "A check done.",
+        "description": "Answer of `POST /v1/public/signups/{id}/completion`.",
         "required": [
-          "id",
-          "maintenance_sub_item_id"
+          "redirect_url"
         ],
         "properties": {
-          "id": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Completion id."
-          },
-          "maintenance_sub_item_id": {
-            "type": "integer",
-            "format": "int32",
-            "description": "The check."
-          },
-          "completed_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time",
-            "description": "When."
-          },
-          "notes": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Notes (with the meter reading when given)."
-          },
-          "completed_by_name": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Who did it; null when unknown."
+          "redirect_url": {
+            "type": "string",
+            "description": "Where the browser goes next."
+          }
+        }
+      },
+      "CompletionBody": {
+        "type": "object",
+        "description": "Body of `POST /v1/public/signups/{id}/completion`.",
+        "required": [
+          "consents"
+        ],
+        "properties": {
+          "consents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsentAcceptance"
+            },
+            "description": "Every checkbox the buyer ticked, as `GET .../consents` showed it."
           }
         }
       },
@@ -51105,6 +51868,56 @@
           "disconnected",
           "unverified"
         ]
+      },
+      "ConsentAcceptance": {
+        "type": "object",
+        "description": "A checkbox the buyer ticked, as sent back on completion.",
+        "required": [
+          "kind",
+          "version",
+          "text_sha256"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ConsentKind"
+          },
+          "version": {
+            "type": "string",
+            "description": "The `version` the page showed."
+          },
+          "text_sha256": {
+            "type": "string",
+            "description": "The `sha256` the page showed."
+          }
+        }
+      },
+      "ConsentKind": {
+        "type": "string",
+        "description": "A checkbox.",
+        "enum": [
+          "terms",
+          "auto_renewal",
+          "per_user_pricing",
+          "onboarding_fee",
+          "ach_authorization",
+          "card_authorization"
+        ]
+      },
+      "ConsentsResponse": {
+        "type": "object",
+        "description": "Answer of `GET /v1/public/signups/{id}/consents`.",
+        "required": [
+          "consents"
+        ],
+        "properties": {
+          "consents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RenderedConsent"
+            },
+            "description": "The checkboxes, in the order to show them."
+          }
+        }
       },
       "ContactSyncRun": {
         "type": "object",
@@ -51496,6 +52309,27 @@
           }
         }
       },
+      "CreateSignupBody": {
+        "type": "object",
+        "description": "Body of `POST /v1/public/signups`.",
+        "required": [
+          "plan",
+          "company",
+          "owner"
+        ],
+        "properties": {
+          "plan": {
+            "$ref": "#/components/schemas/PlanChoice",
+            "description": "What the buyer picked in step 1."
+          },
+          "company": {
+            "$ref": "#/components/schemas/CompanyDetails"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/OwnerDetails"
+          }
+        }
+      },
       "Created": {
         "type": "object",
         "description": "`POST /v1/schedule/notifications/templates` and `…/flows`.",
@@ -51702,6 +52536,25 @@
             "type": "integer",
             "format": "int32",
             "description": "Id of the new sale."
+          }
+        }
+      },
+      "CreatedSignup": {
+        "type": "object",
+        "description": "Answer of `POST /v1/public/signups`.",
+        "required": [
+          "id",
+          "resend_in_seconds"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The signup id. Keep it private: it is the only secret of the flow."
+          },
+          "resend_in_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds until another code can be requested."
           }
         }
       },
@@ -54130,6 +54983,24 @@
           "contract_sent",
           "contract_signed"
         ]
+      },
+      "DocumentLink": {
+        "type": "object",
+        "description": "A document a checkbox refers to.",
+        "required": [
+          "title",
+          "url"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "e.g. \"Terms of Service\"."
+          },
+          "url": {
+            "type": "string",
+            "description": "The page on the main app (`/terms`, `/privacy-policy`, `/dpa`)."
+          }
+        }
       },
       "DocumentRename": {
         "type": "object",
@@ -59481,6 +60352,68 @@
           }
         }
       },
+      "MaintenanceRun": {
+        "type": "object",
+        "description": "What one run did.",
+        "required": [
+          "processed",
+          "resumed",
+          "completed",
+          "given_up",
+          "expired",
+          "customers_deleted",
+          "seat_companies",
+          "seat_errors",
+          "errors"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "`resumed` + `expired` (what the scheduler logs).",
+            "minimum": 0
+          },
+          "resumed": {
+            "type": "integer",
+            "description": "Stuck signups whose provisioning was run again.",
+            "minimum": 0
+          },
+          "completed": {
+            "type": "integer",
+            "description": "Resumed signups this run completed.",
+            "minimum": 0
+          },
+          "given_up": {
+            "type": "integer",
+            "description": "Stuck signups given up on (staff were alerted).",
+            "minimum": 0
+          },
+          "expired": {
+            "type": "integer",
+            "description": "Abandoned signups expired.",
+            "minimum": 0
+          },
+          "customers_deleted": {
+            "type": "integer",
+            "description": "Stripe customers of expired signups deleted.",
+            "minimum": 0
+          },
+          "seat_companies": {
+            "type": "integer",
+            "description": "Subscription companies whose seats were reconciled (0 except on the\ndaily reconcile).",
+            "minimum": 0
+          },
+          "seat_errors": {
+            "type": "integer",
+            "description": "Seat reconciles that failed.",
+            "minimum": 0
+          },
+          "errors": {
+            "type": "integer",
+            "description": "Resumes that failed and Stripe customers that could not be deleted\n(retried on a later run).",
+            "minimum": 0
+          }
+        }
+      },
       "ManagedUser": {
         "type": "object",
         "description": "A user in the list.",
@@ -62293,6 +63226,29 @@
           }
         }
       },
+      "OwnerDetails": {
+        "type": "object",
+        "description": "The owner of the new company, who signs in with these.",
+        "required": [
+          "name",
+          "email",
+          "password"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Full name, up to 100 characters."
+          },
+          "email": {
+            "type": "string",
+            "description": "Email, up to 254 bytes. Receives the code; used to sign in."
+          },
+          "password": {
+            "type": "string",
+            "description": "Password: at least 10 characters and at most 200 bytes (as sign-in\ncounts them; surrounding spaces are dropped)."
+          }
+        }
+      },
       "ParentInput": {
         "type": "object",
         "description": "Body of `PUT /v1/customers/{id}/parent`.",
@@ -62429,6 +63385,41 @@
               "null"
             ],
             "description": "That customer's name."
+          }
+        }
+      },
+      "PaymentMode": {
+        "type": "string",
+        "description": "Where the card or bank account is collected.",
+        "enum": [
+          "test",
+          "stripe"
+        ]
+      },
+      "PaymentSetup": {
+        "type": "object",
+        "description": "Answer of `POST /v1/public/signups/{id}/payment-setup`:\n`{\"mode\": \"test\"}` or `{\"mode\": \"stripe\", \"client_secret\", \"publishable_key\"}`.",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/PaymentMode",
+            "description": "`test`: a test payment method was attached, nothing for the page to\ndo. `stripe`: confirm the SetupIntent with the Payment Element."
+          },
+          "client_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SetupIntent's client secret; only in `stripe` mode."
+          },
+          "publishable_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Stripe publishable key; only in `stripe` mode."
           }
         }
       },
@@ -62890,14 +63881,73 @@
       },
       "PlanChoice": {
         "type": "object",
-        "description": "Body of `POST /v1/billing/checkout` and `PUT /v1/billing/subscription`.",
+        "description": "What the buyer picks in step 1. `users` is an estimate: billing counts\nactive users.",
         "required": [
-          "price_id"
+          "users",
+          "addons"
         ],
         "properties": {
-          "price_id": {
-            "type": "string",
-            "description": "A plan's `price_id` from `GET /v1/billing`."
+          "users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Estimated active users (1 to 500); only previews the price."
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddonKey"
+            },
+            "description": "Chosen add-ons."
+          }
+        }
+      },
+      "PlansResponse": {
+        "type": "object",
+        "description": "The catalog and a quote for one choice.",
+        "required": [
+          "base",
+          "extra_user_cents",
+          "free_months",
+          "min_users",
+          "max_users",
+          "addons",
+          "quote"
+        ],
+        "properties": {
+          "base": {
+            "$ref": "#/components/schemas/BasePlan"
+          },
+          "extra_user_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monthly price in cents of each active user above the included ones."
+          },
+          "free_months": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Months without a charge after signup.",
+            "minimum": 0
+          },
+          "min_users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Smallest user estimate."
+          },
+          "max_users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Largest user estimate."
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddonInfo"
+            },
+            "description": "Every add-on."
+          },
+          "quote": {
+            "$ref": "#/components/schemas/Quote",
+            "description": "The price of the requested choice."
           }
         }
       },
@@ -64597,6 +65647,76 @@
           }
         }
       },
+      "Quote": {
+        "type": "object",
+        "description": "The price of a plan choice. Money in cents, before sales tax.",
+        "required": [
+          "users",
+          "included_users",
+          "extra_users",
+          "lines",
+          "base_and_addons_cents",
+          "monthly_cents",
+          "due_today_cents",
+          "first_charge_on",
+          "fee_cents",
+          "deadline_on"
+        ],
+        "properties": {
+          "users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The user estimate the quote was made for."
+          },
+          "included_users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Users the base price covers (10)."
+          },
+          "extra_users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Users above the included ones."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteLine"
+            },
+            "description": "Base, then extra users (when any), then each add-on."
+          },
+          "base_and_addons_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Base + add-ons, without extra users: the fixed part of each charge."
+          },
+          "monthly_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Estimated monthly total with the extra users."
+          },
+          "due_today_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Always 0: the free period."
+          },
+          "first_charge_on": {
+            "type": "string",
+            "format": "date",
+            "description": "First charge day (`YYYY-MM-DD`): signup day + 3 calendar months."
+          },
+          "fee_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Onboarding fee: 2 x `base_and_addons_cents`, waived when onboarding is\ncompleted by `deadline_on`."
+          },
+          "deadline_on": {
+            "type": "string",
+            "format": "date",
+            "description": "Onboarding deadline (`YYYY-MM-DD`): signup day + 30 days."
+          }
+        }
+      },
       "QuoteChanges": {
         "type": "object",
         "description": "Changes to a quote; fields left out stay.",
@@ -65509,6 +66629,62 @@
           }
         }
       },
+      "QuoteLine": {
+        "type": "object",
+        "description": "One line of a quote.",
+        "required": [
+          "kind",
+          "label",
+          "quantity",
+          "unit_cents",
+          "amount_cents"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/QuoteLineKind",
+            "description": "`base`, `extra_users` or `addon`."
+          },
+          "key": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AddonKey",
+                "description": "The add-on of an `addon` line, else null."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "Display label, e.g. \"Base plan (up to 10 users)\", \"2 extra users\", \"Quotes\"."
+          },
+          "quantity": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many: 1 for the base and add-ons, the extra users otherwise."
+          },
+          "unit_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Price of one, in cents."
+          },
+          "amount_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`quantity` x `unit_cents`."
+          }
+        }
+      },
+      "QuoteLineKind": {
+        "type": "string",
+        "description": "What a quote line charges for.",
+        "enum": [
+          "base",
+          "extra_users",
+          "addon"
+        ]
+      },
       "QuoteList": {
         "type": "object",
         "description": "`GET /v1/quotes`.",
@@ -66307,6 +67483,41 @@
           }
         }
       },
+      "RenderedConsent": {
+        "type": "object",
+        "description": "A checkbox text rendered for one signup.",
+        "required": [
+          "kind",
+          "version",
+          "text",
+          "sha256",
+          "documents"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ConsentKind"
+          },
+          "version": {
+            "type": "string",
+            "description": "Version of this checkbox text, e.g. `auto-renewal-2026-10-v1`."
+          },
+          "text": {
+            "type": "string",
+            "description": "The checkbox label, shown verbatim."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "SHA-256 (hex) of `text`; send it back on completion."
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentLink"
+            },
+            "description": "Documents the text refers to, linked under it."
+          }
+        }
+      },
       "ReorderBody": {
         "type": "object",
         "description": "Body of `POST /v1/deals/reorder`.",
@@ -66511,6 +67722,20 @@
           "follow_up",
           "custom"
         ]
+      },
+      "ResentCode": {
+        "type": "object",
+        "description": "Answer of `POST /v1/public/signups/{id}/code`.",
+        "required": [
+          "resend_in_seconds"
+        ],
+        "properties": {
+          "resend_in_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds until another code can be requested."
+          }
+        }
       },
       "ResetRequest": {
         "type": "object",
@@ -69206,6 +70431,65 @@
             "description": "The signed copy (API path), once signed."
           }
         }
+      },
+      "Signup": {
+        "type": "object",
+        "description": "A signup in progress.",
+        "required": [
+          "id",
+          "status",
+          "email_masked",
+          "company_name",
+          "plan",
+          "quote",
+          "payment_mode",
+          "resend_in_seconds"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The signup id (the flow's secret)."
+          },
+          "status": {
+            "$ref": "#/components/schemas/SignupStatus"
+          },
+          "email_masked": {
+            "type": "string",
+            "description": "The email with its local part hidden, e.g. `a***@acme.com`."
+          },
+          "company_name": {
+            "type": "string",
+            "description": "The company name from step 2."
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PlanChoice"
+          },
+          "quote": {
+            "$ref": "#/components/schemas/Quote",
+            "description": "The price of `plan` today."
+          },
+          "payment_mode": {
+            "$ref": "#/components/schemas/PaymentMode"
+          },
+          "resend_in_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds until another code can be requested (0 = now)."
+          }
+        }
+      },
+      "SignupStatus": {
+        "type": "string",
+        "description": "Where a signup is.",
+        "enum": [
+          "started",
+          "verified",
+          "payment_ready",
+          "awaiting_bank_verification",
+          "provisioning",
+          "completed",
+          "expired"
+        ]
       },
       "Sink": {
         "type": "object",
@@ -73467,6 +74751,19 @@
           "has_ringcentral_api": {
             "type": "boolean",
             "description": "The listed company has `RingCentral`."
+          }
+        }
+      },
+      "VerifyBody": {
+        "type": "object",
+        "description": "Body of `POST /v1/public/signups/{id}/verification`.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The 6-digit code from the email."
           }
         }
       },

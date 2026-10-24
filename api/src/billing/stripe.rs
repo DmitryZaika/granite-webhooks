@@ -27,22 +27,57 @@ pub enum StripeError {
     /// Stripe refused the request; the message is Stripe's, for the user
     /// (e.g. "Your card was declined.").
     #[error("{0}")]
-    Api(String),
+    Api(StripeFailure),
     /// The object does not exist (404, e.g. a customer already deleted).
     #[error("{0}")]
-    Missing(String),
+    Missing(StripeFailure),
     /// Stripe failed or throttled (5xx, 429): the same request, under the
     /// same idempotency key, may be retried.
     #[error("Stripe request failed: {0}")]
-    Server(String),
+    Server(StripeFailure),
     #[error("Stripe request failed: {0}")]
     Request(String),
+}
+
+/// What Stripe said about a refused request. The message can quote what was
+/// sent (an email, a phone number): show it to the person who sent it, but
+/// log and store [`StripeError::code`] only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StripeFailure {
+    pub message: String,
+    /// Stripe's `error.code`, else `error.type`, else `http_<status>`.
+    pub code: String,
+}
+
+impl std::fmt::Display for StripeFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl StripeFailure {
+    fn new(message: impl Into<String>, code: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            code: code.into(),
+        }
+    }
 }
 
 impl StripeError {
     /// Worth retrying later with the same idempotency key.
     pub const fn is_retryable(&self) -> bool {
         matches!(self, Self::Server(_) | Self::Request(_))
+    }
+
+    /// A short reason safe to log and store: Stripe's error code or type,
+    /// never its message.
+    pub fn code(&self) -> &str {
+        match self {
+            Self::NotConfigured => "not_configured",
+            Self::Api(failure) | Self::Missing(failure) | Self::Server(failure) => &failure.code,
+            Self::Request(_) => "request_failed",
+        }
     }
 }
 
@@ -134,17 +169,26 @@ impl Stripe {
         let body: Value = match response.json().await {
             Ok(body) => body,
             Err(_) if status.is_server_error() => {
-                return Err(StripeError::Server(status.to_string()));
+                return Err(StripeError::Server(StripeFailure::new(
+                    status.to_string(),
+                    format!("http_{}", status.as_u16()),
+                )));
             }
             Err(err) => return Err(StripeError::Request(err.without_url().to_string())),
         };
         if status.is_success() {
             return Ok(body);
         }
-        let message = body["error"]["message"]
+        let error = &body["error"];
+        let code = error["code"]
             .as_str()
-            .unwrap_or("Stripe request failed")
-            .to_string();
+            .or_else(|| error["type"].as_str())
+            .filter(|code| !code.is_empty())
+            .map_or_else(|| format!("http_{}", status.as_u16()), str::to_string);
+        let message = StripeFailure::new(
+            error["message"].as_str().unwrap_or("Stripe request failed"),
+            code,
+        );
         Err(
             if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 StripeError::Server(message)
@@ -523,7 +567,9 @@ pub struct NewSubscription<'a> {
 impl Stripe {
     /// Whether the key is a test-mode key (`sk_test_...`).
     pub fn is_test_mode(&self) -> bool {
-        self.key.as_deref().is_some_and(|key| key.starts_with("sk_test_"))
+        self.key
+            .as_deref()
+            .is_some_and(|key| key.starts_with("sk_test_"))
     }
 
     /// Active prices by lookup key (up to 10 keys).
@@ -634,9 +680,10 @@ impl Stripe {
         payment_method: &str,
     ) -> Result<Value, StripeError> {
         if !self.is_test_mode() {
-            return Err(StripeError::Api(
-                "Test payment methods need a test-mode key".into(),
-            ));
+            return Err(StripeError::Api(StripeFailure::new(
+                "Test payment methods need a test-mode key",
+                "test_mode_required",
+            )));
         }
         self.post_keyed(
             "/v1/setup_intents",
@@ -688,10 +735,7 @@ impl Stripe {
                 "payment_settings[payment_method_types][]".into(),
                 "us_bank_account".into(),
             ),
-            (
-                "collection_method".into(),
-                "charge_automatically".into(),
-            ),
+            ("collection_method".into(), "charge_automatically".into()),
             (
                 "metadata[company_id]".into(),
                 subscription.company_id.to_string(),

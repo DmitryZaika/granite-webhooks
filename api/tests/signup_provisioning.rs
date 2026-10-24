@@ -332,7 +332,50 @@ async fn completion_provisions_the_company_and_subscription(pool: MySqlPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(consents, 4);
+    // Four checkboxes; the terms one records terms, privacy and DPA apart.
+    assert_eq!(consents, 6);
+    let documents: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT kind, document_version, document_sha256 FROM consent_records
+          WHERE signup_intent_id = ? ORDER BY id",
+    )
+    .bind(&id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let terms: Vec<(&str, Option<&str>)> = documents
+        .iter()
+        .filter(|(kind, _, _)| kind == "terms")
+        .map(|(_, version, sha)| (version.as_str(), sha.as_deref()))
+        .collect();
+    assert_eq!(
+        terms,
+        [
+            (consent::TERMS_VERSION, Some(consent::TERMS_SHA256)),
+            (consent::PRIVACY_VERSION, Some(consent::PRIVACY_SHA256)),
+            (consent::DPA_VERSION, Some(consent::DPA_SHA256)),
+        ]
+    );
+    let amounts: Value = serde_json::from_str(
+        &sqlx::query_scalar::<_, String>(
+            "SELECT CAST(amounts_and_dates AS CHAR) FROM consent_records
+              WHERE signup_intent_id = ? AND kind = 'onboarding_fee'",
+        )
+        .bind(&id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    let deadline: chrono::NaiveDate = amounts["onboarding_deadline_on"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        amounts["onboarding_fee_charge_on"],
+        json!((deadline + Duration::days(7)).to_string())
+    );
+    assert_eq!(amounts["extra_user_cents"], 3000);
 
     let addons: Vec<String> = sqlx::query_scalar(
         "SELECT addon_key FROM company_addons
@@ -431,7 +474,7 @@ async fn a_lost_subscription_answer_is_resumed_without_a_second_subscription(poo
             &id
         )
         .await,
-        4
+        6
     );
     assert_eq!(env.notices("owner@lost.test"), (1, 1, 1));
 }
@@ -448,12 +491,20 @@ async fn the_job_finishes_a_signup_stopped_by_a_stripe_outage(pool: MySqlPool) {
     let err = env.complete(&id).await.unwrap_err();
     assert_eq!(code(&err), (503, "provisioning_retry"));
 
-    // Within 10 minutes of the failure the job leaves it alone.
+    // One failed run: the job waits 20 minutes before the next.
     let early = env.job().await;
     assert_eq!(early["resumed"], 0);
+    sqlx::query(
+        "UPDATE signup_intents SET updated_at = updated_at - INTERVAL 15 MINUTE WHERE id = ?",
+    )
+    .bind(&id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(env.job().await["resumed"], 0);
 
     sqlx::query(
-        "UPDATE signup_intents SET updated_at = updated_at - INTERVAL 11 MINUTE WHERE id = ?",
+        "UPDATE signup_intents SET updated_at = updated_at - INTERVAL 6 MINUTE WHERE id = ?",
     )
     .bind(&id)
     .execute(&pool)
@@ -501,7 +552,7 @@ async fn two_completions_at_once_make_one_company(pool: MySqlPool) {
             &id
         )
         .await,
-        4
+        6
     );
     assert_eq!(env.notices(email), (1, 1, 1));
 
@@ -743,4 +794,126 @@ async fn the_job_expires_abandoned_signups_and_reconciles_seats_daily(pool: MySq
         (legacy_status.as_str(), plan_source.as_str()),
         ("active", "legacy")
     );
+}
+
+#[test_db::test(seed)]
+async fn a_signup_stuck_past_26_hours_is_given_up_with_one_staff_alert(pool: MySqlPool) {
+    let env = Env::new(&pool).await;
+    let stuck = env
+        .intent_row(
+            "owner@stuck.test",
+            "Stuck Stone",
+            "verified",
+            Duration::hours(30),
+        )
+        .await;
+    let customer = env.intent(&stuck).await.stripe_customer_id.unwrap();
+    let backing_off = env
+        .intent_row(
+            "owner@wait.test",
+            "Wait Stone",
+            "verified",
+            Duration::hours(3),
+        )
+        .await;
+    let now = Env::now();
+    sqlx::query(
+        "UPDATE signup_intents
+            SET status = 'provisioning', accepted_at = ?, updated_at = ?, provision_attempts = 12,
+                last_error = 'Stripe error api_error', expires_at = ?
+          WHERE id = ?",
+    )
+    .bind(now - Duration::hours(27))
+    .bind(now - Duration::hours(3))
+    .bind(now + Duration::hours(1))
+    .bind(&stuck)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Three failed runs: the next one waits 80 minutes after the last.
+    sqlx::query(
+        "UPDATE signup_intents
+            SET status = 'provisioning', accepted_at = ?, updated_at = ?, provision_attempts = 3
+          WHERE id = ?",
+    )
+    .bind(now - Duration::hours(2))
+    .bind(now - Duration::minutes(30))
+    .bind(&backing_off)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let run = env.job().await;
+    assert_eq!(run["given_up"], 1);
+    assert_eq!(run["resumed"], 0);
+    assert_eq!(run["customers_deleted"], 1);
+    let gone = env.intent(&stuck).await;
+    assert_eq!(gone.status, intent::SignupStatus::Expired);
+    assert_eq!(gone.password_hash, "");
+    assert!(!env.stripe.lock().unwrap().customers.contains_key(&customer));
+    assert_eq!(gone.stripe_customer_id, None);
+    assert_eq!(
+        env.intent(&backing_off).await.status,
+        intent::SignupStatus::Provisioning
+    );
+
+    let hashed = api::signup::funnel::distinct_id(&stuck);
+    {
+        let sink = env.sink.lock().unwrap();
+        assert_eq!(sink.telegrams.len(), 1);
+        let text = sink.telegrams[0]["message"].as_str().unwrap();
+        assert!(text.contains(&hashed), "{text}");
+        assert!(!text.contains(&stuck));
+        assert!(text.contains("Stripe error api_error"));
+        let emails = sink.emails_to(STAFF_EMAIL);
+        assert_eq!(emails.len(), 1);
+        assert!(emails[0]["body"].as_str().unwrap().contains(&hashed));
+    }
+
+    // Given up once: the next run alerts no one.
+    let again = env.job().await;
+    assert_eq!(again["given_up"], 0);
+    assert_eq!(env.sink.lock().unwrap().telegrams.len(), 1);
+}
+
+#[test_db::test(seed)]
+async fn a_refused_signup_whose_customer_survived_is_cleaned_up_by_the_job(pool: MySqlPool) {
+    let env = Env::new(&pool).await;
+    let id = env
+        .ready_signup("owner@kept.test", "Kept Stone", true)
+        .await;
+    let customer = env.intent(&id).await.stripe_customer_id.unwrap();
+    sqlx::query(
+        "INSERT INTO users (email, password, name, is_employee, company_id)
+         VALUES ('owner@kept.test', '', 'Someone', 1, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    env.stripe
+        .lock()
+        .unwrap()
+        .fail(Method::DELETE, "/v1/customers/", FailMode::Before, 1);
+
+    let err = env.complete(&id).await.unwrap_err();
+    assert_eq!(code(&err), (409, "email_taken"));
+    let refused = env.intent(&id).await;
+    assert_eq!(refused.status, intent::SignupStatus::Expired);
+    assert_eq!(
+        refused.stripe_customer_id.as_deref(),
+        Some(customer.as_str())
+    );
+    assert!(env.stripe.lock().unwrap().customers.contains_key(&customer));
+
+    let run = env.job().await;
+    assert_eq!(run["customers_deleted"], 1);
+    assert!(!env.stripe.lock().unwrap().customers.contains_key(&customer));
+    assert_eq!(env.intent(&id).await.stripe_customer_id, None);
+}
+
+#[test]
+fn resumes_back_off_from_ten_minutes_to_two_hours() {
+    use api::signup::maintenance::resume_wait;
+    let minutes: Vec<i64> = (0..7).map(|n| resume_wait(n).num_minutes()).collect();
+    assert_eq!(minutes, [10, 20, 40, 80, 120, 120, 120]);
 }

@@ -286,7 +286,10 @@ async fn only_a_self_serve_company_needs_no_subdomain_infra(pool: MySqlPool) {
         .unwrap();
     let self_serve = infra().await;
     assert_eq!(self_serve["done"], true);
-    assert_eq!(self_serve["detail"], "Not needed: this company has no subdomain");
+    assert_eq!(
+        self_serve["detail"],
+        "Not needed: this company has no subdomain"
+    );
 }
 
 #[test_db::test(seed)]

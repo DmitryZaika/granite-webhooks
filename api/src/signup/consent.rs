@@ -10,7 +10,7 @@
 use super::RequestMeta;
 use super::intent::Intent;
 use crate::billing::catalog::{
-    Catalog, Quote, QuoteLineKind, onboarding_deadline, signup_day, trial_end,
+    Catalog, INCLUDED_USERS, Quote, QuoteLineKind, onboarding_deadline, signup_day, trial_end,
 };
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -108,6 +108,8 @@ pub struct ConsentFacts {
     pub trial_end_at: NaiveDateTime,
     /// When the onboarding deadline passes (UTC).
     pub deadline_at: NaiveDateTime,
+    /// The price of each user above the included ones, in cents.
+    pub extra_user_cents: i64,
 }
 
 /// The facts of `intent` at `now`, priced from `catalog`.
@@ -119,8 +121,49 @@ pub fn facts(catalog: &Catalog, intent: &Intent, now: DateTime<Utc>) -> ConsentF
         deadline_at: intent
             .deadline_at
             .unwrap_or_else(|| onboarding_deadline(now)),
+        extra_user_cents: catalog.extra_user.unit_cents,
     }
 }
+
+/// What the current consent texts state as fixed amounts: they must equal
+/// the catalog's, or the texts would promise a price Stripe does not charge.
+pub const STATED_EXTRA_USER_CENTS: i64 = 3_000;
+pub const STATED_INCLUDED_USERS: i64 = 10;
+
+/// Why the catalog no longer matches the consent texts, or `None`.
+pub fn catalog_mismatch(catalog: &Catalog) -> Option<String> {
+    let mut problems = Vec::new();
+    if catalog.extra_user.unit_cents != STATED_EXTRA_USER_CENTS {
+        problems.push(format!(
+            "the extra-user price is {} but the consent texts say {}",
+            money(catalog.extra_user.unit_cents),
+            money(STATED_EXTRA_USER_CENTS)
+        ));
+    }
+    if INCLUDED_USERS != STATED_INCLUDED_USERS {
+        problems.push(format!(
+            "the base plan includes {INCLUDED_USERS} users but the consent texts say {STATED_INCLUDED_USERS}"
+        ));
+    }
+    (!problems.is_empty()).then(|| problems.join("; "))
+}
+
+/// The documents a consent row records: the terms checkbox accepts three,
+/// one row each (04-legal.md section 7).
+fn recorded_documents(consent: &RenderedConsent) -> Vec<(&'static str, Option<&'static str>)> {
+    if consent.kind == ConsentKind::Terms {
+        vec![
+            (TERMS_VERSION, Some(TERMS_SHA256)),
+            (PRIVACY_VERSION, Some(PRIVACY_SHA256)),
+            (DPA_VERSION, Some(DPA_SHA256)),
+        ]
+    } else {
+        vec![(consent.document_version, consent.document_sha256)]
+    }
+}
+
+/// The onboarding fee is charged this long after its notice (at the deadline).
+pub const ONBOARDING_FEE_NOTICE_DAYS: u64 = 7;
 
 pub const AUTO_RENEWAL_VERSION: &str = "auto-renewal-2026-10-v1";
 pub const PER_USER_PRICING_VERSION: &str = "per-user-pricing-2026-10-v1";
@@ -246,9 +289,8 @@ pub fn render(facts: &ConsentFacts, app_url: &str) -> Vec<RenderedConsent> {
 pub fn all_accepted(rendered: &[RenderedConsent], given: &[ConsentAcceptance]) -> bool {
     rendered.iter().all(|consent| {
         given.iter().any(|accepted| {
-            accepted.kind == consent.kind
-                && accepted.version == consent.version
-                && accepted.text_sha256 == consent.sha256
+            let same_text = accepted.text_sha256 == consent.sha256;
+            accepted.kind == consent.kind && accepted.version == consent.version && same_text
         })
     })
 }
@@ -288,7 +330,7 @@ fn amounts_and_dates(facts: &ConsentFacts, payment: &PaymentFacts) -> serde_json
         "base_cents": line_cents(QuoteLineKind::Base),
         "base_and_addons_cents": quote.base_and_addons_cents,
         "extra_users": quote.extra_users,
-        "extra_user_cents": line_cents(QuoteLineKind::ExtraUsers),
+        "extra_user_cents": facts.extra_user_cents,
         "users_estimate": quote.users,
         "addons": addons,
         "tax": "plus applicable sales tax",
@@ -297,7 +339,8 @@ fn amounts_and_dates(facts: &ConsentFacts, payment: &PaymentFacts) -> serde_json
         "onboarding_fee_cents": quote.fee_cents,
         "onboarding_deadline_on": quote.deadline_on,
         "onboarding_deadline_at": stamp(facts.deadline_at),
-        "onboarding_fee_notice_days": 7,
+        "onboarding_fee_notice_days": ONBOARDING_FEE_NOTICE_DAYS,
+        "onboarding_fee_charge_on": quote.deadline_on + chrono::Days::new(ONBOARDING_FEE_NOTICE_DAYS),
         "grace_period_days": 7,
         "payment_method_type": payment.method_type,
         "payment_method_last4": payment.last4,
@@ -309,9 +352,11 @@ fn amounts_and_dates(facts: &ConsentFacts, payment: &PaymentFacts) -> serde_json
     })
 }
 
-/// One `consent_records` row per rendered checkbox (source `self_serve`,
-/// `signup_intent_id` set, company and user still null), inside the caller's
-/// transaction.
+/// Records the accepted consents, inside the caller's transaction.
+///
+/// One `consent_records` row per rendered checkbox and document it accepts
+/// (the terms checkbox: terms, privacy and DPA), source `self_serve`,
+/// `signup_intent_id` set, company and user still null.
 pub async fn insert_records(
     conn: &mut MySqlConnection,
     signup_id: &str,
@@ -322,7 +367,15 @@ pub async fn insert_records(
     accepted_at: NaiveDateTime,
 ) -> sqlx::Result<()> {
     let amounts = amounts_and_dates(facts, payment).to_string();
-    for consent in rendered {
+    let rows: Vec<(&RenderedConsent, (&str, Option<&str>))> = rendered
+        .iter()
+        .flat_map(|consent| {
+            recorded_documents(consent)
+                .into_iter()
+                .map(move |document| (consent, document))
+        })
+        .collect();
+    for (consent, (document_version, document_sha256)) in rows {
         sqlx::query(
             "INSERT INTO consent_records
                (signup_intent_id, source, kind, document_version, document_sha256,
@@ -332,8 +385,8 @@ pub async fn insert_records(
         )
         .bind(signup_id)
         .bind(consent.kind.as_str())
-        .bind(consent.document_version)
-        .bind(consent.document_sha256)
+        .bind(document_version)
+        .bind(document_sha256)
         .bind(&consent.text)
         .bind(&consent.sha256)
         .bind(&amounts)
@@ -379,6 +432,7 @@ mod tests {
             },
             trial_end_at: day(2027, 1, 23).and_hms_opt(5, 0, 0).unwrap(),
             deadline_at: day(2026, 11, 22).and_hms_opt(17, 0, 0).unwrap(),
+            extra_user_cents: 3_000,
         }
     }
 

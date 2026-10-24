@@ -310,13 +310,12 @@ impl FakeStripe {
                     if let Some(Value::Array(items)) = subscription
                         .get_mut("items")
                         .and_then(|i| i.get_mut("data"))
+                        && let Some(item) = items.iter_mut().find(|item| item["id"] == *id)
                     {
-                        if let Some(item) = items.iter_mut().find(|item| item["id"] == *id) {
-                            if let Some(quantity) = quantity {
-                                item["quantity"] = json!(quantity);
-                            }
-                            return ok(item.clone());
+                        if let Some(quantity) = quantity {
+                            item["quantity"] = json!(quantity);
                         }
+                        return ok(item.clone());
                     }
                 }
                 missing()
@@ -326,13 +325,12 @@ impl FakeStripe {
                     if let Some(Value::Array(items)) = subscription
                         .get_mut("items")
                         .and_then(|i| i.get_mut("data"))
+                        && let Some(index) = items.iter().position(|item| item["id"] == *id)
                     {
-                        if let Some(index) = items.iter().position(|item| item["id"] == *id) {
-                            items.remove(index);
-                            return ok(
-                                json!({ "id": id, "object": "subscription_item", "deleted": true }),
-                            );
-                        }
+                        items.remove(index);
+                        return ok(
+                            json!({ "id": id, "object": "subscription_item", "deleted": true }),
+                        );
                     }
                 }
                 missing()
