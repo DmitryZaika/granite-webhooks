@@ -647,16 +647,18 @@ async fn emails_per_month(
     sql.build_query_as().fetch_all(pool).await
 }
 
-async fn sms_per_month(
+async fn sms_per_month_of(
     pool: &MySqlPool,
     company: i32,
     provider: SmsProvider,
     f: &Filters,
 ) -> sqlx::Result<Vec<MonthCount>> {
-    let (table, agent) = match provider {
-        SmsProvider::Ringcentral => ("ringcentral_sms", "ringcentral_extension_id"),
-        SmsProvider::Cloudtalk => ("cloudtalk_sms", "cloudtalk_agent_id"),
-    };
+    // A Telnyx text's agent is its sender's user id.
+    let table = provider.sms_table();
+    let agent = provider.agent_column().map_or_else(
+        || "CAST(ru.id AS CHAR)".to_string(),
+        |column| format!("ru.{column}"),
+    );
     let mut sql = QueryBuilder::new(format!(
         "SELECT DATE_FORMAT(cs.created_date, '%Y-%m') AS month, COUNT(*) AS count
            FROM {table} cs
@@ -671,7 +673,7 @@ async fn sms_per_month(
             .push_bind(rep.clone())
             .push(format!(
                 " OR EXISTS (SELECT 1 FROM users ru WHERE ru.company_id = cs.company_id
-                           AND ru.is_deleted = 0 AND ru.{agent} = cs.agent AND ru.name = "
+                           AND ru.is_deleted = 0 AND {agent} = cs.agent AND ru.name = "
             ));
         sql.push_bind(rep.clone()).push("))");
     }
@@ -729,10 +731,22 @@ pub async fn overview(
     .bind(company)
     .fetch_all(pool)
     .await?;
-    let sms_per_month = match features.sms_provider() {
-        Some(provider) => Some(sms_per_month(pool, company, provider, &f).await?),
+    let mut sms_per_month = match features.sms_provider() {
+        Some(provider) => Some(sms_per_month_of(pool, company, provider, &f).await?),
         None => None,
     };
+    // Texts through Telnyx count too, month by month.
+    if features.telnyx_sms {
+        let mut months = sms_per_month.take().unwrap_or_default();
+        for telnyx in sms_per_month_of(pool, company, SmsProvider::Telnyx, &f).await? {
+            match months.iter_mut().find(|month| month.month == telnyx.month) {
+                Some(month) => month.count += telnyx.count,
+                None => months.push(telnyx),
+            }
+        }
+        months.sort_by(|a, b| a.month.cmp(&b.month));
+        sms_per_month = Some(months);
+    }
     Ok(Json(Overview {
         deals_by_rep: deals_by_rep(pool, company, &f).await?,
         deals_by_stage: deals_by_stage(pool, company, &f).await?,

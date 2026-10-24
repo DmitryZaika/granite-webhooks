@@ -1,7 +1,8 @@
 //! Calls through the company's telephony provider.
 //!
 //! - `GET /v1/calls/{provider}` → a deal's or customer's calls, in the
-//!   `CloudTalk` call shape (`RingCentral` rows are converted)
+//!   `CloudTalk` call shape (`RingCentral` rows are converted, and so are
+//!   Granite Phone calls from our own call log, `telnyx`)
 //! - `POST /v1/calls/{provider}` → call a number: `CloudTalk` rings the
 //!   caller's agent first, `RingCentral` rings their line (`RingOut`)
 //! - `POST /v1/call-transcripts` → a recorded call's transcript
@@ -11,8 +12,10 @@
 //! `api.cloudtalk.call`, `api.ringcentral.ringout` and `userCallMedia` routes.
 
 mod audio;
+pub mod provider;
 pub mod recording;
 pub mod ringcentral;
+pub mod telnyx;
 mod transcript;
 
 use crate::auth::EmployeeUser;
@@ -27,6 +30,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use common::telephony::cloudtalk;
+use provider::CallProvider;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -43,27 +47,54 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(audio::recording))
 }
 
-/// Query of `GET /v1/calls/{provider}`: a deal, or one or two phones.
+/// Query of `GET /v1/calls/{provider}`: a deal, a customer, or one or two
+/// phones.
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct CallsQuery {
     /// Calls with the deal's customer since the deal was created.
     pub deal_id: Option<i64>,
+    /// Or: calls with this customer of the company (their phone and phone
+    /// 2, plus `phone`/`phone2` when sent; `telnyx` also counts calls
+    /// logged to them). None for another company's customer.
+    pub customer_id: Option<i32>,
     /// Or: calls with this phone.
     pub phone: Option<String>,
     /// And this one.
     pub phone2: Option<String>,
-    /// From this day (`YYYY-MM-DD`), with `phone`.
+    /// From this day (`YYYY-MM-DD`, UTC for `telnyx`), with `phone` or
+    /// `customer_id`.
     pub date_from: Option<String>,
-    /// To this day, with `phone`.
+    /// To this day (included), with `phone` or `customer_id`.
     pub date_to: Option<String>,
 }
 
 /// `GET /v1/calls/{provider}`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Calls {
-    /// Calls in the `CloudTalk` shape (`Cdr`, `Contact`, `Agent`, …).
+    /// Calls in the `CloudTalk` shape (`Cdr`, `Contact`, `Agent`, …). A
+    /// `telnyx` call's `Cdr.id` and `Cdr.recording_link` are `tx_<call id>`
+    /// (for `POST /v1/call-transcripts` and the recording route; the link
+    /// is empty when not recorded), times are RFC 3339 UTC, `Agent` is the
+    /// user who placed or answered it, `CallNumber.internal_name` our
+    /// number's label, and a `Telnyx` part adds `call_id`, `status`
+    /// (`answered`, `missed`, `voicemail`, `ai_message`, `declined`,
+    /// `busy`, `no_answer`, `failed`, `canceled`), `line_label`,
+    /// `our_number`, `customer_id`, `deal_id`, `transcript_status`,
+    /// `ai_note` (null until written), `note_added` (the AI note is on the
+    /// deal), `via_cell`, `spam_likely` and `may_hear`: false when the
+    /// caller may not hear the call (only its user, the users of its direct
+    /// line, for an unanswered incoming call the users its line rings, its
+    /// deal's owner, admins and sales managers may), and then `recorded` is
+    /// false, `recording_link` empty and `ai_note` null.
     pub items: Vec<Value>,
+}
+
+/// The start of day `YYYY-MM-DD` (UTC), and of the day after it.
+fn day_bounds(day: Option<&str>) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    let day = chrono::NaiveDate::parse_from_str(day?.trim().get(..10)?, "%Y-%m-%d").ok()?;
+    let start = day.and_hms_opt(0, 0, 0)?.and_utc();
+    Some((start, start + chrono::Duration::days(1)))
 }
 
 /// `+1XXXXXXXXXX` of a US phone, or a `+` number as typed.
@@ -137,28 +168,39 @@ pub async fn cloudtalk_calls(
 
 #[derive(sqlx::FromRow)]
 struct DealPhones {
+    customer_id: i32,
     phone: Option<String>,
     phone_2: Option<String>,
     created_at: Option<DateTime<Utc>>,
 }
 
+/// Most Granite Phone calls one list answers (newest first).
+const TELNYX_CALLS_LIMIT: i64 = 200;
+
 /// List calls with a customer
 ///
 /// With `deal_id`: calls with the deal's customer since the deal was created
-/// (none for another company's deal). With `phone`/`phone2`: every call with
-/// those numbers in the date range. Empty when the company has not set up
-/// the provider.
+/// (none for another company's deal). With `customer_id`: calls with the
+/// customer's numbers (none for another company's customer). With
+/// `phone`/`phone2`: every call with those numbers in the date range.
+/// Empty when the company has not set up the provider. `telnyx` reads the
+/// company's Granite Phone call log (ended calls, newest first, at most
+/// 200; calls logged to the customer count too; recordings and AI notes
+/// only of the calls the caller may hear, `Telnyx.may_hear`): call the
+/// recording route with `Cdr.recording_link` and `POST /v1/call-transcripts`
+/// with `Cdr.id`.
 #[utoipa::path(
     get,
     path = "/v1/calls/{provider}",
     operation_id = "list_calls",
     tag = "calls",
-    params(("provider" = SmsProvider, Path, description = "Telephony provider"), CallsQuery),
+    params(("provider" = inline(CallProvider), Path, description = "Telephony provider: `cloudtalk`, `ringcentral` or `telnyx`"), CallsQuery),
     responses(
         (status = 200, description = "Calls", body = Calls),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
         (status = 429, description = "RingCentral is rate limiting; try again in a minute", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
         (status = 502, description = "The provider failed", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -166,13 +208,15 @@ struct DealPhones {
 pub async fn list(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
-    Path(provider): Path<SmsProvider>,
+    Path(provider): Path<CallProvider>,
     Query(query): Query<CallsQuery>,
 ) -> ApiResult<Response> {
-    let (phones, date_from) = match query.deal_id {
-        Some(deal_id) => {
+    let empty = || Ok(Json(Calls { items: Vec::new() }).into_response());
+    let (phones, customer_id, date_from) = match (query.deal_id, query.customer_id) {
+        (Some(deal_id), _) => {
             let deal: Option<DealPhones> = sqlx::query_as(
-                "SELECT c.phone, c.phone_2, d.created_at FROM deals d JOIN customers c ON c.id = d.customer_id
+                "SELECT c.id AS customer_id, c.phone, c.phone_2, d.created_at
+                   FROM deals d JOIN customers c ON c.id = d.customer_id
                   WHERE d.id = ? AND c.company_id = ? AND d.deleted_at IS NULL",
             )
             .bind(deal_id)
@@ -180,24 +224,66 @@ pub async fn list(
             .fetch_optional(&state.pool)
             .await?;
             let Some(deal) = deal else {
-                return Ok(Json(Calls { items: Vec::new() }).into_response());
+                return empty();
             };
             (
                 vec![deal.phone, deal.phone_2],
+                Some(deal.customer_id),
                 deal.created_at.map(|at| at.format("%Y-%m-%d").to_string()),
             )
         }
-        None => (vec![query.phone, query.phone2], query.date_from),
+        (None, Some(customer_id)) => {
+            let customer: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+                "SELECT phone, phone_2 FROM customers WHERE id = ? AND company_id = ?",
+            )
+            .bind(customer_id)
+            .bind(user.company_id)
+            .fetch_optional(&state.pool)
+            .await?;
+            let Some((phone, phone_2)) = customer else {
+                return empty();
+            };
+            (
+                vec![phone, phone_2, query.phone, query.phone2],
+                Some(customer_id),
+                query.date_from,
+            )
+        }
+        (None, None) => (vec![query.phone, query.phone2], None, query.date_from),
     };
-    let phones: Vec<String> = phones
+    let mut phones: Vec<String> = phones
         .iter()
         .flatten()
         .filter_map(|phone| to_e164(phone))
         .collect();
+    let mut seen = HashSet::new();
+    phones.retain(|phone| seen.insert(phone.clone()));
     let date_to = query.deal_id.is_none().then_some(query.date_to).flatten();
+    if provider == CallProvider::Telnyx {
+        let numbers: Vec<String> = phones
+            .iter()
+            .filter_map(|phone| crate::phone::numbers::last10(phone))
+            .collect();
+        let calls = telnyx::list(
+            &state.pool,
+            user.company_id,
+            crate::phone::calls::Hearer::of(&user),
+            &telnyx::Filter {
+                numbers: &numbers,
+                customer_id,
+                from: day_bounds(date_from.as_deref()).map(|(start, _)| start),
+                to: day_bounds(date_to.as_deref()).map(|(_, end)| end),
+                limit: TELNYX_CALLS_LIMIT,
+                ..telnyx::Filter::default()
+            },
+        )
+        .await?;
+        let items = calls.iter().map(telnyx::item).collect();
+        return Ok(Json(Calls { items }).into_response());
+    }
     let features = company_features(&state.pool, user.company_id).await?;
     let items = match provider {
-        SmsProvider::Cloudtalk if features.cloudtalk => {
+        CallProvider::Cloudtalk if features.cloudtalk => {
             match cloudtalk_calls(
                 &state,
                 user.company_id,
@@ -216,7 +302,7 @@ pub async fn list(
                 }
             }
         }
-        SmsProvider::Ringcentral if features.ringcentral => {
+        CallProvider::Ringcentral if features.ringcentral => {
             let fetch = ringcentral::Fetch {
                 pool: &state.pool,
                 client: &state.telephony_http,
@@ -379,6 +465,8 @@ pub async fn start(
                 Err(err) => Ok(refuse(StatusCode::BAD_GATEWAY, &cloudtalk_error(&err))),
             }
         }
+        // Telnyx calls start from Granite Phone (the app or the web phone).
+        SmsProvider::Telnyx => Ok(refuse(StatusCode::BAD_REQUEST, "unsupported_provider")),
         SmsProvider::Ringcentral => {
             if !features.ringcentral {
                 return Ok(refuse(StatusCode::FORBIDDEN, "ringcentral_not_configured"));

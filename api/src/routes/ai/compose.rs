@@ -497,8 +497,13 @@ async fn load_context(
             .bind(user.company_id)
             .fetch_optional(&state.pool)
             .await?;
-    let rep_phone = rep.and_then(|phones| {
-        <[_; 3]>::from(phones)
+    // Their own phone, else the Telnyx line they text from, else their
+    // CloudTalk or RingCentral number.
+    let telnyx_line = crate::phone::texting::user_line(&state.pool, user.company_id, user.id)
+        .await?
+        .map(|line| line.e164);
+    let rep_phone = rep.and_then(|(own, cloudtalk, ringcentral)| {
+        [own, telnyx_line, cloudtalk, ringcentral]
             .into_iter()
             .flatten()
             .map(|p| p.trim().to_string())

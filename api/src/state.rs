@@ -2,9 +2,12 @@ use crate::ai::Ai;
 use crate::billing::BillingPlan;
 use crate::billing::stripe::Stripe;
 use crate::maps::Maps;
+use crate::phone::PhoneConfig;
+use crate::push::Push;
 use crate::qbo::Qbo;
 use crate::storage::Storage;
 use crate::telegram::TelegramBots;
+use crate::telnyx::Telnyx;
 use crate::transcribe::Transcriber;
 use crate::webhooks_client::WebhooksClient;
 use axum::http::{Method, header};
@@ -94,6 +97,15 @@ pub struct AppState {
     /// `SIGNATURE_SESSION_SECRET`: keys the native signer's CSRF token
     /// (32+ bytes); unset, native signing links answer 503.
     pub signing_session_secret: Option<Arc<str>>,
+    /// Telnyx, for Granite Phone (a stub in tests; disabled without
+    /// `TELNYX_API_KEY`).
+    pub telnyx: Telnyx,
+    /// FCM pushes to the Granite Phone app (disabled without a service
+    /// account).
+    pub push: Push,
+    /// Granite Phone settings (`PHONE_*`, `TELNYX_PUBLIC_KEY`,
+    /// `TELNYX_FALLBACK_TEXML_URL`).
+    pub phone: PhoneConfig,
 }
 
 /// Where the SES identity lists come from.
@@ -172,7 +184,28 @@ impl AppState {
             dns: crate::deliverability::AppDns::Fixed(Arc::default()),
             ses: SesIdentities::Fixed(None),
             signing_session_secret: None,
+            telnyx: Telnyx::disabled(),
+            push: Push::disabled(),
+            phone: PhoneConfig::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_telnyx(mut self, telnyx: Telnyx) -> Self {
+        self.telnyx = telnyx;
+        self
+    }
+
+    #[must_use]
+    pub fn with_push(mut self, push: Push) -> Self {
+        self.push = push;
+        self
+    }
+
+    #[must_use]
+    pub fn with_phone_config(mut self, phone: PhoneConfig) -> Self {
+        self.phone = phone;
+        self
     }
 
     #[must_use]
@@ -335,8 +368,12 @@ impl AppState {
         let secret = std::env::var("SESSION_SECRET").map_err(|_| MissingSessionSecret)?;
         let origins = std::env::var("API_ALLOWED_ORIGINS")
             .unwrap_or_else(|_| DEFAULT_ALLOWED_ORIGINS.to_string());
+        let storage = Storage::from_env();
         Ok(Self::new(pool, &secret, &origins)
-            .with_storage(Storage::from_env())
+            .with_push(Push::from_env(&storage))
+            .with_storage(storage)
+            .with_telnyx(Telnyx::from_env())
+            .with_phone_config(PhoneConfig::from_env())
             .with_telegram(TelegramBots::from_env())
             .with_webhooks(WebhooksClient::from_env())
             .with_maps(Maps::from_env())

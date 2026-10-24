@@ -49,6 +49,8 @@ hayro = "0.8"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+# Ed25519 (Telnyx webhook signatures) and RS256 (the FCM service-account JWT).
+ring = "0.17"
 hickory-resolver = "0.25"
 
 [dev-dependencies]

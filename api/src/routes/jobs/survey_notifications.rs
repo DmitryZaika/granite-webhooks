@@ -12,10 +12,8 @@
 
 use super::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
-use crate::routes::company::queries::company_features;
-use crate::routes::events::notify::{customer_phone, office_manager};
+use crate::routes::events::notify::customer_phone;
 use crate::routes::sms::provider::{SmsProvider, phone10};
-use crate::routes::stats::schemas::SmsProvider as CompanyProvider;
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingEmail, OutgoingSms};
 use axum::Json;
@@ -230,7 +228,7 @@ struct DueChecklist {
 struct Sms {
     provider: SmsProvider,
     manager_id: i32,
-    agent_id: String,
+    seat: crate::routes::sms::send::Seat,
     phone_digits: String,
 }
 
@@ -242,10 +240,9 @@ async fn sms_target(
     let Some(customer_id) = customer_id else {
         return Ok(None);
     };
-    let Some(provider) = provider(state, company_id).await? else {
-        return Ok(None);
-    };
-    let Some(manager) = office_manager(&state.pool, company_id, provider).await? else {
+    let Some((provider, manager, seat)) =
+        crate::routes::events::notify::notice_sender(&state.pool, company_id).await?
+    else {
         return Ok(None);
     };
     let digits = customer_phone(&state.pool, company_id, customer_id)
@@ -255,19 +252,9 @@ async fn sms_target(
     Ok(digits.map(|phone_digits| Sms {
         provider,
         manager_id: manager.id,
-        agent_id: manager.agent_id,
+        seat,
         phone_digits,
     }))
-}
-
-async fn provider(state: &AppState, company_id: i32) -> Result<Option<SmsProvider>, sqlx::Error> {
-    Ok(company_features(&state.pool, company_id)
-        .await?
-        .sms_provider()
-        .map(|provider| match provider {
-            CompanyProvider::Cloudtalk => SmsProvider::Cloudtalk,
-            CompanyProvider::Ringcentral => SmsProvider::Ringcentral,
-        }))
 }
 
 /// Texts the survey; false when there is no line to text from or it failed.
@@ -284,14 +271,14 @@ async fn send_sms(
         provider: target.provider.as_str().to_string(),
         company_id,
         user_id: target.manager_id,
-        agent_id: target.agent_id,
+        agent_id: target.seat.agent_id.clone(),
         phone_digits: target.phone_digits,
         text: text.to_string(),
         attachments: Vec::new(),
         is_automated: true,
         idempotency_key: None,
     };
-    match state.webhooks.send_sms(&sms).await {
+    match crate::routes::sms::send::send_text(state, target.provider, &target.seat, &sms).await {
         Ok(_) => Ok(true),
         Err(failure) => {
             tracing::warn!(error = %failure.error, "checklist survey SMS failed");
@@ -383,7 +370,11 @@ async fn notify(
             .await
             .map(|()| Outcome::Sent));
     }
-    if is_reminder && provider(state, row.company_id).await? == Some(SmsProvider::Cloudtalk) {
+    let cloudtalk = crate::routes::company::queries::company_features(&state.pool, row.company_id)
+        .await?
+        .sms_provider()
+        == Some(SmsProvider::Cloudtalk);
+    if is_reminder && cloudtalk {
         if send_sms(state, row.company_id, row.customer_id, &text).await? {
             return Ok(Ok(Outcome::Sent));
         }

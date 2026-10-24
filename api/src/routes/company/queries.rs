@@ -12,6 +12,8 @@ struct FeatureRow {
     domain: Option<String>,
     cloudtalk: bool,
     ringcentral: bool,
+    telnyx: bool,
+    telnyx_sms: bool,
 }
 
 /// `company c` columns plus the platform-wide rollout defaults
@@ -63,7 +65,12 @@ pub async fn company_features(
                   AND c.ringcentral_refresh_token IS NOT NULL
                   AND c.ringcentral_access_expires IS NOT NULL
                   AND c.ringcentral_refresh_expires > UNIX_TIMESTAMP())
-                 OR ({rc_id} AND {rc_secret} AND {rc_jwt})) AS ringcentral
+                 OR ({rc_id} AND {rc_secret} AND {rc_jwt})) AS ringcentral,
+                EXISTS (SELECT 1 FROM telnyx_company_config t
+                         WHERE t.company_id = c.id AND t.enabled <> 0) AS telnyx,
+                EXISTS (SELECT 1 FROM telnyx_company_config t
+                         WHERE t.company_id = c.id AND t.enabled <> 0
+                           AND COALESCE(TRIM(t.messaging_profile_id), '') <> '') AS telnyx_sms
            FROM company c
            {ROLLOUT_JOINS}
           WHERE c.id = ?",
@@ -90,6 +97,8 @@ pub async fn company_features(
             inbound_email: false,
             cloudtalk: false,
             ringcentral: false,
+            telnyx: false,
+            telnyx_sms: false,
         },
         |row| CompanyFeatures {
             quickbooks_enabled: row.quickbooks_enabled,
@@ -100,6 +109,8 @@ pub async fn company_features(
             inbound_email: mail_domain(row.domain.as_deref()).is_some(),
             cloudtalk: row.cloudtalk,
             ringcentral: row.ringcentral,
+            telnyx: row.telnyx,
+            telnyx_sms: row.telnyx_sms,
         },
     ))
 }

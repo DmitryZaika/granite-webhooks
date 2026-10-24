@@ -7,7 +7,7 @@
 use crate::routes::company::queries::company_features;
 use crate::routes::emails::thread::from_email;
 use crate::routes::sms::provider::{SmsProvider, phone10};
-use crate::routes::stats::schemas::SmsProvider as CompanyProvider;
+use crate::routes::sms::send::Seat;
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingEmail, OutgoingSms};
 use chrono::{DateTime, Utc};
@@ -188,7 +188,29 @@ pub async fn office_manager(
     company_id: i32,
     provider: SmsProvider,
 ) -> Result<Option<OfficeManager>, sqlx::Error> {
-    let (agent, phone) = (provider.agent_column(), provider.phone_column());
+    let (Some(agent), Some(phone)) = (provider.agent_column(), provider.phone_column()) else {
+        // Telnyx: an office manager with a line, while the company texts
+        // through Telnyx; their user id is their agent id there.
+        if crate::phone::texting::texting_setup(pool, company_id)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        return sqlx::query_as(
+            "SELECT u.id, u.name, CAST(u.id AS CHAR) AS agent_id FROM users u
+               JOIN users_positions up ON up.user_id = u.id
+              WHERE up.company_id = ? AND up.position_id = ? AND u.is_deleted = 0
+                AND EXISTS (SELECT 1 FROM telnyx_number_users nu
+                              JOIN telnyx_numbers n ON n.id = nu.number_id AND n.company_id = up.company_id
+                             WHERE nu.user_id = u.id AND nu.can_call_from <> 0 AND n.active <> 0)
+              ORDER BY u.name LIMIT 1",
+        )
+        .bind(company_id)
+        .bind(OFFICE_MANAGER_POSITION)
+        .fetch_optional(pool)
+        .await;
+    };
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT u.id, u.name, TRIM(u.{agent}) AS agent_id FROM users u
            JOIN users_positions up ON up.user_id = u.id
@@ -200,6 +222,54 @@ pub async fn office_manager(
     .bind(OFFICE_MANAGER_POSITION)
     .fetch_optional(pool)
     .await
+}
+
+/// How an office manager texts on `provider`: on Telnyx from their line
+/// (`None` without one).
+pub async fn manager_seat(
+    pool: &MySqlPool,
+    company_id: i32,
+    provider: SmsProvider,
+    manager: &OfficeManager,
+) -> Result<Option<Seat>, sqlx::Error> {
+    if provider == SmsProvider::Telnyx {
+        return Ok(
+            crate::phone::texting::user_line(pool, company_id, manager.id)
+                .await?
+                .map(|line| Seat {
+                    agent_id: manager.agent_id.clone(),
+                    line: Some(line),
+                }),
+        );
+    }
+    Ok(Some(Seat {
+        agent_id: manager.agent_id.clone(),
+        line: None,
+    }))
+}
+
+/// Who texts the company's notices (bookings, surveys): an office manager
+/// with a Telnyx line while the company texts through Telnyx, else one with
+/// a line on the company's provider; with their provider and seat.
+pub async fn notice_sender(
+    pool: &MySqlPool,
+    company_id: i32,
+) -> Result<Option<(SmsProvider, OfficeManager, Seat)>, sqlx::Error> {
+    let features = company_features(pool, company_id).await?;
+    let mut providers = Vec::new();
+    if features.telnyx_sms {
+        providers.push(SmsProvider::Telnyx);
+    }
+    providers.extend(features.sms_provider());
+    for provider in providers {
+        let Some(manager) = office_manager(pool, company_id, provider).await? else {
+            continue;
+        };
+        if let Some(seat) = manager_seat(pool, company_id, provider, &manager).await? {
+            return Ok(Some((provider, manager, seat)));
+        }
+    }
+    Ok(None)
 }
 
 /// The customer's sales rep's phone, else the booker's.
@@ -307,26 +377,16 @@ pub async fn notify_booking(
         .fetch_optional(pool)
         .await?;
     let company_name = company_name.unwrap_or_else(|| "Our Company".to_string());
-    let provider = company_features(pool, booking.company_id)
-        .await?
-        .sms_provider()
-        .map(|provider| match provider {
-            CompanyProvider::Cloudtalk => SmsProvider::Cloudtalk,
-            CompanyProvider::Ringcentral => SmsProvider::Ringcentral,
-        });
-    let manager = match provider {
-        Some(provider) => office_manager(pool, booking.company_id, provider).await?,
-        None => None,
-    };
+    let sender = notice_sender(pool, booking.company_id).await?;
     let user_name = booking
         .user_name
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(str::to_string)
         .or_else(|| {
-            manager
+            sender
                 .as_ref()
-                .and_then(|m| m.name.clone())
+                .and_then(|(_, m, _)| m.name.clone())
                 .filter(|n| !n.trim().is_empty())
         })
         .unwrap_or_else(|| company_name.clone());
@@ -340,7 +400,7 @@ pub async fn notify_booking(
         booking.location,
     );
 
-    if let (Some(provider), Some(manager)) = (provider, &manager) {
+    if let Some((provider, manager, seat)) = &sender {
         let digits = customer_phone(pool, booking.company_id, booking.customer_id)
             .await?
             .map(|phone| phone10(&phone))
@@ -357,7 +417,7 @@ pub async fn notify_booking(
                 is_automated: true,
                 idempotency_key: None,
             };
-            match state.webhooks.send_sms(&sms).await {
+            match crate::routes::sms::send::send_text(state, *provider, seat, &sms).await {
                 Ok(_) => return Ok(Some(Channel::Sms)),
                 Err(failure) => {
                     tracing::warn!(error = %failure.error, "estimate booking text failed");

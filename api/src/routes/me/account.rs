@@ -738,7 +738,7 @@ async fn finished_setup_credit(
 /// Save my account
 ///
 /// Saves the user's details in their home company. A new password ends the
-/// user's other sessions. The texting line is checked with its provider (the
+/// user's other sessions and signs out their Granite Phone apps. The texting line is checked with its provider (the
 /// `RingCentral` extension is looked up from the number), and a number moved
 /// from `CloudTalk` to `RingCentral` brings its texting history along. A newly
 /// filled email name or signature completes its setup task, with its points.
@@ -792,6 +792,14 @@ pub async fn update_account(
         line.extension.as_ref(),
     )
     .await?;
+    if input.password.is_some() {
+        crate::phone::revoke::revoke_user_phones(
+            &state,
+            actor.user_id,
+            crate::phone::revoke::RevokeReason::PasswordChanged,
+        )
+        .await?;
+    }
     follow_ringcentral_link(&state, actor, &input, &before, &line).await;
     let credit = finished_setup_credit(&state, actor, &input, &before).await;
     Ok(Json(AccountSaved {

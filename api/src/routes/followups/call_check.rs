@@ -52,6 +52,30 @@ impl PhoneDigits {
     }
 }
 
+/// A provider's call id: `CloudTalk`'s or `RingCentral`'s number, or a
+/// Granite Phone call `tx_<id>`.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum CallId {
+    Number(i64),
+    Text(String),
+}
+
+impl CallId {
+    fn text(&self) -> String {
+        match self {
+            Self::Number(n) => n.to_string(),
+            Self::Text(text) => text.trim().to_string(),
+        }
+    }
+
+    /// A Granite Phone call: its transcript is ours (no waiting for the
+    /// provider) and the phone job gives it its call points.
+    fn is_telnyx(&self) -> bool {
+        matches!(self, Self::Text(text) if crate::routes::calls::telnyx::parse_token(text).is_some())
+    }
+}
+
 /// A finished outbound call.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CallCheck {
@@ -59,8 +83,9 @@ pub struct CallCheck {
     pub company_id: i32,
     /// The customer's phone.
     pub phone_digits: PhoneDigits,
-    /// The provider's call id.
-    pub call_id: i64,
+    /// The provider's call id: a number, or a Granite Phone call `tx_<id>`
+    /// (whose kept transcript is checked).
+    pub call_id: CallId,
     /// Seconds of talk.
     pub talking_time: i64,
     /// The provider says the call reached voicemail.
@@ -120,7 +145,13 @@ async fn transcribe_with_retry(
     state: &AppState,
     check: &CallCheck,
 ) -> Result<Transcript, CallTranscriptError> {
-    let call_id = check.call_id.to_string();
+    let call_id = check.call_id.text();
+    // Our own recordings are there or not: no waiting.
+    let attempts = if check.call_id.is_telnyx() {
+        1
+    } else {
+        RECORDING_ATTEMPTS
+    };
     let mut attempt = 0;
     loop {
         let caller = Caller {
@@ -143,7 +174,7 @@ async fn transcribe_with_retry(
                 | CallTranscriptError::FetchFailed
                 | CallTranscriptError::Empty
                 | CallTranscriptError::Provider(_)),
-            ) if attempt + 1 < RECORDING_ATTEMPTS => {
+            ) if attempt + 1 < attempts => {
                 tracing::info!(%err, attempt, "call recording not ready, retrying");
                 attempt += 1;
                 tokio::time::sleep(RECORDING_RETRY_DELAY).await;
@@ -162,6 +193,10 @@ async fn record_call_points(
     transcript: &str,
     voicemail: bool,
 ) {
+    // Granite Phone calls get their points from the phone job.
+    if check.call_id.is_telnyx() {
+        return;
+    }
     let result = async {
         if company_sms_provider(state, check.company_id).await? != Some(SmsProvider::Cloudtalk) {
             return Ok(());
@@ -179,7 +214,7 @@ async fn record_call_points(
                outcome = IF(phone_call_points.outcome = 'pending', new.outcome, phone_call_points.outcome)",
         )
         .bind(check.company_id)
-        .bind(check.call_id.to_string())
+        .bind(check.call_id.text())
         .bind(check.talking_time)
         .bind(digits)
         .bind(crate::voicemail::classify(voicemail, transcript))
@@ -191,7 +226,7 @@ async fn record_call_points(
     if let Err(err) = result {
         tracing::error!(
             ?err,
-            call_id = check.call_id,
+            call_id = %check.call_id.text(),
             "call points classification not saved"
         );
     }
@@ -205,7 +240,9 @@ fn preview(text: &str) -> Option<String> {
 /// Check an outbound call
 ///
 /// Whether the customer talked back on a rep's call. A conversation stops
-/// the customer's running SMS / email flows.
+/// the customer's running SMS / email flows. `call_id` may be a Granite
+/// Phone call `tx_<id>` (the transcript kept on it is checked); the API runs
+/// those checks itself.
 #[utoipa::path(
     post,
     path = "/v1/followups/call-check",
@@ -224,6 +261,12 @@ pub async fn call_check(
     _caller: JobCaller,
     JsonBody(check): JsonBody<CallCheck>,
 ) -> ApiResult<Json<CallCheckResult>> {
+    Ok(Json(check_call(&state, &check).await?))
+}
+
+/// The check of `POST /v1/followups/call-check`, for any caller (the phone
+/// job checks Granite Phone calls in-process).
+pub async fn check_call(state: &AppState, check: &CallCheck) -> sqlx::Result<CallCheckResult> {
     let skipped = |reason, transcript_preview| CallCheckResult {
         skipped: true,
         reason,
@@ -232,7 +275,7 @@ pub async fn call_check(
         transcript_preview,
     };
     if check.talking_time <= MIN_TALKING_SECONDS {
-        return Ok(Json(skipped("talking_time_too_short", None)));
+        return Ok(skipped("talking_time_too_short", None));
     }
     let phone = check.phone_digits.digits();
     if check.talking_time > CONVERSATION_TALKING_SECONDS {
@@ -243,22 +286,22 @@ pub async fn call_check(
             &phone,
         )
         .await?;
-        return Ok(Json(CallCheckResult {
+        return Ok(CallCheckResult {
             skipped: false,
             reason: "long_call",
             cancelled,
             customer_responded: true,
             transcript_preview: None,
-        }));
+        });
     }
-    let Ok(transcript) = transcribe_with_retry(&state, &check).await else {
-        return Ok(Json(skipped("transcription_unavailable", None)));
+    let Ok(transcript) = transcribe_with_retry(state, check).await else {
+        return Ok(skipped("transcription_unavailable", None));
     };
     // Points keep the text-only classifier; the decision below uses turns.
     let voicemail = check.is_voicemail || crate::voicemail::sounds_like_voicemail(&transcript.text);
-    record_call_points(&state, &check, &transcript.text, voicemail).await;
+    record_call_points(state, check, &transcript.text, voicemail).await;
     if !is_customer_conversation(&transcript, check.is_voicemail) {
-        return Ok(Json(skipped("voicemail", preview(&transcript.text))));
+        return Ok(skipped("voicemail", preview(&transcript.text)));
     }
     let cancelled = stop_after_customer_conversation(
         &state.pool,
@@ -267,13 +310,13 @@ pub async fn call_check(
         &phone,
     )
     .await?;
-    Ok(Json(CallCheckResult {
+    Ok(CallCheckResult {
         skipped: false,
         reason: "customer_conversation",
         cancelled,
         customer_responded: true,
         transcript_preview: preview(&transcript.text),
-    }))
+    })
 }
 
 #[cfg(test)]

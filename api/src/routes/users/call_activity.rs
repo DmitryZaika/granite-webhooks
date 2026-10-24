@@ -1,22 +1,27 @@
-//! `GET /v1/users/call-activity`: the `CloudTalk` calls of chosen reps over
-//! the last 90 days, for the admin users-activity page.
+//! `GET /v1/users/call-activity`: the `CloudTalk` and Granite Phone calls of
+//! chosen reps over the last 90 days, for the admin users-activity page.
 //! Remix: `api.users.activity.calls.tsx`.
 
 use crate::auth::AdminUser;
 use crate::error::{ApiResult, ErrorBody};
+use crate::phone::calls::{CallDirection, CallStatus};
+use crate::routes::calls::telnyx::{self, TelnyxCall};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Query, State};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use common::telephony::cloudtalk;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use utoipa::{IntoParams, ToSchema};
 
 const PAGE_SIZE: usize = 200;
 const MAX_PAGES_PER_AGENT: usize = 5;
 const DAYS_BACK: i64 = 90;
+/// Most Granite Phone calls listed per rep (`CloudTalk` lists 1,000 an agent).
+const TELNYX_CALLS_PER_REP: i64 = 1_000;
 
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -28,31 +33,36 @@ pub struct CallActivityQuery {
 /// One call, as a row of the users-activity feed.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CallActivity {
-    /// The `CloudTalk` call id.
+    /// The `CloudTalk` call id, or our call id for a Granite Phone call.
     pub id: i64,
-    /// Always `cloudtalk_call`.
+    /// `cloudtalk_call`, or `telnyx_call` for a Granite Phone call.
     pub source: &'static str,
-    /// The rep.
+    /// The rep (for a Granite Phone call nobody answered: the owner of the
+    /// direct line it rang).
     pub user_id: i32,
     /// The rep's name.
     pub user_name: String,
     /// `Made a call`, `Received a call` or `Missed a call`.
     pub action: &'static str,
-    /// When the call started, as `CloudTalk` reports it.
+    /// When the call started, as `CloudTalk` reports it (RFC 3339 UTC for a
+    /// Granite Phone call).
     pub created_at: String,
-    /// The `CloudTalk` contact's name.
+    /// The `CloudTalk` contact's name, or the CRM customer of a Granite
+    /// Phone call.
     pub customer_name: Option<String>,
     /// The other party's number.
     pub contact: Option<String>,
     /// Direction and outcome, like `Incoming · 2m 5s`.
     pub summary: String,
-    /// The call's notes, one per line.
+    /// The call's notes, one per line (a Granite Phone call's AI note).
     pub body: Option<String>,
-    /// Direction, outcome, `Recorded`, then `CloudTalk` tags.
+    /// Direction, outcome, `Recorded`, then `CloudTalk` tags (a Granite Phone
+    /// call: the label of our number).
     pub tags: Vec<String>,
     /// Whether there is a recording.
     pub recorded: bool,
-    /// `CloudTalk`'s recording link.
+    /// `CloudTalk`'s recording link, or `tx_<id>` for a recorded Granite
+    /// Phone call (`GET /v1/calls/telnyx/{media_id}/recording`).
     pub recording_link: Option<String>,
     /// The caller left a voicemail.
     pub is_voicemail: bool,
@@ -202,11 +212,85 @@ pub async fn agent_calls(
     items
 }
 
+/// A Granite Phone call as a row of the feed, for rep `user_id`.
+pub fn telnyx_activity(call: &TelnyxCall, user_id: i32, user_name: &str) -> CallActivity {
+    let talk_seconds = i64::from(call.duration_secs.unwrap_or(0).max(0));
+    let incoming = call.direction == CallDirection::Inbound;
+    let voicemail = call.status == CallStatus::Voicemail;
+    let direction = if incoming { "Incoming" } else { "Outgoing" };
+    let outcome = if talk_seconds > 0 {
+        duration(talk_seconds)
+    } else {
+        match call.status {
+            CallStatus::Voicemail => "Voicemail",
+            CallStatus::AiMessage => "AI message",
+            CallStatus::Declined => "Declined",
+            CallStatus::Busy => "Busy",
+            CallStatus::Failed => "Failed",
+            _ if incoming => "Missed",
+            _ => "No answer",
+        }
+        .into()
+    };
+    let action = if !incoming {
+        "Made a call"
+    } else if voicemail || talk_seconds == 0 {
+        "Missed a call"
+    } else {
+        "Received a call"
+    };
+    let mut tags = vec![direction.to_string(), outcome.clone()];
+    if call.recorded {
+        tags.push("Recorded".into());
+    }
+    tags.extend(call.line_label.clone());
+    CallActivity {
+        id: call.id,
+        source: "telnyx_call",
+        user_id,
+        user_name: user_name.to_string(),
+        action,
+        created_at: telnyx::iso(call.started_at),
+        customer_name: call
+            .customer_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string),
+        contact: Some(call.other_number.clone()).filter(|number| !number.is_empty()),
+        summary: format!("{direction} · {outcome}"),
+        body: call
+            .ai_note
+            .clone()
+            .filter(|note| call.may_hear && !note.trim().is_empty()),
+        tags,
+        recorded: call.recorded && call.may_hear,
+        recording_link: (call.recorded && call.may_hear).then(|| telnyx::token(call.id)),
+        is_voicemail: voicemail,
+        talk_seconds,
+    }
+}
+
+/// When a feed row's call started: `CloudTalk`'s `YYYY-MM-DD HH:MM:SS` (UTC)
+/// or RFC 3339.
+fn started(row: &CallActivity) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(&row.created_at)
+        .map(|at| at.with_timezone(&Utc))
+        .ok()
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(&row.created_at, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|at| at.and_utc())
+        })
+}
+
 /// List reps' calls
 ///
 /// The `CloudTalk` calls of the given users of the caller's company over the
-/// last 90 days, newest first. Users without a `CloudTalk` agent, and
-/// companies without `CloudTalk`, have none.
+/// last 90 days, and their Granite Phone calls (placed or answered by them,
+/// and unanswered calls of their direct lines; `source` `telnyx_call`),
+/// newest first. Users without a `CloudTalk` agent, and companies without
+/// `CloudTalk`, have no `CloudTalk` calls.
 #[utoipa::path(
     get,
     path = "/v1/users/call-activity",
@@ -246,9 +330,29 @@ pub async fn call_activity(
     builder.push(")");
     let reps: Vec<(i32, Option<String>, Option<String>)> =
         builder.build_query_as().fetch_all(&state.pool).await?;
-    let date_from = (chrono::Utc::now() - chrono::Duration::days(DAYS_BACK))
-        .format("%Y-%m-%d")
-        .to_string();
+    let since = chrono::Utc::now() - chrono::Duration::days(DAYS_BACK);
+    let date_from = since.format("%Y-%m-%d").to_string();
+    let names: HashMap<i32, String> = reps
+        .iter()
+        .map(|(id, name, _)| (*id, name.clone().unwrap_or_default()))
+        .collect();
+    let rep_ids: Vec<i32> = names.keys().copied().collect();
+    let phone_calls = if rep_ids.is_empty() {
+        Vec::new()
+    } else {
+        telnyx::list(
+            &state.pool,
+            user.company_id,
+            crate::phone::calls::Hearer::of(&user),
+            &telnyx::Filter {
+                users: &rep_ids,
+                from: Some(since),
+                limit: TELNYX_CALLS_PER_REP * i64::try_from(rep_ids.len()).unwrap_or(1),
+                ..telnyx::Filter::default()
+            },
+        )
+        .await?
+    };
     let mut tasks = Vec::new();
     for (id, name, agent) in reps {
         let Some(agent) = agent
@@ -268,10 +372,20 @@ pub async fn call_activity(
                 .collect::<Vec<_>>()
         }));
     }
-    let mut calls = Vec::new();
+    let mut calls: Vec<CallActivity> = phone_calls
+        .iter()
+        .filter_map(|call| {
+            let owner = call.owner_id?;
+            Some(telnyx_activity(call, owner, names.get(&owner)?))
+        })
+        .collect();
     for task in tasks {
         calls.extend(task.await.unwrap_or_default());
     }
-    calls.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    calls.sort_by(|a, b| {
+        started(b)
+            .cmp(&started(a))
+            .then_with(|| b.created_at.cmp(&a.created_at))
+    });
     Ok(Json(calls))
 }

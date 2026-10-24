@@ -41,14 +41,20 @@ fn upkeep_due(state: &AppState, provider: SmsProvider, company_id: i32) -> bool 
     due
 }
 
-/// [`common::sms::maintenance::run`], at most once a minute per company.
+/// [`common::sms::maintenance::run`] (Telnyx: failing sends that never
+/// finished), at most once a minute per company.
 pub async fn upkeep(
     state: &AppState,
     provider: SmsProvider,
     company_id: i32,
 ) -> Result<(), sqlx::Error> {
     if upkeep_due(state, provider, company_id) {
-        common::sms::maintenance::run(&state.pool, provider.shared(), company_id).await?;
+        match provider.shared() {
+            Some(shared) => common::sms::maintenance::run(&state.pool, shared, company_id).await?,
+            None => {
+                crate::phone::texting::fail_stale_pending(&state.pool, company_id).await?;
+            }
+        }
     }
     Ok(())
 }
@@ -181,34 +187,35 @@ pub async fn customers_by_phone(
     if phones.is_empty() {
         return Ok(out);
     }
-    let contacts = provider.contacts_table();
-    let list = marks(phones.len());
-    let branch = |column: &str| {
-        format!(
-            "SELECT RIGHT(ct.{column}, 10) AS phone_digits, c.id, c.name
-               FROM {contacts} ct
-               JOIN customers c ON c.id = ct.customer_id AND c.company_id = ? AND c.deleted_at IS NULL
-              WHERE ct.company_id = ? AND RIGHT(ct.{column}, 10) IN ({list})"
+    if let Some(contacts) = provider.contacts_table() {
+        let list = marks(phones.len());
+        let branch = |column: &str| {
+            format!(
+                "SELECT RIGHT(ct.{column}, 10) AS phone_digits, c.id, c.name
+                   FROM {contacts} ct
+                   JOIN customers c ON c.id = ct.customer_id AND c.company_id = ? AND c.deleted_at IS NULL
+                  WHERE ct.company_id = ? AND RIGHT(ct.{column}, 10) IN ({list})"
+            )
+        };
+        let mut params: Vec<Param> = Vec::new();
+        for _ in 0..2 {
+            params.push(company_id.into());
+            params.push(company_id.into());
+            params.extend(phones.iter().map(Param::from));
+        }
+        let rows: Vec<(String, i32, Option<String>)> = fetch_all(
+            pool,
+            format!(
+                "{} UNION ALL {}",
+                branch("phone_e164_1"),
+                branch("phone_e164_2")
+            ),
+            &params,
         )
-    };
-    let mut params: Vec<Param> = Vec::new();
-    for _ in 0..2 {
-        params.push(company_id.into());
-        params.push(company_id.into());
-        params.extend(phones.iter().map(Param::from));
-    }
-    let rows: Vec<(String, i32, Option<String>)> = fetch_all(
-        pool,
-        format!(
-            "{} UNION ALL {}",
-            branch("phone_e164_1"),
-            branch("phone_e164_2")
-        ),
-        &params,
-    )
-    .await?;
-    for (phone, id, name) in rows {
-        out.entry(phone).or_insert((id, name));
+        .await?;
+        for (phone, id, name) in rows {
+            out.entry(phone).or_insert((id, name));
+        }
     }
     // No provider contact: fall back to the customer record itself, as the
     // thread header does.
@@ -458,7 +465,7 @@ struct AlertRow {
 ///
 /// Up to 50 unread conversations whose latest message came from the
 /// customer, for desktop notifications. Empty for a user without an agent id
-/// or a company without the provider.
+/// (Telnyx: without a line) or a company without the provider.
 #[utoipa::path(
     get,
     path = "/v1/sms/{provider}/desktop-alerts",
@@ -480,11 +487,17 @@ pub async fn desktop_alerts(
 ) -> ApiResult<Json<DesktopAlerts>> {
     let pool = &state.pool;
     let features = company_features(pool, user.company_id).await?;
-    let enabled = match provider {
-        SmsProvider::Cloudtalk => features.cloudtalk,
-        SmsProvider::Ringcentral => features.ringcentral,
+    let (enabled, texts) = match provider {
+        SmsProvider::Cloudtalk => (features.cloudtalk, provider.can_send(&user)),
+        SmsProvider::Ringcentral => (features.ringcentral, provider.can_send(&user)),
+        SmsProvider::Telnyx => (
+            features.telnyx_sms,
+            !crate::phone::texting::inbox_lines(pool, user.company_id, user.id)
+                .await?
+                .is_empty(),
+        ),
     };
-    if provider.agent_of(&user).is_none() || !enabled {
+    if !texts || !enabled {
         return Ok(Json(DesktopAlerts { alerts: Vec::new() }));
     }
     let rows: Vec<AlertRow> = rollup(
@@ -536,7 +549,8 @@ pub async fn desktop_alerts(
 /// List reps who text
 ///
 /// The company's users with an agent (`CloudTalk`) or extension
-/// (`RingCentral`) id, for the admin inbox's rep filter.
+/// (`RingCentral`) id, or with a Telnyx line (`agent_id` = their user id),
+/// for the admin inbox's rep filter.
 #[utoipa::path(
     get,
     path = "/v1/sms/{provider}/sales-reps",
@@ -556,7 +570,18 @@ pub async fn sales_reps(
     AdminUser(user): AdminUser,
     Path(provider): Path<SmsProvider>,
 ) -> ApiResult<Json<Vec<SalesRep>>> {
-    let column = provider.agent_column();
+    let Some(column) = provider.agent_column() else {
+        // Telnyx: the users with a line, by their user id.
+        let reps = crate::phone::texting::texting_users(&state.pool, user.company_id)
+            .await?
+            .into_iter()
+            .map(|(id, name)| SalesRep {
+                agent_id: id.to_string(),
+                name,
+            })
+            .collect();
+        return Ok(Json(reps));
+    };
     let reps = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT TRIM({column}) AS agent_id, MIN(name) AS name FROM users
           WHERE company_id = ? AND is_deleted = 0

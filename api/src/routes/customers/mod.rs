@@ -19,7 +19,7 @@ pub mod estimate_time;
 pub(crate) mod fuzzy;
 mod handlers;
 pub mod history;
-mod phones;
+pub(crate) mod phones;
 mod projects;
 pub mod queries;
 mod recipients;

@@ -78,6 +78,15 @@ pub struct AppShell {
     pub has_cloudtalk_api: bool,
     /// The company has RingCentral.
     pub has_ringcentral_api: bool,
+    /// The company has Granite Phone (Telnyx) switched on.
+    pub has_telnyx_api: bool,
+    /// The company texts through Telnyx (its messaging profile is set):
+    /// users with a `telnyx_line` text from it (`/v1/sms/telnyx/...`).
+    pub has_telnyx_sms: bool,
+    /// The user's Telnyx line for calls and texts from the CRM (E.164): their
+    /// default caller ID, else their direct number, else the first number
+    /// they may call from; null without one (or without Telnyx).
+    pub telnyx_line: Option<String>,
     /// The company receives email (it has a mail domain).
     pub has_inbound_email: bool,
     /// Pictures can be sent by text (`SMS_IMAGES_ENABLED` is not off).
@@ -196,6 +205,13 @@ pub async fn shell(
             },
         );
     let features = company_features(pool, user.company_id).await?;
+    let telnyx_line = if features.telnyx {
+        crate::phone::lines::user_line(pool, user.company_id, user.id)
+            .await?
+            .map(|line| line.e164)
+    } else {
+        None
+    };
     let feature_capabilities =
         crate::routes::onboarding::team::capabilities(pool, home.unwrap_or(user.company_id))
             .await?;
@@ -220,6 +236,9 @@ pub async fn shell(
         portal: portal.map(|(name, _)| name),
         has_cloudtalk_api: features.cloudtalk,
         has_ringcentral_api: features.ringcentral,
+        has_telnyx_api: features.telnyx,
+        has_telnyx_sms: features.telnyx_sms,
+        telnyx_line,
         has_inbound_email: features.inbound_email,
         sms_images_enabled,
         can_manage_company: user.is_superuser || here(MANAGER),

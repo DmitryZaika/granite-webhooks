@@ -36,7 +36,7 @@ pub struct HistoryQuery {
 pub struct HistoryText {
     /// The SMS row.
     pub id: i32,
-    /// The provider's message id.
+    /// The provider's message id; null for Telnyx (its ids are not numbers).
     pub provider_id: Option<i64>,
     /// Sending phone (digits as stored).
     pub sender: Option<String>,
@@ -101,13 +101,15 @@ async fn deal_phones(
     .await
 }
 
-/// Rep names by agent (or extension) id.
+/// Rep names by agent (or extension) id; by user id on Telnyx.
 async fn agent_names(
     pool: &sqlx::MySqlPool,
     provider: SmsProvider,
     company_id: i32,
 ) -> Result<HashMap<String, String>, sqlx::Error> {
-    let column = provider.agent_column();
+    let Some(column) = provider.agent_column() else {
+        return crate::phone::texting::user_names(pool, company_id).await;
+    };
     let rows: Vec<(String, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT TRIM({column}), MIN(name) FROM users
           WHERE company_id = ? AND is_deleted = 0 AND {column} IS NOT NULL AND TRIM({column}) != ''
@@ -177,7 +179,13 @@ pub async fn history(
             customer_phone_digits: Vec::new(),
         }));
     }
-    let (table, id_column) = (provider.sms_table(), provider.id_column());
+    let table = provider.sms_table();
+    // Telnyx's ids are UUIDs: none here.
+    let provider_id = if provider.numeric_ids() {
+        format!("s.{}", provider.id_column())
+    } else {
+        "CAST(NULL AS SIGNED)".to_string()
+    };
     let list = marks(variants.len());
     let mut params: Vec<Param> = vec![user.company_id.into()];
     params.extend(variants.iter().map(Param::from));
@@ -190,7 +198,7 @@ pub async fn history(
     let rows: Vec<Row> = fetch_all(
         pool,
         format!(
-            "SELECT s.id, s.{id_column} AS provider_id, CAST(s.sender AS CHAR) AS sender,
+            "SELECT s.id, {provider_id} AS provider_id, CAST(s.sender AS CHAR) AS sender,
                     CAST(s.recipient AS CHAR) AS recipient, s.text, s.agent, s.created_date
                FROM {table} s
               WHERE s.company_id = ? AND s.status IN ('received', 'sent')

@@ -19,6 +19,7 @@ pub mod analytics_proxy;
 pub mod auth;
 pub mod automation_notice;
 pub mod billing;
+pub mod call_notes;
 pub mod chat;
 pub mod commissions;
 pub mod db;
@@ -38,9 +39,11 @@ pub mod pdf;
 pub mod pdf_fonts;
 pub mod pdf_preview;
 pub mod period;
+pub mod phone;
 pub mod posthog;
 pub mod price_list_chunking;
 pub mod price_lists;
+pub mod push;
 pub mod qbo;
 pub mod quote_pricing;
 pub mod ringcentral_connect;
@@ -54,12 +57,13 @@ pub mod state;
 pub mod storage;
 pub mod supplier_file_processor;
 pub mod telegram;
+pub mod telnyx;
 pub mod thumbnails;
 pub mod transcribe;
 pub mod voicemail;
 pub mod webhooks_client;
 
-use axum::extract::{Request, State};
+use axum::extract::{MatchedPath, Request, State};
 use axum::http::header::{CONTENT_TYPE, ORIGIN};
 use axum::http::{Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -100,26 +104,38 @@ async fn check_origin(State(state): State<AppState>, request: Request, next: Nex
 }
 
 /// Every 5xx the API answers goes to `PostHog`'s Error Tracking with what
-/// failed. The relay is left out: its failures are `PostHog`'s own.
+/// failed, named by its route ([`reported_route`]). The relay is left out:
+/// its failures are `PostHog`'s own.
 async fn report_server_errors(
     State(state): State<AppState>,
     request: Request,
     next: Next,
 ) -> Response {
     let method = request.method().clone();
-    let path = request.uri().path().to_owned();
+    let route = reported_route(&request);
     let response = next.run(request).await;
-    if response.status().is_server_error() && !path.starts_with("/ingest/") {
+    if response.status().is_server_error() && !route.starts_with("/ingest/") {
         posthog::capture_server_error(
             &state.telephony_http,
             method.as_str(),
-            &path,
+            &route,
             response.status().as_u16(),
             response.extensions().get::<error::ErrorDetail>(),
         )
         .await;
     }
     response
+}
+
+/// The route a request matched, as its template
+/// (`/v1/webhooks/telnyx/{token}/inbound`), never the path itself: path
+/// segments carry secrets and customers' numbers (the company's Telnyx
+/// webhook token, a text thread's key).
+fn reported_route(request: &Request) -> String {
+    request.extensions().get::<MatchedPath>().map_or_else(
+        || "(no matching route)".to_owned(),
+        |route| route.as_str().to_owned(),
+    )
 }
 
 /// A handler that panicked answers 500 like any internal error, and the

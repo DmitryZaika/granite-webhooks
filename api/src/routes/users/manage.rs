@@ -745,7 +745,9 @@ struct PositionRow {
 /// user's company, Super Admin and check-in positions and Super Admin
 /// companies as they are, and may only grant marketing for the user's own
 /// company (or remove companies a superuser granted). Super Admins are
-/// always admins. The `RingCentral` extension follows the number.
+/// always admins. The `RingCentral` extension follows the number. A user
+/// who is no longer an employee or admin of their company (or moved to
+/// another one) is signed out of Granite Phone.
 #[utoipa::path(
     put,
     path = "/v1/admin/users/{id}",
@@ -925,12 +927,14 @@ pub async fn update(
         .await?;
     }
     tx.commit().await?;
+    crate::phone::revoke::revoke_if_lost_access(&state, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Delete a user
 ///
-/// Soft-deletes a live user of the caller's company (superusers: any).
+/// Soft-deletes a live user of the caller's company (superusers: any) and
+/// signs out their Granite Phone apps.
 #[utoipa::path(
     delete,
     path = "/v1/admin/users/{id}",
@@ -956,6 +960,12 @@ pub async fn delete(
         .bind(id)
         .execute(&state.pool)
         .await?;
+    crate::phone::revoke::revoke_user_phones(
+        &state,
+        id,
+        crate::phone::revoke::RevokeReason::UserRemoved,
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

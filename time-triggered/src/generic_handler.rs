@@ -360,6 +360,9 @@ pub(crate) async fn function_handler(
             0
         }
     };
+    if let Err(error) = post_api_job("phone", "Phone").await {
+        tracing::error!(?error, "Failed to process Phone; continuing");
+    }
     let message = format!(
         "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, and {} contact syncs",
         processed_email_count,

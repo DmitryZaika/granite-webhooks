@@ -34,7 +34,9 @@ async fn features_of_each_company(pool: MySqlPool) {
             "e_signature": false,
             "inbound_email": false,
             "cloudtalk": false,
-            "ringcentral": false
+            "ringcentral": false,
+            "telnyx": false,
+            "telnyx_sms": false
         })
     );
     assert_eq!(
@@ -47,7 +49,9 @@ async fn features_of_each_company(pool: MySqlPool) {
             "e_signature": false,
             "inbound_email": true,
             "cloudtalk": true,
-            "ringcentral": false
+            "ringcentral": false,
+            "telnyx": false,
+            "telnyx_sms": false
         })
     );
 }
@@ -91,7 +95,9 @@ async fn integrations_count_once_set_up(pool: MySqlPool) {
                 ringcentral_access_token = 'a', ringcentral_refresh_token = 'r',
                 ringcentral_access_expires = 1,
                 ringcentral_refresh_expires = UNIX_TIMESTAMP() - 1
-          WHERE id = 101;",
+          WHERE id = 101;
+         INSERT INTO telnyx_company_config (company_id, enabled, webhook_token)
+         VALUES (100, 1, REPEAT('a', 32)), (101, 0, REPEAT('b', 32));",
     )
     .await;
     assert_eq!(
@@ -104,7 +110,9 @@ async fn integrations_count_once_set_up(pool: MySqlPool) {
             "e_signature": true,
             "inbound_email": true,
             "cloudtalk": false,
-            "ringcentral": true
+            "ringcentral": true,
+            "telnyx": true,
+            "telnyx_sms": false
         })
     );
     // A blank secret is no CloudTalk; an expired RingCentral refresh token is
@@ -114,9 +122,10 @@ async fn integrations_count_once_set_up(pool: MySqlPool) {
         (
             &other["inbound_email"],
             &other["cloudtalk"],
-            &other["ringcentral"]
+            &other["ringcentral"],
+            &other["telnyx"]
         ),
-        (&json!(false), &json!(false), &json!(false))
+        (&json!(false), &json!(false), &json!(false), &json!(false))
     );
 
     // QuickBooks needs every token column, not just the realm.

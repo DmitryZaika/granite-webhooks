@@ -139,6 +139,7 @@ dependencies = [
  "percent-encoding",
  "regex",
  "reqwest",
+ "ring",
  "serde",
  "serde_html_form",
  "serde_json",

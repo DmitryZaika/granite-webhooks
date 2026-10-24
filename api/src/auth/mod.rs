@@ -7,13 +7,17 @@
 //! | `EmployeeUser` | `getEmployeeUser`           | `is_employee \|\| is_admin \|\| is_superuser` |
 //! | `AdminUser`    | `getAdminUser`              | `is_admin \|\| is_superuser`              |
 //! | `UserManager`  | `canEditAdminUsers`         | a superuser, or an admin holding Manager in the company |
+//! | `CompanyManager` | (`can_manage_billing`)    | anyone holding Manager in the company (superusers too only then) |
 //! | `InstallerUser` | `getInstallerUser` | an installer of the company |
 //! | `ShopOrEmployeeUser` | `getShopOrEmployeeUser` | an employee, or a shop manager / worker of the company |
+//! | `device::DeviceUser` | (Granite Phone app)  | a live `X-Granite-Device` token of an employee, admin or superuser |
+//! | `device::PhoneCaller` | (app or CRM)        | the device token when sent, else `EmployeeUser`'s cookie rules |
 //!
 //! *`CurrentUser` also applies the super-admin elevation and company switch, so
 //! `company_id` is always the company the request acts in.
 
 pub mod cookie;
+pub mod device;
 pub mod session;
 
 use crate::error::ApiError;
@@ -172,6 +176,28 @@ impl FromRequestParts<AppState> for BillingManager {
             .iter()
             .any(|row| row.company_id == user.company_id && row.position_id == MANAGER_POSITION);
         if (user.is_employee || user.is_admin || user.is_superuser) && manager {
+            Ok(Self(user))
+        } else {
+            Err(ApiError::Forbidden)
+        }
+    }
+}
+
+/// Someone holding the Manager position in the company the request acts in
+/// (the app shell's `can_manage_billing`), whatever their other rights: a
+/// company admin or a superuser without it is refused. Used where only the
+/// company's Managers may act (the 10DLC texting registration).
+pub struct CompanyManager(pub SessionUser);
+
+impl FromRequestParts<AppState> for CompanyManager {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        let (user, positions) = authenticate_with_positions(parts, state).await?;
+        let manager = positions
+            .iter()
+            .any(|row| row.company_id == user.company_id && row.position_id == MANAGER_POSITION);
+        if manager {
             Ok(Self(user))
         } else {
             Err(ApiError::Forbidden)

@@ -12,7 +12,7 @@ use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-const VOICEMAIL_PROMPT: &str = r#"Summarize this outbound sales voicemail into a minimal CRM note for a countertop company.
+pub(crate) const VOICEMAIL_PROMPT: &str = r#"Summarize this outbound sales voicemail into a minimal CRM note for a countertop company.
 
 Return plain text only. Use "- Label: details" bullets. Do not include Voicemail, Call type, or Customer bullets. Maximum 2 bullets.
 
@@ -25,7 +25,22 @@ Rules:
 - Never quote, copy, or paraphrase the transcript as prose — output only the bullet lines.
 - No filler. Never include personal names."#;
 
-const CALL_PROMPT: &str = r#"Summarize this phone sales call into a CRM note for a countertop and stone fabrication company.
+/// Granite Phone's AI note of a voicemail a caller left for the company
+/// (`VOICEMAIL_PROMPT` is for the rep's own voicemails). Its note is tidied
+/// as a voicemail note: the `Action` bullet.
+pub(crate) const INBOUND_VOICEMAIL_PROMPT: &str = r#"Summarize this voicemail a caller left for a countertop company into a minimal CRM note.
+
+Return plain text only. Use one "- Label: details" bullet. Do not include Voicemail, Call type, or Customer bullets.
+
+Required:
+- Action: One line with what the caller wants and when or how they asked to be called back (~18 words). Example: "Wants a quote for a quartz kitchen; asked for a call back after 5 pm".
+
+Rules:
+- Only what the caller said; never invent a project, a time or a request.
+- Never quote, copy, or paraphrase the transcript as prose — output only the bullet line.
+- No filler. Never include personal names or phone numbers."#;
+
+pub(crate) const CALL_PROMPT: &str = r#"Summarize this phone sales call into a CRM note for a countertop and stone fabrication company.
 
 Return plain text only. Use one bullet per topic. Every bullet must use the format "- **Label:** details" with a bold label and a colon (e.g. "- **Project:** ...", "- **Sink:** ..."). The note must be complete—never end mid-sentence or mid-thought. Never repeat the same label twice—merge related facts into one bullet.
 

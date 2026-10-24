@@ -13,6 +13,14 @@ pub fn js_date<S: Serializer>(
     }
 }
 
+/// [`js_date`] for a date that is always set.
+pub fn js_date_required<S: Serializer>(
+    value: &DateTime<Utc>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&value.to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
 /// For PATCH bodies: a field left out is `None`, a field sent as `null` is
 /// `Some(None)`, a value is `Some(Some(value))`. Use with `#[serde(default)]`.
 pub fn double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>

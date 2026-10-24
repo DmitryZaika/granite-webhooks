@@ -93,7 +93,8 @@ const HISTORY_LINES: &str = "SELECT h.event_id, h.action, h.message, h.created_b
   WHERE h.company_id = ? AND h.created_at IS NOT NULL
     AND LOWER(TRIM(h.message)) NOT IN ('comment added', 'comment deleted', 'comment updated')";
 
-const COMMENT_LINES: &str = "SELECT c.event_id, 'commented' AS action, 'Event commented' AS message,
+const COMMENT_LINES: &str =
+    "SELECT c.event_id, 'commented' AS action, 'Event commented' AS message,
         c.created_by, c.created_at
    FROM event_comments c
   WHERE c.company_id = ? AND c.deleted_at IS NULL AND c.created_at IS NOT NULL";
@@ -125,7 +126,8 @@ pub async fn activity(
     let pool = &state.pool;
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = query.offset.unwrap_or(0).max(0);
-    let latest: Vec<(i32, DateTime<Utc>)> = sqlx::query_as(&format!(
+    // Only constants and placeholders are spliced in.
+    let latest: Vec<(i32, DateTime<Utc>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT a.event_id, MAX(a.created_at) AS last_at
            FROM ({HISTORY_LINES} UNION ALL {COMMENT_LINES}) a
            JOIN events e ON e.id = a.event_id AND e.deleted_date IS NULL
@@ -136,7 +138,7 @@ pub async fn activity(
           GROUP BY a.event_id
           ORDER BY last_at DESC, a.event_id DESC
           LIMIT ? OFFSET ?"
-    ))
+    )))
     .bind(user.company_id)
     .bind(user.company_id)
     .bind(user.company_id)
@@ -190,7 +192,7 @@ pub async fn activity(
           WHERE a.event_id IN ({placeholders})
           ORDER BY a.created_at DESC"
     );
-    let mut lines_query = sqlx::query_as::<_, LineRow>(&lines_sql)
+    let mut lines_query = sqlx::query_as::<_, LineRow>(sqlx::AssertSqlSafe(lines_sql))
         .bind(user.company_id)
         .bind(user.company_id);
     for (id, _) in latest {

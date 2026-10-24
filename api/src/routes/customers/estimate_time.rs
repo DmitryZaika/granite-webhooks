@@ -98,7 +98,7 @@ async fn sms(
     };
     let mut messages = Vec::new();
     // Both providers: a company that switched keeps its earlier texts.
-    for table in ["cloudtalk_sms", "ringcentral_sms"] {
+    for table in ["cloudtalk_sms", "ringcentral_sms", "telnyx_sms"] {
         let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(format!(
             "SELECT text, CAST(direction AS CHAR) AS direction, created_date FROM {table}
               WHERE company_id = "

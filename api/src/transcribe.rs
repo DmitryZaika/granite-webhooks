@@ -39,6 +39,44 @@ pub struct Transcript {
     pub audio_seconds: Option<f64>,
 }
 
+impl Transcript {
+    /// The transcript as Granite Phone keeps it (`phone_calls.transcript`)
+    /// and writes its AI notes from: the speakers' turns, one a line
+    /// (`Speaker A: ...`), else the plain text.
+    pub fn labeled_text(&self) -> String {
+        match self.utterances.as_deref() {
+            Some(turns) if !turns.is_empty() => turns
+                .iter()
+                .map(|turn| format!("Speaker {}: {}", turn.speaker, turn.text.trim()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => self.text.trim().to_string(),
+        }
+    }
+
+    /// A transcript kept as [`Transcript::labeled_text`] wrote it: the text
+    /// as kept, with its turns back when every line is one.
+    pub fn from_labeled_text(text: &str) -> Self {
+        let text = text.trim();
+        let turns: Option<Vec<Utterance>> = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let (speaker, said) = line.trim().strip_prefix("Speaker ")?.split_once(": ")?;
+                (!speaker.is_empty() && !speaker.contains(char::is_whitespace)).then(|| Utterance {
+                    speaker: speaker.to_string(),
+                    text: said.trim().to_string(),
+                })
+            })
+            .collect();
+        Self {
+            text: text.to_string(),
+            utterances: turns.filter(|turns| !turns.is_empty()),
+            audio_seconds: None,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TranscribeError {
     #[error("ASSEMBLYAI_API_KEY is not set")]

@@ -5,12 +5,14 @@
 //! (recordings are often over Lambda's 6 MB response limit) and answered as
 //! a presigned link the player fetches. Replaces the Remix
 //! `api.{cloudtalk,ringcentral}.userCallMedia.$callId` routes, which
-//! streamed it.
+//! streamed it. Granite Phone recordings are ours already: they are played
+//! from the private recordings bucket through a 5-minute link.
 
+use super::provider::CallProvider;
 use super::recording::{CallTranscriptError, MediaToken, fetch_audio};
+use super::telnyx;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
-use crate::routes::sms::provider::SmsProvider;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -24,7 +26,8 @@ use utoipa::ToSchema;
 /// Where to load a call's audio.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CallRecording {
-    /// A link to the audio, valid an hour.
+    /// A link to the audio, valid an hour (5 minutes for a Granite Phone
+    /// recording: ask again when it runs out).
     pub url: String,
     /// Its type, e.g. `audio/mpeg` or `audio/wav`.
     pub content_type: String,
@@ -32,7 +35,7 @@ pub struct CallRecording {
 
 /// The audio's key: not guessable from the call, since the bucket's files
 /// are public.
-fn cache_key(secret: &str, company_id: i32, provider: SmsProvider, media_id: &str) -> String {
+fn cache_key(secret: &str, company_id: i32, provider: CallProvider, media_id: &str) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key");
     mac.update(format!("{company_id}/{}/{media_id}", provider.as_str()).as_bytes());
     let hex = mac
@@ -51,39 +54,65 @@ fn cache_key(secret: &str, company_id: i32, provider: SmsProvider, media_id: &st
 /// A link (an hour) to the audio of a recorded call or voicemail: a
 /// `CloudTalk` call id, or a `RingCentral` media token (`rec_<id>`,
 /// `vm_<extension>_<message>_<attachment>`) as the call lists give them.
+/// For `telnyx`, a Granite Phone call `tx_<id>` of the caller's company
+/// (`Cdr.recording_link` of `GET /v1/calls/telnyx`): a 5-minute link to our
+/// private copy; 404 for another company's call or one not recorded, 403
+/// when the caller may not hear it (only the call's user, the users of its
+/// direct line, for an unanswered incoming call the users its line rings,
+/// its deal's owner, admins and sales managers may).
 #[utoipa::path(
     get,
     path = "/v1/calls/{provider}/{media_id}/recording",
     operation_id = "get_call_recording",
     tag = "calls",
     params(
-        ("provider" = String, Path, description = "`cloudtalk` or `ringcentral`"),
-        ("media_id" = String, Path, description = "CloudTalk call id or RingCentral media token"),
+        ("provider" = inline(CallProvider), Path, description = "`cloudtalk`, `ringcentral` or `telnyx`"),
+        ("media_id" = String, Path, description = "CloudTalk call id, RingCentral media token, or Granite Phone call `tx_<id>`"),
     ),
     responses(
         (status = 200, description = "Where to load the audio", body = CallRecording),
         (status = 400, description = "Not a call id or media token of the provider", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
-        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
-        (status = 404, description = "The call has no recording", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin, or may not hear this Granite Phone call", body = ErrorBody),
+        (status = 404, description = "The call has no recording (or is not the company's)", body = ErrorBody),
         (status = 502, description = "The provider could not be reached", body = ErrorBody),
-        (status = 503, description = "No bucket configured", body = ErrorBody),
+        (status = 503, description = "No bucket (or no recordings bucket) configured", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
 pub async fn recording(
     State(state): State<AppState>,
     EmployeeUser(user): EmployeeUser,
-    Path((provider, media_id)): Path<(SmsProvider, String)>,
+    Path((provider, media_id)): Path<(CallProvider, String)>,
 ) -> ApiResult<Json<CallRecording>> {
     let media_id = media_id.trim();
     let (call_id, link) = match provider {
-        SmsProvider::Cloudtalk
+        CallProvider::Cloudtalk
             if !media_id.is_empty() && media_id.bytes().all(|b| b.is_ascii_digit()) =>
         {
             (media_id, None)
         }
-        SmsProvider::Ringcentral if MediaToken::parse(media_id).is_some() => ("", Some(media_id)),
+        CallProvider::Ringcentral if MediaToken::parse(media_id).is_some() => ("", Some(media_id)),
+        CallProvider::Telnyx => {
+            let id = telnyx::parse_token(media_id)
+                .ok_or_else(|| ApiError::BadRequest("Unsupported media id".into()))?;
+            let key = telnyx::recording_key(&state.pool, user.company_id, id)
+                .await?
+                .ok_or(ApiError::NotFound)?;
+            let hearer = crate::phone::calls::Hearer::of(&user);
+            if crate::phone::calls::may_hear(&state.pool, user.company_id, hearer, id).await?
+                != Some(true)
+            {
+                return Err(ApiError::Forbidden);
+            }
+            let link = crate::phone::recordings::link(&state, &key)
+                .await?
+                .ok_or_else(|| ApiError::Unavailable("Recordings are not set up.".into()))?;
+            return Ok(Json(CallRecording {
+                url: link.url,
+                content_type: link.content_type.into(),
+            }));
+        }
         _ => return Err(ApiError::BadRequest("Unsupported media id".into())),
     };
     let key = cache_key(&state.session_secret, user.company_id, provider, media_id);

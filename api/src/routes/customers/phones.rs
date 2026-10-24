@@ -92,7 +92,7 @@ pub struct PhoneCustomer {
 }
 
 /// `317-555-0100` for 10 digits (or 11 starting with 1); `None` otherwise.
-fn storage_format(digits: &str) -> Option<String> {
+pub fn storage_format(digits: &str) -> Option<String> {
     if !(10..=15).contains(&digits.len()) || !digits.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }

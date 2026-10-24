@@ -12,6 +12,8 @@
 //! - `POST /v1/jobs/supplier-files` → supplier price files into chunks
 //! - `POST /v1/jobs/contact-sync` → customers into `RingCentral` and
 //!   `CloudTalk` contacts
+//! - `POST /v1/jobs/phone` → Granite Phone upkeep: sign-outs, recordings,
+//!   AI notes, call points, old Telnyx callbacks
 //!
 //! Replaces the Remix `api.*.process` cron routes.
 
@@ -19,6 +21,7 @@ mod appointment_reminders;
 pub mod call_points;
 pub mod contact_sync;
 pub mod maintenance_reminders;
+pub mod phone;
 pub mod signature_reminders;
 pub mod sms_followups;
 pub mod supplier_files;
@@ -40,6 +43,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(sms_followups::run))
         .routes(routes!(supplier_files::run))
         .routes(routes!(contact_sync::run))
+        .routes(routes!(phone::run))
 }
 
 /// The `time-triggered` Lambda, by its key.

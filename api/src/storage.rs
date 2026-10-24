@@ -246,9 +246,10 @@ impl Storage {
         }
     }
 
-    /// Writes a signature file once to the private signature bucket
-    /// (`If-None-Match: *`, encrypted, never cached); writing the same bytes
-    /// again is fine, other bytes are refused.
+    /// Writes a file once to a private bucket (signatures, call
+    /// recordings: `If-None-Match: *`, encrypted, never cached); writing the
+    /// same bytes again is fine, other bytes are refused. The bytes are
+    /// handed to S3 without a copy (recordings run to 100 MB).
     pub async fn put_private(
         &self,
         bucket: &str,
@@ -263,6 +264,8 @@ impl Storage {
                 use sha2::Digest as _;
                 let checksum =
                     base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(&bytes));
+                // Shared, not copied: the body and the check below read the same buffer.
+                let bytes = axum::body::Bytes::from(bytes);
                 let result = s3
                     .client
                     .put_object()
@@ -397,6 +400,20 @@ impl Storage {
         content_type: &str,
         filename: Option<&str>,
     ) -> Result<String, StorageError> {
+        self.presign_get_in_for(bucket, key, content_type, filename, DOWNLOAD_URL_TTL)
+            .await
+    }
+
+    /// [`Storage::presign_get_in`] with a link that works for `ttl` (the
+    /// usual one works an hour), e.g. 5 minutes for call recordings.
+    pub async fn presign_get_in_for(
+        &self,
+        bucket: Option<&str>,
+        key: &str,
+        content_type: &str,
+        filename: Option<&str>,
+        ttl: Duration,
+    ) -> Result<String, StorageError> {
         let disposition = filename.map_or_else(
             || "inline".to_string(),
             |name| {
@@ -418,7 +435,7 @@ impl Storage {
         );
         match self {
             Self::S3(s3) => {
-                let config = PresigningConfig::expires_in(DOWNLOAD_URL_TTL)
+                let config = PresigningConfig::expires_in(ttl)
                     .map_err(|err| StorageError::Backend(err.to_string()))?;
                 let request = s3
                     .client
@@ -478,6 +495,49 @@ impl Storage {
     /// Whether a key of this bucket holds an object.
     pub async fn exists(&self, key: &str) -> Result<bool, StorageError> {
         Ok(self.head(key).await?.is_some())
+    }
+
+    /// The size in bytes of an object in `bucket` (else this bucket); `None`
+    /// when it is missing. The in-memory bucket ignores bucket names.
+    pub async fn size_in(
+        &self,
+        bucket: Option<&str>,
+        key: &str,
+    ) -> Result<Option<u64>, StorageError> {
+        match self {
+            Self::S3(s3) => {
+                match s3
+                    .client
+                    .head_object()
+                    .bucket(bucket.unwrap_or(&s3.bucket))
+                    .key(key)
+                    .send()
+                    .await
+                {
+                    Ok(output) => Ok(Some(
+                        output
+                            .content_length()
+                            .and_then(|length| u64::try_from(length).ok())
+                            .unwrap_or_default(),
+                    )),
+                    Err(err)
+                        if err.as_service_error().is_some_and(
+                            aws_sdk_s3::operation::head_object::HeadObjectError::is_not_found,
+                        ) =>
+                    {
+                        Ok(None)
+                    }
+                    Err(err) => Err(StorageError::Backend(err.to_string())),
+                }
+            }
+            Self::Memory(memory) => Ok(memory
+                .objects
+                .lock()
+                .expect("lock")
+                .get(key)
+                .map(|object| u64::try_from(object.bytes.len()).unwrap_or(u64::MAX))),
+            Self::Disabled => Err(StorageError::Disabled),
+        }
     }
 
     /// The bucket and key a stored file URL points at: `s3://bucket/key`, an

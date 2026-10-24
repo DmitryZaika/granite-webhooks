@@ -223,7 +223,7 @@ async fn customer_messaged_since(
         }
     }
     for phone in &phones {
-        for table in ["cloudtalk_sms", "ringcentral_sms"] {
+        for table in SmsProvider::ALL.map(SmsProvider::sms_table) {
             let found: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                 "SELECT CAST(id AS SIGNED) FROM {table}
                   WHERE company_id = ? AND direction = 'inbound' AND created_date > ?
@@ -527,15 +527,18 @@ async fn deliver_row(
             .map(|_| ())
             .map_err(|err| err.to_string()),
         Kind::Sms => {
-            let provider = if row.provider.as_deref() == Some("ringcentral") {
-                SmsProvider::Ringcentral
-            } else {
-                SmsProvider::Cloudtalk
-            };
+            let provider = row
+                .provider
+                .as_deref()
+                .and_then(SmsProvider::parse)
+                .unwrap_or(SmsProvider::Cloudtalk);
             let request = sms_from_payload(&payload);
-            let agent = provider.agent_of(user).ok_or("agent_not_linked")?;
+            let seat = crate::routes::sms::send::seat(&state.pool, provider, user)
+                .await
+                .map_err(|err| err.to_string())?
+                .ok_or("agent_not_linked")?;
             check(user, &request)?;
-            match deliver_now(state, user, provider, agent, &request).await {
+            match deliver_now(state, user, provider, &seat, &request).await {
                 Ok(_) => Ok(()),
                 Err(Undelivered::Api(err)) => Err(err.to_string()),
                 Err(Undelivered::Sms(failure)) => Err(failure.error),

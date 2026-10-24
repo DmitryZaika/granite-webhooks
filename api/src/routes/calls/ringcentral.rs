@@ -67,7 +67,7 @@ fn is_voicemail(record: &Value) -> bool {
         .contains("voicemail")
 }
 
-fn empty_agent() -> Value {
+pub(super) fn empty_agent() -> Value {
     json!({
         "id": 0, "firstname": "", "lastname": "", "fullname": "", "email": "", "language": "",
         "role": "", "status": "", "default_outbound_number": "", "associated_numbers": [], "groups": [],

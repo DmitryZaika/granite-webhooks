@@ -1,8 +1,12 @@
 //! Sending a text from a conversation, now or later.
 //!
 //! Replaces the Remix `api.{cloudtalk,ringcentral}.sms.send` actions. The
-//! `webhooks` Lambda talks to the provider; a scheduled text goes into
-//! `delayed_sms`, which the CRM's delayed-message job sends.
+//! `webhooks` Lambda talks to CloudTalk and RingCentral; Telnyx texts go
+//! out from here (`crate::phone::texting`). A scheduled text goes into
+//! `delayed_sms`, which the delayed-message job sends.
+//!
+//! [`seat`], [`user_provider`] and [`send_text`] are the one way every
+//! sender (the composer, flows, drips, notices) picks a provider and texts.
 
 use super::provider::{SmsProvider, phone10};
 use super::schemas::Message;
@@ -11,6 +15,8 @@ use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::phone::lines::CallerId;
+use crate::routes::company::queries::company_features;
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingSms, OutgoingSmsFile, SmsFailure};
 use axum::Json;
@@ -162,8 +168,102 @@ pub fn check(user: &SessionUser, request: &SendSmsRequest) -> Result<(), &'stati
     Ok(())
 }
 
+/// How a user texts through a provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Seat {
+    /// Stored as `agent` on what they send: their agent (`CloudTalk`) or
+    /// extension (`RingCentral`) id; their user id on Telnyx.
+    pub agent_id: String,
+    /// The Telnyx line they text from (Telnyx only).
+    pub line: Option<CallerId>,
+}
+
+/// The seat of `user` on `provider`; `None` when they cannot text there
+/// (no agent id; on Telnyx no line, or Telnyx texting is off).
+pub async fn seat(
+    pool: &MySqlPool,
+    provider: SmsProvider,
+    user: &SessionUser,
+) -> Result<Option<Seat>, sqlx::Error> {
+    if provider == SmsProvider::Telnyx {
+        return Ok(
+            crate::phone::texting::user_line(pool, user.company_id, user.id)
+                .await?
+                .map(|line| Seat {
+                    agent_id: user.id.to_string(),
+                    line: Some(line),
+                }),
+        );
+    }
+    Ok(provider.agent_of(user).map(|agent_id| Seat {
+        agent_id,
+        line: None,
+    }))
+}
+
+/// The provider `user` texts through: Telnyx when the company texts
+/// through Telnyx and the user has a line there; else the company's own
+/// (`RingCentral`, then `CloudTalk`); else Telnyx when the company texts
+/// only through it (the user then has no [`seat`]).
+pub async fn user_provider(
+    pool: &MySqlPool,
+    company_id: i32,
+    user_id: i32,
+) -> Result<Option<SmsProvider>, sqlx::Error> {
+    let features = company_features(pool, company_id).await?;
+    if features.telnyx_sms
+        && crate::phone::texting::user_line(pool, company_id, user_id)
+            .await?
+            .is_some()
+    {
+        return Ok(Some(SmsProvider::Telnyx));
+    }
+    Ok(features
+        .sms_provider()
+        .or_else(|| features.telnyx_sms.then_some(SmsProvider::Telnyx)))
+}
+
+/// Sends a text as `seat` through `provider`: Telnyx from here, the others
+/// through the webhooks Lambda. An automated text to a phone that texted
+/// STOP is refused (`opted_out`).
+pub async fn send_text(
+    state: &AppState,
+    provider: SmsProvider,
+    seat: &Seat,
+    sms: &OutgoingSms,
+) -> Result<Vec<i64>, SmsFailure> {
+    if sms.is_automated
+        && crate::phone::texting::is_opted_out(&state.pool, sms.company_id, &sms.phone_digits)
+            .await?
+    {
+        return Err(SmsFailure {
+            status: 400,
+            error: "opted_out".into(),
+            sent_ids: Vec::new(),
+            unsent_s3_keys: Vec::new(),
+        });
+    }
+    match (provider, &seat.line) {
+        (SmsProvider::Telnyx, Some(line)) => crate::phone::texting::deliver(state, line, sms).await,
+        (SmsProvider::Telnyx, None) => Err(SmsFailure {
+            status: 400,
+            error: "agent_not_linked".into(),
+            sent_ids: Vec::new(),
+            unsent_s3_keys: Vec::new(),
+        }),
+        _ => state.webhooks.send_sms(sms).await,
+    }
+}
+
 /// Ten sends a minute per user (per Lambda instance).
 fn take_send_slot(state: &AppState, user_id: i32) -> bool {
+    send_slot_wait(state, user_id).is_none()
+}
+
+/// Takes one of the user's sends of the minute (the composer's and the
+/// phone app's share them): `None` when taken, else the seconds until one
+/// frees up.
+pub fn send_slot_wait(state: &AppState, user_id: i32) -> Option<u64> {
     let limit = std::env::var("SMS_SEND_RATE_LIMIT_PER_MIN")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -180,12 +280,15 @@ fn take_send_slot(state: &AppState, user_id: i32) -> bool {
         !sends.is_empty()
     });
     let sends = slots.entry(user_id).or_default();
-    let allowed = sends.len() < limit;
-    if allowed {
+    if sends.len() < limit {
         sends.push_back(now);
+        return None;
     }
+    let wait = sends.front().map_or(window, |oldest| {
+        window.saturating_sub(now.duration_since(*oldest))
+    });
     drop(slots);
-    allowed
+    Some(wait.as_secs().max(1))
 }
 
 /// Stores the text for the delayed-message job.
@@ -261,6 +364,7 @@ async fn record_template_usage(
     let kind = match provider {
         SmsProvider::Cloudtalk => "cloudtalk_sms",
         SmsProvider::Ringcentral => "ringcentral_sms",
+        SmsProvider::Telnyx => "telnyx_sms",
     };
     let result = sqlx::query(
         "INSERT INTO user_template_usage (user_id, template_type, template_id, usage_count, last_used_at)
@@ -307,13 +411,13 @@ pub enum Undelivered {
     Sms(SmsFailure),
 }
 
-/// Sends a checked text now through the webhooks Lambda, marks the thread
+/// Sends a checked text now as `seat` ([`send_text`]), marks the thread
 /// read for the sender and counts the template; the stored message ids.
 pub async fn deliver_now(
     state: &AppState,
     user: &SessionUser,
     provider: SmsProvider,
-    agent_id: String,
+    seat: &Seat,
     request: &SendSmsRequest,
 ) -> Result<Vec<i64>, Undelivered> {
     let mut attachments = Vec::with_capacity(request.attachments.len());
@@ -344,14 +448,14 @@ pub async fn deliver_now(
         provider: provider.as_str().to_string(),
         company_id: user.company_id,
         user_id: user.id,
-        agent_id,
+        agent_id: seat.agent_id.clone(),
         phone_digits: request.phone_digits.clone(),
         text: request.text.trim().to_string(),
         attachments,
         is_automated: false,
         idempotency_key: None,
     };
-    let ids = match state.webhooks.send_sms(&outgoing).await {
+    let ids = match send_text(state, provider, seat, &outgoing).await {
         Ok(ids) => ids,
         Err(failure) => return Err(Undelivered::Sms(failure)),
     };
@@ -375,9 +479,12 @@ pub async fn deliver_now(
 /// Send a text
 ///
 /// Sends a text (with photos or files uploaded beforehand) to a phone
-/// through the caller's agent (`CloudTalk`) or extension (`RingCentral`), or
-/// schedules it with `send_at`. `CloudTalk` texts carry links to the files;
-/// `RingCentral` sends them as MMS, split into several texts when large.
+/// through the caller's agent (`CloudTalk`), extension (`RingCentral`) or
+/// Telnyx line, or schedules it with `send_at`. `CloudTalk` texts carry
+/// links to the files; `RingCentral` sends them as MMS, split into several
+/// texts when large; Telnyx sends pictures and PDFs as MMS of up to 1 MB
+/// each (split likewise) and bigger or other files as links, to US and
+/// Canadian numbers only, never to a phone that texted STOP (`opted_out`).
 /// Opening the conversation counts as read. Errors come back as a token in
 /// `error`.
 #[utoipa::path(
@@ -403,7 +510,7 @@ pub async fn send(
     Path(provider): Path<SmsProvider>,
     JsonBody(request): JsonBody<SendSmsRequest>,
 ) -> ApiResult<Response> {
-    let Some(agent_id) = provider.agent_of(&user) else {
+    let Some(seat) = seat(&state.pool, provider, &user).await? else {
         return Ok(refuse(StatusCode::FORBIDDEN, "agent_not_linked"));
     };
     if let Some(send_at) = request.send_at {
@@ -423,7 +530,7 @@ pub async fn send(
     if !take_send_slot(&state, user.id) {
         return Ok(refuse(StatusCode::TOO_MANY_REQUESTS, "rate_limited"));
     }
-    let ids = match deliver_now(&state, &user, provider, agent_id, &request).await {
+    let ids = match deliver_now(&state, &user, provider, &seat, &request).await {
         Ok(ids) => ids,
         Err(Undelivered::Api(err)) => return Err(err),
         Err(Undelivered::Sms(failure)) => return Ok(failure_response(failure)),

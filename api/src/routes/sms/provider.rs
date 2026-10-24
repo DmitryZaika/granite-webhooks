@@ -8,12 +8,13 @@ use sqlx::{Arguments, MySql};
 
 impl SmsProvider {
     /// Every provider, for the admin inbox that merges them.
-    pub const ALL: [Self; 2] = [Self::Cloudtalk, Self::Ringcentral];
+    pub const ALL: [Self; 3] = [Self::Cloudtalk, Self::Ringcentral, Self::Telnyx];
 
     pub const fn sms_table(self) -> &'static str {
         match self {
             Self::Cloudtalk => "cloudtalk_sms",
             Self::Ringcentral => "ringcentral_sms",
+            Self::Telnyx => "telnyx_sms",
         }
     }
 
@@ -21,13 +22,17 @@ impl SmsProvider {
         match self {
             Self::Cloudtalk => "cloudtalk_sms_thread_reads",
             Self::Ringcentral => "ringcentral_sms_thread_reads",
+            Self::Telnyx => "telnyx_sms_thread_reads",
         }
     }
 
-    pub const fn contacts_table(self) -> &'static str {
+    /// The provider's synced contacts; Telnyx has none (customers are
+    /// matched by their own phones).
+    pub const fn contacts_table(self) -> Option<&'static str> {
         match self {
-            Self::Cloudtalk => "cloudtalk_contacts",
-            Self::Ringcentral => "ringcentral_contacts",
+            Self::Cloudtalk => Some("cloudtalk_contacts"),
+            Self::Ringcentral => Some("ringcentral_contacts"),
+            Self::Telnyx => None,
         }
     }
 
@@ -36,35 +41,56 @@ impl SmsProvider {
         match self {
             Self::Cloudtalk => ("cloudtalk_sms_attachments", "cloudtalk_sms_id"),
             Self::Ringcentral => ("ringcentral_sms_attachments", "ringcentral_sms_id"),
+            Self::Telnyx => ("telnyx_sms_attachments", "telnyx_sms_id"),
         }
     }
 
-    /// The provider's own message id column.
+    /// The provider's own message id column (Telnyx's is a UUID, as text).
     pub const fn id_column(self) -> &'static str {
         match self {
             Self::Cloudtalk => "cloudtalk_id",
             Self::Ringcentral => "ringcentral_id",
+            Self::Telnyx => "telnyx_id",
         }
     }
 
-    /// The `users` column holding the agent (`CloudTalk`) or extension id.
-    pub const fn agent_column(self) -> &'static str {
+    /// The provider's message ids are numbers (Telnyx's are UUIDs).
+    pub const fn numeric_ids(self) -> bool {
+        !matches!(self, Self::Telnyx)
+    }
+
+    /// Breaks ties between rows of the same second: the provider's id, or
+    /// ours when the provider's carries no order.
+    pub const fn order_column(self) -> &'static str {
         match self {
-            Self::Cloudtalk => "cloudtalk_agent_id",
-            Self::Ringcentral => "ringcentral_extension_id",
+            Self::Telnyx => "id",
+            other => other.id_column(),
         }
     }
 
-    /// The `users` column holding the user's own provider number.
-    pub const fn phone_column(self) -> &'static str {
+    /// The `users` column holding the agent (`CloudTalk`) or extension id;
+    /// none for Telnyx, whose users text from the lines they may call from
+    /// (`crate::phone::texting`).
+    pub const fn agent_column(self) -> Option<&'static str> {
         match self {
-            Self::Cloudtalk => "cloudtalk_phone_number",
-            Self::Ringcentral => "ringcentral_phone_number",
+            Self::Cloudtalk => Some("cloudtalk_agent_id"),
+            Self::Ringcentral => Some("ringcentral_extension_id"),
+            Self::Telnyx => None,
+        }
+    }
+
+    /// The `users` column holding the user's own provider number; none for
+    /// Telnyx (its numbers are `telnyx_numbers`).
+    pub const fn phone_column(self) -> Option<&'static str> {
+        match self {
+            Self::Cloudtalk => Some("cloudtalk_phone_number"),
+            Self::Ringcentral => Some("ringcentral_phone_number"),
+            Self::Telnyx => None,
         }
     }
 
     /// `CloudTalk` pulls late webhook inserts back between their provider-id
-    /// neighbours; `RingCentral` orders by insert time.
+    /// neighbours; the others order by insert time.
     pub const fn has_conversation_time(self) -> bool {
         matches!(self, Self::Cloudtalk)
     }
@@ -73,13 +99,24 @@ impl SmsProvider {
         match self {
             Self::Cloudtalk => "cloudtalk",
             Self::Ringcentral => "ringcentral",
+            Self::Telnyx => "telnyx",
         }
     }
 
-    pub const fn shared(self) -> common::sms::derived::SmsProvider {
+    /// The provider stored as `name` (`delayed_sms.provider`).
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|provider| provider.as_str() == name)
+    }
+
+    /// The provider of the shared insert and upkeep code (`common::sms`);
+    /// Telnyx rows are written by `crate::phone::texting`.
+    pub const fn shared(self) -> Option<common::sms::derived::SmsProvider> {
         match self {
-            Self::Cloudtalk => common::sms::derived::SmsProvider::Cloudtalk,
-            Self::Ringcentral => common::sms::derived::SmsProvider::Ringcentral,
+            Self::Cloudtalk => Some(common::sms::derived::SmsProvider::Cloudtalk),
+            Self::Ringcentral => Some(common::sms::derived::SmsProvider::Ringcentral),
+            Self::Telnyx => None,
         }
     }
 
@@ -87,10 +124,12 @@ impl SmsProvider {
         match self {
             Self::Cloudtalk => user.cloudtalk_agent_id.as_deref(),
             Self::Ringcentral => user.ringcentral_extension_id.as_deref(),
+            Self::Telnyx => None,
         }
     }
 
-    /// The user's trimmed agent id, if set.
+    /// The user's trimmed agent id, if set. Always `None` for Telnyx, where
+    /// texting depends on the user's lines (`crate::phone::texting::seat`).
     pub fn agent_of(self, user: &SessionUser) -> Option<String> {
         self.raw_agent(user)
             .map(str::trim)
@@ -98,7 +137,8 @@ impl SmsProvider {
             .map(str::to_string)
     }
 
-    /// Whether the user may text through this provider (has an agent id).
+    /// Whether the user may text through this provider (has an agent id);
+    /// see [`Self::agent_of`] for Telnyx.
     pub fn can_send(self, user: &SessionUser) -> bool {
         self.raw_agent(user).is_some_and(|agent| !agent.is_empty())
     }
@@ -108,6 +148,7 @@ impl SmsProvider {
         let raw = match self {
             Self::Cloudtalk => user.cloudtalk_phone_number.as_deref(),
             Self::Ringcentral => user.ringcentral_phone_number.as_deref(),
+            Self::Telnyx => None,
         }?;
         let digits = phone10(raw);
         (digits.len() >= 10).then_some(digits)

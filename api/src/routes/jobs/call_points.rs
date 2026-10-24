@@ -361,19 +361,27 @@ struct Pending {
     transcribe_attempts: u8,
 }
 
+/// SQL: the rows this job classifies. Granite Phone's own calls
+/// (`provider = 'telnyx'`) are scored by the phone job from their AI note's
+/// transcript, never here.
+const PROVIDERS: &str = "provider IN ('cloudtalk', 'ringcentral')";
+
 async fn finalize(state: &AppState, id: i64, outcome: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE phone_call_points SET outcome = ?, classified_at = UTC_TIMESTAMP() WHERE id = ? AND outcome = 'pending'")
-        .bind(outcome)
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE phone_call_points SET outcome = ?, classified_at = UTC_TIMESTAMP()
+          WHERE id = ? AND outcome = 'pending' AND {PROVIDERS}"
+    )))
+    .bind(outcome)
+    .bind(id)
+    .execute(&state.pool)
+    .await?;
     Ok(())
 }
 
 async fn classify_one(state: &AppState, row: Pending) -> Result<bool, sqlx::Error> {
     let claimed = sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE phone_call_points SET transcribe_claimed_at = UTC_TIMESTAMP(), transcribe_attempts = transcribe_attempts + 1
-          WHERE id = ? AND outcome = 'pending'
+          WHERE id = ? AND outcome = 'pending' AND {PROVIDERS}
             AND (transcribe_claimed_at IS NULL OR transcribe_claimed_at < UTC_TIMESTAMP() - INTERVAL {CLAIM_TTL_MINUTES} MINUTE)"
     )))
     .bind(row.id)
@@ -426,7 +434,7 @@ pub async fn classify_pending(state: &AppState, limit: i64) -> Result<usize, sql
         "SELECT id, company_id, provider_call_id, recording_link, provider_voicemail <> 0 AS provider_voicemail,
                 transcribe_attempts
            FROM phone_call_points
-          WHERE outcome = 'pending' AND user_id IS NOT NULL AND started_at IS NOT NULL
+          WHERE outcome = 'pending' AND {PROVIDERS} AND user_id IS NOT NULL AND started_at IS NOT NULL
             AND started_at <= UTC_TIMESTAMP() - INTERVAL {CLASSIFY_MIN_AGE_MINUTES} MINUTE
             AND (transcribe_claimed_at IS NULL OR transcribe_claimed_at < UTC_TIMESTAMP() - INTERVAL {CLAIM_TTL_MINUTES} MINUTE)
           ORDER BY started_at LIMIT ?"

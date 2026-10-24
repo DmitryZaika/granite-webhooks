@@ -516,7 +516,7 @@ async fn load_sms_timeline(
     }
     let marks = vec!["?"; digits.len()].join(", ");
     let mut rows: Vec<SmsRow> = Vec::new();
-    for table in ["cloudtalk_sms", "ringcentral_sms"] {
+    for table in ["cloudtalk_sms", "ringcentral_sms", "telnyx_sms"] {
         let normalized = |column: &str| {
             format!(
                 "RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(CAST({column} AS CHAR), ' ', ''), '-', ''), '(', ''), ')', ''), 10)"

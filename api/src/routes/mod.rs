@@ -28,6 +28,7 @@ pub mod customers;
 pub mod dashboard;
 pub mod deals;
 pub mod delayed;
+pub mod device_sessions;
 pub mod documents;
 pub mod emails;
 pub mod events;
@@ -47,6 +48,7 @@ pub mod me;
 pub mod notifications;
 pub mod onboarding;
 pub mod online_quotes;
+pub mod phone;
 pub mod places;
 pub mod public;
 pub mod questionnaires;
@@ -80,6 +82,7 @@ pub mod supports;
 pub mod survey_results;
 pub mod teach_mode;
 pub mod teach_progress;
+pub mod telnyx_webhooks;
 pub mod templates;
 pub mod transaction_slabs;
 pub mod transactions;
@@ -169,4 +172,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(signing::router())
         .merge(signatures::router())
         .merge(signwell_webhook::router())
+        .merge(device_sessions::router())
+        .merge(phone::router())
+        .merge(telnyx_webhooks::router())
 }

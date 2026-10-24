@@ -281,7 +281,7 @@ pub fn rollup_sql(
            LEFT JOIN {reads} r
              ON r.user_id = ? AND r.company_id = ? AND r.customer_phone_digits = a.phone_digits"
     );
-    outer(&threads, params, mode, narrowing.agent_id.is_some())
+    outer(&threads, params, mode, narrowing.one_rep)
 }
 
 /// The outermost level of the rollup for `mode`.
