@@ -45,12 +45,22 @@ features and flags) comes from the shared cache in every other worktree:
 ```
 brew install sccache
 printf '[build]\nrustc-wrapper = "sccache"\n' >> ~/.cargo/config.toml
-sccache --show-stats   # hits and misses
 ```
 
-It is set per machine, not in `.cargo/config.toml`, so CI and machines
-without sccache are unaffected. Workspace crates use incremental compilation,
-which sccache does not cache; they build as before.
+sccache hashes absolute paths, and every worktree's `target/` has its own, so
+list the worktree roots as base directories in
+`~/Library/Application Support/Mozilla.sccache/config` (macOS), adding each
+new worktree:
+
+```toml
+basedirs = ["/Users/you/granite-webhooks", "/Users/you/granite-webhooks-ci"]
+```
+
+`sccache --show-stats` shows the hits. It is set per machine, not in
+`.cargo/config.toml`, so CI and machines without sccache are unaffected.
+Workspace crates (incremental), proc macros and build scripts are not cached:
+a new worktree's first `cargo build -p api` measured 73 s instead of 80 s,
+since compiling `api` itself is most of it.
 
 ## Functions
 
