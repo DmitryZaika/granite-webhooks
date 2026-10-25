@@ -12,13 +12,14 @@
 //! the company lock is released (best effort, logged with the company id).
 
 use super::cancellation_emails::{
-    ConfirmationInput, StaffEvent, StaffNoticeInput, WithdrawalInput, render_confirmation,
-    render_staff_email, render_staff_telegram, render_withdrawal,
+    ConfirmationInput, OnboardingFee, StaffEvent, StaffNoticeInput, WithdrawalInput,
+    render_confirmation, render_staff_email, render_staff_telegram, render_withdrawal,
 };
 use super::lock::{CompanyLock, LockError};
 use super::reminder_emails::RenderedEmail;
 use super::stripe::{StripeError, subscription_snapshot};
 use super::{MANAGER_POSITION, payments_account_url};
+use crate::onboarding_call::commitment::{Commitment, Status};
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingEmail, SendFailure};
 use chrono::NaiveDateTime;
@@ -504,6 +505,26 @@ async fn notify_staff(state: &AppState, notice: &StaffNoticeInput<'_>) {
     }
 }
 
+/// Why a request made at `requested_at` avoids the onboarding fee: before
+/// the fee's charge date once its notice went out, else before the deadline.
+/// `None` when no fee is pending (done, waived, already invoiced or void).
+pub fn onboarding_fee(
+    commitment: Option<&Commitment>,
+    requested_at: NaiveDateTime,
+) -> Option<OnboardingFee> {
+    let commitment = commitment?;
+    match commitment.status {
+        Status::NoticeSent | Status::Suspended if commitment.notice_sent_at.is_some() => commitment
+            .charge_after
+            .filter(|charge| *charge > requested_at)
+            .map(OnboardingFee::BeforeChargeDate),
+        Status::Pending | Status::Booked | Status::Suspended => (commitment.deadline_at
+            > requested_at)
+            .then_some(OnboardingFee::BeforeDeadline(commitment.deadline_at)),
+        _ => None,
+    }
+}
+
 async fn notify_requested(
     state: &AppState,
     company_id: i32,
@@ -512,6 +533,16 @@ async fn notify_requested(
 ) {
     let company = company_name(&state.pool, company_id).await;
     let account_url = payments_account_url();
+    let commitment = crate::onboarding_call::store::load(&state.pool, company_id)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(company_id, error = %err, "cancellation: onboarding commitment not read");
+            None
+        });
+    let fee = onboarding_fee(
+        commitment.as_ref().map(|stored| &stored.commitment),
+        request.requested_at,
+    );
     for contact in managers_or_log(state, company_id).await {
         let email = render_confirmation(&ConfirmationInput {
             company_name: &company,
@@ -520,6 +551,7 @@ async fn notify_requested(
             requested_at: request.requested_at,
             effective_at: request.effective_at,
             free_period,
+            onboarding_fee: fee,
             account_url: &account_url,
         });
         if let Err(err) = send_rendered(state, &contact.email, &email).await {
@@ -590,6 +622,75 @@ async fn notify_withdrawn(state: &AppState, company_id: i32, user_id: i32, withd
 mod tests {
     use super::*;
     use crate::billing::test_store::at;
+
+    fn commitment(status: Status) -> Commitment {
+        Commitment {
+            company_id: 1,
+            status,
+            created_at: at("2026-10-24 15:00:00"),
+            deadline_at: at("2026-11-24 04:59:59"),
+            original_deadline_at: at("2026-11-24 04:59:59"),
+            tolled_days: 0,
+            extension_used: false,
+            fee_cents: 60_000,
+            booking: None,
+            completed_at: None,
+            completed_by: None,
+            no_show_at: None,
+            no_show_call_start_at: None,
+            suspended_at: None,
+            notice_sent_at: None,
+            notice_cycle_at: None,
+            charge_after: None,
+            stripe_invoice_id: None,
+            availability_checked_on: None,
+        }
+    }
+
+    #[test]
+    fn the_fee_is_avoided_before_the_deadline_or_after_the_notice_before_the_charge() {
+        let before = at("2026-11-01 12:00:00");
+        let deadline = OnboardingFee::BeforeDeadline(at("2026-11-24 04:59:59"));
+        for status in [Status::Pending, Status::Booked, Status::Suspended] {
+            assert_eq!(
+                onboarding_fee(Some(&commitment(status)), before),
+                Some(deadline)
+            );
+        }
+        assert_eq!(
+            onboarding_fee(
+                Some(&commitment(Status::Pending)),
+                at("2026-11-25 12:00:00")
+            ),
+            None
+        );
+        let noticed = Commitment {
+            notice_sent_at: Some(at("2026-11-24 15:00:00")),
+            charge_after: Some(at("2026-12-01 15:00:00")),
+            ..commitment(Status::NoticeSent)
+        };
+        let in_notice_week = at("2026-11-27 12:00:00");
+        assert_eq!(
+            onboarding_fee(Some(&noticed), in_notice_week),
+            Some(OnboardingFee::BeforeChargeDate(at("2026-12-01 15:00:00")))
+        );
+        assert_eq!(
+            onboarding_fee(Some(&noticed), at("2026-12-02 12:00:00")),
+            None
+        );
+        for status in [
+            Status::Completed,
+            Status::Waived,
+            Status::FeeInvoiced,
+            Status::FeePaid,
+            Status::FeeFailed,
+            Status::FeeSkipped,
+            Status::Void,
+        ] {
+            assert_eq!(onboarding_fee(Some(&commitment(status)), before), None);
+        }
+        assert_eq!(onboarding_fee(None, before), None);
+    }
 
     #[test]
     fn reasons_are_trimmed_empty_is_none_and_long_is_refused() {

@@ -3,10 +3,9 @@
 //! staff notice (email and Telegram). Pure: subjects, escaped HTML and text
 //! parts. The reason goes to staff only.
 
-use super::format_billing_date;
 use super::reminder_emails::{
-    RenderedEmail, SUPPORT_EMAIL, company_or_default, escape_html, footer, greeting, html_button,
-    html_footer, html_paragraph, wrap_html,
+    RenderedEmail, SUPPORT_EMAIL, company_or_default, escape_html, footer, format_local_date,
+    greeting, html_button, html_footer, html_paragraph, wrap_html,
 };
 use chrono::NaiveDateTime;
 
@@ -29,8 +28,34 @@ pub struct ConfirmationInput<'a> {
     pub effective_at: NaiveDateTime,
     /// Asked during the free period: nothing is charged at all.
     pub free_period: bool,
+    /// Why the onboarding fee is not charged; `None` when no fee applies.
+    pub onboarding_fee: Option<OnboardingFee>,
     /// The payments app's account page.
     pub account_url: &'a str,
+}
+
+/// Why a cancellation request avoids the onboarding fee (Terms 11.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardingFee {
+    /// Requested before the onboarding deadline.
+    BeforeDeadline(NaiveDateTime),
+    /// Requested after the fee notice, before the fee's charge date.
+    BeforeChargeDate(NaiveDateTime),
+}
+
+impl OnboardingFee {
+    fn sentence(self) -> String {
+        match self {
+            Self::BeforeDeadline(at) => format!(
+                "You requested cancellation before your onboarding deadline of {}, so the onboarding fee is not charged.",
+                format_local_date(at)
+            ),
+            Self::BeforeChargeDate(at) => format!(
+                "You requested cancellation before the charge date of the onboarding fee, {}, so the fee is not charged.",
+                format_local_date(at)
+            ),
+        }
+    }
 }
 
 /// One Manager's copy of the withdrawal notice.
@@ -54,15 +79,15 @@ fn requester_or_default(name: &str) -> &str {
 fn confirmation_paragraphs(input: &ConfirmationInput<'_>, esc: fn(&str) -> String) -> Vec<String> {
     let company = esc(company_or_default(input.company_name));
     let by = esc(requester_or_default(input.requested_by));
-    let asked = format_billing_date(input.requested_at);
-    let ends = format_billing_date(input.effective_at);
+    let asked = format_local_date(input.requested_at);
+    let ends = format_local_date(input.effective_at);
     let charges = if input.free_period {
         "The request was made during the free period, so the subscription is not charged at all."
             .to_string()
     } else {
         format!("No further subscription charges are made after {ends}.")
     };
-    vec![
+    let mut paragraphs = vec![
         format!(
             "{by} requested cancellation of the Granite Manager subscription for {company} on {asked}."
         ),
@@ -70,14 +95,17 @@ fn confirmation_paragraphs(input: &ConfirmationInput<'_>, esc: fn(&str) -> Strin
             "The subscription ends on {ends}. Until then everything keeps working as usual for your whole team."
         ),
         charges,
-        "If your plan has an onboarding commitment, the onboarding fee is not charged when cancellation is requested before the onboarding deadline.".to_string(),
+    ];
+    paragraphs.extend(input.onboarding_fee.map(OnboardingFee::sentence));
+    paragraphs.extend([
         format!(
             "Changed your mind? Before {ends}, use Keep my subscription on your account page, or reply to this email or write to {SUPPORT_EMAIL}."
         ),
         format!(
             "Need a copy of your data? Ask {SUPPORT_EMAIL} within {EXPORT_DAYS} days after {ends} and we will send an export in a common format."
         ),
-    ]
+    ]);
+    paragraphs
 }
 
 /// The confirmation of a cancellation request, for one Manager.
@@ -114,7 +142,7 @@ fn withdrawal_paragraphs(input: &WithdrawalInput<'_>, esc: fn(&str) -> String) -
         |at| {
             format!(
                 "The next charge is on {}, and then every month on the same day.",
-                format_billing_date(at)
+                format_local_date(at)
             )
         },
     ));
@@ -192,7 +220,7 @@ impl StaffNoticeInput<'_> {
                 ),
             ),
             (by, requester_or_default(self.by).to_string()),
-            (ends, format_billing_date(self.effective_at)),
+            (ends, format_local_date(self.effective_at)),
             ("Reason", self.reason.unwrap_or("none given").to_string()),
         ]
     }
@@ -257,6 +285,7 @@ mod tests {
             requested_at: at("2026-10-24 15:00:00"),
             effective_at: at("2027-01-21 05:00:00"),
             free_period,
+            onboarding_fee: Some(OnboardingFee::BeforeDeadline(at("2026-11-24 04:59:59"))),
             account_url: ACCOUNT,
         }
     }
@@ -283,7 +312,7 @@ mod tests {
                 .contains("No further subscription charges are made after January 21, 2027.")
         );
         assert!(email.text.contains(
-            "the onboarding fee is not charged when cancellation is requested before the onboarding deadline."
+            "You requested cancellation before your onboarding deadline of November 23, 2026, so the onboarding fee is not charged."
         ));
         assert!(email.text.contains(
             "Before January 21, 2027, use Keep my subscription on your account page, or reply to this email or write to support@granite-manager.com."
@@ -315,6 +344,24 @@ mod tests {
                 .contains("href=\"https://payments.example.com/account\"")
         );
         assert_eq!(email.html.matches("href=").count(), 1);
+    }
+
+    #[test]
+    fn the_fee_sentence_names_the_charge_date_after_the_notice_and_is_left_out_without_a_fee() {
+        let notice = render_confirmation(&ConfirmationInput {
+            onboarding_fee: Some(OnboardingFee::BeforeChargeDate(at("2026-12-01 15:00:00"))),
+            ..confirmation(false)
+        });
+        assert!(notice.text.contains(
+            "You requested cancellation before the charge date of the onboarding fee, December 1, 2026, so the fee is not charged."
+        ));
+        assert!(!notice.text.contains("onboarding deadline"));
+        let none = render_confirmation(&ConfirmationInput {
+            onboarding_fee: None,
+            ..confirmation(false)
+        });
+        assert!(!none.text.contains("onboarding"));
+        no_dashes(&notice);
     }
 
     #[test]

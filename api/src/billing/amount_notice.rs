@@ -19,11 +19,11 @@ use super::cancellation::{
     company_name, failure_kind, manager_contacts, next_charge, send_rendered,
 };
 use super::catalog::signup_day;
+use super::payments_account_url;
 use super::reminder_emails::{
     RenderedEmail, SUPPORT_EMAIL, company_or_default, escape_html, footer, format_money, greeting,
     html_button, html_footer, html_paragraph, wrap_html,
 };
-use super::{format_billing_date, payments_account_url};
 use crate::state::AppState;
 use chrono::{NaiveDate, NaiveDateTime};
 use lambda_http::tracing;
@@ -110,7 +110,7 @@ fn notice_paragraphs(input: &AmountNoticeInput<'_>, company: &str) -> Vec<String
         |at| {
             format!(
                 "The new total first applies to the charge on {}.",
-                format_billing_date(at)
+                super::reminder_emails::format_local_date(at)
             )
         },
     ));
