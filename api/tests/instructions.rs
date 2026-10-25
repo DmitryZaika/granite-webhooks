@@ -213,3 +213,81 @@ async fn admins_add_edit_and_delete_instructions(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NO_CONTENT);
 }
+
+#[test_db::test(seed)]
+async fn deleting_keeps_the_order(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO instructions (id, title, parent_id, after_id, company_id) VALUES
+           (700, 'A', NULL, NULL, 100), (701, 'B', NULL, 700, 100), (702, 'C', NULL, 701, 100),
+           (703, 'D', NULL, 702, 100), (710, 'C1', 702, NULL, 100), (711, 'C2', 702, 710, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool.clone());
+    let delete = |id: i32| {
+        let request = server
+            .delete(&format!("/v1/instructions/{id}"))
+            .with_session(sessions::ADMIN);
+        async move { request.await }
+    };
+    // The one after it now follows the one before it.
+    delete(701).await.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        chain(&pool, None).await,
+        [(700, None), (702, Some(700)), (703, Some(702))]
+    );
+    // Its children take its place, in their order.
+    delete(702).await.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        chain(&pool, None).await,
+        [
+            (700, None),
+            (703, Some(711)),
+            (710, Some(700)),
+            (711, Some(710))
+        ]
+    );
+    // The first one: the next becomes the first.
+    delete(700).await.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        chain(&pool, None).await,
+        [(703, Some(711)), (710, None), (711, Some(710))]
+    );
+}
+
+#[test_db::test(seed)]
+async fn super_admins_add_general_instructions(pool: MySqlPool) {
+    // General instructions use company 0, which the seed does not have.
+    sqlx::raw_sql(
+        "SET SESSION sql_mode = CONCAT(@@sql_mode, ',NO_AUTO_VALUE_ON_ZERO');
+         INSERT INTO company (id, name) VALUES (0, 'General');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let server = server(pool.clone());
+    let mut companies = Vec::new();
+    for superuser in [0, 1] {
+        sqlx::query("UPDATE users SET is_superuser = ? WHERE id = 102")
+            .bind(superuser)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let res = server
+            .post("/v1/instructions?scope=general")
+            .with_session(sessions::ADMIN)
+            .json(&json!({ "title": "Safety" }))
+            .await;
+        res.assert_status(StatusCode::CREATED);
+        let id = res.json::<serde_json::Value>()["id"].as_i64().unwrap();
+        let company: i32 = sqlx::query_scalar("SELECT company_id FROM instructions WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        companies.push(company);
+    }
+    // Only a super admin's lands in the general tree.
+    assert_eq!(companies, [100, 0]);
+}

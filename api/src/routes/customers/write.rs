@@ -5,7 +5,8 @@
 
 use super::service::{
     SALES_REP_POSITION, audit_name, ensure_open_deal, record_lead_manager_assignment,
-    record_reassignment, remind_new_rep, source_allowed, sync_emails, user_name,
+    record_reassignment, refuse_import_placeholder, remind_new_rep, source_allowed, sync_emails,
+    user_name,
 };
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -289,6 +290,7 @@ pub async fn update(
     .fetch_optional(pool)
     .await?;
     let (previous_rep, current_source) = previous.ok_or(ApiError::NotFound)?;
+    refuse_import_placeholder(pool, id).await?;
     if !source_allowed(
         pool,
         user.company_id,
@@ -392,6 +394,7 @@ pub async fn set_sales_rep(
     .fetch_optional(pool)
     .await?;
     let previous = previous.ok_or(ApiError::NotFound)?;
+    refuse_import_placeholder(pool, id).await?;
     check_rep(&state, user.company_id, body.sales_rep).await?;
     if previous != body.sales_rep {
         record_lead_manager_assignment(pool, id, previous).await?;
@@ -453,6 +456,7 @@ pub async fn set_temperature(
     .fetch_optional(&state.pool)
     .await?;
     found.ok_or(ApiError::NotFound)?;
+    refuse_import_placeholder(&state.pool, id).await?;
     sqlx::query("UPDATE customers SET customer_temperature = ? WHERE id = ? AND company_id = ?")
         .bind(body.temperature.map(Temperature::as_str))
         .bind(id)
@@ -533,6 +537,7 @@ pub async fn mark_invalid(
     .fetch_optional(pool)
     .await?;
     found.ok_or(ApiError::NotFound)?;
+    refuse_import_placeholder(pool, id).await?;
     let deals: Vec<i64> = sqlx::query_scalar(
         "SELECT CAST(id AS SIGNED) FROM deals WHERE customer_id = ? AND deleted_at IS NULL",
     )
@@ -606,6 +611,7 @@ pub async fn delete(
     .fetch_optional(pool)
     .await?;
     found.ok_or(ApiError::NotFound)?;
+    refuse_import_placeholder(pool, id).await?;
     let deals: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM deals WHERE customer_id = ? AND deleted_at IS NULL",
     )

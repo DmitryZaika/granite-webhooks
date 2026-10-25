@@ -108,6 +108,9 @@ impl Modify for SessionCookie {
                 "Device token of a signed-in Granite Phone app (`POST /v1/auth/device-sessions`).",
             ))),
         );
+        let mut runner = Http::new(HttpAuthScheme::Bearer);
+        runner.description = Some("`AGENT_RUNNER_KEY`, sent by the claude-job-runner.".into());
+        components.add_security_scheme("agent_runner_key", SecurityScheme::Http(runner));
     }
 }
 

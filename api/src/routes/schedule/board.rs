@@ -57,7 +57,7 @@ pub struct EventInvoice {
 pub struct ScheduleEvent {
     /// Event id.
     pub id: i32,
-    /// Title (a customer id for customer events).
+    /// The event's name.
     pub title: String,
     /// Description.
     pub description: Option<String>,
@@ -87,7 +87,9 @@ pub struct ScheduleEvent {
     pub assigned_user_id: Option<i32>,
     /// Its sale.
     pub sale_id: Option<i32>,
-    /// The customer, when the title is a customer id.
+    /// The customer it is for.
+    pub customer_id: Option<i32>,
+    /// That customer's name.
     pub customer_name: Option<String>,
     /// Its QuickBooks invoice (only when QuickBooks is connected).
     #[sqlx(skip)]
@@ -108,8 +110,8 @@ pub struct ScheduleEvents {
 ///
 /// One-off events overlapping the range and repeating events that started
 /// before its end and repeat past its start (the page expands them), with
-/// the customer named by a numeric title and the QuickBooks invoice. Events
-/// of calendars hidden for everyone or from the caller are left out.
+/// their customers' names and QuickBooks invoices. Events of calendars
+/// hidden for everyone or from the caller are left out.
 #[utoipa::path(
     get,
     path = "/v1/schedule/events",
@@ -168,14 +170,12 @@ async fn load_events(
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.notes,
                 e.calendar_id, NULLIF(TRIM(e.rrule), '') AS rrule,
                 DATE_FORMAT(e.recurrence_until, '%Y-%m-%dT%H:%i:%sZ') AS recurrence_until,
-                e.created_user_id, e.assigned_user_id, e.sale_id, c.name AS customer_name
+                e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
+                c.name AS customer_name
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c
-             ON TRIM(e.title) REGEXP '^[0-9]+$'
-            AND c.id = CAST(TRIM(e.title) AS UNSIGNED)
-            AND c.company_id = u.company_id
-            AND c.deleted_at IS NULL
+             ON c.id = e.customer_id AND c.company_id = u.company_id AND c.deleted_at IS NULL
           WHERE u.company_id = ? AND e.deleted_date IS NULL AND e.unscheduled = 0
             AND (? IS NULL OR e.calendar_id IS NULL OR NOT EXISTS (
                   SELECT 1 FROM calendar_hidden_users h
@@ -235,8 +235,8 @@ async fn load_events(
 /// Events waiting for their day
 ///
 /// The company's unscheduled events (kept off the calendar until someone
-/// picks the date), oldest first, with the customer named by a numeric
-/// title. Events of calendars hidden for the caller are left out.
+/// picks the date), oldest first, with their customers' names. Events of
+/// calendars hidden for the caller are left out.
 #[utoipa::path(
     get,
     path = "/v1/schedule/unscheduled",
@@ -260,14 +260,12 @@ pub async fn unscheduled(
                 DATE_FORMAT(e.end_date, '%Y-%m-%dT%H:%i:%sZ') AS end_date,
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.notes,
                 e.calendar_id, NULL AS rrule, NULL AS recurrence_until,
-                e.created_user_id, e.assigned_user_id, e.sale_id, c.name AS customer_name
+                e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
+                c.name AS customer_name
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c
-             ON TRIM(e.title) REGEXP '^[0-9]+$'
-            AND c.id = CAST(TRIM(e.title) AS UNSIGNED)
-            AND c.company_id = u.company_id
-            AND c.deleted_at IS NULL
+             ON c.id = e.customer_id AND c.company_id = u.company_id AND c.deleted_at IS NULL
           WHERE u.company_id = ? AND e.deleted_date IS NULL AND e.unscheduled = 1
             AND (e.calendar_id IS NULL OR NOT EXISTS (
                   SELECT 1 FROM calendar_hidden_users h
@@ -298,7 +296,7 @@ pub struct MyScheduleQuery {
 /// A personal schedule
 ///
 /// The events assigned to the caller (an installer's or template maker's own
-/// day), on any calendar, with the customer named by a numeric title. An
+/// day), on any calendar, with their customers' names. An
 /// admin or superuser may read an installer's or template maker's schedule
 /// with `user_id`.
 #[utoipa::path(

@@ -773,6 +773,17 @@ async fn load_company_instructions(
 
 /// The company's customer page (`/customer/<id>/stones`).
 pub fn customer_inventory_page_url(company_id: i32, domain: Option<&str>) -> String {
+    format!("{}/stones", customer_pages_url(company_id, domain))
+}
+
+/// The company's online quote, where customers send their measurements
+/// (`/customer/<id>/quote`).
+pub fn customer_quote_page_url(company_id: i32, domain: Option<&str>) -> String {
+    format!("{}/quote", customer_pages_url(company_id, domain))
+}
+
+/// `https://<subdomain>.granite-manager.com/customer/<id>`.
+fn customer_pages_url(company_id: i32, domain: Option<&str>) -> String {
     let domain = trim(domain.unwrap_or(""));
     let without_scheme = re!(r"^https?:\/\/", "i").replace(domain, "");
     let slug = without_scheme
@@ -781,9 +792,9 @@ pub fn customer_inventory_page_url(company_id: i32, domain: Option<&str>) -> Str
         .unwrap_or("")
         .to_lowercase();
     if slug.is_empty() {
-        format!("https://granite-manager.com/customer/{company_id}/stones")
+        format!("https://granite-manager.com/customer/{company_id}")
     } else {
-        format!("https://{slug}.granite-manager.com/customer/{company_id}/stones")
+        format!("https://{slug}.granite-manager.com/customer/{company_id}")
     }
 }
 

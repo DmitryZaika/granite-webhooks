@@ -422,12 +422,19 @@ async fn a_new_customer_becomes_a_lead_for_the_managers(pool: MySqlPool) {
     );
     assert_eq!(quote["emails"][0]["recipients"], "jane@new.example");
 
-    // The customer's email links to the quote, which prices as it was shown.
+    // The customer's email lists the colors with no price and links to the
+    // quote, which prices as it was shown.
     let email = sent.lock().unwrap()[0].clone();
     assert_eq!(email.to, vec!["jane@new.example"]);
     assert_eq!(email.from_name.as_deref(), Some("Acme Stone"));
     assert_eq!(email.reply_to, vec!["manager@acme.test".to_string()]);
-    assert!(email.body.contains("$2,245.50"), "{}", email.body);
+    assert_eq!(email.subject, "Acme Stone got your countertop details");
+    assert!(
+        email.body.contains("Granite Absolute Black"),
+        "{}",
+        email.body
+    );
+    assert!(!email.body.contains('$'), "{}", email.body);
     let token = quote["quote"]["portal_token"].as_str().unwrap();
     assert!(
         email.body.contains(&format!(

@@ -24,7 +24,11 @@
 //! There the header decides alone (a bad token is 401 even with a cookie); on
 //! every other route they ignore it. `device::DeviceUser` and
 //! `device::PhoneCaller` take the token on any route, as before.
+//! Without a session cookie, every extractor also takes an agent token
+//! (`Authorization: Bearer agt_...`): the agent then acts as the person who
+//! asked it, read-only, in one company (see [`agent`]).
 
+pub mod agent;
 pub mod cookie;
 pub mod device;
 pub mod session;
@@ -79,8 +83,12 @@ async fn authenticate_with_positions(
         .iter()
         .filter_map(|header| header.to_str().ok())
         .flat_map(|header| cookie_values(header, SESSION_COOKIE_NAME))
-        .find_map(|value| decode_session(&value, &state.session_secret))
-        .ok_or(ApiError::Unauthorized)?;
+        .find_map(|value| decode_session(&value, &state.session_secret));
+    let session = match (session, agent::bearer_token(&parts.headers)) {
+        (Some(session), _) => session,
+        (None, Some(token)) => return agent::authenticate(parts, state, token).await,
+        (None, None) => return Err(ApiError::Unauthorized),
+    };
     let session_id = session.session_id.ok_or(ApiError::Unauthorized)?;
     let user = find_session_user(&state.pool, &session_id)
         .await?

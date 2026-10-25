@@ -137,6 +137,40 @@ async fn a_new_quote_starts_from_the_price_list_and_the_customer(pool: MySqlPool
 }
 
 #[test_db::test(seed)]
+async fn a_quote_by_a_non_rep_goes_to_the_customers_rep(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    price_list(&server, &pool).await;
+    // Dina has no positions; Alice is Rita's.
+    let res = server
+        .post("/v1/quotes")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "customer_id": 1000 }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let id = res.json::<Value>()["id"].as_i64().unwrap();
+    let (rep, salesperson, created_by): (String, i32, i32) =
+        sqlx::query_as("SELECT sales_rep, salesperson_id, created_by FROM quotes WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (rep.as_str(), salesperson, created_by),
+        ("Rita Rep", 100, 107)
+    );
+
+    // Bob has no rep, so Dina can't quote him; Rita can.
+    let res = server
+        .post("/v1/quotes")
+        .with_session(sessions::DEALER)
+        .json(&json!({ "customer_id": 1001 }))
+        .await;
+    res.assert_status(StatusCode::BAD_REQUEST);
+    res.assert_json(&json!({ "error": "Assign this customer to a sales rep first" }));
+    create(&server, json!({ "customer_id": 1001 })).await;
+}
+
+#[test_db::test(seed)]
 async fn the_editor_saves_revisions_and_unsaved_work(pool: MySqlPool) {
     let (server, _) = server(&pool).await;
     price_list(&server, &pool).await;

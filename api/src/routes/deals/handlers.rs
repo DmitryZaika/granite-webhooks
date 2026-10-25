@@ -253,6 +253,8 @@ pub async fn create(
     if input.amount.is_some_and(|amount| amount < 0.0) {
         return Err(ApiError::BadRequest("amount must be 0 or more".into()));
     }
+    crate::routes::customers::service::refuse_import_placeholder(&state.pool, input.customer_id)
+        .await?;
 
     let mut tx = state.pool.begin().await?;
     let customer: Option<(i32, Option<i32>)> = sqlx::query_as(

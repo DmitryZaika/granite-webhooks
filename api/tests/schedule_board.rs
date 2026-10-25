@@ -6,19 +6,19 @@ use serde_json::{Value, json};
 use sqlx::MySqlPool;
 
 /// Calendars 9700 (shown) and 9701 (hidden from Rita); events in April 2026:
-/// a one-off on 9700 titled with customer 1000, one on 9701, a weekly event
-/// from March, one in May, and one of company 101.
+/// a one-off on 9700 for customer 1000, one on 9701, a weekly event from
+/// March, one in May, and one of company 101.
 async fn seed(pool: &MySqlPool) {
     sqlx::raw_sql(
         "INSERT INTO calendars (id, company_id, name, color) VALUES
            (9700, 100, 'Crew A', 'blue'), (9701, 100, 'Crew B', 'red');
          INSERT INTO calendar_hidden_users (calendar_id, user_id, company_id) VALUES (9701, 100, 100);
-         INSERT INTO events (id, title, start_date, end_date, created_user_id, calendar_id, rrule, recurrence_until) VALUES
-           (9710, '1000', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 100, 9700, NULL, NULL),
-           (9711, 'Hidden', '2026-04-11 15:00:00', '2026-04-11 16:00:00', 100, 9701, NULL, NULL),
-           (9712, 'Weekly', '2026-03-02 15:00:00', '2026-03-02 16:00:00', 100, NULL, 'FREQ=WEEKLY', NULL),
-           (9713, 'May', '2026-05-10 15:00:00', '2026-05-10 16:00:00', 100, 9700, NULL, NULL),
-           (9714, 'Other', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 106, NULL, NULL, NULL);
+         INSERT INTO events (id, title, start_date, end_date, created_user_id, calendar_id, rrule, recurrence_until, customer_id) VALUES
+           (9710, 'Install', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 100, 9700, NULL, NULL, 1000),
+           (9711, 'Hidden', '2026-04-11 15:00:00', '2026-04-11 16:00:00', 100, 9701, NULL, NULL, NULL),
+           (9712, 'Weekly', '2026-03-02 15:00:00', '2026-03-02 16:00:00', 100, NULL, 'FREQ=WEEKLY', NULL, NULL),
+           (9713, 'May', '2026-05-10 15:00:00', '2026-05-10 16:00:00', 100, 9700, NULL, NULL, NULL),
+           (9714, 'Other', '2026-04-10 15:00:00', '2026-04-10 16:00:00', 106, NULL, NULL, NULL, NULL);
          INSERT INTO users_positions (user_id, position_id, company_id) VALUES
            (101, 6, 100), (104, 11, 100), (104, 6, 100);
          INSERT INTO user_schedule_colors (company_id, user_id, color) VALUES (100, 101, 'teal');",
@@ -39,6 +39,8 @@ async fn the_schedule_lists_a_ranges_events(pool: MySqlPool) {
         .await
         .json::<Value>();
     assert_eq!(common::ids(&body["events"]), [9712, 9710]);
+    assert_eq!(body["events"][1]["title"], "Install");
+    assert_eq!(body["events"][1]["customer_id"], 1000);
     assert_eq!(body["events"][1]["customer_name"], "Alice Lead");
     assert_eq!(body["events"][1]["start_date"], "2026-04-10T15:00:00Z");
     assert_eq!(body["events"][0]["rrule"], "FREQ=WEEKLY");
@@ -198,4 +200,38 @@ async fn activity_lists_the_latest_changed_events_first(pool: MySqlPool) {
         .json::<Value>();
     assert_eq!(page["events"][0]["event"]["id"], 9710);
     assert_eq!(page["has_more"], true);
+}
+
+#[test_db::test(seed)]
+async fn admins_pick_the_day_weeks_start_on(pool: MySqlPool) {
+    let server = server(pool);
+    let settings = |session: &'static str| {
+        let request = server.get("/v1/schedule/settings").with_session(session);
+        async move { request.await.json::<Value>() }
+    };
+    let set = |session: &'static str, day: &str| {
+        server
+            .put("/v1/schedule/settings")
+            .with_session(session)
+            .json(&json!({ "week_starts_on": day }))
+    };
+    assert_eq!(
+        settings(sessions::REP).await,
+        json!({ "week_starts_on": "sunday" })
+    );
+    set(sessions::REP, "monday")
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    set(sessions::ADMIN, "friday")
+        .await
+        .assert_status_bad_request();
+    set(sessions::ADMIN, "monday")
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(settings(sessions::REP).await["week_starts_on"], "monday");
+    // Another company keeps its own.
+    assert_eq!(
+        settings(sessions::OTHER_COMPANY_REP).await["week_starts_on"],
+        "sunday"
+    );
 }

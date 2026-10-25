@@ -6,7 +6,8 @@
 //! - `POST /v1/ai/email-template` → an email template from a description
 //! - `POST /v1/ai/invoice-edit` → a QuickBooks invoice edit from an instruction
 //! - `POST /v1/ai/signature-fields` → what each blank of a contract PDF is for
-//! - `POST /v1/ai/agentic-questions`, `GET .../{id}` → questions for the agent
+//! - `POST /v1/ai/agentic-questions`, `GET .../{id}` → questions for the agent,
+//!   and `POST .../{id}/agent-token` → the agent's read-only token
 //! - `GET /v1/ai/design/{pictures,deals}` → what the AI design tool picks from
 //! - `GET /v1/ai/design/stones`, `POST /v1/ai/design` → AI Design's stones and
 //!   the kitchen redrawn with them (streamed)
@@ -49,6 +50,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(signature_fields::detect))
         .routes(routes!(agentic::ask))
         .routes(routes!(agentic::job))
+        .routes(routes!(agentic::agent_token))
         .routes(routes!(design::pictures))
         .routes(routes!(design::deals))
         .routes(routes!(design_render::stones))

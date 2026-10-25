@@ -300,18 +300,21 @@ async fn rule(pool: &MySqlPool, calendar: i32, channel: &str, body: &str, is_def
     i32::try_from(flow).unwrap()
 }
 
-/// An event `hours` from now, made long ago (or just now).
+/// An event `hours` from now, made long ago (or just now); a title that is a
+/// customer id is that customer's event.
 async fn event(pool: &MySqlPool, calendar: i32, title: &str, hours: i32, made_now: bool) {
     sqlx::query(
-        "INSERT INTO events (title, start_date, end_date, created_user_id, calendar_id, location, created_date)
+        "INSERT INTO events (title, start_date, end_date, created_user_id, calendar_id, location, created_date,
+                             customer_id)
          VALUES (?, UTC_TIMESTAMP() + INTERVAL ? HOUR, UTC_TIMESTAMP() + INTERVAL ? HOUR, 100, ?, '1 Main St',
-                 IF(?, CURRENT_TIMESTAMP, '2000-01-01'))",
+                 IF(?, CURRENT_TIMESTAMP, '2000-01-01'), ?)",
     )
     .bind(title)
     .bind(hours)
     .bind(hours + 2)
     .bind(calendar)
     .bind(made_now)
+    .bind(title.parse::<i32>().ok())
     .execute(pool)
     .await
     .unwrap();
@@ -549,4 +552,51 @@ async fn events_get_the_default_flow_or_the_ones_they_pick(pool: MySqlPool) {
         .collect();
     bodies.sort();
     assert_eq!(bodies, ["<p>Default Alice</p>", "<p>Picked Alice</p>"]);
+}
+
+#[test_db::test(seed)]
+async fn a_confirmation_goes_out_right_away(pool: MySqlPool) {
+    sqlx::raw_sql(CALENDARS).execute(&pool).await.unwrap();
+    let template = sqlx::query(
+        "INSERT INTO schedule_notification_templates (company_id, name, channel, subject, body)
+         VALUES (100, 'Confirmation', 'email', 'Booked, {{customer.first_name}}',
+                 'See you {{appointment.date}} at {{appointment.address}}.')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_id();
+    // Two weeks out: far before any flow step would send.
+    event(&pool, 8830, "1000", 14 * 24, true).await;
+    let booked = last_event(&pool).await;
+    event(&pool, 8830, "Crew meeting", 2, true).await;
+    let crew = last_event(&pool).await;
+    let (server, sent) = server(&pool).await;
+    let confirm = |event: i32, template: u64| {
+        server
+            .post(&format!("/v1/events/{event}/confirmation"))
+            .with_session(sessions::REP)
+            .json(&json!({ "template_id": template }))
+    };
+
+    let body: Value = confirm(booked, template).await.json();
+    assert_eq!(body, json!({ "channel": "email" }));
+    let emails = sent.emails.lock().unwrap().clone();
+    assert_eq!(emails.len(), 1);
+    assert_eq!(emails[0].subject, "Booked, Alice");
+    assert!(emails[0].body.starts_with("<p>See you "));
+    assert!(emails[0].body.ends_with(" at 1 Main St.</p>"));
+    let history: Vec<String> =
+        sqlx::query_scalar("SELECT message FROM event_history WHERE event_id = ?")
+            .bind(booked)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(history, ["Confirmation sent: Confirmation"]);
+
+    confirm(crew, template).await.assert_status_bad_request();
+    confirm(booked, template + 1)
+        .await
+        .assert_status_bad_request();
+    assert_eq!(sent.emails.lock().unwrap().len(), 1);
 }

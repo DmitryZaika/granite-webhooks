@@ -61,6 +61,9 @@ pub struct AppState {
     /// `LAMBDA_KEY`: the `Authorization` the scheduled jobs (`/v1/jobs/*`)
     /// must send. Jobs are refused when unset.
     pub job_key: Option<Arc<str>>,
+    /// `AGENT_RUNNER_KEY` (32+ characters): what the claude-job-runner sends
+    /// for an agent token. No tokens are issued when unset.
+    pub agent_runner_key: Option<Arc<str>>,
     /// Where the contract templates are read from (a stub in tests).
     pub contract_templates_base: Arc<str>,
     /// Domain and `Secure` flag of the session cookie the auth routes set.
@@ -168,6 +171,7 @@ impl AppState {
             transcriber: Transcriber::disabled(),
             qbo: Qbo::disabled(),
             job_key: None,
+            agent_runner_key: None,
             contract_templates_base: Arc::from(crate::routes::sales::contract::TEMPLATES_BASE),
             cookie: crate::auth::cookie::CookieConfig::default(),
             app_url: Arc::from("http://localhost:5173"),
@@ -360,6 +364,14 @@ impl AppState {
     }
 
     #[must_use]
+    pub fn with_agent_runner_key(mut self, key: &str) -> Self {
+        self.agent_runner_key = Some(key.trim())
+            .filter(|key| key.len() >= 32)
+            .map(Arc::from);
+        self
+    }
+
+    #[must_use]
     pub fn with_maps(mut self, maps: Maps) -> Self {
         self.maps = maps;
         self
@@ -388,6 +400,7 @@ impl AppState {
             .with_transcriber(Transcriber::from_env())
             .with_qbo(Qbo::from_env())
             .with_job_key(&std::env::var("LAMBDA_KEY").unwrap_or_default())
+            .with_agent_runner_key(&std::env::var("AGENT_RUNNER_KEY").unwrap_or_default())
             .with_cookie(cookie_config_from_env())
             .with_stripe(Stripe::from_env())
             .with_stripe_webhook_secret(&std::env::var("STRIPE_WEBHOOK_SECRET").unwrap_or_default())

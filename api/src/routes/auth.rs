@@ -7,6 +7,8 @@
 //! - `POST /v1/auth/password-reset`              → email a reset link
 //! - `GET  /v1/auth/password-reset/{token}`      → is the link still good
 //! - `POST /v1/auth/password-reset/{token}`      → set a new password
+//! - `GET  /v1/auth/invite/{token}`              → whose invite it is
+//! - `POST /v1/auth/invite/{token}`              → set up the account, sign in
 //!
 //! Replaces the Remix `login`, `logout`, `forgot-password`,
 //! `reset-password.$token` and `api.superadmin.switchCompany` routes. The
@@ -20,7 +22,9 @@
 //! are 384-bit random tokens stored as SHA-256, valid for an hour and once,
 //! built from `APP_URL` (never from request headers); asking for one says
 //! the same whether or not the email exists. Setting a password ends every
-//! session of the user.
+//! session of the user. Invite links (a manager added the user by email) are
+//! the same tokens, valid for 7 days and once, and only while the account
+//! has no password; using one signs in.
 
 use crate::auth::CurrentUser;
 use crate::auth::cookie::{
@@ -37,6 +41,7 @@ use axum::extract::{Path, State};
 use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use common::utils::email_body::escape_html;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -52,6 +57,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(set_active_company))
         .routes(routes!(request_reset))
         .routes(routes!(check_reset, reset_password))
+        .routes(routes!(check_invite, accept_invite))
 }
 
 /// Failed sign-ins allowed per email and client address in the window.
@@ -66,6 +72,8 @@ const RESET_TOKEN_BYTES: usize = 48;
 const RESET_MINUTES: i64 = 60;
 /// One reset email per user this often.
 const RESET_INTERVAL_SECONDS: i64 = 60;
+/// An invite link works this long.
+const INVITE_DAYS: i64 = 7;
 /// Shortest new password.
 const MIN_PASSWORD: usize = 8;
 /// bcrypt cost of new passwords (as Remix).
@@ -396,6 +404,12 @@ pub async fn login(
         .bind(&email_hash)
         .execute(pool)
         .await?;
+    start_session(&state, user_id).await
+}
+
+/// Signs the user in: a new session, the sign-in answer and its cookie.
+async fn start_session(state: &AppState, user_id: i32) -> ApiResult<Response> {
+    let pool = &state.pool;
     let session_id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO sessions (id, user_id, expiration_date)
@@ -811,6 +825,252 @@ pub async fn reset_password(
     )
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// An invite link that was made for a user.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SentInvite {
+    /// The link, to share another way if the email does not arrive.
+    pub invite_url: String,
+    /// The link was emailed to the user.
+    pub email_sent: bool,
+}
+
+/// Makes a new invite link for a user (older links stop working) and emails
+/// it to them. A failed email still answers the link, for the manager to
+/// share.
+pub(crate) async fn send_invite(state: &AppState, user_id: i32) -> ApiResult<SentInvite> {
+    let pool = &state.pool;
+    let (address, company_id, company_name): (String, i32, Option<String>) = sqlx::query_as(
+        "SELECT u.email, u.company_id, c.name FROM users u
+           LEFT JOIN company c ON c.id = u.company_id
+          WHERE u.id = ? AND u.is_deleted = 0",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+    let token = random_token()?;
+    sqlx::query("UPDATE password_reset_tokens SET used = TRUE WHERE user_id = ? AND used = FALSE")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    sqlx::query(
+        "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+         VALUES (?, ?, NOW() + INTERVAL ? DAY)",
+    )
+    .bind(user_id)
+    .bind(sha256_hex(&token))
+    .bind(INVITE_DAYS)
+    .execute(pool)
+    .await?;
+    let subdomain = company_subdomain(pool, company_id).await?;
+    let invite_url = format!(
+        "{}/invite/{token}",
+        app_origin(&state.app_url, subdomain.as_deref())
+    );
+    let company = company_name
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "your company".into());
+    let email = OutgoingEmail {
+        from_name: Some("Granite Manager".into()),
+        from_address: "noreply@granite-manager.com".into(),
+        to: vec![address.trim().to_string()],
+        cc: Vec::new(),
+        bcc: Vec::new(),
+        subject: format!("You're invited to {company} on Granite Manager"),
+        body: invite_email_html(&company, &invite_url),
+        signature: None,
+        reply_to: Vec::new(),
+        in_reply_to: None,
+        references: Vec::new(),
+        attachments: Vec::new(),
+        transactional: true,
+    };
+    let email_sent = match state.webhooks.send_email(&email).await {
+        Ok(_) => true,
+        Err(err) => {
+            tracing::warn!(?err, user_id, "invite email failed");
+            false
+        }
+    };
+    Ok(SentInvite {
+        invite_url,
+        email_sent,
+    })
+}
+
+fn invite_email_html(company: &str, url: &str) -> String {
+    let company = escape_html(company);
+    format!(
+        r#"<div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+  <h2 style="color: #1e293b;">Join {company}</h2>
+  <p style="color: #475569; line-height: 1.6;">You've been added to {company} on Granite Manager. Click the button below to enter your name, phone number and password. This link expires in {INVITE_DAYS} days.</p>
+  <a href="{url}" style="display: inline-block; background-color: #2563eb; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 16px 0;">Set up your account</a>
+  <p style="color: #94a3b8; font-size: 13px; margin-top: 24px;">If you weren't expecting this, you can safely ignore this email.</p>
+  <p style="color: #94a3b8; font-size: 12px;">Link: {url}</p>
+</div>"#
+    )
+}
+
+#[derive(sqlx::FromRow)]
+struct InvitedUser {
+    id: i32,
+    email: String,
+    company_name: Option<String>,
+}
+
+/// The user of a live, unused link who has no password yet.
+async fn invited_user(pool: &sqlx::MySqlPool, token: &str) -> sqlx::Result<Option<InvitedUser>> {
+    if token.len() != RESET_TOKEN_BYTES * 2 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(None);
+    }
+    sqlx::query_as(
+        "SELECT u.id, u.email, c.name AS company_name
+           FROM password_reset_tokens t
+           JOIN users u ON u.id = t.user_id
+           LEFT JOIN company c ON c.id = u.company_id
+          WHERE t.token_hash = ? AND t.used = FALSE AND t.expires_at > NOW()
+            AND u.is_deleted = 0 AND (u.password IS NULL OR u.password = '')
+          LIMIT 1",
+    )
+    .bind(sha256_hex(token))
+    .fetch_optional(pool)
+    .await
+}
+
+/// `GET /v1/auth/invite/{token}`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InviteDetails {
+    /// The account's email; they sign in with it.
+    pub email: String,
+    /// The company that added them.
+    pub company_name: Option<String>,
+}
+
+/// Check an invite link
+///
+/// Whose invite it is while the link can still set up the account; 404 when
+/// it is unknown, used or expired, or the account already has a password.
+#[utoipa::path(
+    get,
+    path = "/v1/auth/invite/{token}",
+    operation_id = "check_invite",
+    tag = "auth",
+    params(("token" = String, Path, description = "The token from the emailed link")),
+    responses(
+        (status = 200, description = "The link works", body = InviteDetails),
+        (status = 404, description = "Invalid or expired link", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    )
+)]
+pub async fn check_invite(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> ApiResult<Json<InviteDetails>> {
+    let invited = invited_user(&state.pool, &token)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(InviteDetails {
+        email: invited.email,
+        company_name: invited.company_name,
+    }))
+}
+
+/// Body of `POST /v1/auth/invite/{token}`.
+#[derive(Deserialize, ToSchema)]
+pub struct JoinInput {
+    /// Their name.
+    pub name: String,
+    /// Their phone, at least 10 digits.
+    pub phone_number: String,
+    /// At least 8 characters.
+    pub password: String,
+}
+
+impl std::fmt::Debug for JoinInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JoinInput")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Set up an invited account
+///
+/// Uses an invite link once: saves the user's name, phone and password
+/// (bcrypt), spends the link and signs in as `POST /v1/auth/login` does.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/invite/{token}",
+    operation_id = "accept_invite",
+    tag = "auth",
+    params(("token" = String, Path, description = "The token from the emailed link")),
+    request_body = JoinInput,
+    responses(
+        (status = 200, description = "Set up and signed in; the session cookie is set", body = AuthSession),
+        (status = 400, description = "Name missing, phone or password too short", body = ErrorBody),
+        (status = 404, description = "Invalid or expired link", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    )
+)]
+pub async fn accept_invite(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    JsonBody(input): JsonBody<JoinInput>,
+) -> ApiResult<Response> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("Name is required".into()));
+    }
+    let phone = input.phone_number.trim().to_string();
+    if phone.chars().filter(char::is_ascii_digit).count() < 10 {
+        return Err(ApiError::BadRequest(
+            "Phone must include at least 10 digits".into(),
+        ));
+    }
+    // Trimmed like sign-in does, so the new password always signs in.
+    let password = input.password.trim().to_string();
+    if password.chars().count() < MIN_PASSWORD || password.len() > 200 {
+        return Err(ApiError::BadRequest(
+            "Password must be at least 8 characters long.".into(),
+        ));
+    }
+    let invited = invited_user(&state.pool, &token)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let hash = tokio::task::spawn_blocking(move || bcrypt::hash(password, BCRYPT_COST))
+        .await
+        .map_err(|err| ApiError::Internal(err.to_string()))?
+        .map_err(|err| ApiError::Internal(err.to_string()))?;
+    let mut tx = state.pool.begin().await?;
+    // Spend the link first: a second use of the same token finds nothing.
+    let spent = sqlx::query(
+        "UPDATE password_reset_tokens SET used = TRUE
+          WHERE token_hash = ? AND used = FALSE AND expires_at > NOW()",
+    )
+    .bind(sha256_hex(&token))
+    .execute(&mut *tx)
+    .await?;
+    if spent.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    let saved = sqlx::query(
+        "UPDATE users SET name = ?, phone_number = ?, password = ?
+          WHERE id = ? AND is_deleted = 0 AND (password IS NULL OR password = '')",
+    )
+    .bind(&name)
+    .bind(&phone)
+    .bind(hash)
+    .bind(invited.id)
+    .execute(&mut *tx)
+    .await?;
+    if saved.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    tx.commit().await?;
+    start_session(&state, invited.id).await
 }
 
 #[cfg(test)]

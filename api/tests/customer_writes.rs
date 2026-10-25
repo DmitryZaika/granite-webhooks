@@ -488,3 +488,33 @@ async fn custom_company_sources_are_accepted(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::NO_CONTENT);
 }
+
+#[test_db::test(seed)]
+async fn the_moraware_import_shared_customer_cannot_be_changed(pool: MySqlPool) {
+    sqlx::query("UPDATE customers SET name = 'Moraware import', created_by = 'Moraware import' WHERE id = 1001")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let server = server(pool.clone());
+    let res = server
+        .put("/v1/customers/1001")
+        .with_session(RITA)
+        .json(&json!({ "name": "Igor Chara", "source": "check-in", "emails": ["igor@new.test"], "phone": "317-441-3915" }))
+        .await;
+    res.assert_status(StatusCode::CONFLICT);
+    server
+        .put("/v1/customers/1001/sales-rep")
+        .with_session(RITA)
+        .json(&json!({ "sales_rep": 100 }))
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    let (name, phone, rep): (String, Option<String>, Option<i32>) =
+        sqlx::query_as("SELECT name, phone, sales_rep FROM customers WHERE id = 1001")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(name, "Moraware import");
+    assert_ne!(phone.as_deref(), Some("317-441-3915"));
+    assert!(rep.is_none());
+    assert!(open_deals(&pool, 1001).await.is_empty());
+}

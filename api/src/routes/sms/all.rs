@@ -475,8 +475,7 @@ async fn merged_thread(
     for (provider, agent) in sources {
         let provider = *provider;
         upkeep(state, provider, user.company_id).await?;
-        let access =
-            thread_access(pool, provider, user, scope, agent.as_deref(), &digits).await?;
+        let access = thread_access(pool, provider, user, scope, agent.as_deref(), &digits).await?;
         let Some(access) = access else {
             continue;
         };

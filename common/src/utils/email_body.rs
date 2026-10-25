@@ -248,7 +248,7 @@ static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(sanitizer)
 
 /// Sanitizes the note's HTML, opens its links in a new tab and turns bare
 /// URLs into links.
-fn sanitize_body(html: &str) -> String {
+pub fn sanitize_body(html: &str) -> String {
     let sanitized = SANITIZER.clean(html).to_string();
     let with_targets = ANCHOR_OPEN.replace_all(&sanitized, |captures: &Captures| {
         if TARGET_ATTR.is_match(&captures[1]) {

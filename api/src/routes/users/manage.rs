@@ -1,20 +1,23 @@
 //! Managing a company's users (the admin Users page): list, add, edit,
 //! delete, with their positions.
 //!
-//! - `GET    /v1/admin/users`       → the users and the page's settings
-//! - `POST   /v1/admin/users`       → add a user
-//! - `GET    /v1/admin/users/{id}`  → one user for the edit form
-//! - `PUT    /v1/admin/users/{id}`  → save them
-//! - `DELETE /v1/admin/users/{id}`  → delete them (soft)
+//! - `GET    /v1/admin/users`              → the users and the page's settings
+//! - `POST   /v1/admin/users`              → add a user by email, invite them
+//! - `GET    /v1/admin/users/{id}`         → one user for the edit form
+//! - `PUT    /v1/admin/users/{id}`         → save them
+//! - `DELETE /v1/admin/users/{id}`         → delete them (soft)
+//! - `POST   /v1/admin/users/{id}/invite`  → email them a new invite link
 //!
 //! Superusers manage every company; a Manager admin their own. Superusers
-//! and Super Admins can only be changed by a superuser. Replaces the Remix
-//! `admin.users*` loaders and actions.
+//! and Super Admins can only be changed by a superuser. A new user sets their
+//! own name, phone and password from the invite link (`auth.rs`). Replaces
+//! the Remix `admin.users*` loaders and actions.
 
 use crate::auth::UserManager;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::routes::auth::{SentInvite, send_invite};
 use crate::routes::company::queries::company_features;
 use crate::routes::sms::provider::phone10;
 use crate::state::AppState;
@@ -67,6 +70,8 @@ pub struct ManagedUser {
     pub ringcentral_phone_number: Option<String>,
     /// A superuser or Super Admin: only superusers may change them.
     pub is_protected: bool,
+    /// Has not set up their account from the invite yet (no password).
+    pub invite_pending: bool,
 }
 
 /// A company to pick.
@@ -110,6 +115,9 @@ pub struct UsersPage {
 
 const PROTECTED: &str = "(u.is_superuser = 1 OR EXISTS (SELECT 1 FROM users_positions up \
      WHERE up.user_id = u.id AND up.position_id = 9))";
+
+/// No password yet: invited, not set up.
+const PENDING: &str = "(u.password IS NULL OR u.password = '')";
 
 /// Users counting toward `max_users` (`COUNTS_TOWARD_COMPANY_USER_LIMIT_SQL`).
 async fn user_limit(pool: &MySqlPool, company_id: i32) -> Result<UserLimit, sqlx::Error> {
@@ -183,7 +191,8 @@ pub async fn list(
     };
     let columns = format!(
         "u.id, u.name, u.email, u.phone_number, u.cloudtalk_agent_id, u.cloudtalk_phone_number,
-         u.ringcentral_extension_id, u.ringcentral_phone_number, {PROTECTED} AS is_protected"
+         u.ringcentral_extension_id, u.ringcentral_phone_number, {PROTECTED} AS is_protected,
+         {PENDING} AS invite_pending"
     );
     let users: Vec<ManagedUser> = match company_id {
         Some(company) => {
@@ -275,15 +284,8 @@ fn checked_email(email: &str) -> ApiResult<String> {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewUser {
-    /// Name.
-    pub name: String,
-    /// Phone (10+ characters) or empty.
-    #[serde(default)]
-    pub phone_number: Option<String>,
-    /// Email, used to sign in.
+    /// Email: the invite goes there, and they sign in with it.
     pub email: String,
-    /// Password (4+ characters).
-    pub password: String,
     /// Superusers: the company (others add to their own).
     #[serde(default)]
     pub company_id: Option<i32>,
@@ -295,18 +297,24 @@ pub struct NewUser {
     pub is_admin: bool,
 }
 
-/// `{ id }` of a new user.
+/// A new user and their invite.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CreatedUser {
     /// The new user.
     pub id: i32,
+    /// The invite link, to share another way if the email does not arrive.
+    pub invite_url: String,
+    /// The invite was emailed to them.
+    pub email_sent: bool,
 }
 
 /// Add a user
 ///
-/// Creates a user with their positions in the caller's company
-/// (superusers: in `company_id`). The email must be unused, even by a
-/// deleted user.
+/// Creates a user with their email and positions in the caller's company
+/// (superusers: in `company_id`) and emails them an invite link (7 days) to
+/// set their own name, phone and password; they cannot sign in before. The
+/// email must be unused, even by a deleted user. When the email fails the
+/// user is still added: share the returned link instead.
 #[utoipa::path(
     post,
     path = "/v1/admin/users",
@@ -314,8 +322,8 @@ pub struct CreatedUser {
     tag = "users",
     request_body = NewUser,
     responses(
-        (status = 201, description = "Added", body = CreatedUser),
-        (status = 400, description = "Missing or invalid field, or positions that can't go together", body = ErrorBody),
+        (status = 201, description = "Added and invited", body = CreatedUser),
+        (status = 400, description = "Invalid email, or positions that can't go together", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller may not manage users", body = ErrorBody),
         (status = 409, description = "The email is taken", body = ErrorBody),
@@ -328,18 +336,7 @@ pub async fn create(
     UserManager(user): UserManager,
     JsonBody(input): JsonBody<NewUser>,
 ) -> ApiResult<(StatusCode, Json<CreatedUser>)> {
-    let name = input.name.trim();
-    if name.is_empty() {
-        return Err(ApiError::BadRequest("Name is required".into()));
-    }
-    let phone = checked_phone(input.phone_number.as_deref())?;
     let email = checked_email(&input.email)?;
-    let password = input.password.trim();
-    if password.chars().count() < 4 {
-        return Err(ApiError::BadRequest(
-            "Password must be at least 4 characters".into(),
-        ));
-    }
     let company_id = if user.is_superuser {
         input
             .company_id
@@ -364,17 +361,13 @@ pub async fn create(
             "A user with this email already exists".into()
         }));
     }
-    let hash = bcrypt::hash(password, 10)
-        .map_err(|err| ApiError::Internal(format!("password hash: {err}")))?;
     let mut tx = state.pool.begin().await?;
+    // No password until they set up the account; the name is theirs to fill.
     let inserted = sqlx::query(
-        "INSERT INTO users (name, phone_number, email, password, company_id, is_employee, is_admin)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO users (name, email, company_id, is_employee, is_admin)
+         VALUES ('', ?, ?, ?, ?)",
     )
-    .bind(name)
-    .bind(&phone)
     .bind(&email)
-    .bind(&hash)
     .bind(company_id)
     .bind(is_employee(&positions))
     .bind(input.is_admin)
@@ -400,10 +393,14 @@ pub async fn create(
         .await?;
     }
     tx.commit().await?;
+    let id = i32::try_from(id).unwrap_or(i32::MAX);
+    let invite = send_invite(&state, id).await?;
     Ok((
         StatusCode::CREATED,
         Json(CreatedUser {
-            id: i32::try_from(id).unwrap_or(i32::MAX),
+            id,
+            invite_url: invite.invite_url,
+            email_sent: invite.email_sent,
         }),
     ))
 }
@@ -412,6 +409,15 @@ pub async fn create(
 struct TargetRow {
     company_id: i32,
     is_protected: bool,
+}
+
+async fn invite_pending(pool: &MySqlPool, id: i32) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT {PENDING} FROM users u WHERE u.id = ?"
+    )))
+    .bind(id)
+    .fetch_one(pool)
+    .await
 }
 
 /// The user the caller may change: live, of their company (superusers: any),
@@ -460,6 +466,8 @@ pub struct EditedUser {
     pub ringcentral_extension_id: Option<String>,
     /// `RingCentral` outbound number.
     pub ringcentral_phone_number: Option<String>,
+    /// Has not set up their account from the invite yet (no password).
+    pub invite_pending: bool,
 }
 
 /// The edit form.
@@ -524,13 +532,14 @@ pub async fn get(
 ) -> ApiResult<Json<UserForm>> {
     let pool = &state.pool;
     target(pool, &user, id).await?;
-    let edited: EditedUser = sqlx::query_as(
-        "SELECT id, name, email, phone_number, company_id,
-                COALESCE(is_admin, 0) <> 0 AS is_admin, COALESCE(is_superuser, 0) <> 0 AS is_superuser,
-                COALESCE(is_employee, 0) <> 0 AS is_employee, cloudtalk_agent_id,
-                cloudtalk_phone_number, ringcentral_extension_id, ringcentral_phone_number
-           FROM users WHERE id = ?",
-    )
+    let edited: EditedUser = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT u.id, u.name, u.email, u.phone_number, u.company_id,
+                COALESCE(u.is_admin, 0) <> 0 AS is_admin, COALESCE(u.is_superuser, 0) <> 0 AS is_superuser,
+                COALESCE(u.is_employee, 0) <> 0 AS is_employee, u.cloudtalk_agent_id,
+                u.cloudtalk_phone_number, u.ringcentral_extension_id, u.ringcentral_phone_number,
+                {PENDING} AS invite_pending
+           FROM users u WHERE u.id = ?"
+    )))
     .bind(id)
     .fetch_one(pool)
     .await?;
@@ -574,7 +583,7 @@ pub async fn get(
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UserChanges {
-    /// Name.
+    /// Name (may stay empty while their invite is pending).
     pub name: String,
     /// Email, or empty for none.
     #[serde(default)]
@@ -770,7 +779,7 @@ pub async fn update(
     let pool = &state.pool;
     let existing_company = target(pool, &user, id).await?;
     let name = input.name.trim();
-    if name.is_empty() {
+    if name.is_empty() && !invite_pending(pool, id).await? {
         return Err(ApiError::BadRequest("Name is required".into()));
     }
     let phone = checked_phone(input.phone_number.as_deref())?;
@@ -961,6 +970,41 @@ pub async fn delete(
     )
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Resend a user's invite
+///
+/// Emails a user who has not set up their account a new invite link (7
+/// days); older links stop working. When the email fails the link is still
+/// answered, to share another way.
+#[utoipa::path(
+    post,
+    path = "/v1/admin/users/{id}/invite",
+    operation_id = "resend_user_invite",
+    tag = "users",
+    params(("id" = i32, Path, description = "User id")),
+    responses(
+        (status = 200, description = "A new link was made", body = SentInvite),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller may not manage users, or only a superuser may change this one", body = ErrorBody),
+        (status = 404, description = "No such live user of the caller's company", body = ErrorBody),
+        (status = 409, description = "They already set up their account", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn invite(
+    State(state): State<AppState>,
+    UserManager(user): UserManager,
+    Path(id): Path<i32>,
+) -> ApiResult<Json<SentInvite>> {
+    target(&state.pool, &user, id).await?;
+    if !invite_pending(&state.pool, id).await? {
+        return Err(ApiError::Conflict(
+            "This user already set up their account".into(),
+        ));
+    }
+    Ok(Json(send_invite(&state, id).await?))
 }
 
 #[cfg(test)]

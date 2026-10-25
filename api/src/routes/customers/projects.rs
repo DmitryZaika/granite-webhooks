@@ -224,6 +224,7 @@ pub async fn set_parent(
     in_company(pool, user.company_id, id)
         .await?
         .ok_or(ApiError::NotFound)?;
+    super::service::refuse_import_placeholder(pool, id).await?;
     in_company(pool, user.company_id, body.parent_id)
         .await?
         .ok_or(ApiError::NotFound)?;

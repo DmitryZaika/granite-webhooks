@@ -5,7 +5,7 @@ use super::config::{Config, Mode};
 use super::emails;
 use super::github::{Dispatch, DispatchError, Dispatcher};
 use super::ledger::{self, Judgement, Verdict};
-use super::model::{RunView, SkipReason, Source};
+use super::model::{LastSeen, RunView, SkipReason, Source};
 use super::notify::{self, Email, Mailer};
 use super::policy::{self, Candidate};
 use super::posthog::{Issue, IssueEvents, IssueSource};
@@ -552,8 +552,60 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
             }
         }
         if !previewed.is_empty() {
-            self.queue(emails::preview_digest(&previewed, config));
+            let seen = self.last_seen(&previewed).await?;
+            self.queue(emails::preview_digest(&previewed, &seen, config));
         }
         Ok(())
+    }
+
+    /// Where and to whom each run's error last happened, by PostHog issue id:
+    /// the page or request from PostHog, the user from `users`. Empty when
+    /// PostHog cannot be read in time; the digest goes out without it.
+    async fn last_seen(
+        &mut self,
+        runs: &[RunView],
+    ) -> Result<HashMap<String, LastSeen>, sqlx::Error> {
+        let Some(oldest) = runs.iter().map(|run| run.issue_created_at).min() else {
+            return Ok(HashMap::new());
+        };
+        if self.out_of_time() {
+            return Ok(HashMap::new());
+        }
+        let ids: Vec<String> = runs
+            .iter()
+            .map(|run| run.posthog_issue_id.clone())
+            .collect();
+        let since = oldest - Duration::hours(EVENTS_LOOKBACK_HOURS);
+        let events = match self.deps.source.events(&ids, since).await {
+            Ok(events) => events,
+            Err(error) => {
+                self.failed("preview details", &error);
+                return Ok(HashMap::new());
+            }
+        };
+        let mut seen = HashMap::new();
+        for events in events {
+            // Signed-in browsers report as the user id; servers and signed-out
+            // pages as anything else.
+            let user_id = events
+                .distinct_id
+                .as_deref()
+                .and_then(|id| id.parse::<i32>().ok());
+            let (user_name, company_id) = match user_id {
+                Some(id) => ledger::user(&mut *self.conn, id).await?.unwrap_or_default(),
+                None => (None, None),
+            };
+            seen.insert(
+                events.issue_id,
+                LastSeen {
+                    url: events.url,
+                    request: events.request,
+                    user_id,
+                    user_name,
+                    company_id,
+                },
+            );
+        }
+        Ok(seen)
     }
 }

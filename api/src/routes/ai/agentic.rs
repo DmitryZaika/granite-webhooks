@@ -2,6 +2,8 @@
 //!
 //! - `POST /v1/ai/agentic-questions` → queue a question
 //! - `GET  /v1/ai/agentic-questions/{id}` → its progress, and the answer
+//! - `POST /v1/ai/agentic-questions/{id}/agent-token` → the runner's token to
+//!   read the API as the asker (see [`crate::auth::agent`])
 //!
 //! A question is a `chat_messages` row (`sender = 'user'`, `is_agentic = 1`)
 //! the runner polls and answers with a `sender = 'ai'` row it points at from
@@ -10,6 +12,7 @@
 //! Replaces the Remix `api.agentic-chat` route.
 
 use crate::auth::EmployeeUser;
+use crate::auth::agent::{self, AgentRunner, Claims, TOKEN_TTL_SECS};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::state::AppState;
@@ -234,6 +237,80 @@ fn to_job(row: JobRow) -> AgenticJob {
         },
         status,
     }
+}
+
+/// A token the agent reads the API with.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentToken {
+    /// Send as `Authorization: Bearer <token>`.
+    pub token: String,
+    /// When it stops working (unix seconds); it also stops once the question
+    /// is `done` or `failed`.
+    pub expires_at: i64,
+    /// The asker, whom the token acts as.
+    pub user_id: i32,
+    /// The only company the token sees.
+    pub company_id: i32,
+}
+
+/// Issue an agent token
+///
+/// For the claude-job-runner, with `AGENT_RUNNER_KEY`: a token that lets its
+/// agent read the API as the person who asked question `id`, in the company
+/// they asked in. It reads only (plus `POST /v1/call-transcripts`), never as
+/// a superuser, and works for 30 minutes or until the question is answered.
+/// Ask for a new one when it runs out mid-answer.
+#[utoipa::path(
+    post,
+    path = "/v1/ai/agentic-questions/{id}/agent-token",
+    operation_id = "issue_agent_token",
+    tag = "ai",
+    params(("id" = i64, Path, description = "The question's id")),
+    responses(
+        (status = 201, description = "The token", body = AgentToken),
+        (status = 401, description = "Missing or wrong runner key", body = ErrorBody),
+        (status = 404, description = "No open question asked in the last 7 days by someone who can still act in its company", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("agent_runner_key" = []))
+)]
+pub async fn agent_token(
+    State(state): State<AppState>,
+    _runner: AgentRunner,
+    Path(id): Path<i64>,
+) -> ApiResult<(
+    StatusCode,
+    [(header::HeaderName, &'static str); 1],
+    Json<AgentToken>,
+)> {
+    let (user_id, company_id) = agent::open_question(&state.pool, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    agent::asker(&state.pool, user_id, company_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let claims = Claims {
+        q: id,
+        u: user_id,
+        c: company_id,
+        exp: chrono::Utc::now().timestamp() + TOKEN_TTL_SECS,
+    };
+    lambda_http::tracing::info!(
+        question = id,
+        user = user_id,
+        company = company_id,
+        "agent token issued"
+    );
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(AgentToken {
+            token: agent::issue(&state.session_secret, &claims),
+            expires_at: claims.exp,
+            user_id,
+            company_id,
+        }),
+    ))
 }
 
 #[cfg(test)]

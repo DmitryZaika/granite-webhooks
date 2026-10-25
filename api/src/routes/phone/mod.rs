@@ -140,7 +140,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(admin::list_admin_devices))
         .routes(routes!(admin::revoke_admin_device))
         .routes(routes!(admin::get_admin_hours, admin::save_admin_hours))
-        .routes(routes!(admin::get_admin_recording, admin::save_admin_recording))
+        .routes(routes!(
+            admin::get_admin_recording,
+            admin::save_admin_recording
+        ))
         .routes(routes!(connect::connect_telnyx))
         .routes(routes!(connect::search_numbers))
         .routes(routes!(connect::buy_number))

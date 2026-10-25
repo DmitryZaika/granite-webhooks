@@ -53,17 +53,27 @@ async fn managers_add_users_with_positions(pool: MySqlPool) {
         .post("/v1/admin/users")
         .with_session(ADA)
         .json(&json!({
-            "name": "Ian Installer",
             "email": " Ian@Acme.TEST ",
-            "password": "secret1",
             "positions": [6, 9, 8],
             "company_id": 101,
         }))
         .await;
     res.assert_status(StatusCode::CREATED);
-    let id = res.json::<Value>()["id"].as_i64().unwrap();
-    let (email, company, hash, employee): (String, i32, String, bool) = sqlx::query_as(
-        "SELECT email, company_id, password, is_employee <> 0 FROM users WHERE id = ?",
+    let created: Value = res.json();
+    let id = created["id"].as_i64().unwrap();
+    // This server sends no email: the manager gets the link to share.
+    assert_eq!(created["email_sent"], false);
+    let url = created["invite_url"].as_str().unwrap();
+    let token = url.strip_prefix("http://localhost:5173/invite/").unwrap();
+    assert_eq!(token.len(), 96);
+    let (email, company, name, password, employee): (
+        String,
+        i32,
+        Option<String>,
+        Option<String>,
+        bool,
+    ) = sqlx::query_as(
+        "SELECT email, company_id, name, password, is_employee <> 0 FROM users WHERE id = ?",
     )
     .bind(id)
     .fetch_one(&pool)
@@ -72,7 +82,9 @@ async fn managers_add_users_with_positions(pool: MySqlPool) {
     assert_eq!(email, "ian@acme.test");
     // Only superusers pick the company or grant Super Admin and check-in.
     assert_eq!(company, 100);
-    assert!(bcrypt::verify("secret1", &hash).unwrap());
+    // They set their own name and password from the invite.
+    assert_eq!(name.as_deref(), Some(""));
+    assert_eq!(password, None);
     assert!(employee);
     let positions: Vec<i32> =
         sqlx::query_scalar("SELECT position_id FROM users_positions WHERE user_id = ?")
@@ -82,25 +94,30 @@ async fn managers_add_users_with_positions(pool: MySqlPool) {
             .unwrap();
     assert_eq!(positions, [6]);
 
+    let page: Value = server.get("/v1/admin/users").with_session(ADA).await.json();
+    let pending = |user_id: i64| {
+        page["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|user| user["id"] == user_id)
+            .unwrap()["invite_pending"]
+            .clone()
+    };
+    assert_eq!(pending(id), true);
+    assert_eq!(pending(100), false);
+
     for (body, status) in [
+        (json!({ "email": "ian@acme.test" }), StatusCode::CONFLICT),
+        (json!({ "email": "gone@acme.test" }), StatusCode::CONFLICT),
+        (json!({ "email": "nope" }), StatusCode::BAD_REQUEST),
         (
-            json!({ "name": "X", "email": "ian@acme.test", "password": "secret" }),
-            StatusCode::CONFLICT,
-        ),
-        (
-            json!({ "name": "X", "email": "gone@acme.test", "password": "secret" }),
-            StatusCode::CONFLICT,
-        ),
-        (
-            json!({ "name": "X", "email": "x@acme.test", "password": "abc" }),
+            json!({ "email": "y@acme.test", "positions": [1, 4] }),
             StatusCode::BAD_REQUEST,
         ),
+        // The manager no longer sets the password.
         (
-            json!({ "name": "X", "email": "nope", "password": "secret" }),
-            StatusCode::BAD_REQUEST,
-        ),
-        (
-            json!({ "name": "X", "email": "y@acme.test", "password": "secret", "positions": [1, 4] }),
+            json!({ "email": "z@acme.test", "password": "secret" }),
             StatusCode::BAD_REQUEST,
         ),
     ] {
@@ -226,6 +243,7 @@ async fn managers_delete_users_of_their_company(pool: MySqlPool) {
 async fn user_addresses_are_single_plain_addresses(pool: MySqlPool) {
     make_manager(&pool).await;
     let server = server(pool.clone());
+    let before = user_count(&pool).await;
     for email in [
         "%@%.%",
         "ian%@acme.test",
@@ -235,9 +253,7 @@ async fn user_addresses_are_single_plain_addresses(pool: MySqlPool) {
         let res = server
             .post("/v1/admin/users")
             .with_session(ADA)
-            .json(
-                &json!({ "name": "Ian", "email": email, "password": "secret1", "positions": [1] }),
-            )
+            .json(&json!({ "email": email, "positions": [1] }))
             .await;
         res.assert_status(StatusCode::BAD_REQUEST);
         assert_eq!(
@@ -246,9 +262,80 @@ async fn user_addresses_are_single_plain_addresses(pool: MySqlPool) {
             "{email}"
         );
     }
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE name = 'Ian'")
-        .fetch_one(&pool)
+    assert_eq!(user_count(&pool).await, before);
+}
+
+async fn user_count(pool: &MySqlPool) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(pool)
         .await
-        .unwrap();
-    assert_eq!(count, 0);
+        .unwrap()
+}
+
+#[test_db::test(seed)]
+async fn pending_invites_are_edited_and_sent_again(pool: MySqlPool) {
+    make_manager(&pool).await;
+    let server = server(pool.clone());
+    let created: Value = server
+        .post("/v1/admin/users")
+        .with_session(ADA)
+        .json(&json!({ "email": "ian@acme.test", "positions": [6] }))
+        .await
+        .json();
+    let id = created["id"].as_i64().unwrap();
+    let first = created["invite_url"].as_str().unwrap().to_string();
+    let form: Value = server
+        .get(&format!("/v1/admin/users/{id}"))
+        .with_session(ADA)
+        .await
+        .json();
+    assert_eq!(form["user"]["invite_pending"], true);
+
+    // Positions change before they set up; their name stays theirs to fill.
+    server
+        .put(&format!("/v1/admin/users/{id}"))
+        .with_session(ADA)
+        .json(&json!({ "name": "", "email": "ian@acme.test", "company_id": 100, "positions": [1] }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    // Someone who set up their account keeps needing a name.
+    server
+        .put("/v1/admin/users/100")
+        .with_session(ADA)
+        .json(&json!({ "name": "", "company_id": 100, "positions": [1] }))
+        .await
+        .assert_status_bad_request();
+
+    let res = server
+        .post(&format!("/v1/admin/users/{id}/invite"))
+        .with_session(ADA)
+        .await;
+    res.assert_status_ok();
+    let second = res.json::<Value>()["invite_url"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(first, second);
+    // The older link stops working.
+    let path = |url: &str| {
+        format!(
+            "/v1/auth/invite/{}",
+            url.rsplit('/').next().unwrap_or_default()
+        )
+    };
+    server.get(&path(&first)).await.assert_status_not_found();
+    let invite: Value = server.get(&path(&second)).await.json();
+    assert_eq!(invite["email"], "ian@acme.test");
+    assert_eq!(invite["company_name"], "Acme Stone");
+
+    server
+        .post("/v1/admin/users/100/invite")
+        .with_session(ADA)
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    server
+        .post("/v1/admin/users/106/invite")
+        .with_session(ADA)
+        .await
+        .assert_status_not_found();
 }

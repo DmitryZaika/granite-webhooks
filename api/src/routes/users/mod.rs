@@ -25,4 +25,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(call_activity::call_activity))
         .routes(routes!(manage::list, manage::create))
         .routes(routes!(manage::get, manage::update, manage::delete))
+        .routes(routes!(manage::invite))
 }

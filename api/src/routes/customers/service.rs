@@ -23,6 +23,27 @@ pub const BUILTIN_SOURCES: &[&str] = &[
 ];
 /// `positions.id` of a sales rep.
 pub const SALES_REP_POSITION: i32 = 1;
+/// Name and `created_by` of the Moraware quote import's shared customer: the
+/// imported quotes without any contact all sit on it.
+pub const IMPORT_PLACEHOLDER: &str = "Moraware import";
+
+/// Refuses any change to the import's shared customer (`Conflict`): editing it
+/// from one quote would rename the customer of every quote on it.
+pub async fn refuse_import_placeholder(pool: &MySqlPool, id: i32) -> Result<(), ApiError> {
+    let shared: Option<i32> =
+        sqlx::query_scalar("SELECT 1 FROM customers WHERE id = ? AND name = ? AND created_by = ?")
+            .bind(id)
+            .bind(IMPORT_PLACEHOLDER)
+            .bind(IMPORT_PLACEHOLDER)
+            .fetch_optional(pool)
+            .await?;
+    if shared.is_some() {
+        return Err(ApiError::Conflict(
+            "This is the shared Moraware import customer and can't be changed. Create a new customer for the quote instead.".into(),
+        ));
+    }
+    Ok(())
+}
 
 /// Trimmed addresses without blanks or (case-insensitive) repeats, in order.
 pub fn normalize_emails(emails: &[String]) -> Vec<String> {

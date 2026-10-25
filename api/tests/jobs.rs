@@ -121,10 +121,13 @@ async fn due_appointment_reminders_are_sent_once(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn shop_workers_get_one_maintenance_digest_a_day(pool: MySqlPool) {
+async fn shop_workers_and_managers_get_one_maintenance_digest_a_day(pool: MySqlPool) {
+    // 100 is a shop worker and shop manager, 101 a shop manager.
     sqlx::raw_sql(
         "UPDATE users SET notifications_telegram_id = 555 WHERE id = 100;
-         INSERT INTO users_positions (user_id, position_id, company_id) VALUES (100, 4, 100);
+         UPDATE users SET notifications_telegram_id = 556 WHERE id = 101;
+         INSERT INTO users_positions (user_id, position_id, company_id) VALUES
+           (100, 4, 100), (100, 3, 100), (101, 3, 100);
          INSERT INTO maintenance_items (id, company_id, name, start_date, created_by_user_id) VALUES
            (9601, 100, 'Saw', '2026-01-01', 102), (9602, 101, 'Other', '2026-01-01', 106);
          INSERT INTO maintenance_sub_items (id, company_id, maintenance_item_id, name, created_by_user_id) VALUES
@@ -159,18 +162,22 @@ async fn shop_workers_get_one_maintenance_digest_a_day(pool: MySqlPool) {
     let run = api::routes::jobs::maintenance_reminders::send_digests(&state, day)
         .await
         .unwrap();
-    assert_eq!((run.processed, run.sent, run.failed), (1, 1, 0));
+    assert_eq!((run.processed, run.sent, run.failed), (2, 2, 0));
     let sent = telegrams.lock().unwrap().clone();
     assert_eq!(sent[0]["user_id"], 100);
-    let message = sent[0]["message"].as_str().unwrap();
-    assert!(
-        message.starts_with("🔧 Maintenance due today\n\n• Saw · Check\n• Saw · Blade\n\nOpen: ")
-    );
+    assert_eq!(sent[1]["user_id"], 101);
+    for telegram in &sent {
+        let message = telegram["message"].as_str().unwrap();
+        assert!(
+            message
+                .starts_with("🔧 Maintenance due today\n\n• Saw · Check\n• Saw · Blade\n\nOpen: ")
+        );
+    }
     let again = api::routes::jobs::maintenance_reminders::send_digests(&state, day)
         .await
         .unwrap();
-    assert_eq!((again.processed, again.sent), (1, 0));
-    assert_eq!(telegrams.lock().unwrap().len(), 1);
+    assert_eq!((again.processed, again.sent), (2, 0));
+    assert_eq!(telegrams.lock().unwrap().len(), 2);
 }
 
 #[test_db::test(seed)]

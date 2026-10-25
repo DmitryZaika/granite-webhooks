@@ -4962,7 +4962,7 @@
           "users"
         ],
         "summary": "Add a user",
-        "description": "Creates a user with their positions in the caller's company\n(superusers: in `company_id`). The email must be unused, even by a\ndeleted user.",
+        "description": "Creates a user with their email and positions in the caller's company\n(superusers: in `company_id`) and emails them an invite link (7 days) to\nset their own name, phone and password; they cannot sign in before. The\nemail must be unused, even by a deleted user. When the email fails the\nuser is still added: share the returned link instead.",
         "operationId": "create_managed_user",
         "requestBody": {
           "content": {
@@ -4976,7 +4976,7 @@
         },
         "responses": {
           "201": {
-            "description": "Added",
+            "description": "Added and invited",
             "content": {
               "application/json": {
                 "schema": {
@@ -4986,7 +4986,7 @@
             }
           },
           "400": {
-            "description": "Missing or invalid field, or positions that can't go together",
+            "description": "Invalid email, or positions that can't go together",
             "content": {
               "application/json": {
                 "schema": {
@@ -5266,6 +5266,95 @@
           },
           "404": {
             "description": "No such live user of the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/users/{id}/invite": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Resend a user's invite",
+        "description": "Emails a user who has not set up their account a new invite link (7\ndays); older links stop working. When the email fails the link is still\nanswered, to share another way.",
+        "operationId": "resend_user_invite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A new link was made",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SentInvite"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller may not manage users, or only a superuser may change this one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live user of the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "They already set up their account",
             "content": {
               "application/json": {
                 "schema": {
@@ -34088,8 +34177,24 @@
           "instructions"
         ],
         "summary": "Add an instruction",
-        "description": "Puts it in the caller's company tree under `parent_id`, right after\n`after_id` (the sibling that followed `after_id` now follows it).",
+        "description": "Puts it in the caller's company tree (a super admin's `scope=general`:\nthe general one) under `parent_id`, right after `after_id` (the sibling\nthat followed `after_id` now follows it).",
         "operationId": "create_instruction",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`company` (default) or `general` (shared by every company; super\nadmins only, others get `company`).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Which instructions to reorder.",
+              "enum": [
+                "company",
+                "general"
+              ]
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -34255,7 +34360,7 @@
           "instructions"
         ],
         "summary": "Delete an instruction",
-        "description": "Removes it and its access rows; its children move to the top level.",
+        "description": "Removes it and its access rows. Its children take its place among its\nsiblings, in their order; every other instruction keeps its place.",
         "operationId": "delete_instruction",
         "parameters": [
           {
@@ -34421,7 +34526,7 @@
             }
           },
           "400": {
-            "description": "Invalid field or unknown calendar",
+            "description": "Invalid field, or unknown calendar or customer",
             "content": {
               "application/json": {
                 "schema": {
@@ -34503,7 +34608,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "Invalid field or unknown calendar",
+            "description": "Invalid field, or unknown calendar or customer",
             "content": {
               "application/json": {
                 "schema": {
@@ -34630,6 +34735,115 @@
         ]
       }
     },
+    "/v1/events/{id}/confirmation": {
+      "post": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Send a confirmation now",
+        "description": "Sends one of the company's templates to the event's customer right\naway, whenever the appointment is, and notes it in the event's history.",
+        "operationId": "send_event_confirmation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmationSent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unscheduled, no customer, unknown template, or the customer cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The text or email failed to send",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/events/estimates": {
       "post": {
         "tags": [
@@ -34723,7 +34937,7 @@
           "schedule"
         ],
         "summary": "Search events",
-        "description": "The company's events whose title, customer (for a title that is a\ncustomer id), location, description or notes contain `q`, newest first.",
+        "description": "The company's events whose title, customer's name, location, description\nor notes contain `q`, newest first.",
         "operationId": "search_events",
         "parameters": [
           {
@@ -35663,7 +35877,7 @@
           "schedule"
         ],
         "summary": "The schedule's events",
-        "description": "One-off events overlapping the range and repeating events that started\nbefore its end and repeat past its start (the page expands them), with\nthe customer named by a numeric title and the QuickBooks invoice. Events\nof calendars hidden for everyone or from the caller are left out.",
+        "description": "One-off events overlapping the range and repeating events that started\nbefore its end and repeat past its start (the page expands them), with\ntheir customers' names and QuickBooks invoices. Events of calendars\nhidden for everyone or from the caller are left out.",
         "operationId": "list_schedule_events",
         "parameters": [
           {
@@ -35752,7 +35966,7 @@
           "schedule"
         ],
         "summary": "Events waiting for their day",
-        "description": "The company's unscheduled events (kept off the calendar until someone\npicks the date), oldest first, with the customer named by a numeric\ntitle. Events of calendars hidden for the caller are left out.",
+        "description": "The company's unscheduled events (kept off the calendar until someone\npicks the date), oldest first, with their customers' names. Events of\ncalendars hidden for the caller are left out.",
         "operationId": "list_unscheduled_events",
         "responses": {
           "200": {
@@ -35812,7 +36026,7 @@
           "schedule"
         ],
         "summary": "A personal schedule",
-        "description": "The events assigned to the caller (an installer's or template maker's own\nday), on any calendar, with the customer named by a numeric title. An\nadmin or superuser may read an installer's or template maker's schedule\nwith `user_id`.",
+        "description": "The events assigned to the caller (an installer's or template maker's own\nday), on any calendar, with their customers' names. An\nadmin or superuser may read an installer's or template maker's schedule\nwith `user_id`.",
         "operationId": "get_my_schedule",
         "parameters": [
           {
@@ -36080,6 +36294,121 @@
           },
           "400": {
             "description": "Not a schedule color, or not an installer or template maker of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/schedule/settings": {
+      "get": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Get the schedule settings",
+        "description": "The day the company's schedule starts its weeks on (Sunday unless an\nadmin picked Monday).",
+        "operationId": "get_schedule_settings",
+        "responses": {
+          "200": {
+            "description": "Settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "schedule"
+        ],
+        "summary": "Set the schedule settings",
+        "description": "Saves the day the company's schedule starts its weeks on, for everyone.",
+        "operationId": "set_schedule_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Not `sunday` or `monday`",
             "content": {
               "application/json": {
                 "schema": {
@@ -37388,7 +37717,7 @@
           "quotes"
         ],
         "summary": "Create a quote",
-        "description": "An empty drawing (the company's counter depth and rounding) with the\nprice list's \"always include\" extras, the caller as sales rep, the\ncustomer's address, phone and email copied, and the price list's default\ntax rate and payment terms (else the company's first payment terms).",
+        "description": "An empty drawing (the company's counter depth and rounding) with the\nprice list's \"always include\" extras, the caller as sales rep (else the\ncustomer's sales rep; 400 when neither is one), the customer's address,\nphone and email copied, and the price list's default tax rate and payment\nterms (else the company's first payment terms).",
         "operationId": "create_quote",
         "requestBody": {
           "content": {
@@ -37412,7 +37741,7 @@
             }
           },
           "400": {
-            "description": "No customer",
+            "description": "No customer, or no sales rep for it",
             "content": {
               "application/json": {
                 "schema": {
@@ -38913,6 +39242,130 @@
         }
       }
     },
+    "/v1/auth/invite/{token}": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Check an invite link",
+        "description": "Whose invite it is while the link can still set up the account; 404 when\nit is unknown, used or expired, or the account already has a password.",
+        "operationId": "check_invite",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The token from the emailed link",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The link works",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Invalid or expired link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Set up an invited account",
+        "description": "Uses an invite link once: saves the user's name, phone and password\n(bcrypt), spends the link and signs in as `POST /v1/auth/login` does.",
+        "operationId": "accept_invite",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The token from the emailed link",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Set up and signed in; the session cookie is set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Name missing, phone or password too short",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Invalid or expired link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/app/shell": {
       "get": {
         "tags": [
@@ -39949,6 +40402,75 @@
         "security": [
           {
             "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/ai/agentic-questions/{id}/agent-token": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Issue an agent token",
+        "description": "For the claude-job-runner, with `AGENT_RUNNER_KEY`: a token that lets its\nagent read the API as the person who asked question `id`, in the company\nthey asked in. It reads only (plus `POST /v1/call-transcripts`), never as\na superuser, and works for 30 minutes or until the question is answered.\nAsk for a new one when it runs out mid-answer.",
+        "operationId": "issue_agent_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The question's id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentToken"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong runner key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No open question asked in the last 7 days by someone who can still act in its company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agent_runner_key": []
           }
         ]
       }
@@ -41703,7 +42225,7 @@
           "jobs"
         ],
         "summary": "Send today's maintenance digests",
-        "description": "At 9 AM store time, sends each shop worker with Telegram notifications a\nlist of their company's equipment checks due today, once a day.",
+        "description": "At 9 AM store time, sends each shop worker and shop manager with Telegram\nnotifications a list of their company's equipment checks due today, once a\nday.",
         "operationId": "run_maintenance_reminders",
         "responses": {
           "200": {
@@ -58866,6 +59388,37 @@
           }
         }
       },
+      "AgentToken": {
+        "type": "object",
+        "description": "A token the agent reads the API with.",
+        "required": [
+          "token",
+          "expires_at",
+          "user_id",
+          "company_id"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Send as `Authorization: Bearer <token>`."
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it stops working (unix seconds); it also stops once the question\nis `done` or `failed`."
+          },
+          "user_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The asker, whom the token acts as."
+          },
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The only company the token sees."
+          }
+        }
+      },
       "AgenticJob": {
         "type": "object",
         "description": "Where a question is.",
@@ -63431,6 +63984,33 @@
         },
         "additionalProperties": false
       },
+      "ConfirmationInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/events/{id}/confirmation`.",
+        "required": [
+          "template_id"
+        ],
+        "properties": {
+          "template_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "A template of the company."
+          }
+        }
+      },
+      "ConfirmationSent": {
+        "type": "object",
+        "description": "`POST /v1/events/{id}/confirmation`.",
+        "required": [
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/Channel",
+            "description": "How it reached the customer: `sms` or `email`."
+          }
+        }
+      },
       "Connected": {
         "type": "object",
         "description": "After connecting: where the company lives.",
@@ -64286,15 +64866,25 @@
       },
       "CreatedUser": {
         "type": "object",
-        "description": "`{ id }` of a new user.",
+        "description": "A new user and their invite.",
         "required": [
-          "id"
+          "id",
+          "invite_url",
+          "email_sent"
         ],
         "properties": {
           "id": {
             "type": "integer",
             "format": "int32",
             "description": "The new user."
+          },
+          "invite_url": {
+            "type": "string",
+            "description": "The invite link, to share another way if the email does not arrive."
+          },
+          "email_sent": {
+            "type": "boolean",
+            "description": "The invite was emailed to them."
           }
         }
       },
@@ -66761,7 +67351,7 @@
         "properties": {
           "processed": {
             "type": "integer",
-            "description": "Shop workers with checks due today.",
+            "description": "Shop workers and managers with checks due today.",
             "minimum": 0
           },
           "sent": {
@@ -67435,7 +68025,8 @@
           "company_id",
           "is_admin",
           "is_superuser",
-          "is_employee"
+          "is_employee",
+          "invite_pending"
         ],
         "properties": {
           "id": {
@@ -67508,6 +68099,10 @@
               "null"
             ],
             "description": "`RingCentral` outbound number."
+          },
+          "invite_pending": {
+            "type": "boolean",
+            "description": "Has not set up their account from the invite yet (no password)."
           }
         }
       },
@@ -68401,6 +68996,14 @@
             ],
             "format": "int32",
             "description": "The sale it is for."
+          },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer it is for, one of the company's; null unlinks them,\nleave out to keep them. The title stays the event's own name."
           },
           "qbo_invoice": {
             "oneOf": [
@@ -69871,7 +70474,7 @@
           },
           "title": {
             "type": "string",
-            "description": "Title (a bare number is a customer id)."
+            "description": "The event's name."
           },
           "description": {
             "type": [
@@ -69966,12 +70569,20 @@
             "format": "int32",
             "description": "Its sale."
           },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer it is for."
+          },
           "customer_name": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The customer named by the title."
+            "description": "That customer's name."
           }
         }
       },
@@ -71279,6 +71890,26 @@
           }
         }
       },
+      "InviteDetails": {
+        "type": "object",
+        "description": "`GET /v1/auth/invite/{token}`.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The account's email; they sign in with it."
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The company that added them."
+          }
+        }
+      },
       "Invoice": {
         "type": "object",
         "description": "An invoice of the company.",
@@ -71558,6 +72189,29 @@
               "null"
             ],
             "description": "When the latest quote using it was last changed (UTC, ISO 8601); null if unknown."
+          }
+        }
+      },
+      "JoinInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/auth/invite/{token}`.",
+        "required": [
+          "name",
+          "phone_number",
+          "password"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Their name."
+          },
+          "phone_number": {
+            "type": "string",
+            "description": "Their phone, at least 10 digits."
+          },
+          "password": {
+            "type": "string",
+            "description": "At least 8 characters."
           }
         }
       },
@@ -72593,7 +73247,8 @@
         "description": "A user in the list.",
         "required": [
           "id",
-          "is_protected"
+          "is_protected",
+          "invite_pending"
         ],
         "properties": {
           "id": {
@@ -72653,6 +73308,10 @@
           "is_protected": {
             "type": "boolean",
             "description": "A superuser or Super Admin: only superusers may change them."
+          },
+          "invite_pending": {
+            "type": "boolean",
+            "description": "Has not set up their account from the invite yet (no password)."
           }
         }
       },
@@ -73697,29 +74356,12 @@
         "type": "object",
         "description": "Body of `POST /v1/admin/users`.",
         "required": [
-          "name",
-          "email",
-          "password"
+          "email"
         ],
         "properties": {
-          "name": {
-            "type": "string",
-            "description": "Name."
-          },
-          "phone_number": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Phone (10+ characters) or empty."
-          },
           "email": {
             "type": "string",
-            "description": "Email, used to sign in."
-          },
-          "password": {
-            "type": "string",
-            "description": "Password (4+ characters)."
+            "description": "Email: the invite goes there, and they sign in with it."
           },
           "company_id": {
             "type": [
@@ -82929,7 +83571,7 @@
           },
           "title": {
             "type": "string",
-            "description": "Title (a customer id for customer events)."
+            "description": "The event's name."
           },
           "description": {
             "type": [
@@ -83021,12 +83663,20 @@
             "format": "int32",
             "description": "Its sale."
           },
+          "customer_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The customer it is for."
+          },
           "customer_name": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The customer, when the title is a customer id."
+            "description": "That customer's name."
           },
           "qbo_invoice": {
             "oneOf": [
@@ -83088,6 +83738,19 @@
           "color": {
             "type": "string",
             "description": "Their color on the schedule: the saved one, else one picked by id."
+          }
+        }
+      },
+      "ScheduleSettings": {
+        "type": "object",
+        "description": "`GET` and `PUT /v1/schedule/settings`.",
+        "required": [
+          "week_starts_on"
+        ],
+        "properties": {
+          "week_starts_on": {
+            "$ref": "#/components/schemas/WeekStart",
+            "description": "The day the week and month views start their weeks on."
           }
         }
       },
@@ -83354,6 +84017,24 @@
           "text": {
             "type": "string",
             "description": "The text, 1 to 1600 characters."
+          }
+        }
+      },
+      "SentInvite": {
+        "type": "object",
+        "description": "An invite link that was made for a user.",
+        "required": [
+          "invite_url",
+          "email_sent"
+        ],
+        "properties": {
+          "invite_url": {
+            "type": "string",
+            "description": "The link, to share another way if the email does not arrive."
+          },
+          "email_sent": {
+            "type": "boolean",
+            "description": "The link was emailed to the user."
           }
         }
       },
@@ -90319,7 +91000,7 @@
         "properties": {
           "name": {
             "type": "string",
-            "description": "Name."
+            "description": "Name (may stay empty while their invite is pending)."
           },
           "email": {
             "type": [
@@ -90875,6 +91556,14 @@
           }
         }
       },
+      "WeekStart": {
+        "type": "string",
+        "description": "The first day of a week.",
+        "enum": [
+          "sunday",
+          "monday"
+        ]
+      },
       "WidgetAction": {
         "type": "string",
         "description": "What a user did with a widget.",
@@ -91063,6 +91752,11 @@
       }
     },
     "securitySchemes": {
+      "agent_runner_key": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "`AGENT_RUNNER_KEY`, sent by the claude-job-runner."
+      },
       "autofix_callback": {
         "type": "http",
         "scheme": "bearer",

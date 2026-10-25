@@ -250,6 +250,8 @@ fn issue(n: u32, created_at: DateTime<Utc>, bug: &Bug<'_>) -> (Issue, IssueEvent
             "value": bug.description,
             "stacktrace": { "type": "resolved", "frames": [frame] },
         }])),
+        url: (bug.lib == "web").then(|| "https://granite-manager.com/employee/deals/7".into()),
+        request: (bug.lib != "web").then(|| "GET /v1/schedule".into()),
     };
     let issue = Issue {
         id,
@@ -583,6 +585,32 @@ async fn a_dry_run_previews_instead_of_dispatching(pool: MySqlPool) {
         1,
         "no digest without new previews"
     );
+}
+
+#[test_db::test(seed)]
+async fn a_dry_run_email_names_the_page_the_user_and_the_company(pool: MySqlPool) {
+    let config = Config {
+        mode: Mode::DryRun,
+        github_token: None,
+        ..live()
+    };
+    let world = World::default();
+    // The seed's user 103 is Sam Super, of company 101.
+    let bug = Bug {
+        distinct_id: "103",
+        ..field_state_bug()
+    };
+    world.source.add(issue(204, t0(), &bug));
+    world.tick(&pool, &config, minutes(5)).await;
+    let report = world.tick(&pool, &config, minutes(40)).await;
+    assert_eq!(report.previewed, 1);
+    let sent = world.mailer.sent.lock().unwrap();
+    assert_eq!(sent[0].subject, "[AI fix] Dry run: 1 new error");
+    let html = &sent[0].html;
+    assert!(html.contains("Cannot read properties of undefined (reading 'getFieldState')"));
+    assert!(html.contains("<a href=\"https://granite-manager.com/employee/deals/7\">"));
+    assert!(html.contains("<strong>User:</strong> Sam Super (user 103)"));
+    assert!(html.contains("<strong>Company ID:</strong> 101"));
 }
 
 #[test_db::test]

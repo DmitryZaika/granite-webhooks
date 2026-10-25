@@ -346,15 +346,28 @@ async fn editable_company(pool: &MySqlPool, user: &SessionUser, id: i32) -> ApiR
     }
 }
 
+/// Query of `POST /v1/instructions`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct CreateQuery {
+    /// `company` (default) or `general` (shared by every company; super
+    /// admins only, others get `company`).
+    #[serde(default)]
+    #[param(inline)]
+    pub scope: InstructionScope,
+}
+
 /// Add an instruction
 ///
-/// Puts it in the caller's company tree under `parent_id`, right after
-/// `after_id` (the sibling that followed `after_id` now follows it).
+/// Puts it in the caller's company tree (a super admin's `scope=general`:
+/// the general one) under `parent_id`, right after `after_id` (the sibling
+/// that followed `after_id` now follows it).
 #[utoipa::path(
     post,
     path = "/v1/instructions",
     operation_id = "create_instruction",
     tag = "instructions",
+    params(CreateQuery),
     request_body = InstructionInput,
     responses(
         (status = 201, description = "Added", body = CreatedInstruction),
@@ -368,10 +381,15 @@ async fn editable_company(pool: &MySqlPool, user: &SessionUser, id: i32) -> ApiR
 pub async fn create(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
+    MultiQuery(query): MultiQuery<CreateQuery>,
     JsonBody(input): JsonBody<InstructionInput>,
 ) -> ApiResult<(StatusCode, Json<CreatedInstruction>)> {
     let (title, positions) = checked(&input)?;
-    let company = user.company_id;
+    let company = if user.is_superuser {
+        scope_company(&user, query.scope)
+    } else {
+        user.company_id
+    };
     check_links(&state.pool, company, &input).await?;
     let mut tx = state.pool.begin().await?;
     let id = sqlx::query(
@@ -449,9 +467,30 @@ pub async fn update(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Siblings in the order the page shows them: from the first (no `after_id`)
+/// along the chain, then any the chain misses. `rows` are sorted by id.
+fn chain_order(rows: &[(i32, Option<i32>)]) -> Vec<i32> {
+    let mut ordered: Vec<i32> = Vec::with_capacity(rows.len());
+    let mut next = rows.iter().find(|(_, after)| after.is_none());
+    while let Some(&(id, _)) = next {
+        if ordered.contains(&id) {
+            break;
+        }
+        ordered.push(id);
+        next = rows.iter().find(|(_, after)| *after == Some(id));
+    }
+    for &(id, _) in rows {
+        if !ordered.contains(&id) {
+            ordered.push(id);
+        }
+    }
+    ordered
+}
+
 /// Delete an instruction
 ///
-/// Removes it and its access rows; its children move to the top level.
+/// Removes it and its access rows. Its children take its place among its
+/// siblings, in their order; every other instruction keeps its place.
 #[utoipa::path(
     delete,
     path = "/v1/instructions/{id}",
@@ -472,10 +511,42 @@ pub async fn delete(
     AdminUser(user): AdminUser,
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
-    editable_company(&state.pool, &user, id).await?;
-    // Its access rows hold a foreign key without cascade; children and the
-    // next sibling are unlinked by the table's own `ON DELETE SET NULL`.
+    let company = editable_company(&state.pool, &user, id).await?;
     let mut tx = state.pool.begin().await?;
+    let (parent, after): (Option<i32>, Option<i32>) =
+        sqlx::query_as("SELECT parent_id, after_id FROM instructions WHERE id = ? FOR UPDATE")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let children: Vec<(i32, Option<i32>)> =
+        sqlx::query_as("SELECT id, after_id FROM instructions WHERE parent_id = ? ORDER BY id")
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
+    let children = chain_order(&children);
+    // Relink first: the table's `ON DELETE SET NULL` would leave the next
+    // sibling, and the children at the top level, each starting a second list.
+    sqlx::query(
+        "UPDATE instructions SET after_id = ?
+          WHERE after_id = ? AND parent_id <=> ? AND company_id = ?",
+    )
+    .bind(children.last().copied().or(after))
+    .bind(id)
+    .bind(parent)
+    .bind(company)
+    .execute(&mut *tx)
+    .await?;
+    let mut previous = after;
+    for child in children {
+        sqlx::query("UPDATE instructions SET parent_id = ?, after_id = ? WHERE id = ?")
+            .bind(parent)
+            .bind(previous)
+            .bind(child)
+            .execute(&mut *tx)
+            .await?;
+        previous = Some(child);
+    }
+    // Its access rows hold a foreign key without cascade.
     sqlx::query("DELETE FROM instruction_access WHERE instruction_id = ?")
         .bind(id)
         .execute(&mut *tx)

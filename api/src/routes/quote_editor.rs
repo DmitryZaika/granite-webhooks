@@ -31,6 +31,7 @@ use crate::quote_pricing::{
 };
 use crate::routes::auth::{app_origin, company_subdomain};
 use crate::routes::created::CreatedId;
+use crate::routes::customers::service::IMPORT_PLACEHOLDER;
 use crate::routes::emails::thread::sending_address;
 use crate::routes::quote_extras::load_catalog;
 use crate::routes::quote_forms;
@@ -368,9 +369,10 @@ mod full_address_tests {
 /// Create a quote
 ///
 /// An empty drawing (the company's counter depth and rounding) with the
-/// price list's "always include" extras, the caller as sales rep, the
-/// customer's address, phone and email copied, and the price list's default
-/// tax rate and payment terms (else the company's first payment terms).
+/// price list's "always include" extras, the caller as sales rep (else the
+/// customer's sales rep; 400 when neither is one), the customer's address,
+/// phone and email copied, and the price list's default tax rate and payment
+/// terms (else the company's first payment terms).
 #[utoipa::path(
     post,
     path = "/v1/quotes",
@@ -379,7 +381,7 @@ mod full_address_tests {
     request_body = NewQuote,
     responses(
         (status = 201, description = "Created", body = CreatedId),
-        (status = 400, description = "No customer", body = ErrorBody),
+        (status = 400, description = "No customer, or no sales rep for it", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -402,9 +404,11 @@ pub async fn create_quote(
         phone: Option<String>,
         phone_2: Option<String>,
         email: Option<String>,
+        sales_rep: Option<i32>,
     }
     let customer: Option<Customer> = sqlx::query_as(
-        "SELECT c.name, c.address, c.city, c.state, c.postal_code, c.phone, c.phone_2, ce.email
+        "SELECT c.name, c.address, c.city, c.state, c.postal_code, c.phone, c.phone_2, ce.email,
+                c.sales_rep
            FROM customers c
            LEFT JOIN customers_emails ce ON ce.id = c.email_id AND ce.customer_id = c.id
           WHERE c.id = ? AND c.company_id = ?",
@@ -414,6 +418,18 @@ pub async fn create_quote(
     .fetch_optional(&state.pool)
     .await?;
     let customer = customer.ok_or_else(|| ApiError::BadRequest("Customer is required".into()))?;
+    // A quote's salesperson is always a sales rep: the caller when they are
+    // one, else the customer's rep.
+    let reps = sales_reps(&state.pool, user.company_id).await?;
+    let rep = reps
+        .iter()
+        .find(|p| p.id == user.id)
+        .or_else(|| {
+            customer
+                .sales_rep
+                .and_then(|id| reps.iter().find(|p| p.id == id))
+        })
+        .ok_or_else(|| ApiError::BadRequest("Assign this customer to a sales rep first".into()))?;
     let lists = list_rows(&state.pool, user.company_id).await?;
     let chosen_id = match input.price_list_id {
         Some(id) => Some(id),
@@ -484,9 +500,9 @@ pub async fn create_quote(
     )
     .bind(input.customer_id)
     .bind(&name)
-    .bind(&user.name)
+    .bind(&rep.name)
     .bind(user.company_id)
-    .bind(user.id)
+    .bind(rep.id)
     .bind(user.id)
     .bind(chosen.as_ref().map(|(row, _)| row.id))
     .bind(chosen.as_ref().and_then(|(row, _)| row.current_revision_id))
@@ -1486,12 +1502,18 @@ pub async fn update_quote(
         }
     }
     if let Some(phone_2) = blank_is_null(input.phone_2) {
-        sqlx::query("UPDATE customers SET phone_2 = ? WHERE id = ? AND company_id = ?")
-            .bind(phone_2)
-            .bind(customer_id)
-            .bind(user.company_id)
-            .execute(&state.pool)
-            .await?;
+        // Never onto the import's shared customer: it belongs to every quote on it.
+        sqlx::query(
+            "UPDATE customers SET phone_2 = ? WHERE id = ? AND company_id = ?
+               AND NOT (name <=> ? AND created_by <=> ?)",
+        )
+        .bind(phone_2)
+        .bind(customer_id)
+        .bind(user.company_id)
+        .bind(IMPORT_PLACEHOLDER)
+        .bind(IMPORT_PLACEHOLDER)
+        .execute(&state.pool)
+        .await?;
     }
     if !sets.is_empty() {
         let mut sql = sqlx::QueryBuilder::new("UPDATE quotes SET ");

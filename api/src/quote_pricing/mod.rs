@@ -737,23 +737,39 @@ async fn add_waiting_jobs(
     .bind(quote.company_id)
     .fetch_all(pool)
     .await?;
-    let address: Option<Option<String>> = sqlx::query_scalar(
-        "SELECT NULLIF(TRIM(address), '') FROM customers WHERE id = ? AND company_id = ?",
+    let customer: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT NULLIF(TRIM(name), ''), NULLIF(TRIM(address), '') FROM customers
+          WHERE id = ? AND company_id = ?",
     )
     .bind(quote.customer_id)
     .bind(quote.company_id)
     .fetch_optional(pool)
     .await?;
-    let address = address.flatten();
+    let (name, address) = customer.unwrap_or_default();
+    // Named after the customer, else the quote.
+    let title: String = name
+        .or_else(|| {
+            quote
+                .quote_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| format!("Customer #{}", quote.customer_id))
+        .chars()
+        .take(255)
+        .collect();
     for calendar_id in calendars {
         let id = sqlx::query(
             "INSERT INTO events (title, location, start_date, end_date, all_day, unscheduled,
-                color, status, created_user_id, calendar_id, quote_id)
-             VALUES (?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 1, 'blue', 'not_ready', ?, ?, ?)",
+                color, status, created_user_id, customer_id, calendar_id, quote_id)
+             VALUES (?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 1, 'blue', 'not_ready', ?, ?, ?, ?)",
         )
-        .bind(quote.customer_id.to_string())
+        .bind(&title)
         .bind(address.as_deref())
         .bind(creator)
+        .bind(quote.customer_id)
         .bind(calendar_id)
         .bind(quote.id)
         .execute(pool)

@@ -1088,7 +1088,7 @@ async fn throttle(pool: &MySqlPool, company_id: i32, email: &str) -> ApiResult<(
     .await?;
     if today >= QUOTES_PER_EMAIL_PER_DAY {
         return Err(ApiError::TooManyRequests(
-            "You already got your quotes today. We will be in touch soon.".into(),
+            "You already sent us your details today. We will be in touch soon.".into(),
         ));
     }
     if this_hour >= QUOTES_PER_COMPANY_PER_HOUR {
@@ -1249,49 +1249,35 @@ fn price_text(price: &OnlinePrice) -> String {
         .map_or_else(|| "price to be confirmed".to_string(), money)
 }
 
-/// "November 5, 2026".
-fn long_date(date: &str) -> String {
-    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-        .map_or_else(|_| date.to_string(), |d| d.format("%B %-d, %Y").to_string())
-}
-
-/// The customer's email: each color's price and a button to the quote.
+/// The customer's email: we got their details and will contact them, the
+/// colors they picked (never a price) and a button to what they sent.
 fn customer_html(
     branding: &Branding,
     name: &str,
-    prices: &[OnlinePrice],
+    colors: &[OnlineColorPick],
     link: &str,
-    valid_until: Option<&str>,
 ) -> String {
     let cell = format!(
         "{EMAIL_FONT}font-size:15px;color:#3f3f46;padding:12px 10px;border-bottom:1px solid #e4e4e7;"
     );
-    let rows = prices.iter().fold(String::new(), |mut out, price| {
+    let rows = colors.iter().fold(String::new(), |mut out, pick| {
         let _ = write!(
             out,
-            "<tr><td style=\"{cell}\">{}</td><td style=\"{cell}font-weight:700;color:#18181b;text-align:right;\">{}</td></tr>",
-            escape_html(&format!("{} {}", price.product, price.color)),
-            escape_html(&price_text(price)),
+            "<tr><td style=\"{cell}\">{}</td></tr>",
+            escape_html(&format!("{} {}", pick.product, pick.color)),
         );
         out
     });
     let first = name.split_whitespace().next().unwrap_or(name);
-    let until = valid_until.map_or_else(String::new, |date| {
-        format!(
-            " These prices are good until {}.",
-            escape_html(&long_date(date))
-        )
-    });
     card_html(
         branding,
         &format!(
-            "<tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:24px;color:#18181b;padding-bottom:6px;\">Your Countertop Quote</td></tr>
-          <tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:15px;line-height:1.6;color:#3f3f46;padding-bottom:24px;\">Hi {}, thank you for building your quote. Here is the price of each color you picked.</td></tr>
+            "<tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:24px;color:#18181b;padding-bottom:6px;\">We Got Your Details</td></tr>
+          <tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:15px;line-height:1.6;color:#3f3f46;padding-bottom:24px;\">Hi {}, thank you for sending us your countertop sizes. We will look them over and contact you soon. The colors you picked:</td></tr>
           <tr><td style=\"padding-bottom:24px;\"><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">{rows}</table></td></tr>
-          <tr><td align=\"center\" style=\"padding:4px 0 24px;\">{}</td></tr>
-          <tr><td align=\"center\" style=\"{EMAIL_FONT}font-size:13px;line-height:1.6;color:#71717a;\">The price comes from the sizes you entered. We confirm it when we measure.{until}</td></tr>",
+          <tr><td align=\"center\" style=\"padding:4px 0 24px;\">{}</td></tr>",
             escape_html(first),
-            button_html(link, "View Your Quote"),
+            button_html(link, "See What You Sent"),
         ),
     )
 }
@@ -1625,9 +1611,9 @@ pub async fn create(
             .await?;
     let company_name = company.name();
     let subject = if company_name.is_empty() {
-        "Your countertop quote".to_string()
+        "We got your countertop details".to_string()
     } else {
-        format!("Your countertop quote from {company_name}")
+        format!("{company_name} got your countertop details")
     };
     let portal = token()?;
     let email_token = token()?;
@@ -1736,13 +1722,7 @@ pub async fn create(
         || format!("{origin}/quote-portal/{portal}?e={email_token}"),
         |view| format!("{origin}/customer/{company_id}/{view}?quote={quote_id}"),
     );
-    let html = customer_html(
-        &branding,
-        &name,
-        &prices,
-        &customer_link,
-        expiration.as_deref(),
-    );
+    let html = customer_html(&branding, &name, &input.colors, &customer_link);
     let outgoing = OutgoingEmail {
         from_name: Some(company_name.clone()).filter(|n| !n.is_empty()),
         from_address: NO_REPLY.into(),
@@ -1937,11 +1917,5 @@ mod tests {
                 burners: 4
             }
         );
-    }
-
-    #[test]
-    fn dates_read_like_a_letter() {
-        assert_eq!(long_date("2026-11-05"), "November 5, 2026");
-        assert_eq!(long_date("soon"), "soon");
     }
 }

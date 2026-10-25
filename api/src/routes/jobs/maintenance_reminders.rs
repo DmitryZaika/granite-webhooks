@@ -1,6 +1,6 @@
 //! `POST /v1/jobs/maintenance-reminders`: at 9 AM store time, a Telegram
-//! digest of the equipment checks due today to each shop worker of the
-//! company. Port of `maintenanceReminders.server.ts`.
+//! digest of the equipment checks due today to each shop worker and shop
+//! manager of the company. Port of `maintenanceReminders.server.ts`.
 
 use super::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
@@ -14,13 +14,15 @@ use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
 const REMINDER_HOUR: u32 = 9;
+/// `positions.id` of a shop manager.
+const SHOP_MANAGER_POSITION: i32 = 3;
 /// `positions.id` of a shop worker.
 const SHOP_WORKER_POSITION: i32 = 4;
 
 /// What a run did.
 #[derive(Debug, Default, Serialize, ToSchema)]
 pub struct DigestRun {
-    /// Shop workers with checks due today.
+    /// Shop workers and managers with checks due today.
     pub processed: usize,
     /// Digests sent.
     pub sent: usize,
@@ -79,8 +81,9 @@ async fn due_items(
 
 /// Send today's maintenance digests
 ///
-/// At 9 AM store time, sends each shop worker with Telegram notifications a
-/// list of their company's equipment checks due today, once a day.
+/// At 9 AM store time, sends each shop worker and shop manager with Telegram
+/// notifications a list of their company's equipment checks due today, once a
+/// day.
 #[utoipa::path(
     post,
     path = "/v1/jobs/maintenance-reminders",
@@ -114,11 +117,13 @@ pub async fn send_digests(state: &AppState, day: NaiveDate) -> Result<DigestRun,
     let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(
         "SELECT DISTINCT u.id, up.company_id FROM users u
            JOIN users_positions up ON up.user_id = u.id AND up.company_id = u.company_id
-          WHERE u.is_deleted = 0 AND u.notifications_telegram_id IS NOT NULL AND up.position_id = ",
+          WHERE u.is_deleted = 0 AND u.notifications_telegram_id IS NOT NULL AND up.position_id IN (",
     );
     builder
+        .push_bind(SHOP_MANAGER_POSITION)
+        .push(", ")
         .push_bind(SHOP_WORKER_POSITION)
-        .push(" AND up.company_id IN (");
+        .push(") AND up.company_id IN (");
     let mut list = builder.separated(", ");
     for company_id in due.keys() {
         list.push_bind(*company_id);

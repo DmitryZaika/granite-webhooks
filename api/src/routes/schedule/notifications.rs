@@ -11,17 +11,22 @@
 //!   turns it off (`event_notification_skips`); the others only go on events
 //!   that pick them (`event_notification_picks`)
 //!
+//! - `POST /v1/events/{id}/confirmation` → send a template to the event's
+//!   customer now (`send_confirmation`)
+//!
 //! The appointment-reminders job sends the due steps (`send_due`). An event's
-//! customer is the one its title names (a bare customer id), else its sale's.
+//! customer is its own (`customer_id`), else its sale's.
 //! An event with a flow on no longer gets the built-in reminders.
 
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::routes::company::queries::company_features;
+use crate::routes::events::history::{History, record};
 use crate::routes::events::notify::{
     customer_email, customer_phone, escape_html, office_manager, sender_for,
 };
+use crate::routes::events::writes::company_event;
 use crate::routes::sms::provider::{SmsProvider, phone10};
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingEmail, OutgoingSms};
@@ -30,10 +35,13 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use chrono_tz::America::Indiana::Indianapolis;
+use common::utils::email_body::{is_empty_rich_text, sanitize_body};
 use lambda_http::tracing;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sqlx::{MySql, MySqlPool, Transaction};
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use utoipa::{IntoParams, ToSchema};
 
 /// Longest text a template may send.
@@ -406,7 +414,8 @@ async fn check_template(
         return Err(bad("Texting is not set up for this company"));
     }
     let body = input.body.trim().to_string();
-    if body.is_empty() {
+    // An emptied editor still sends `<p><br></p>`.
+    if is_empty_rich_text(&body) {
         return Err(bad("Message is required"));
     }
     let limit = match input.channel {
@@ -1082,6 +1091,14 @@ pub const FLOW_APPLIES: &str =
            EXISTS (SELECT 1 FROM event_notification_picks p
                     WHERE p.event_id = e.id AND p.flow_id = f.id))";
 
+/// SQL: `COALESCE(tc.id, sc.id)` is the customer of the event `e` in the
+/// company `r.company_id`: its own, else its sale's.
+const EVENT_CUSTOMER: &str = "LEFT JOIN customers tc ON tc.id = e.customer_id
+     AND tc.company_id = r.company_id AND tc.deleted_at IS NULL
+    LEFT JOIN sales s ON s.id = e.sale_id AND s.company_id = r.company_id
+    LEFT JOIN customers sc ON sc.id = s.customer_id
+     AND sc.company_id = r.company_id AND sc.deleted_at IS NULL";
+
 /// When an appointment starts: all-day ones at store midnight of their day.
 fn effective_start(start: NaiveDateTime, all_day: bool) -> DateTime<Utc> {
     if all_day {
@@ -1157,8 +1174,17 @@ pub fn fill_appointment(
     out
 }
 
-/// Plain text as email HTML: blank lines split paragraphs.
+/// The editor's HTML always starts with a block tag; a text template never
+/// does (it may still hold `<Al>`).
+static EDITOR_HTML: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^\s*<(?:p|h[1-6]|ol|ul)[\s>]").unwrap());
+
+/// The template as email HTML: the editor's HTML sanitized, else plain text
+/// with blank lines splitting paragraphs.
 fn email_html(text: &str) -> String {
+    if EDITOR_HTML.is_match(text) {
+        return sanitize_body(text);
+    }
     text.replace("\r\n", "\n")
         .split("\n\n")
         .map(str::trim)
@@ -1236,10 +1262,21 @@ async fn finish(
     Ok(())
 }
 
-/// The rule's subject and body for this appointment, or why it cannot go.
+/// A template going out for one appointment: a flow step's, or a
+/// confirmation sent on request.
+struct Outgoing<'a> {
+    company_id: i32,
+    channel: Channel,
+    subject: Option<&'a str>,
+    body: &'a str,
+    /// Keeps a retried text from going out twice.
+    idempotency_key: Option<String>,
+}
+
+/// The message's subject and body for this appointment, or why it cannot go.
 async fn render(
     pool: &MySqlPool,
-    rule: &DueRule,
+    message: &Outgoing<'_>,
     event: &Appointment,
     customer_id: i32,
     user_id: i32,
@@ -1249,7 +1286,7 @@ async fn render(
         user_id,
         None,
         Some(customer_id),
-        rule.company_id,
+        message.company_id,
     )
     .await
     else {
@@ -1264,8 +1301,8 @@ async fn render(
         );
         common::utils::template::replace_template_variables(&text, &data)
     };
-    let body = fill(&rule.body);
-    let subject = rule.subject.as_deref().map(fill);
+    let body = fill(message.body);
+    let subject = message.subject.map(fill);
     let unfilled = common::utils::template::placeholder_keys(&body)
         .into_iter()
         .chain(
@@ -1282,30 +1319,31 @@ async fn render(
     Ok(Ok((subject, body)))
 }
 
-/// Sends one rule's message for one appointment: the error code when it
-/// did not go out.
+/// Sends one message for one appointment: the error code when it did not
+/// go out.
 async fn deliver(
     state: &AppState,
-    rule: &DueRule,
+    message: &Outgoing<'_>,
     event: &Appointment,
     customer_id: i32,
 ) -> Result<Option<&'static str>, sqlx::Error> {
     let pool = &state.pool;
+    let company_id = message.company_id;
     let sales_rep: Option<Option<i32>> = sqlx::query_scalar(
         "SELECT CAST(u.id AS SIGNED) FROM customers c JOIN users u ON u.id = c.sales_rep AND u.is_deleted = 0
           WHERE c.id = ? AND c.company_id = ?",
     )
     .bind(customer_id)
-    .bind(rule.company_id)
+    .bind(company_id)
     .fetch_optional(pool)
     .await?;
     let user_id = sales_rep.flatten().unwrap_or(event.created_user_id);
-    let (subject, body) = match render(pool, rule, event, customer_id, user_id).await? {
-        Ok(message) => message,
+    let (subject, body) = match render(pool, message, event, customer_id, user_id).await? {
+        Ok(rendered) => rendered,
         Err(code) => return Ok(Some(code)),
     };
-    if Channel::parse(&rule.channel) == Channel::Sms {
-        let features = company_features(pool, rule.company_id).await?;
+    if message.channel == Channel::Sms {
+        let features = company_features(pool, company_id).await?;
         // Telnyx when the company texts through it and the office manager
         // has a line there; then the company's provider first; with both set
         // up, the other one when the office manager only has a line there.
@@ -1327,12 +1365,9 @@ async fn deliver(
         }
         let mut sender = None;
         for provider in providers {
-            if let Some(manager) = office_manager(pool, rule.company_id, provider).await?
+            if let Some(manager) = office_manager(pool, company_id, provider).await?
                 && let Some(seat) = crate::routes::events::notify::manager_seat(
-                    pool,
-                    rule.company_id,
-                    provider,
-                    &manager,
+                    pool, company_id, provider, &manager,
                 )
                 .await?
             {
@@ -1343,7 +1378,7 @@ async fn deliver(
         let Some((provider, manager, seat)) = sender else {
             return Ok(Some("no_sms_sender"));
         };
-        let Some(phone_digits) = customer_phone(pool, rule.company_id, customer_id)
+        let Some(phone_digits) = customer_phone(pool, company_id, customer_id)
             .await?
             .map(|phone| phone10(&phone))
             .filter(|digits| digits.len() == 10)
@@ -1352,25 +1387,20 @@ async fn deliver(
         };
         let sms = OutgoingSms {
             provider: provider.as_str().to_string(),
-            company_id: rule.company_id,
+            company_id,
             user_id: manager.id,
             agent_id: manager.agent_id,
             phone_digits,
             text: body,
             attachments: Vec::new(),
             is_automated: true,
-            idempotency_key: Some(format!(
-                "schedule-rule-{}-{}-{}",
-                rule.id,
-                event.id,
-                event.start_date.and_utc().timestamp()
-            )),
+            idempotency_key: message.idempotency_key.clone(),
         };
         return Ok(
             match crate::routes::sms::send::send_text(state, provider, &seat, &sms).await {
                 Ok(_) => None,
                 Err(failure) => {
-                    tracing::warn!(error = %failure.error, rule_id = rule.id, "schedule notification text failed");
+                    tracing::warn!(error = %failure.error, event_id = event.id, "schedule notification text failed");
                     Some("send_error")
                 }
             },
@@ -1379,8 +1409,8 @@ async fn deliver(
     let Some(email) = customer_email(pool, customer_id).await? else {
         return Ok(Some("no_email"));
     };
-    let (from_name, from_address) = sender_for(pool, rule.company_id, customer_id, user_id).await?;
-    let message = OutgoingEmail {
+    let (from_name, from_address) = sender_for(pool, company_id, customer_id, user_id).await?;
+    let email = OutgoingEmail {
         from_name,
         from_address,
         to: vec![email],
@@ -1395,10 +1425,10 @@ async fn deliver(
         attachments: Vec::new(),
         transactional: true,
     };
-    Ok(match state.webhooks.send_email(&message).await {
+    Ok(match state.webhooks.send_email(&email).await {
         Ok(_) => None,
         Err(err) => {
-            tracing::warn!(error = ?err, rule_id = rule.id, "schedule notification email failed");
+            tracing::warn!(error = ?err, event_id = event.id, "schedule notification email failed");
             Some("send_error")
         }
     })
@@ -1441,12 +1471,7 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
                FROM schedule_notification_rules r
                JOIN schedule_notification_flows f ON f.id = r.flow_id
                JOIN events e ON {FLOW_APPLIES}
-               LEFT JOIN customers tc ON TRIM(e.title) REGEXP '^[0-9]+$'
-                AND tc.id = CAST(TRIM(e.title) AS UNSIGNED)
-                AND tc.company_id = r.company_id AND tc.deleted_at IS NULL
-               LEFT JOIN sales s ON s.id = e.sale_id AND s.company_id = r.company_id
-               LEFT JOIN customers sc ON sc.id = s.customer_id
-                AND sc.company_id = r.company_id AND sc.deleted_at IS NULL
+               {EVENT_CUSTOMER}
               WHERE r.id = ? AND e.deleted_date IS NULL AND e.unscheduled = 0 AND NULLIF(TRIM(e.rrule), '') IS NULL
                 AND e.start_date > UTC_TIMESTAMP() - INTERVAL 1 DAY
                 AND e.start_date <= UTC_TIMESTAMP() + INTERVAL ? MINUTE
@@ -1494,7 +1519,19 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
             }
             run.processed += 1;
             let customer_id = event.customer_id.unwrap_or_default();
-            let outcome = match deliver(state, &rule, &event, customer_id).await {
+            let message = Outgoing {
+                company_id: rule.company_id,
+                channel: Channel::parse(&rule.channel),
+                subject: rule.subject.as_deref(),
+                body: &rule.body,
+                idempotency_key: Some(format!(
+                    "schedule-rule-{}-{}-{}",
+                    rule.id,
+                    event.id,
+                    event.start_date.and_utc().timestamp()
+                )),
+            };
+            let outcome = match deliver(state, &message, &event, customer_id).await {
                 Ok(outcome) => outcome,
                 Err(err) => {
                     // One failure must not hold up the messages behind it.
@@ -1515,6 +1552,117 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
         }
     }
     Ok(run)
+}
+
+/// Body of `POST /v1/events/{id}/confirmation`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ConfirmationInput {
+    /// A template of the company.
+    pub template_id: i32,
+}
+
+/// `POST /v1/events/{id}/confirmation`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ConfirmationSent {
+    /// How it reached the customer: `sms` or `email`.
+    pub channel: Channel,
+}
+
+/// What the event form shows when a confirmation did not go out.
+fn confirmation_failure(code: &str) -> ApiError {
+    let message = match code {
+        "sms_unavailable" => "Texting is not set up for this company",
+        "no_sms_sender" => "No office manager has a texting line",
+        "no_phone" => "The customer has no phone number",
+        "no_email" => "The customer has no email",
+        "unfilled_variables" => {
+            "The event is missing something the template needs, e.g. an address"
+        }
+        "variables_failed" => "Could not fill in the template",
+        _ => return ApiError::Upstream("Could not send the confirmation".into()),
+    };
+    bad(message)
+}
+
+/// Send a confirmation now
+///
+/// Sends one of the company's templates to the event's customer right
+/// away, whenever the appointment is, and notes it in the event's history.
+#[utoipa::path(
+    post,
+    path = "/v1/events/{id}/confirmation",
+    operation_id = "send_event_confirmation",
+    tag = "schedule",
+    params(("id" = i32, Path, description = "Event id")),
+    request_body = ConfirmationInput,
+    responses(
+        (status = 200, description = "Sent", body = ConfirmationSent),
+        (status = 400, description = "Unscheduled, no customer, unknown template, or the customer cannot be reached", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 404, description = "No such event in the caller's company", body = ErrorBody),
+        (status = 502, description = "The text or email failed to send", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn send_confirmation(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i32>,
+    JsonBody(input): JsonBody<ConfirmationInput>,
+) -> ApiResult<Json<ConfirmationSent>> {
+    let pool = &state.pool;
+    let stored = company_event(pool, user.company_id, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if stored.unscheduled {
+        return Err(bad("Put the event on the calendar before confirming it"));
+    }
+    let template: TemplateRow = sqlx::query_as(
+        "SELECT id, name, CAST(channel AS CHAR) AS channel, subject, body
+           FROM schedule_notification_templates
+          WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(input.template_id)
+    .bind(user.company_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| bad("Template not found"))?;
+    let event: Appointment = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT e.id, e.start_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
+                e.location, e.created_date, e.created_user_id,
+                CAST(COALESCE(tc.id, sc.id) AS SIGNED) AS customer_id
+           FROM events e
+           JOIN users r ON r.id = e.created_user_id
+           {EVENT_CUSTOMER}
+          WHERE e.id = ?"
+    )))
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+    let Some(customer_id) = event.customer_id else {
+        return Err(bad("The event has no customer"));
+    };
+    let message = Outgoing {
+        company_id: user.company_id,
+        channel: Channel::parse(&template.channel),
+        subject: template.subject.as_deref(),
+        body: &template.body,
+        idempotency_key: None,
+    };
+    if let Some(code) = deliver(&state, &message, &event, customer_id).await? {
+        return Err(confirmation_failure(code));
+    }
+    let line = format!("Confirmation sent: {}", template.name);
+    record(
+        pool,
+        &History::new(id, user.company_id, "updated", user.name.as_deref()).message(&line),
+    )
+    .await;
+    Ok(Json(ConfirmationSent {
+        channel: message.channel,
+    }))
 }
 
 #[cfg(test)]
@@ -1575,5 +1723,14 @@ mod tests {
             email_html("Hi <Al>,\nline two\n\nBye"),
             "<p>Hi &lt;Al&gt;,<br>line two</p><p>Bye</p>"
         );
+    }
+
+    #[test]
+    fn editor_html_keeps_its_formatting() {
+        let html = email_html(
+            r#"<p><strong>Hi</strong> <u>Al</u> <span style="color: rgb(230, 0, 0);">red</span></p><p>bad<script>alert(1)</script></p>"#,
+        );
+        assert!(html.starts_with(r#"<p><strong>Hi</strong> <u>Al</u> <span style="color: rgb(230, 0, 0);">red</span></p>"#));
+        assert!(!html.contains("script"));
     }
 }

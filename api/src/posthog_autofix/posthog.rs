@@ -21,7 +21,7 @@ pub struct Issue {
 }
 
 /// What the intake needs from an issue's `$exception` events.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IssueEvents {
     pub issue_id: String,
     pub occurrences: u64,
@@ -33,6 +33,10 @@ pub struct IssueEvents {
     pub host: Option<String>,
     /// The latest event's `$exception_list`.
     pub exception_list: Option<Value>,
+    /// The page of the latest browser error (`$current_url`).
+    pub url: Option<String>,
+    /// The latest API error's request, as `GET /v1/customers/7`.
+    pub request: Option<String>,
 }
 
 /// PostHog could not be read; the tick retries on the next poll.
@@ -107,7 +111,9 @@ impl IssueSource for PostHog<'_> {
         let hogql = format!(
             "SELECT issue_id, count(), uniq(distinct_id), argMax(distinct_id, timestamp), \
              argMax(properties.$lib, timestamp), argMax(properties.$host, timestamp), \
-             argMax(properties.$exception_list, timestamp) \
+             argMax(properties.$exception_list, timestamp), \
+             argMax(properties.$current_url, timestamp), \
+             argMax(properties.api_method, timestamp), argMax(properties.api_path, timestamp) \
              FROM events WHERE event = '$exception' AND timestamp >= {} \
              AND issue_id IN ({list}) GROUP BY issue_id LIMIT {}",
             datetime_literal(since),
@@ -292,9 +298,21 @@ fn parse_events(body: &Value) -> Vec<IssueEvents> {
                 lib: text(&row[4]),
                 host: text(&row[5]),
                 exception_list: json_cell(&row[6]),
+                url: text(&row[7]),
+                request: request(&row[8], &row[9]),
             })
         })
         .collect()
+}
+
+/// `GET /v1/customers/7` from the `api_method` and `api_path` cells; the
+/// path alone without a method.
+fn request(method: &Value, path: &Value) -> Option<String> {
+    let path = text(path)?;
+    Some(match text(method) {
+        Some(method) => format!("{method} {path}"),
+        None => path,
+    })
 }
 
 #[cfg(test)]
@@ -385,10 +403,12 @@ mod tests {
         let encoded = list.to_string();
         let body = json!({
             "results": [
-                [ISSUE, 12, 3, "user-1", "web", "granite-manager.com", encoded],
+                [ISSUE, 12, 3, "user-1", "web", "granite-manager.com", encoded,
+                 "https://granite-manager.com/employee/deals/7", null, null],
                 ["01a158ec-b8d5-7002-bb99-07e4e724acef", "4", "1", "granite-api", "", null,
-                 serde_json::to_string(&encoded).unwrap()],
-                ["01a158ec-b8d5-7002-bb99-07e4e724ac00", 1, 1, null, null, null, "not json"],
+                 serde_json::to_string(&encoded).unwrap(), null, "GET", "/v1/slabs"],
+                ["01a158ec-b8d5-7002-bb99-07e4e724ac00", 1, 1, null, null, null, "not json",
+                 "", null, "/v1/deals"],
             ],
         });
         let events = parse_events(&body);
@@ -402,11 +422,16 @@ mod tests {
                 lib: Some("web".into()),
                 host: Some("granite-manager.com".into()),
                 exception_list: Some(list.clone()),
+                url: Some("https://granite-manager.com/employee/deals/7".into()),
+                request: None,
             }
         );
         assert_eq!((events[1].occurrences, events[1].users), (4, 1));
         assert_eq!(events[1].lib, None);
         assert_eq!(events[1].exception_list, Some(list));
+        assert_eq!(events[1].request.as_deref(), Some("GET /v1/slabs"));
         assert_eq!(events[2].exception_list, None);
+        assert_eq!(events[2].url, None);
+        assert_eq!(events[2].request.as_deref(), Some("/v1/deals"));
     }
 }

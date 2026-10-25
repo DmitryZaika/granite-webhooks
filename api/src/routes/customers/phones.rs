@@ -299,6 +299,7 @@ pub async fn link_phone(
     .fetch_optional(pool)
     .await?
     .ok_or(ApiError::NotFound)?;
+    super::service::refuse_import_placeholder(pool, id).await?;
     let column = if current.is_some_and(|phone| !phone.is_empty()) {
         "phone_2"
     } else {

@@ -719,6 +719,7 @@ struct FoundRow {
     created_user_id: i32,
     assigned_user_id: Option<i32>,
     sale_id: Option<i32>,
+    customer_id: Option<i32>,
     customer_name: Option<String>,
 }
 
@@ -727,7 +728,7 @@ struct FoundRow {
 pub struct FoundEvent {
     /// The event.
     pub id: i32,
-    /// Title (a bare number is a customer id).
+    /// The event's name.
     pub title: String,
     /// Longer text.
     pub description: Option<String>,
@@ -757,14 +758,16 @@ pub struct FoundEvent {
     pub assigned_user_id: Option<i32>,
     /// Its sale.
     pub sale_id: Option<i32>,
-    /// The customer named by the title.
+    /// The customer it is for.
+    pub customer_id: Option<i32>,
+    /// That customer's name.
     pub customer_name: Option<String>,
 }
 
 /// Search events
 ///
-/// The company's events whose title, customer (for a title that is a
-/// customer id), location, description or notes contain `q`, newest first.
+/// The company's events whose title, customer's name, location, description
+/// or notes contain `q`, newest first.
 #[utoipa::path(
     get,
     path = "/v1/events/search",
@@ -794,11 +797,10 @@ pub async fn search(
         "SELECT e.id, e.title, e.description, e.location, e.notes, e.start_date, e.end_date,
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.calendar_id, e.rrule,
                 e.recurrence_until, e.created_user_id, e.assigned_user_id, e.sale_id,
-                c.name AS customer_name
+                e.customer_id, c.name AS customer_name
            FROM events e
            JOIN users u ON e.created_user_id = u.id
-           LEFT JOIN customers c ON TRIM(e.title) REGEXP '^[0-9]+$'
-                AND c.id = CAST(TRIM(e.title) AS UNSIGNED)
+           LEFT JOIN customers c ON c.id = e.customer_id
                 AND c.company_id = u.company_id AND c.deleted_at IS NULL
           WHERE u.company_id = ? AND e.deleted_date IS NULL
             AND (e.title LIKE ? OR c.name LIKE ? OR e.location LIKE ? OR e.description LIKE ? OR e.notes LIKE ?)
@@ -833,6 +835,7 @@ pub async fn search(
                 created_user_id: row.created_user_id,
                 assigned_user_id: row.assigned_user_id,
                 sale_id: row.sale_id,
+                customer_id: row.customer_id,
                 customer_name: row.customer_name,
             })
             .collect(),

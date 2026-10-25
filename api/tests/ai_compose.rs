@@ -104,6 +104,11 @@ async fn the_draft_is_continued_from_the_conversation(pool: MySqlPool) {
         prompt.contains("SMS Customer: Can you come measure on Friday?"),
         "{prompt}"
     );
+    assert!(
+        prompt.contains("/customer/100/stones\nCustomer quote URL (they type their measurements there and send them to us): https://"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("/customer/100/quote\n"), "{prompt}");
     assert!(prompt.ends_with("DRAFT (already typed — continue from its very end):\n\"Fri\"\nThe draft ends mid-word or right after the word \"Fri\". If it is unfinished, complete it (keep \"Fri\", add only the missing letters)."));
     let logged: String =
         sqlx::query_scalar("SELECT feature FROM ai_usage_log ORDER BY id DESC LIMIT 1")

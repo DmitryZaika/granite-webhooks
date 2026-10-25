@@ -158,6 +158,29 @@ pub async fn find_user(
     .await
 }
 
+/// A live user by id, as a session would load them, in their own company.
+pub async fn find_live_user(
+    pool: &MySqlPool,
+    user_id: i32,
+) -> Result<Option<SessionUser>, sqlx::Error> {
+    sqlx::query_as::<_, SessionUser>(
+        r"
+        SELECT users.id, users.email, users.name, users.phone_number,
+               COALESCE(users.is_employee, 0) AS is_employee,
+               COALESCE(users.is_admin, 0) AS is_admin,
+               COALESCE(users.is_superuser, 0) AS is_superuser,
+               users.company_id, users.pined_bar, users.cloudtalk_agent_id,
+               users.cloudtalk_phone_number, users.ringcentral_extension_id,
+               users.ringcentral_phone_number, users.is_signature_available
+        FROM users
+        WHERE users.id = ? AND users.is_deleted = 0
+        ",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,10 +3,12 @@
 
 use super::config::Config;
 use super::model::{
-    AgentResult, Conclusion, RunReport, RunView, TestReport, TestStatus, Verification,
+    AgentResult, Conclusion, LastSeen, RunReport, RunView, Source, TestReport, TestStatus,
+    Verification,
 };
 use super::notify::Email;
 use crate::routes::bug_reports::escape;
+use std::collections::HashMap;
 use std::fmt::Write;
 
 const NAME_MAX: usize = 120;
@@ -95,28 +97,99 @@ pub fn storm_digest(
     }
 }
 
-/// Dry run: the runs this tick would have started.
-pub fn preview_digest(runs: &[RunView], config: &Config) -> Email {
+/// Dry run: the errors this tick would have started fixing, each with where
+/// and to whom it last happened (`seen`, by PostHog issue id).
+pub fn preview_digest(
+    runs: &[RunView],
+    seen: &HashMap<String, LastSeen>,
+    config: &Config,
+) -> Email {
     let mut html = String::from(
-        "<h2>PostHog auto-fix dry run</h2>\
-         <p>These issues would be fixed in live mode.</p>\
-         <table cellpadding=\"4\" border=\"1\" style=\"border-collapse: collapse;\">\
-         <tr><th>Issue</th><th>Source</th><th>Occurrences</th><th>Users</th></tr>",
+        "<h2>New errors (dry run)</h2>\
+         <p>Auto-fix is in dry-run mode, so it changed nothing. In live mode it would \
+         try to fix each error below.</p>",
     );
-    for run in runs {
+    for (number, run) in runs.iter().enumerate() {
         let _ = write!(
             html,
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-            issue_link(run, config),
-            escape(run.source.as_deref().unwrap_or("unknown")),
-            count(run.occurrences),
-            count(run.users),
+            "<hr><h3>{}. {}</h3>",
+            number + 1,
+            escape(&clean(&run.issue_name, NAME_MAX))
+        );
+        let message = run.issue_description.trim();
+        html.push_str(&block(
+            "Description",
+            if message.is_empty() {
+                "(no message)"
+            } else {
+                message
+            },
+        ));
+        html.push_str(&last_seen(seen.get(&run.posthog_issue_id)));
+        let source = run
+            .source
+            .as_deref()
+            .and_then(Source::parse)
+            .unwrap_or(Source::Unknown);
+        html.push_str(&field("Happened", &happened(run, source)));
+        html.push_str(&field("Source", source.label()));
+        let _ = write!(
+            html,
+            "<p>{}</p>",
+            link(&config.issue_url(&run.posthog_issue_id), "Open in PostHog")
         );
     }
-    html.push_str("</table>");
+    let errors = if runs.len() == 1 { "error" } else { "errors" };
     Email {
-        subject: format!("[AI fix] Dry run: {} issue(s) would be fixed", runs.len()),
+        subject: format!("[AI fix] Dry run: {} new {errors}", runs.len()),
         html,
+    }
+}
+
+const NOT_KNOWN: &str = "not known";
+
+/// The page (or the request, for an API error), the user and their company.
+fn last_seen(seen: Option<&LastSeen>) -> String {
+    let none = LastSeen::default();
+    let seen = seen.unwrap_or(&none);
+    let mut html = match (&seen.url, &seen.request) {
+        // The page comes from the browser: only a web address becomes a link.
+        (Some(url), _) if url.starts_with("https://") || url.starts_with("http://") => {
+            format!("<p><strong>Page:</strong> {}</p>", link(url, url))
+        }
+        (Some(url), _) => field("Page", url),
+        (None, Some(request)) => field("Request", request),
+        (None, None) => field("Page", NOT_KNOWN),
+    };
+    let user = match (seen.user_id, seen.user_name.as_deref().map(str::trim)) {
+        (Some(id), Some(name)) if !name.is_empty() => format!("{name} (user {id})"),
+        (Some(id), _) => format!("user {id}"),
+        (None, _) => NOT_KNOWN.into(),
+    };
+    html.push_str(&field("User", &user));
+    let company = seen
+        .company_id
+        .map_or_else(|| NOT_KNOWN.into(), |id| id.to_string());
+    html.push_str(&field("Company ID", &company));
+    html
+}
+
+/// `4 times to 2 users`. Servers report under one shared id, so only browser
+/// errors count users.
+fn happened(run: &RunView, source: Source) -> String {
+    let times = plural(run.occurrences, "time", "times");
+    if source == Source::Web {
+        format!("{times} to {}", plural(run.users, "user", "users"))
+    } else {
+        times
+    }
+}
+
+fn plural(value: Option<u32>, one: &str, many: &str) -> String {
+    match value {
+        Some(1) => format!("1 {one}"),
+        Some(value) => format!("{value} {many}"),
+        None => format!("? {many}"),
     }
 }
 
@@ -397,10 +470,85 @@ mod tests {
             "[AI fix] Error storm: 25 new issues in 30 minutes"
         );
         let runs = [run("a", "d"), run("b", "d")];
+        let seen = HashMap::new();
         assert_eq!(
-            preview_digest(&runs, &config).subject,
-            "[AI fix] Dry run: 2 issue(s) would be fixed"
+            preview_digest(&runs, &seen, &config).subject,
+            "[AI fix] Dry run: 2 new errors"
         );
+        assert_eq!(
+            preview_digest(&runs[..1], &seen, &config).subject,
+            "[AI fix] Dry run: 1 new error"
+        );
+    }
+
+    #[test]
+    fn a_dry_run_names_the_error_the_page_the_user_and_the_company() {
+        let run = run(
+            "TypeError",
+            "Cannot read properties of undefined (reading 'id')",
+        );
+        let page = "https://acme.granite-manager.com/employee/deals/7?tab=notes&x=1";
+        let seen = HashMap::from([(
+            ISSUE.to_string(),
+            LastSeen {
+                url: Some(page.into()),
+                user_id: Some(103),
+                user_name: Some("Sam <Super>".into()),
+                company_id: Some(101),
+                ..LastSeen::default()
+            },
+        )]);
+        let html = preview_digest(std::slice::from_ref(&run), &seen, &Config::default()).html;
+        assert!(html.contains("<h3>1. TypeError</h3>"));
+        assert!(html.contains("Cannot read properties of undefined (reading 'id')"));
+        let escaped_page = escape(page);
+        assert!(html.contains(&format!(
+            "<strong>Page:</strong> <a href=\"{escaped_page}\">{escaped_page}</a>"
+        )));
+        assert!(html.contains("<strong>User:</strong> Sam &lt;Super&gt; (user 103)"));
+        assert!(html.contains("<strong>Company ID:</strong> 101"));
+        assert!(html.contains("<strong>Happened:</strong> 12 times to 3 users"));
+        assert!(html.contains("<strong>Source:</strong> web app"));
+        assert!(html.contains(&format!(
+            "<a href=\"{}\">Open in PostHog</a>",
+            Config::default().issue_url(ISSUE)
+        )));
+        assert!(!html.contains("<table"));
+    }
+
+    #[test]
+    fn a_dry_run_of_a_server_error_shows_its_request_and_no_user() {
+        let mut api_run = run("ApiError", "  ");
+        api_run.source = Some("granite-api".into());
+        api_run.occurrences = Some(1);
+        let seen = HashMap::from([(
+            ISSUE.to_string(),
+            LastSeen {
+                request: Some("GET /v1/slabs?id=6074".into()),
+                ..LastSeen::default()
+            },
+        )]);
+        let html = preview_digest(std::slice::from_ref(&api_run), &seen, &Config::default()).html;
+        assert!(html.contains("(no message)"));
+        assert!(html.contains("<strong>Request:</strong> GET /v1/slabs?id=6074"));
+        assert!(html.contains("<strong>User:</strong> not known"));
+        assert!(html.contains("<strong>Company ID:</strong> not known"));
+        assert!(html.contains("<strong>Happened:</strong> 1 time</p>"));
+        assert!(html.contains("<strong>Source:</strong> API"));
+
+        // PostHog unreadable: the digest still goes out, without the details.
+        let html = preview_digest(&[run("e", "d")], &HashMap::new(), &Config::default()).html;
+        assert!(html.contains("<strong>Page:</strong> not known"));
+        // Only a web address becomes a link.
+        let seen = HashMap::from([(
+            ISSUE.to_string(),
+            LastSeen {
+                url: Some("javascript:alert(1)".into()),
+                ..LastSeen::default()
+            },
+        )]);
+        let html = preview_digest(&[run("e", "d")], &seen, &Config::default()).html;
+        assert!(html.contains("<strong>Page:</strong> javascript:alert(1)</p>"));
     }
 
     #[test]
@@ -462,7 +610,7 @@ mod tests {
             run_timed_out(&run, &config),
             dispatch_failed(&run, "boom", &config),
             storm_digest(21, 30, &[("a: b".into(), 4)], &config),
-            preview_digest(std::slice::from_ref(&run), &config),
+            preview_digest(std::slice::from_ref(&run), &HashMap::new(), &config),
             run_finished(&run, &report(Some(agent(Outcome::NeedsHuman))), &config),
         ];
         assert!(emails[0].html.contains("check the PR's deploy"));

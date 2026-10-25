@@ -163,17 +163,14 @@ pub async fn activity(
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.notes,
                 e.calendar_id, NULLIF(TRIM(e.rrule), '') AS rrule,
                 DATE_FORMAT(e.recurrence_until, '%Y-%m-%dT%H:%i:%sZ') AS recurrence_until,
-                e.created_user_id, e.assigned_user_id, e.sale_id, c.name AS customer_name,
-                COALESCE(e.unscheduled, 0) <> 0 AS unscheduled,
+                e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
+                c.name AS customer_name, COALESCE(e.unscheduled, 0) <> 0 AS unscheduled,
                 au.name AS assignee_name, u.name AS creator_name
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN users au ON e.assigned_user_id = au.id
            LEFT JOIN customers c
-             ON TRIM(e.title) REGEXP '^[0-9]+$'
-            AND c.id = CAST(TRIM(e.title) AS UNSIGNED)
-            AND c.company_id = u.company_id
-            AND c.deleted_at IS NULL
+             ON c.id = e.customer_id AND c.company_id = u.company_id AND c.deleted_at IS NULL
           WHERE u.company_id = ",
     );
     sql.push_bind(user.company_id).push(" AND e.id IN (");

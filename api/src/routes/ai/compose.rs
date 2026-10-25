@@ -16,7 +16,7 @@ use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::followups::gather::{
-    FollowupRequest, customer_inventory_page_url, gather_followup_context,
+    FollowupRequest, customer_inventory_page_url, customer_quote_page_url, gather_followup_context,
 };
 use crate::followups::greeting::{conversation_recency, greeting_instruction};
 use crate::followups::js::{js_len, js_slice, trim};
@@ -67,6 +67,7 @@ Rules:
 - If the draft ends mid-word, finish THAT word first, keeping the letters already typed (no leading space). If it ends after a full word, start with a space.
 - Stay consistent with the conversation and the rep's tone. Never invent prices, dates, or facts not in the context.
 - When the rep is about to share the inventory / stones page, use the exact customer page URL from CUSTOMER / PROJECT INFO.
+- When the rep asks the customer for their measurements or sends them a link to send us their sizes, use the exact Customer quote URL from CUSTOMER / PROJECT INFO.
 - When the message needs the rep's name, the rep's phone number or the company address, use them from SALES REP and COMPANY.
 - If the DRAFT is empty, suggest how the rep's next message should start: one short sentence (max ~20 words) that fits where the conversation is now. Follow the GREETING line: with GREETING: NONE (an SMS or email with them earlier today) never start with "Hi", "Hey" or "Hello" and never use the customer's name; start with the content.
 - Never repeat or rephrase something the rep already said in the CONVERSATION. If the rep's last message is still unanswered, don't ask its question again: add something new (a different angle, an offer, a next step) or return an empty string.
@@ -496,8 +497,8 @@ async fn load_context(
     .bind(user.id)
     .fetch_optional(&state.pool)
     .await?;
-    let company: Option<(Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT name, address FROM company WHERE id = ? LIMIT 1")
+    let company: Option<(Option<String>, Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT name, address, domain FROM company WHERE id = ? LIMIT 1")
             .bind(user.company_id)
             .fetch_optional(&state.pool)
             .await?;
@@ -513,7 +514,11 @@ async fn load_context(
             .map(|p| p.trim().to_string())
             .find(|p| !p.is_empty())
     });
-    let (company_name, company_address) = company.unwrap_or_default();
+    let (company_name, company_address, domain) = company.unwrap_or_default();
+    let quote_page = format!(
+        "Customer quote URL (they type their measurements there and send them to us): {}",
+        customer_quote_page_url(user.company_id, domain.as_deref())
+    );
     let deal_id = thread.deal_id.map(i64::from);
     // Best effort, like the reply drafter: without them the AI only can't
     // answer quote questions.
@@ -532,7 +537,7 @@ async fn load_context(
         None => String::new(),
     };
     let context = ComposeContext {
-        profile: gathered.profile,
+        profile: format!("{}\n{quote_page}", gathered.profile),
         timeline: trim_timeline(&gathered.timeline, TIMELINE_MAX_CHARS),
         rep_phone,
         company_name,

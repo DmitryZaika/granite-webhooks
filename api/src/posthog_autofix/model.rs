@@ -167,6 +167,18 @@ impl Source {
         .into_iter()
         .find(|source| source.as_str() == value)
     }
+
+    /// The name the emails show.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Web => "web app",
+            Self::Api => "API",
+            Self::Webhooks => "webhooks",
+            Self::TimeTriggered => "scheduled jobs",
+            Self::LegacyNode => "old Remix server",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 /// What the agent concluded about the issue.
@@ -396,6 +408,20 @@ impl RunView {
     pub fn status(&self) -> Option<Status> {
         Status::parse(&self.status)
     }
+}
+
+/// Where and to whom an issue's error last happened, for the dry-run email.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LastSeen {
+    /// The page, for a browser error.
+    pub url: Option<String>,
+    /// The request, as `GET /v1/customers/7`, for an API error.
+    pub request: Option<String>,
+    /// The signed-in user (the browser's `distinct_id`).
+    pub user_id: Option<i32>,
+    /// That user's name and company, from `users`.
+    pub user_name: Option<String>,
+    pub company_id: Option<i32>,
 }
 
 #[cfg(test)]

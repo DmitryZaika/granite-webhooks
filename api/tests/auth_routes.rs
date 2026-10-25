@@ -325,3 +325,130 @@ async fn a_password_is_reset_by_email(pool: MySqlPool) {
         .await
         .assert_status_not_found();
 }
+
+#[test_db::test(seed)]
+async fn an_invited_user_sets_up_their_own_account(pool: MySqlPool) {
+    sqlx::query("UPDATE company SET subdomain = 'acme' WHERE id = 100")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Ada (102) adds users once she is a Manager of 100.
+    sqlx::query(
+        "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (102, 5, 100)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (server, sent) = setup(pool.clone(), None).await;
+    let res = server
+        .post("/v1/admin/users")
+        .with_session(sessions::ADMIN)
+        .json(&json!({ "email": " New@Acme.test ", "positions": [1] }))
+        .await;
+    res.assert_status(StatusCode::CREATED);
+    let created: Value = res.json();
+    assert_eq!(created["email_sent"], true);
+    let url = created["invite_url"].as_str().unwrap().to_string();
+    let token = url
+        .strip_prefix("https://acme.granite-manager.com/invite/")
+        .unwrap()
+        .to_string();
+    assert_eq!(token.len(), 96);
+    let emails = sent.lock().unwrap().clone();
+    assert_eq!(emails.len(), 1);
+    assert_eq!(emails[0].to, ["new@acme.test"]);
+    assert!(emails[0].subject.contains("Acme Stone"));
+    assert!(emails[0].body.contains(&url));
+
+    let invite: Value = server.get(&format!("/v1/auth/invite/{token}")).await.json();
+    assert_eq!(
+        invite,
+        json!({ "email": "new@acme.test", "company_name": "Acme Stone" })
+    );
+    // No password yet: nothing signs in.
+    server
+        .post("/v1/auth/login")
+        .json(&json!({ "email": "new@acme.test", "password": "a-new-password" }))
+        .await
+        .assert_status_unauthorized();
+    for body in [
+        json!({ "name": " ", "phone_number": "3175550123", "password": "a-new-password" }),
+        json!({ "name": "Nia New", "phone_number": "555-0123", "password": "a-new-password" }),
+        json!({ "name": "Nia New", "phone_number": "3175550123", "password": "short" }),
+    ] {
+        server
+            .post(&format!("/v1/auth/invite/{token}"))
+            .json(&body)
+            .await
+            .assert_status_bad_request();
+    }
+
+    let res = server
+        .post(&format!("/v1/auth/invite/{token}"))
+        .json(&json!({
+            "name": " Nia New ",
+            "phone_number": " 317-555-0123 ",
+            "password": " a-new-password ",
+        }))
+        .await;
+    res.assert_status_ok();
+    let body: Value = res.json();
+    assert_eq!(body["user"]["email"], "new@acme.test");
+    assert_eq!(body["user"]["name"], "Nia New");
+    assert_eq!(body["home_path"], "/employee");
+    // Signed in by the answer's cookie.
+    server
+        .get("/v1/me")
+        .add_header("cookie", session_cookie(&res))
+        .await
+        .assert_status_ok();
+    let (phone, hash): (String, String) =
+        sqlx::query_as("SELECT phone_number, password FROM users WHERE email = 'new@acme.test'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(phone, "317-555-0123");
+    assert!(bcrypt::verify("a-new-password", &hash).unwrap());
+
+    // The link works once.
+    server
+        .get(&format!("/v1/auth/invite/{token}"))
+        .await
+        .assert_status_not_found();
+    server
+        .post(&format!("/v1/auth/invite/{token}"))
+        .json(&json!({
+            "name": "Someone Else",
+            "phone_number": "3175550199",
+            "password": "another-password",
+        }))
+        .await
+        .assert_status_not_found();
+    server
+        .post("/v1/auth/login")
+        .json(&json!({ "email": "new@acme.test", "password": "a-new-password" }))
+        .await
+        .assert_status_ok();
+
+    // A reset link is no invite: that account already has a password.
+    server
+        .post("/v1/auth/password-reset")
+        .json(&json!({ "email": "rep@acme.test" }))
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+    let reset = sent.lock().unwrap().last().unwrap().body.clone();
+    let start = reset.find("/reset-password/").unwrap() + "/reset-password/".len();
+    let reset_token: String = reset[start..]
+        .chars()
+        .take_while(char::is_ascii_hexdigit)
+        .collect();
+    assert_eq!(reset_token.len(), 96);
+    server
+        .get(&format!("/v1/auth/invite/{reset_token}"))
+        .await
+        .assert_status_not_found();
+    server
+        .get("/v1/auth/invite/not-a-token")
+        .await
+        .assert_status_not_found();
+}

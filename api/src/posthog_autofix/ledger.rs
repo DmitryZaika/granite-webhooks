@@ -1,4 +1,5 @@
-//! SQL over `posthog_autofix_runs` and `posthog_autofix_notices`.
+//! SQL over `posthog_autofix_runs` and `posthog_autofix_notices`, and the
+//! `users` lookup the dry-run email needs.
 //!
 //! Every status change is one conditional `UPDATE ... WHERE status IN (...)`
 //! built from [`may_become`], so the state machine in [`Status::can_become`]
@@ -36,6 +37,17 @@ pub async fn load_run(db: impl MySqlExecutor<'_>, id: u64) -> Result<Option<RunV
     .bind(id)
     .fetch_optional(db)
     .await
+}
+
+/// The name and company of user `id`; `None` when there is no such user.
+pub async fn user(
+    db: impl MySqlExecutor<'_>,
+    id: i32,
+) -> Result<Option<(Option<String>, Option<i32>)>, sqlx::Error> {
+    sqlx::query_as("SELECT name, company_id FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_optional(db)
+        .await
 }
 
 /// Claims once-per-window work (`kind` at `window_start`): true for the one

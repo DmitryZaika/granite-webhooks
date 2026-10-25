@@ -167,8 +167,8 @@ pub async fn book(
     let event = check(&input.event)?;
     let id = sqlx::query(
         "INSERT INTO events (title, description, location, start_date, end_date, all_day, color,
-            status, notes, created_user_id, calendar_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            status, notes, created_user_id, customer_id, calendar_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(event.title)
     .bind(event.description)
@@ -180,6 +180,7 @@ pub async fn book(
     .bind(event.status)
     .bind(event.notes)
     .bind(user.id)
+    .bind(input.customer_id)
     .bind(calendar_id)
     .execute(pool)
     .await?
