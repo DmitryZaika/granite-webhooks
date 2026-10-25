@@ -455,29 +455,26 @@ fn days_given_back(span: Duration) -> i64 {
     (secs.saturating_add(SECS_PER_DAY - 1) / SECS_PER_DAY).max(1)
 }
 
-/// The deadline moved: with the deadline in the future again the notice
-/// cycle ends and a sent notice is withdrawn (back to booked or pending).
-/// Suspended stays suspended, but a notice it holds was about the old
-/// deadline: it is dropped, so a later resumption sends a new one.
+/// The deadline moved: a sent or held notice named the old deadline, so it
+/// is dropped with its charge date (a sent one goes back to booked or
+/// pending; a new notice naming the new deadline, with a new charge date at
+/// least 7 days on, falls due once it passes). Suspended stays suspended.
+/// With the deadline in the future again the notice cycle ends too.
 fn withdraw_stale_notice(commitment: &mut Commitment, now: NaiveDateTime) -> bool {
-    if commitment.status == Status::Suspended {
-        let held = commitment.notice_sent_at.is_some();
+    if matches!(commitment.status, Status::Suspended | Status::NoticeSent) {
+        let dropped = commitment.notice_sent_at.is_some();
+        if commitment.status == Status::NoticeSent {
+            commitment.status = resting_status(commitment);
+        }
         commitment.notice_sent_at = None;
         commitment.charge_after = None;
         commitment.notice_cycle_at = None;
-        return held;
+        return dropped;
     }
-    if commitment.deadline_at <= now {
-        return false;
+    if commitment.deadline_at > now {
+        commitment.notice_cycle_at = None;
     }
-    commitment.notice_cycle_at = None;
-    if commitment.status != Status::NoticeSent {
-        return false;
-    }
-    commitment.status = resting_status(commitment);
-    commitment.notice_sent_at = None;
-    commitment.charge_after = None;
-    true
+    false
 }
 
 /// Adds `days` local days to the deadline; returns the old deadline and
@@ -1684,7 +1681,7 @@ mod tests {
     }
 
     #[test]
-    fn host_cancellation_that_leaves_the_deadline_past_keeps_the_notice() {
+    fn host_cancellation_that_leaves_the_deadline_past_drops_the_notice_for_a_new_one() {
         let recorded = Booking {
             booked_at: at("2026-10-31 13:00"),
             ..call("2026-11-03 15:00")
@@ -1696,11 +1693,39 @@ mod tests {
         });
         let day = run(&c, &cancelled, "2026-11-01 13:00");
         let out = &day.outcome;
-        assert_eq!(out.commitment.status, Status::NoticeSent);
+        assert_eq!(out.commitment.status, Status::Pending);
         assert_eq!(out.commitment.deadline_at, at("2026-11-01 11:00"));
-        assert_eq!(out.commitment.charge_after, Some(at("2026-11-07 12:00")));
-        assert_eq!(out.events[0].detail["notice_withdrawn"], false);
-        assert!(day.due.is_empty());
+        assert_eq!(out.commitment.charge_after, None);
+        assert_eq!(out.events[0].detail["notice_withdrawn"], true);
+        assert_eq!(day.due, [Due::Notice]);
+    }
+
+    #[test]
+    fn a_host_move_during_the_notice_sends_a_new_notice_and_no_charge_on_the_old_date() {
+        // Notice Nov 1 (charge Nov 8), call Nov 6; Granite moves it to Nov 9 on Nov 4.
+        let notice = notice_sent(&base(), at("2026-11-01 12:00")).commitment;
+        assert_eq!(notice.charge_after, Some(at("2026-11-08 12:00")));
+        let c = book(
+            &notice,
+            Booking {
+                booked_at: at("2026-11-01 13:00"),
+                ..call("2026-11-06 15:00")
+            },
+        );
+        let moved = with(BookingCheck::MovedByHost(Booking {
+            booked_at: at("2026-11-04 09:00"),
+            ..call("2026-11-09 15:00")
+        }));
+        let day = run(&c, &moved, "2026-11-04 10:00");
+        let after = &day.outcome.commitment;
+        assert_eq!(after.status, Status::Booked);
+        assert_eq!((after.notice_sent_at, after.charge_after), (None, None));
+        assert!(after.deadline_at < at("2026-11-04 10:00"));
+        assert_eq!(day.due, [Due::Notice]);
+        // The new notice dates the charge 7 days on; nothing is due on Nov 8.
+        let renoticed = notice_sent(after, at("2026-11-04 10:00")).commitment;
+        assert_eq!(renoticed.charge_after, Some(at("2026-11-11 10:00")));
+        assert!(due_at(&renoticed, "2026-11-08 12:00").is_empty());
     }
 
     #[test]

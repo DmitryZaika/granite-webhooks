@@ -1756,6 +1756,66 @@ async fn an_open_fee_invoice_is_voided_by_a_cancellation_before_the_charge_date(
 }
 
 #[test_db::test(seed)]
+async fn our_void_whose_save_was_lost_settles_the_commitment_instead_of_waiting(pool: MySqlPool) {
+    let h = harness(&pool, ON).await;
+    let noticed_at = left_invoiced(&pool, &h, "void").await;
+    // Voided for a cancellation request, the save lost, the request withdrawn.
+    h.stripe
+        .lock()
+        .unwrap()
+        .invoices
+        .get_mut("in_fee_left")
+        .unwrap()["metadata"]["withdrawn"] = json!("cancellation_requested");
+
+    h.run(noticed_at + Duration::days(8)).await;
+
+    let c = commitment(&pool, PENDING).await;
+    assert_eq!(c.status.as_str(), "suspended");
+    assert_eq!(c.stripe_invoice_id, None);
+    assert_eq!(stripe_calls(&h), (0, 0, 0, 0, 0));
+
+    // No request on file: the next run resumes at the notice stage, never on
+    // the void invoice.
+    h.run(noticed_at + Duration::days(9) + Duration::hours(1))
+        .await;
+    let c = commitment(&pool, PENDING).await;
+    assert_ne!(c.status.as_str(), "suspended");
+    assert_ne!(c.stripe_invoice_id.as_deref(), Some("in_fee_left"));
+}
+
+#[test_db::test(seed)]
+async fn an_untagged_void_found_by_the_run_waives_the_fee(pool: MySqlPool) {
+    let h = harness(&pool, ON).await;
+    let noticed_at = left_invoiced(&pool, &h, "void").await;
+
+    h.run(noticed_at + Duration::days(8)).await;
+
+    assert_eq!(status(&pool, PENDING).await, "waived");
+    assert_eq!(stripe_calls(&h), (0, 0, 0, 0, 0));
+}
+
+#[test_db::test(seed)]
+async fn a_stale_withdrawn_tag_is_cleared_before_the_fee_is_charged(pool: MySqlPool) {
+    let h = harness(&pool, ON).await;
+    let noticed_at = left_invoiced(&pool, &h, "open").await;
+    // A withdrawal tagged it, then its void failed; now the fee may be charged.
+    h.stripe
+        .lock()
+        .unwrap()
+        .invoices
+        .get_mut("in_fee_left")
+        .unwrap()["metadata"]["withdrawn"] = json!("charging_off");
+
+    h.run(noticed_at + Duration::days(8)).await;
+
+    assert_eq!(status(&pool, PENDING).await, "fee_paid");
+    assert_eq!(
+        h.stripe.lock().unwrap().invoices["in_fee_left"]["metadata"]["withdrawn"],
+        ""
+    );
+}
+
+#[test_db::test(seed)]
 async fn the_voided_event_of_our_own_withdrawal_never_waives_the_fee(pool: MySqlPool) {
     sqlx::query(
         "UPDATE company_onboarding_commitments

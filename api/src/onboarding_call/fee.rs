@@ -35,6 +35,7 @@ use chrono::{NaiveDateTime, TimeZone};
 use lambda_http::tracing;
 use serde_json::Value;
 use sqlx::MySqlPool;
+use std::time::Instant;
 
 const DEFAULT_FROM_ADDRESS: &str = "noreply@granite-manager.com";
 
@@ -54,6 +55,10 @@ pub enum FeeError {
     /// nothing was sent to Stripe. Reported, and looked at again the next day.
     #[error("the onboarding fee is held: {0}")]
     Held(&'static str),
+    /// The run's time is up: stopped between two Stripe calls; the next run
+    /// resumes with the same idempotency keys.
+    #[error("the run's time is up")]
+    OutOfTime,
     #[error(transparent)]
     Save(#[from] SaveError),
     #[error(transparent)]
@@ -67,6 +72,7 @@ impl FeeError {
             Self::NoCustomer => "no_stripe_customer".into(),
             Self::Stripe(code) => code.clone(),
             Self::Held(reason) => format!("held_{reason}"),
+            Self::OutOfTime => "out_of_time".into(),
             Self::Save(SaveError::Conflict) => "conflict".into(),
             Self::Save(SaveError::Database(_)) | Self::Database(_) => "database".into(),
         }
@@ -219,17 +225,43 @@ async fn record_event(
 /// share of the time-triggered tick.
 const STRIPE_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-fn fee_stripe(state: &AppState) -> crate::billing::stripe::Stripe {
+pub(super) fn fee_stripe(state: &AppState) -> crate::billing::stripe::Stripe {
     let mut stripe = state.stripe.clone();
     stripe.request_timeout = STRIPE_CALL_TIMEOUT;
     stripe
 }
 
+/// Before every Stripe call: stop once the run's time is up.
+fn in_time(until: Instant) -> Result<(), FeeError> {
+    if Instant::now() >= until {
+        Err(FeeError::OutOfTime)
+    } else {
+        Ok(())
+    }
+}
+
 /// `invoice.voided` for an invoice we withdrew ourselves (`metadata[withdrawn]`).
 fn voided_by_us(invoice: &Value) -> bool {
+    withdrawn_tag(invoice).is_some()
+}
+
+/// The reason our withdrawal tagged the invoice with, when it did.
+fn withdrawn_tag(invoice: &Value) -> Option<&str> {
     invoice["metadata"]["withdrawn"]
         .as_str()
-        .is_some_and(|reason| !reason.is_empty())
+        .filter(|reason| !reason.is_empty())
+}
+
+/// The withdrawal a tag names. A cancellation request's time is not kept in
+/// the tag: `now` stands in for it.
+fn tagged_withdrawal(tag: &str, now: NaiveDateTime) -> Option<Withdrawal> {
+    match tag {
+        "subscription_ended" => Some(Withdrawal::SubscriptionEnded),
+        "cancellation_requested" => Some(Withdrawal::CancellationRequested(now)),
+        "charging_off" => Some(Withdrawal::ChargingOff),
+        "no_consent" => Some(Withdrawal::NoConsent),
+        _ => None,
+    }
 }
 
 /// Withdraws the recorded fee invoice `invoice_id` before any charge: a
@@ -242,8 +274,10 @@ async fn withdraw(
     invoice_id: &str,
     reason: Withdrawal,
     now: NaiveDateTime,
+    until: Instant,
 ) -> Result<Charged, FeeError> {
     let stripe = &fee_stripe(state);
+    in_time(until)?;
     let invoice = match stripe.invoice(invoice_id).await {
         Ok(invoice) => Some(invoice),
         Err(StripeError::Missing(_)) => None,
@@ -254,21 +288,26 @@ async fn withdraw(
         .map(|invoice| (invoice["status"].as_str(), invoice["attempted"] == true));
     match state_of {
         None | Some((Some("void"), _)) => {}
-        Some((Some("draft"), _)) => match stripe.delete_invoice(invoice_id).await {
-            Ok(_) | Err(StripeError::Missing(_)) => {}
-            Err(err) => return Err(stripe_error(&err)),
-        },
+        Some((Some("draft"), _)) => {
+            in_time(until)?;
+            match stripe.delete_invoice(invoice_id).await {
+                Ok(_) | Err(StripeError::Missing(_)) => {}
+                Err(err) => return Err(stripe_error(&err)),
+            }
+        }
         Some((Some("open"), false)) => {
             // Tagged first: the `invoice.voided` event of our own void must
             // not read as Stripe staff waiving the fee.
+            in_time(until)?;
             stripe
                 .mark_invoice_withdrawn(
                     invoice_id,
                     reason.as_str(),
-                    &format!("onboarding-fee:{invoice_id}:withdrawn"),
+                    &format!("onboarding-fee:{invoice_id}:withdrawn:{}", reason.as_str()),
                 )
                 .await
                 .map_err(|e| stripe_error(&e))?;
+            in_time(until)?;
             stripe
                 .void_invoice(invoice_id, &format!("onboarding-fee:{invoice_id}:void"))
                 .await
@@ -338,10 +377,11 @@ async fn stop_unless_chargeable(
     company_id: i32,
     invoice_id: &str,
     now: NaiveDateTime,
+    until: Instant,
 ) -> Result<Option<Charged>, FeeError> {
     match recheck(state, company_id, invoice_id, now).await? {
         Recheck::Go => Ok(None),
-        Recheck::Withdraw(reason) => withdraw(state, company_id, invoice_id, reason, now)
+        Recheck::Withdraw(reason) => withdraw(state, company_id, invoice_id, reason, now, until)
             .await
             .map(Some),
         Recheck::Stop(reason) => Err(FeeError::Held(reason)),
@@ -427,10 +467,12 @@ async fn fee_invoice(
     commitment: &Commitment,
     customer: &str,
     payment_method: Option<&str>,
+    until: Instant,
 ) -> Result<Value, FeeError> {
     let company_id = commitment.company_id;
     let stripe = &fee_stripe(state);
     let deadline = deadline_key(commitment.deadline_at);
+    in_time(until)?;
     match (commitment.status, commitment.stripe_invoice_id.as_deref()) {
         (Status::FeeInvoiced, Some(id)) => stripe.invoice(id).await.map_err(|e| stripe_error(&e)),
         (Status::NoticeSent, _) => {
@@ -444,6 +486,7 @@ async fn fee_invoice(
                 return Ok(invoice);
             }
             let recorded = store::fee_invoices_recorded(&state.pool, company_id).await?;
+            in_time(until)?;
             let description = format!(
                 "Granite Manager onboarding fee: onboarding not completed by {} (Terms of Service, Section 11)",
                 crate::billing::reminder_emails::format_local_date(commitment.deadline_at)
@@ -475,8 +518,10 @@ async fn pay(
     invoice_id: &str,
     key: &str,
     now: NaiveDateTime,
+    until: Instant,
 ) -> Result<Option<Value>, FeeError> {
     let stripe = &fee_stripe(state);
+    in_time(until)?;
     match stripe.pay_invoice(invoice_id, &format!("{key}:pay")).await {
         Ok(invoice) => Ok(Some(invoice)),
         Err(err) if is_decline(&err) => {
@@ -492,6 +537,7 @@ async fn pay(
             Ok(None)
         }
         Err(err) => {
+            in_time(until)?;
             let fresh = stripe
                 .invoice(invoice_id)
                 .await
@@ -505,6 +551,77 @@ async fn pay(
     }
 }
 
+/// A withdrawal tagged the invoice, then its void did not happen, and the
+/// fee may be charged again: the tag goes before finalize or pay, so it can
+/// never hide a later void by staff.
+async fn clear_tag(
+    stripe: &crate::billing::stripe::Stripe,
+    invoice: &mut Value,
+    invoice_id: &str,
+    key: &str,
+    now: NaiveDateTime,
+    until: Instant,
+) -> Result<(), FeeError> {
+    if withdrawn_tag(invoice).is_none() {
+        return Ok(());
+    }
+    in_time(until)?;
+    stripe
+        .mark_invoice_withdrawn(
+            invoice_id,
+            "",
+            &format!("{key}:withdrawn:cleared:{}", now.and_utc().timestamp()),
+        )
+        .await
+        .map_err(|e| stripe_error(&e))?;
+    invoice["metadata"]["withdrawn"] = Value::Null;
+    Ok(())
+}
+
+/// The recorded fee invoice is already void in Stripe (a withdrawal whose
+/// save was lost, or staff): settles the commitment instead of waiting on
+/// it. Our tag means a withdrawal: the current reason, else the tagged one.
+/// No tag means staff voided it: waived.
+async fn settle_void(
+    state: &AppState,
+    company_id: i32,
+    invoice_id: &str,
+    invoice: &Value,
+    now: NaiveDateTime,
+) -> Result<Charged, FeeError> {
+    let Some(tag) = withdrawn_tag(invoice) else {
+        record_event(
+            &state.pool,
+            company_id,
+            invoice_id,
+            InvoiceEvent::Voided,
+            now,
+        )
+        .await?;
+        return Ok(Charged::Withdrawn);
+    };
+    let facts = charge_facts(state, company_id).await?;
+    apply(&state.pool, company_id, now, |c| {
+        if c.stripe_invoice_id.as_deref() != Some(invoice_id) {
+            return Outcome {
+                commitment: c.clone(),
+                events: Vec::new(),
+            };
+        }
+        match withdrawal(c, &facts).or_else(|| tagged_withdrawal(tag, now)) {
+            Some(reason) => invoice_withdrawn(c, reason, now),
+            None => invoice_event(c, invoice_id, InvoiceEvent::Voided, now),
+        }
+    })
+    .await?;
+    tracing::info!(
+        company_id,
+        tag,
+        "onboarding fee invoice found void; settled"
+    );
+    Ok(Charged::Withdrawn)
+}
+
 /// Creates (or finds) the fee invoice, records it, then finalizes and pays
 /// it. Also finishes an invoice a crash left behind (`fee_invoiced` with a
 /// draft, or an open one never attempted), or withdraws it when the fee may
@@ -514,6 +631,7 @@ pub async fn charge(
     state: &AppState,
     stored: &Stored,
     now: NaiveDateTime,
+    until: Instant,
 ) -> Result<Charged, FeeError> {
     let commitment = &stored.commitment;
     let company_id = commitment.company_id;
@@ -526,7 +644,7 @@ pub async fn charge(
         commitment.stripe_invoice_id.as_deref(),
         blocked,
     ) {
-        return withdraw(state, company_id, id, reason, now).await;
+        return withdraw(state, company_id, id, reason, now, until).await;
     }
     let held = blocked.map(Withdrawal::as_str).or_else(|| {
         hold_reason(
@@ -549,12 +667,16 @@ pub async fn charge(
     let payment_method = record
         .as_ref()
         .and_then(|r| r.stripe_payment_method_id.as_deref());
-    let mut invoice = fee_invoice(state, commitment, &customer, payment_method).await?;
+    let mut invoice = fee_invoice(state, commitment, &customer, payment_method, until).await?;
     let Some(invoice_id) = invoice["id"].as_str().map(str::to_string) else {
         return Err(FeeError::Stripe("invalid_response".into()));
     };
+    if invoice["status"] == "void" {
+        return settle_void(state, company_id, &invoice_id, &invoice, now).await;
+    }
     let key = format!("onboarding-fee:{invoice_id}");
     if invoice["status"] == "draft" && !has_lines(&invoice) {
+        in_time(until)?;
         stripe
             .create_invoice_item(
                 &customer,
@@ -571,19 +693,26 @@ pub async fn charge(
         store::save(pool, stored.version, &outcome, now).await?;
     }
     if invoice["status"] == "draft" {
-        if let Some(stopped) = stop_unless_chargeable(state, company_id, &invoice_id, now).await? {
+        if let Some(stopped) =
+            stop_unless_chargeable(state, company_id, &invoice_id, now, until).await?
+        {
             return Ok(stopped);
         }
+        clear_tag(stripe, &mut invoice, &invoice_id, &key, now, until).await?;
+        in_time(until)?;
         invoice = stripe
             .finalize_invoice(&invoice_id, &format!("{key}:finalize"))
             .await
             .map_err(|e| stripe_error(&e))?;
     }
     if invoice["status"] == "open" && invoice["attempted"] != true {
-        if let Some(stopped) = stop_unless_chargeable(state, company_id, &invoice_id, now).await? {
+        if let Some(stopped) =
+            stop_unless_chargeable(state, company_id, &invoice_id, now, until).await?
+        {
             return Ok(stopped);
         }
-        let Some(answered) = pay(state, company_id, &invoice_id, &key, now).await? else {
+        clear_tag(stripe, &mut invoice, &invoice_id, &key, now, until).await?;
+        let Some(answered) = pay(state, company_id, &invoice_id, &key, now, until).await? else {
             return Ok(Charged::Failed);
         };
         invoice = answered;
