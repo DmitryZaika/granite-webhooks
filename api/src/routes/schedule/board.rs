@@ -81,6 +81,10 @@ pub struct ScheduleEvent {
     pub rrule: Option<String>,
     /// Last repeat (UTC, ISO 8601).
     pub recurrence_until: Option<String>,
+    /// Days a repeating event skips: comma-separated `YYYY-MM-DD` in the
+    /// shop's time zone. Null when none are skipped.
+    #[sqlx(default)]
+    pub recurrence_exdates: Option<String>,
     /// Who made it.
     pub created_user_id: i32,
     /// The installer or template maker on it.
@@ -170,6 +174,7 @@ async fn load_events(
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.notes,
                 e.calendar_id, NULLIF(TRIM(e.rrule), '') AS rrule,
                 DATE_FORMAT(e.recurrence_until, '%Y-%m-%dT%H:%i:%sZ') AS recurrence_until,
+                NULLIF(TRIM(e.recurrence_exdates), '') AS recurrence_exdates,
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
                 c.name AS customer_name
            FROM events e

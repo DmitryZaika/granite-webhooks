@@ -84173,6 +84173,13 @@
             ],
             "description": "Last repeat (UTC, ISO 8601)."
           },
+          "recurrence_exdates": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Days a repeating event skips: comma-separated `YYYY-MM-DD` in the\nshop's time zone. Null when none are skipped."
+          },
           "created_user_id": {
             "type": "integer",
             "format": "int32",
