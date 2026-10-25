@@ -163,6 +163,7 @@ pub async fn activity(
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.notes,
                 e.calendar_id, NULLIF(TRIM(e.rrule), '') AS rrule,
                 DATE_FORMAT(e.recurrence_until, '%Y-%m-%dT%H:%i:%sZ') AS recurrence_until,
+                NULLIF(TRIM(e.recurrence_exdates), '') AS recurrence_exdates,
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
                 c.name AS customer_name, COALESCE(e.unscheduled, 0) <> 0 AS unscheduled,
                 au.name AS assignee_name, u.name AS creator_name

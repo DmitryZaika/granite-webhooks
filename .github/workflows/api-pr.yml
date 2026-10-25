@@ -82,6 +82,7 @@ jobs:
           phone_bootstrap::
           phone_calls::
           phone_contacts::
+          phone_crm_push::
           phone_devices::
           phone_email_push::
           phone_jobs::

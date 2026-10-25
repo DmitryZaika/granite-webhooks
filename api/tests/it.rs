@@ -98,6 +98,7 @@ mod phone_call_settings;
 mod phone_calls;
 mod phone_connect;
 mod phone_contacts;
+mod phone_crm_push;
 mod phone_devices;
 mod phone_email_push;
 mod phone_jobs;

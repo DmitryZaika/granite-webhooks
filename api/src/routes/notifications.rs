@@ -5,6 +5,8 @@
 //!   `RingCentral` calls, and unseen missed Granite Phone calls, voicemails
 //!   and AI messages, newest first
 //! - `POST /v1/notifications/done` → dismiss notifications, or all of them
+//! - `GET /v1/notifications/{id}` → one activity notification (the phone
+//!   app's `notification` push)
 //!
 //! Replaces the Remix `api.notifications` loader and `api.notifications.done`
 //! action. The Remix loader also sent due Telegram activity reminders on each
@@ -19,7 +21,7 @@ use crate::openapi::{OpenApiRouter, routes};
 use crate::phone::calls::push_in_recents;
 use crate::state::AppState;
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -29,6 +31,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list))
         .routes(routes!(done))
+        .routes(routes!(get))
 }
 
 /// What a notification is about.
@@ -323,6 +326,9 @@ pub struct NotificationItem {
     /// Billing: the button text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action_label: Option<String>,
+    /// The deal an activity notification is about (the phone app opens it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deal_id: Option<i64>,
 }
 
 /// `GET /v1/notifications`.
@@ -492,12 +498,19 @@ async fn unread_email(
                 customer_name: None,
                 type_title: None,
                 action_label: None,
+                deal_id: None,
             }
         })
         .collect())
 }
 
-async fn activity(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem>, sqlx::Error> {
+/// The user's due activity notifications, newest first; `only` keeps the
+/// one with that id.
+async fn activity(
+    state: &AppState,
+    user_id: i32,
+    only: Option<i64>,
+) -> Result<Vec<NotificationItem>, sqlx::Error> {
     let rows: Vec<ActivityRow> = sqlx::query_as(
         "SELECT CAST(n.id AS SIGNED) AS id, CAST(n.deal_id AS SIGNED) AS deal_id, c.id AS customer_id, n.message,
                 c.name AS customer_name, n.notification_type, n.actor_name,
@@ -508,7 +521,7 @@ async fn activity(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem
            FROM notifications n
            LEFT JOIN deals d ON d.id = n.deal_id AND d.deleted_at IS NULL
            LEFT JOIN customers c ON c.id = COALESCE(d.customer_id, n.customer_id)
-          WHERE n.user_id = ? AND n.is_done = 0
+          WHERE n.user_id = ? AND n.is_done = 0 AND (? IS NULL OR n.id = ?)
             -- On a live deal, except 911 alerts, the texting registration's
             -- and number ports' (they name no deal).
             AND ((d.id IS NOT NULL AND c.id IS NOT NULL)
@@ -529,6 +542,8 @@ async fn activity(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem
           ORDER BY created_at DESC LIMIT 50",
     )
     .bind(user_id)
+    .bind(only)
+    .bind(only)
     .fetch_all(&state.pool)
     .await?;
     Ok(rows
@@ -571,6 +586,7 @@ async fn activity(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem
                 actor_name: row.actor_name.filter(|actor| actor != TELEGRAM_SENT_MARKER),
                 customer_name: (!alert && !texting && !port).then_some(customer),
                 action_label: None,
+                deal_id: row.deal_id.filter(|_| !(alert || texting || port)),
             }
         })
         .collect())
@@ -648,6 +664,7 @@ async fn telnyx_calls(
                     None => kind.to_string(),
                 }),
                 action_label: None,
+                deal_id: None,
             }
         })
         .collect())
@@ -677,6 +694,7 @@ async fn billing(state: &AppState, user_id: i32) -> Result<Vec<NotificationItem>
             customer_name: None,
             type_title: None,
             action_label: Some(row.action_label),
+            deal_id: None,
         })
         .collect())
 }
@@ -783,6 +801,7 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
             format!("Missed {provider} call")
         }),
         action_label: None,
+        deal_id: None,
     }
 }
 
@@ -823,7 +842,7 @@ pub async fn list(
 ) -> ApiResult<Json<Notifications>> {
     let (email, activities, bills, calls, phone_calls) = tokio::join!(
         unread_email(&state, &user),
-        activity(&state, user.id),
+        activity(&state, user.id, None),
         billing(&state, user.id),
         missed_calls(&state, &user),
         telnyx_calls(&state, &user),
@@ -851,4 +870,39 @@ pub async fn list(
     let at = |item: &NotificationItem| chrono::DateTime::parse_from_rfc3339(&item.sent_at).ok();
     notifications.sort_by_key(|item| std::cmp::Reverse(at(item)));
     Ok(Json(Notifications { notifications }))
+}
+
+/// Get one activity notification
+///
+/// The caller's own due activity notification `notif-<id>`, as
+/// `GET /v1/notifications` lists it, with the deal it opens (`deal_id`).
+/// The phone app reads it for a `notification` push, which names only the
+/// id. 404 for another user's, a dismissed one, or one `GET
+/// /v1/notifications` would not list.
+#[crate::openapi::path(
+    get,
+    path = "/v1/notifications/{id}",
+    operation_id = "get_notification",
+    tag = "notifications",
+    params(("id" = i64, Path, description = "The notification (`notif-<id>` without the prefix)")),
+    responses(
+        (status = 200, description = "The notification", body = NotificationItem),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 404, description = "No such notification of the caller", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn get(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<NotificationItem>> {
+    activity(&state, user.id, Some(id))
+        .await?
+        .into_iter()
+        .next()
+        .map(Json)
+        .ok_or(ApiError::NotFound)
 }

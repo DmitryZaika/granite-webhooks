@@ -114,6 +114,19 @@ class ProbeTest(unittest.TestCase):
             allowed, [["tcp", "127.0.0.1", "3307"], ["tcp", "api.anthropic.com", "443"]]
         )
 
+    def test_the_cli_sandbox_must_start_as_the_agent_user(self) -> None:
+        # The agent runs with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, so the CLI
+        # needs bubblewrap with user namespaces; isolate.sh provides both.
+        self.assertIn((True, isolation.SANDBOX_PROBE), isolation.TOOL_PROBES)
+        self.assertEqual(isolation.SANDBOX_PROBE[0], "bwrap")
+        self.assertIn("--unshare-user", isolation.SANDBOX_PROBE)
+        self.assertNotIn("--unshare-net", isolation.SANDBOX_PROBE)
+        script = (TOOLS_DIR / "isolate.sh").read_text()
+        self.assertIn("install -y --no-install-recommends bubblewrap", script)
+        self.assertIn("kernel.apparmor_restrict_unprivileged_userns=0", script)
+        sandbox_at = script.index("bubblewrap")
+        self.assertLess(sandbox_at, script.index("iptables -N AUTOFIX_EGRESS"))
+
     def test_check_reports_each_probe_that_misbehaves(self) -> None:
         calls = []
 

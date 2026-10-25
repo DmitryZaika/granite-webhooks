@@ -133,6 +133,38 @@ async fn unread_badge_needs_a_mail_domain(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn inbox_lists_only_unread_threads_when_asked(pool: MySqlPool) {
+    // T1 is unread, T2 is read: only T1, every message of it, counted alone.
+    let page = get(&pool, "/v1/emails/threads?unread=true", OLGA).await;
+    assert_eq!(email_ids(&page), vec![8802, 8801, 8800]);
+    assert_eq!(page["total_count"], 1);
+    // With a search too; and other folders ignore it.
+    let page = get(&pool, "/v1/emails/threads?unread=true&search=sketch.", OLGA).await;
+    assert_eq!(page["total_count"], 1);
+    let page = get(
+        &pool,
+        "/v1/emails/threads?unread=true&search=nothing-like-this",
+        OLGA,
+    )
+    .await;
+    assert_eq!(page["total_count"], 0);
+    assert_eq!(
+        get(&pool, "/v1/emails/threads?folder=sent&unread=true", OLGA).await,
+        get(&pool, "/v1/emails/threads?folder=sent", OLGA).await
+    );
+
+    server(pool.clone())
+        .post("/v1/emails/threads/mark-read")
+        .with_session(OLGA)
+        .json(&json!({ "thread_ids": [T1] }))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let page = get(&pool, "/v1/emails/threads?unread=true", OLGA).await;
+    assert_eq!(email_ids(&page), Vec::<i64>::new());
+    assert_eq!(page["total_count"], 0);
+}
+
+#[test_db::test(seed)]
 async fn unread_counts_leave_out_threads_not_in_the_inbox(pool: MySqlPool) {
     // A customer wrote to the office address about Olga's deal: not in her Inbox.
     sqlx::query(
@@ -309,6 +341,26 @@ async fn opening_and_bulk_read_state(pool: MySqlPool) {
         .json(&json!({ "thread_ids": [] }))
         .await
         .assert_status_bad_request();
+}
+
+#[test_db::test(seed)]
+async fn one_message_moves_to_the_trash(pool: MySqlPool) {
+    let app = server(pool.clone());
+    app.delete("/v1/emails/8800")
+        .with_session(OLGA)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    // The rest of T1 stays in the inbox; the message is in the trash.
+    let inbox = email_ids(&get(&pool, "/v1/emails/threads", OLGA).await);
+    assert!(inbox.contains(&8802) && !inbox.contains(&8800));
+    assert!(email_ids(&get(&pool, "/v1/emails/threads?folder=trash", OLGA).await).contains(&8800));
+    // Already gone, another company's, unknown: not found.
+    for id in [8800, 8807, 999_999] {
+        app.delete(&format!("/v1/emails/{id}"))
+            .with_session(OLGA)
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+    }
 }
 
 #[test_db::test(seed)]

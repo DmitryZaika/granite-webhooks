@@ -51,21 +51,41 @@ pub async fn user(
 }
 
 /// Claims once-per-window work (`kind` at `window_start`): true for the one
-/// caller that created the notice row.
+/// caller that created the notice row. The row is stamped `now`, the tick's
+/// clock, so [`notice_since`] works with injected time.
 pub async fn claim_notice(
     db: impl MySqlExecutor<'_>,
     kind: &str,
     window_start: chrono::NaiveDateTime,
+    now: DateTime<Utc>,
 ) -> Result<bool, sqlx::Error> {
     let inserted = sqlx::query(
-        "INSERT IGNORE INTO posthog_autofix_notices (kind, window_start) VALUES (?, ?)",
+        "INSERT IGNORE INTO posthog_autofix_notices (kind, window_start, created_at) \
+         VALUES (?, ?, ?)",
     )
     .bind(kind)
     .bind(window_start)
+    .bind(now.naive_utc())
     .execute(db)
     .await?
     .rows_affected();
     Ok(inserted == 1)
+}
+
+/// Whether a `kind` notice was claimed after `since`: a rule over a sliding
+/// span, which the aligned window of [`claim_notice`] cannot give.
+pub async fn notice_since(
+    db: impl MySqlExecutor<'_>,
+    kind: &str,
+    since: DateTime<Utc>,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM posthog_autofix_notices WHERE kind = ? AND created_at > ?)",
+    )
+    .bind(kind)
+    .bind(since.naive_utc())
+    .fetch_one(db)
+    .await
 }
 
 // Column widths, in characters (utf8mb4 VARCHARs count characters).

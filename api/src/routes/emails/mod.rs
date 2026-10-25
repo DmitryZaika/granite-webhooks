@@ -9,6 +9,7 @@
 //! - `GET  /v1/emails/threads/{thread_id}`        → one conversation
 //! - `POST /v1/emails/threads/{thread_id}/read`   → mark an opened conversation read
 //! - `POST /v1/emails/threads/{mark-read,mark-unread,delete,restore,purge}` → bulk changes
+//! - `DELETE /v1/emails/{id}` → one message to the trash
 //! - `POST /v1/emails`                            → send (or schedule) an email
 //! - `POST /v1/email-attachments/{id}/deal`      → save an attachment to a deal
 //! - `GET  /v1/email-attachments/{id}/preview`   → a picture attachment for an `<img>` (HEIC → JPEG)
@@ -60,6 +61,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::delete_threads))
         .routes(routes!(handlers::restore_threads))
         .routes(routes!(handlers::purge))
+        .routes(routes!(handlers::delete_message))
         .routes(routes!(handlers::suggest))
         .routes(routes!(deal_history::deal_emails))
         .routes(routes!(send::send))

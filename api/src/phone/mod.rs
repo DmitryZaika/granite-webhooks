@@ -26,6 +26,8 @@
 //! - [`recordings`]: copying recordings to our private bucket
 //! - [`outcomes`]: our pushes about calls, and the CRM follow-through
 //! - [`alerts`]: 911 alerts to the company's admins
+//! - [`crm_push`]: pushes of what Telegram also sends (CRM notifications,
+//!   lead alerts, the maintenance digest)
 //! - [`porting`]: moving existing numbers to Telnyx (port-in orders)
 //! - [`texting`]: texting through Telnyx (the `telnyx` SMS provider)
 //! - [`texts`]: the app's Texts tab (threads per line and other number)
@@ -41,6 +43,7 @@ pub mod calls;
 pub mod clock;
 pub mod company;
 pub mod contacts;
+pub mod crm_push;
 pub mod customer_index;
 pub mod devices;
 pub mod events;

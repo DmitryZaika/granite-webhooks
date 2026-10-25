@@ -1,3 +1,4 @@
+use common::crud::phone_app::has_app;
 use common::telegram::crm::{format_activity_notification, format_email_notification};
 
 use crate::axum_helpers::guards::Telegram;
@@ -62,6 +63,10 @@ where
     let Some(telegram_id) = user.notifications_telegram_id else {
         return Ok(());
     };
+    // The app has it already.
+    if has_app(pool, payload.user_id).await {
+        return Ok(());
+    }
 
     let message = format_activity_notification(
         &payload.notification_type,
@@ -109,6 +114,10 @@ where
     let Some(telegram_id) = user.notifications_telegram_id else {
         return Ok(());
     };
+    // The app has it already.
+    if has_app(pool, payload.receiver_user_id).await {
+        return Ok(());
+    }
 
     let message = format_email_notification(
         payload.customer_name.as_deref(),
