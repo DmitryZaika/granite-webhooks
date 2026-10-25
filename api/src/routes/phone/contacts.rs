@@ -205,7 +205,7 @@ pub struct LookupMatch {
     pub number: String,
     /// The newest customer with that phone or phone 2; null when none.
     pub contact: Option<IndexContact>,
-    /// The coworker whose direct line it is; null when none.
+    /// The coworker with this number (any of theirs); null when none.
     pub coworker: Option<Coworker>,
 }
 
@@ -219,8 +219,8 @@ pub struct ContactLookup {
 /// Look numbers up
 ///
 /// Who each number is: the newest customer of the company with that phone
-/// or phone 2, and the coworker whose direct line it is (matched by the
-/// last 10 digits; numbers with fewer digits match nothing). Up to 20
+/// or phone 2, and the coworker with that number, any of theirs (matched
+/// by the last 10 digits; numbers with fewer digits match nothing). Up to 20
 /// numbers. Device token only.
 #[utoipa::path(
     post,
@@ -274,7 +274,10 @@ pub async fn lookup_contacts(
                 .as_ref()
                 .and_then(|key| {
                     coworkers.iter().find(|coworker| {
-                        coworker.e164.as_deref().and_then(last10).as_ref() == Some(key)
+                        coworker
+                            .phones
+                            .iter()
+                            .any(|phone| last10(&phone.e164).as_ref() == Some(key))
                     })
                 })
                 .cloned();

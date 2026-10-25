@@ -217,8 +217,9 @@ async fn the_composer_reads_its_lists_but_cannot_change_them(pool: MySqlPool) {
     add_session(&pool, 305, 100, 100).await;
     let (server, _) = phone_server(pool.clone()).await;
 
-    // From Stones, From Images, From Documents, Use Template and the
-    // schedule's calendars read with the device token, as with her cookie.
+    // From Stones, From Images, From Documents, Use Template, the email
+    // recipient suggestions and the schedule's calendars read with the
+    // device token, as with her cookie.
     for path in [
         "/v1/stones/attachable",
         "/v1/images",
@@ -226,12 +227,17 @@ async fn the_composer_reads_its_lists_but_cannot_change_them(pool: MySqlPool) {
         "/v1/email-templates",
         "/v1/sms-templates",
         "/v1/calendars",
+        "/v1/customers/email-recipients?term=a&include_users=true",
     ] {
         let by_phone = server.get(path).add_header(HEADER, token(305)).await;
         by_phone.assert_status_ok();
         let by_cookie = server.get(path).with_session(sessions::REP).await;
         by_cookie.assert_status_ok();
-        assert_eq!(by_phone.json::<Value>(), by_cookie.json::<Value>(), "{path}");
+        assert_eq!(
+            by_phone.json::<Value>(),
+            by_cookie.json::<Value>(),
+            "{path}"
+        );
     }
 
     // Those lists are read-only to the phone: a write needs the CRM session.

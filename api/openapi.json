@@ -49293,7 +49293,7 @@
           "phone"
         ],
         "summary": "Look numbers up",
-        "description": "Who each number is: the newest customer of the company with that phone\nor phone 2, and the coworker whose direct line it is (matched by the\nlast 10 digits; numbers with fewer digits match nothing). Up to 20\nnumbers. Device token only.",
+        "description": "Who each number is: the newest customer of the company with that phone\nor phone 2, and the coworker with that number, any of theirs (matched\nby the last 10 digits; numbers with fewer digits match nothing). Up to 20\nnumbers. Device token only.",
         "operationId": "lookup_phone_contacts",
         "requestBody": {
           "content": {
@@ -64555,10 +64555,11 @@
       },
       "Coworker": {
         "type": "object",
-        "description": "A coworker the user can call: a user of the company with a direct line.",
+        "description": "A coworker the user can call: a user of the company with at least one\nphone number.",
         "required": [
           "userId",
-          "name"
+          "name",
+          "phones"
         ],
         "properties": {
           "userId": {
@@ -64575,14 +64576,41 @@
               "string",
               "null"
             ],
-            "description": "Their direct line, E.164."
+            "description": "Their first number (`phones[0]`), E.164; the one to call."
           },
           "label": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The line's label; null when empty."
+            "description": "That number's label; null when empty."
+          },
+          "phones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CoworkerPhone"
+            },
+            "description": "Every number they have, first the Granite Phone direct lines, then\nRingCentral, CloudTalk and their own phone; no number twice."
+          }
+        }
+      },
+      "CoworkerPhone": {
+        "type": "object",
+        "description": "One of a coworker's numbers.",
+        "required": [
+          "e164"
+        ],
+        "properties": {
+          "e164": {
+            "type": "string",
+            "description": "The number, E.164."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it is: a direct line's own label (null when it has none),\n`RingCentral`, `CloudTalk` or `Mobile` (their own phone)."
           }
         }
       },
@@ -73020,7 +73048,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Coworker",
-                "description": "The coworker whose direct line it is; null when none."
+                "description": "The coworker with this number (any of theirs); null when none."
               },
               {
                 "type": "null"

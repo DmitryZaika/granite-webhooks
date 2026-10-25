@@ -19,8 +19,8 @@
 //! On [`DEVICE_ROUTES`] (the app's Emails and Schedule screens, and the
 //! installers' and template makers' own schedule), on [`DEVICE_READ_ROUTES`]
 //! with `GET` (what the phone's composers, schedule and Text tab list:
-//! calendars, stones, images, documents, email and text templates, my texts
-//! over every provider), on `/v1/sms/{provider}/messages` with `POST`
+//! calendars, stones, images, documents, email and text templates, email
+//! recipient suggestions, my texts over every provider), on `/v1/sms/{provider}/messages` with `POST`
 //! (sending those texts) and on [`DEVICE_ACTIONS`] with `POST` (an
 //! attachment upload, Improve message, AI reply, filling a template) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
@@ -67,9 +67,9 @@ pub const DEVICE_ROUTES: [&str; 4] = [
 /// CRM routes the app reads with its device token, `GET` only (my texts
 /// over every provider for the Text tab of a company without Telnyx, the
 /// email and text composers' From Stones, From Images, From Documents and
-/// Use Template lists, and the schedule's calendars). These prefixes and everything under
-/// them.
-pub const DEVICE_READ_ROUTES: [&str; 7] = [
+/// Use Template lists, the suggestions under an email's To, Cc and Bcc, and
+/// the schedule's calendars). These prefixes and everything under them.
+pub const DEVICE_READ_ROUTES: [&str; 8] = [
     "/v1/sms/mine",
     "/v1/calendars",
     "/v1/stones/attachable",
@@ -77,6 +77,7 @@ pub const DEVICE_READ_ROUTES: [&str; 7] = [
     "/v1/documents",
     "/v1/email-templates",
     "/v1/sms-templates",
+    "/v1/customers/email-recipients",
 ];
 
 /// CRM actions the app's composer calls with its device token: exactly these
@@ -340,17 +341,29 @@ mod tests {
             "/v1/documents",
             "/v1/email-templates",
             "/v1/sms-templates",
+            "/v1/customers/email-recipients",
         ] {
             assert!(device_route(&Method::GET, path), "{path}");
             for method in [Method::POST, Method::PUT, Method::DELETE] {
                 assert!(!device_route(&method, path), "{method} {path}");
             }
         }
-        for path in ["/v1/calendars/7", "/v1/email-templates/3", "/v1/sms-templates/3"] {
+        for path in [
+            "/v1/calendars/7",
+            "/v1/email-templates/3",
+            "/v1/sms-templates/3",
+        ] {
             assert!(!device_route(&Method::PUT, path), "{path}");
             assert!(!device_route(&Method::DELETE, path), "{path}");
         }
-        for path in ["/v1/stones", "/v1/stones/7", "/v1/imagesx", "/v1/documentsx"] {
+        for path in [
+            "/v1/stones",
+            "/v1/stones/7",
+            "/v1/imagesx",
+            "/v1/documentsx",
+            "/v1/customers",
+            "/v1/customers/7",
+        ] {
             assert!(!device_route(&Method::GET, path), "{path}");
         }
     }

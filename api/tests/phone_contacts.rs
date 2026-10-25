@@ -19,7 +19,7 @@ use sqlx::MySqlPool;
 
 /// Direct lines: Mark's and Dina's (no label) are coworkers; Rita's own,
 /// Olga's (another company's user), a deleted user's and a shared line are
-/// not.
+/// not. (No seeded user has another number.)
 async fn coworker_lines(pool: &MySqlPool) {
     add_number(pool, 9721, 100, "+13175550121", "direct", "Mark direct").await;
     add_number(pool, 9722, 100, "+13175550122", "direct", "").await;
@@ -37,8 +37,10 @@ async fn coworker_lines(pool: &MySqlPool) {
 
 fn coworkers() -> Value {
     json!([
-        { "userId": 107, "name": "Dina Dealer", "e164": "+13175550122", "label": null },
-        { "userId": 101, "name": "Mark Manager", "e164": "+13175550121", "label": "Mark direct" },
+        { "userId": 107, "name": "Dina Dealer", "e164": "+13175550122", "label": null,
+          "phones": [{ "e164": "+13175550122", "label": null }] },
+        { "userId": 101, "name": "Mark Manager", "e164": "+13175550121", "label": "Mark direct",
+          "phones": [{ "e164": "+13175550121", "label": "Mark direct" }] },
     ])
 }
 
@@ -368,6 +370,70 @@ async fn a_since_sync_has_the_changes_and_an_unchanged_index_is_304(pool: MySqlP
     }
 }
 
+/// Coworkers are every user of the company with a number: direct lines
+/// first, then RingCentral, CloudTalk and their own phone, each number
+/// once; a user without one, a deleted user and another company's are not.
+#[test_db::test(seed)]
+async fn coworkers_have_all_their_numbers(pool: MySqlPool) {
+    coworker_lines(&pool).await;
+    sql(
+        &pool,
+        "UPDATE users SET ringcentral_phone_number = '(317) 555-0131',
+                cloudtalk_phone_number = '+1 317 555 0132', phone_number = '317-555-0131'
+          WHERE id = 102",
+    )
+    .await;
+    sql(
+        &pool,
+        "UPDATE users SET phone_number = '317.555.0133' WHERE id = 104",
+    )
+    .await;
+    sql(
+        &pool,
+        "UPDATE users SET phone_number = '317-555-0121', cloudtalk_phone_number = 'none'
+          WHERE id = 101",
+    )
+    .await;
+    sql(
+        &pool,
+        "UPDATE users SET phone_number = '317-555-0134' WHERE id IN (105, 106)",
+    )
+    .await;
+    add_session(&pool, 47, 100, 100).await;
+    let (server, _) = phone_server(pool.clone()).await;
+    let body: Value = server
+        .get("/v1/phone/contacts/index")
+        .add_header(HEADER, token(47))
+        .await
+        .json();
+    assert_eq!(
+        body["coworkers"],
+        json!([
+            { "userId": 102, "name": "Ada Admin", "e164": "+13175550131", "label": "RingCentral",
+              "phones": [
+                { "e164": "+13175550131", "label": "RingCentral" },
+                { "e164": "+13175550132", "label": "CloudTalk" },
+              ] },
+            { "userId": 107, "name": "Dina Dealer", "e164": "+13175550122", "label": null,
+              "phones": [{ "e164": "+13175550122", "label": null }] },
+            { "userId": 101, "name": "Mark Manager", "e164": "+13175550121", "label": "Mark direct",
+              "phones": [{ "e164": "+13175550121", "label": "Mark direct" }] },
+            { "userId": 104, "name": "Vic Viewer", "e164": "+13175550133", "label": "Mobile",
+              "phones": [{ "e164": "+13175550133", "label": "Mobile" }] },
+        ])
+    );
+    // Any of a coworker's numbers names them.
+    let matches: Value = server
+        .post("/v1/phone/contacts/lookup")
+        .add_header(HEADER, token(47))
+        .json(&json!({ "numbers": ["3175550132", "+13175550133"] }))
+        .await
+        .json::<Value>()["matches"]
+        .clone();
+    assert_eq!(matches[0]["coworker"]["userId"], 102);
+    assert_eq!(matches[1]["coworker"]["userId"], 104);
+}
+
 #[test_db::test(seed)]
 async fn numbers_are_looked_up_in_the_company(pool: MySqlPool) {
     coworker_lines(&pool).await;
@@ -433,7 +499,8 @@ async fn numbers_are_looked_up_in_the_company(pool: MySqlPool) {
     );
     assert_eq!(
         matches[3]["coworker"],
-        json!({ "userId": 101, "name": "Mark Manager", "e164": "+13175550121", "label": "Mark direct" })
+        json!({ "userId": 101, "name": "Mark Manager", "e164": "+13175550121", "label": "Mark direct",
+                "phones": [{ "e164": "+13175550121", "label": "Mark direct" }] })
     );
     assert_eq!(
         lookup(json!([])).await.json::<Value>(),
