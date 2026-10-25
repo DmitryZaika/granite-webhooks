@@ -614,6 +614,21 @@ async fn run(
         }
     }
 
+    // The company's inventory or customer quote link: its own, not the model's guess.
+    if crm_manual::asks_customer_link(&question) {
+        let domain: Option<Option<String>> =
+            sqlx::query_scalar("SELECT domain FROM company WHERE id = ?")
+                .bind(company_id)
+                .fetch_optional(pool)
+                .await?;
+        if let Some(answer) =
+            crm_manual::customer_link_answer(&question, company_id, domain.flatten().as_deref())
+        {
+            finish_with(out, pool, user_id, history_id, messages, &answer).await;
+            return Ok(());
+        }
+    }
+
     let how_to = source.map_or_else(
         || crm_manual::looks_like_how_to(&question),
         |picked| picked == crm_manual::Source::Manual,

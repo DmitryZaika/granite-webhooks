@@ -10,6 +10,7 @@
 
 use super::instructions::is_price_query;
 use crate::auth::session::SessionUser;
+use crate::followups::gather::{customer_inventory_page_url, customer_quote_page_url};
 use crate::followups::js::trim;
 use crate::re;
 use serde::{Deserialize, Serialize};
@@ -511,6 +512,59 @@ pub(crate) fn cloudtalk_credentials_answer(
     )
 }
 
+/// Asks for the company's inventory link ("our inventory link", "link to the stones").
+fn asks_inventory_link(normalized: &str) -> bool {
+    re!(r"\b(?:inventory|stones?)(?: page)? (?:link|url)\b").is_match(normalized)
+        || re!(
+            r"\b(?:link|url) (?:to|for) (?:our |the |my |your )?(?:live )?(?:inventory|stones)\b"
+        )
+        .is_match(normalized)
+}
+
+/// Asks for the company's customer quote link ("customer quote link", "link to the online quote").
+fn asks_quote_link(normalized: &str) -> bool {
+    re!(r"\bquote(?: page)? (?:link|url)\b").is_match(normalized)
+        || re!(r"\b(?:link|url) (?:to|for) (?:our |the |my |your )?(?:customer |online )?quote\b")
+            .is_match(normalized)
+}
+
+/// Asks for the inventory or the customer quote link.
+pub fn asks_customer_link(question: &str) -> bool {
+    let normalized = normalize(question);
+    asks_inventory_link(&normalized) || asks_quote_link(&normalized)
+}
+
+/// The company's own inventory and customer quote links, for a question
+/// asking for either: always the asker's company, never a guess by the model.
+pub fn customer_link_answer(
+    question: &str,
+    company_id: i32,
+    domain: Option<&str>,
+) -> Option<String> {
+    let normalized = normalize(question);
+    let inventory = asks_inventory_link(&normalized);
+    let quote = asks_quote_link(&normalized);
+    let mut lines = Vec::new();
+    if inventory {
+        lines.push(format!(
+            "**Inventory link:** {}",
+            customer_inventory_page_url(company_id, domain)
+        ));
+    }
+    if quote {
+        lines.push(format!(
+            "**Customer quote link:** {}",
+            customer_quote_page_url(company_id, domain)
+        ));
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    lines.push(String::new());
+    lines.push("Copy it and send it to your customer.".into());
+    Some(lines.join("\n"))
+}
+
 /// `getCrmManualQuickAnswer`: a canned answer for questions the manual gets wrong.
 pub fn quick_answer(question: &str, access: Option<&Access>) -> Option<String> {
     cloudtalk_phone_answer(question, access)
@@ -665,6 +719,45 @@ mod tests {
                 reachable.contains(id) || id == "document-scope",
                 "no topic loads {id}"
             );
+        }
+    }
+
+    #[test]
+    fn link_questions_get_the_company_s_own_links() {
+        let domain = Some("granitedepotindy.granite-manager.com");
+        let inventory = "https://granitedepotindy.granite-manager.com/customer/7/stones";
+        let quote = "https://granitedepotindy.granite-manager.com/customer/7/quote";
+        for asked in [
+            "What is our inventory link?",
+            "send me the link to our inventory",
+            "stones page url",
+        ] {
+            let answer = customer_link_answer(asked, 7, domain).expect(asked);
+            assert!(
+                answer.contains(inventory) && !answer.contains(quote),
+                "{asked}"
+            );
+        }
+        for asked in [
+            "customer quote link?",
+            "Link to the online quote please",
+            "what's the quote url",
+        ] {
+            let answer = customer_link_answer(asked, 7, domain).expect(asked);
+            assert!(
+                answer.contains(quote) && !answer.contains(inventory),
+                "{asked}"
+            );
+        }
+        let both = customer_link_answer("inventory link and customer quote link", 7, domain)
+            .expect("both");
+        assert!(both.contains(inventory) && both.contains(quote));
+        for other in [
+            "how do I create a quote",
+            "how do I link a quote to a deal",
+            "how many stones are in inventory",
+        ] {
+            assert_eq!(customer_link_answer(other, 7, domain), None, "{other}");
         }
     }
 
