@@ -173,15 +173,34 @@ fn deal_write(method: &Method, path: &str) -> bool {
     }
 }
 
+/// The text and email templates the app's Use Template list adds, edits and
+/// deletes with its device token: `POST /v1/sms-templates` and
+/// `/v1/email-templates`, `PUT|DELETE` on `/{id}` of either (the caller's own,
+/// or an admin's company ones, as on the web). Their attachments and the
+/// picker order stay with the CRM session.
+fn template_write(method: &Method, path: &str) -> bool {
+    let rest = path
+        .strip_prefix("/v1/sms-templates")
+        .or_else(|| path.strip_prefix("/v1/email-templates"));
+    match rest {
+        Some("") => method == Method::POST,
+        Some(rest) => rest
+            .strip_prefix('/')
+            .is_some_and(|id| is_id(id) && (method == Method::PUT || method == Method::DELETE)),
+        None => false,
+    }
+}
+
 /// A request the device token may sign: any method on [`DEVICE_ROUTES`],
 /// `GET` on [`DEVICE_READ_ROUTES`], `POST` on [`DEVICE_ACTIONS`] and on a
 /// provider's `/v1/sms/{provider}/messages`, and the Deals tab's changes
-/// ([`deal_write`]).
+/// ([`deal_write`]) and the templates' ([`template_write`]).
 fn device_route(method: &Method, path: &str) -> bool {
     DEVICE_ROUTES.iter().any(|prefix| under(path, prefix))
         || (method == Method::GET && DEVICE_READ_ROUTES.iter().any(|prefix| under(path, prefix)))
         || (method == Method::POST && (DEVICE_ACTIONS.contains(&path) || sms_send(path)))
         || deal_write(method, path)
+        || template_write(method, path)
 }
 
 async fn authenticate_with_positions(
@@ -405,8 +424,6 @@ mod tests {
             "/v1/images",
             "/v1/image-library",
             "/v1/documents",
-            "/v1/email-templates",
-            "/v1/sms-templates",
             "/v1/customers/email-recipients",
             "/v1/customers/page",
             "/v1/customers/7",
@@ -424,11 +441,7 @@ mod tests {
                 assert!(!device_route(&method, path), "{method} {path}");
             }
         }
-        for path in [
-            "/v1/calendars/7",
-            "/v1/email-templates/3",
-            "/v1/sms-templates/3",
-        ] {
+        for path in ["/v1/calendars/7"] {
             assert!(!device_route(&Method::PUT, path), "{path}");
             assert!(!device_route(&Method::DELETE, path), "{path}");
         }
@@ -486,6 +499,28 @@ mod tests {
         ] {
             assert!(!device_route(&method, path), "{method} {path}");
         }
+    }
+
+    #[test]
+    fn templates_are_added_edited_and_deleted_from_the_phone() {
+        for kind in ["sms-templates", "email-templates"] {
+            let list = format!("/v1/{kind}");
+            let one = format!("/v1/{kind}/3");
+            assert!(device_route(&Method::GET, &list), "{list}");
+            assert!(device_route(&Method::POST, &list), "{list}");
+            assert!(!device_route(&Method::PUT, &list), "{list}");
+            assert!(!device_route(&Method::DELETE, &list), "{list}");
+            assert!(device_route(&Method::PUT, &one), "{one}");
+            assert!(device_route(&Method::DELETE, &one), "{one}");
+            assert!(!device_route(&Method::POST, &one), "{one}");
+            assert!(!device_route(&Method::PUT, &format!("/v1/{kind}/x")));
+        }
+        assert!(!device_route(
+            &Method::POST,
+            "/v1/email-templates/3/attachments"
+        ));
+        assert!(!device_route(&Method::PUT, "/v1/sms-templates/order"));
+        assert!(!device_route(&Method::POST, "/v1/sms-templatesx"));
     }
 
     #[test]
