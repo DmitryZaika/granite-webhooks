@@ -19,7 +19,7 @@
 //! On [`DEVICE_ROUTES`] (the app's Emails and Schedule screens, and the
 //! installers' and template makers' own schedule), on [`DEVICE_READ_ROUTES`]
 //! with `GET` (what the phone's email composer and schedule list: calendars,
-//! stones, images, documents, templates) and on [`DEVICE_ACTIONS`] with `POST`
+//! stones, images, documents, email and text templates) and on [`DEVICE_ACTIONS`] with `POST`
 //! (an attachment upload, Improve message, AI reply, filling a template) the cookie
 //! extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
@@ -62,16 +62,17 @@ pub const DEVICE_ROUTES: [&str; 4] = [
     "/v1/me/schedule",
 ];
 
-/// CRM routes the app reads with its device token, `GET` only (the
-/// composer's From Stones, From Images, From Documents and Use Template
-/// lists, and the schedule's calendars). These prefixes and everything under
+/// CRM routes the app reads with its device token, `GET` only (the email
+/// and text composers' From Stones, From Images, From Documents and Use
+/// Template lists, and the schedule's calendars). These prefixes and everything under
 /// them.
-pub const DEVICE_READ_ROUTES: [&str; 5] = [
+pub const DEVICE_READ_ROUTES: [&str; 6] = [
     "/v1/calendars",
     "/v1/stones/attachable",
     "/v1/images",
     "/v1/documents",
     "/v1/email-templates",
+    "/v1/sms-templates",
 ];
 
 /// CRM actions the app's composer calls with its device token: exactly these
@@ -320,13 +321,14 @@ mod tests {
             "/v1/images",
             "/v1/documents",
             "/v1/email-templates",
+            "/v1/sms-templates",
         ] {
             assert!(device_route(&Method::GET, path), "{path}");
             for method in [Method::POST, Method::PUT, Method::DELETE] {
                 assert!(!device_route(&method, path), "{method} {path}");
             }
         }
-        for path in ["/v1/calendars/7", "/v1/email-templates/3"] {
+        for path in ["/v1/calendars/7", "/v1/email-templates/3", "/v1/sms-templates/3"] {
             assert!(!device_route(&Method::PUT, path), "{path}");
             assert!(!device_route(&Method::DELETE, path), "{path}");
         }

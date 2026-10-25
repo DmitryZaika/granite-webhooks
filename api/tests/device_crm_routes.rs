@@ -224,6 +224,7 @@ async fn the_composer_reads_its_lists_but_cannot_change_them(pool: MySqlPool) {
         "/v1/images",
         "/v1/documents",
         "/v1/email-templates",
+        "/v1/sms-templates",
         "/v1/calendars",
     ] {
         let by_phone = server.get(path).add_header(HEADER, token(305)).await;
