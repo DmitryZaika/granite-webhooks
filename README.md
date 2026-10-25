@@ -35,6 +35,23 @@ When server dies instantly:
 1. Find server: sudo lsof -i :9000
 2. Kill that server: kill -9 <PID>
 
+## Build cache
+
+Each checkout or worktree has its own `target/` and would build the ~400
+dependencies from scratch. With [sccache](https://github.com/mozilla/sccache)
+as cargo's compiler wrapper, a dependency compiled once (same version,
+features and flags) comes from the shared cache in every other worktree:
+
+```
+brew install sccache
+printf '[build]\nrustc-wrapper = "sccache"\n' >> ~/.cargo/config.toml
+sccache --show-stats   # hits and misses
+```
+
+It is set per machine, not in `.cargo/config.toml`, so CI and machines
+without sccache are unaffected. Workspace crates use incremental compilation,
+which sccache does not cache; they build as before.
+
 ## Functions
 
 ### Documenso
