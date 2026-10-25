@@ -413,6 +413,32 @@ async fn a_storm_of_one_error_starts_one_run_per_real_bug(pool: MySqlPool) {
     assert!(subjects[0].contains("storm"), "{subjects:?}");
 }
 
+/// `count` issues of one network error created from `from` on, ids from `first`.
+fn add_burst(source: &FakeSource, first: u32, count: u32, from: DateTime<Utc>) {
+    for n in first..first + count {
+        let bug = web("TypeError", "Failed to fetch", None);
+        let at = from + Duration::seconds(i64::from(n));
+        source.add(issue(n, at, &bug));
+    }
+}
+
+#[test_db::test]
+async fn a_storm_across_a_window_boundary_sends_one_digest(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    add_burst(&world.source, 1, 25, minutes(20));
+
+    // 00:29 is in window 00:00, 00:31 in window 00:30: the same 25 issues.
+    assert!(world.tick(&pool, &config, minutes(29)).await.storm_digest);
+    assert!(!world.tick(&pool, &config, minutes(31)).await.storm_digest);
+    assert_eq!(world.mailer.subjects().len(), 1);
+
+    // A new storm more than a storm window after the first digest is a new digest.
+    add_burst(&world.source, 101, 25, minutes(100));
+    assert!(world.tick(&pool, &config, minutes(101)).await.storm_digest);
+    assert_eq!(world.mailer.subjects().len(), 2);
+}
+
 #[test_db::test]
 async fn without_the_exclusions_one_error_split_110_ways_is_one_run(pool: MySqlPool) {
     let config = Config {
