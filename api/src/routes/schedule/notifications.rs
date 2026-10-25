@@ -1,7 +1,8 @@
 //! Admin > Schedule: the company's own texts and emails to customers before
-//! their appointments. Templates are the messages; a flow puts templates in
-//! a sequence for one calendar ("1 day before: disconnect the sink; 1 hour
-//! before: see you soon").
+//! and after their appointments. Templates are the messages; a flow puts
+//! templates in a sequence for one calendar ("1 day before: disconnect the
+//! sink; 1 hour before: see you soon; 1 day after: care and maintenance").
+//! A step after the appointment counts from its end.
 //!
 //! - `GET /v1/schedule/notifications` → templates, flows, and whether texting is set up
 //! - `POST /v1/schedule/notifications/templates`, `PUT`/`DELETE …/templates/{id}`
@@ -123,6 +124,32 @@ impl OffsetUnit {
     }
 }
 
+/// Whether a step goes out before the appointment starts or after it ends.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+    #[default]
+    Before,
+    After,
+}
+
+impl Direction {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Before => "before",
+            Self::After => "after",
+        }
+    }
+
+    fn parse(text: &str) -> Self {
+        if text == "after" {
+            Self::After
+        } else {
+            Self::Before
+        }
+    }
+}
+
 /// A text or email to customers.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct NotificationTemplate {
@@ -138,18 +165,20 @@ pub struct NotificationTemplate {
     pub body: String,
 }
 
-/// A template of a flow, sent at a time before the appointment.
+/// A template of a flow, sent at a time before or after the appointment.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct FlowStep {
     /// Step id.
     pub id: i32,
     pub template_id: i32,
-    /// How many `offset_unit`s before the appointment it is sent.
+    /// How many `offset_unit`s before or after the appointment it is sent.
     pub offset_value: i32,
     /// `minutes`, `hours` or `days`.
     pub offset_unit: OffsetUnit,
+    /// `before` the start or `after` the end.
+    pub direction: Direction,
     /// `days` steps: store time (`HH:MM`) it is sent that day; null for
-    /// exactly `offset_value` days before the start.
+    /// exactly `offset_value` days before the start (or after the end).
     pub send_time: Option<String>,
 }
 
@@ -207,6 +236,9 @@ pub struct FlowStepInput {
     /// 1 to 30 days' worth of `offset_unit`.
     pub offset_value: i32,
     pub offset_unit: OffsetUnit,
+    /// Default `before`.
+    #[serde(default)]
+    pub direction: Direction,
     /// `days` steps only: `HH:MM` store time.
     #[serde(default)]
     pub send_time: Option<String>,
@@ -277,6 +309,7 @@ struct StepRow {
     template_id: i32,
     offset_value: i32,
     offset_unit: String,
+    direction: String,
     send_time: Option<String>,
 }
 
@@ -321,7 +354,8 @@ async fn load_flows(
     .await?;
     let steps: Vec<StepRow> = sqlx::query_as(
         "SELECT r.id, r.flow_id, r.template_id, r.offset_value,
-                CAST(r.offset_unit AS CHAR) AS offset_unit, TIME_FORMAT(r.send_time, '%H:%i') AS send_time
+                CAST(r.offset_unit AS CHAR) AS offset_unit, CAST(r.direction AS CHAR) AS direction,
+                TIME_FORMAT(r.send_time, '%H:%i') AS send_time
            FROM schedule_notification_rules r
            JOIN schedule_notification_templates m ON m.id = r.template_id AND m.deleted_at IS NULL
           WHERE r.company_id = ? AND r.deleted_at IS NULL AND (? OR m.channel <> 'sms')
@@ -338,6 +372,7 @@ async fn load_flows(
             template_id: row.template_id,
             offset_value: row.offset_value,
             offset_unit: OffsetUnit::parse(&row.offset_unit),
+            direction: Direction::parse(&row.direction),
             send_time: row.send_time,
         });
     }
@@ -349,6 +384,7 @@ async fn load_flows(
                 step_order(
                     step.offset_value,
                     step.offset_unit,
+                    step.direction,
                     step.send_time.as_deref(),
                 )
             });
@@ -364,15 +400,21 @@ async fn load_flows(
         .collect())
 }
 
-/// Sorts steps in the order they go out: furthest ahead first, and on the
-/// same day the earlier clock time first.
+/// Sorts steps in the order they go out: furthest ahead first, the ones
+/// after the appointment last, and on the same day the earlier clock time
+/// first.
 fn step_order(
     value: i32,
     unit: OffsetUnit,
+    direction: Direction,
     send_time: Option<&str>,
-) -> (std::cmp::Reverse<i64>, String) {
+) -> (i64, String) {
+    let minutes = unit.minutes(value);
     (
-        std::cmp::Reverse(unit.minutes(value)),
+        match direction {
+            Direction::Before => -minutes,
+            Direction::After => minutes,
+        },
         send_time.unwrap_or("99:99").to_string(),
     )
 }
@@ -469,7 +511,7 @@ async fn check_step(
         return Err(bad("Texting is not set up for this company"));
     }
     if input.offset_value < 1 || input.offset_value > input.offset_unit.max() {
-        return Err(bad("Send it between 1 minute and 30 days before"));
+        return Err(bad("Send it between 1 minute and 30 days before or after"));
     }
     match input
         .send_time
@@ -575,12 +617,14 @@ async fn save_steps(
             Some(id) => {
                 sqlx::query(
                     "UPDATE schedule_notification_rules
-                        SET template_id = ?, offset_value = ?, offset_unit = ?, send_time = ?
+                        SET template_id = ?, offset_value = ?, offset_unit = ?, direction = ?,
+                            send_time = ?
                       WHERE id = ?",
                 )
                 .bind(step.template_id)
                 .bind(step.offset_value)
                 .bind(step.offset_unit.as_str())
+                .bind(step.direction.as_str())
                 .bind(send_time)
                 .bind(id)
                 .execute(&mut **tx)
@@ -590,14 +634,16 @@ async fn save_steps(
             None => {
                 sqlx::query(
                     "INSERT INTO schedule_notification_rules
-                       (company_id, flow_id, template_id, offset_value, offset_unit, send_time, created_by)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                       (company_id, flow_id, template_id, offset_value, offset_unit, direction, send_time,
+                        created_by)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(company_id)
                 .bind(flow_id)
                 .bind(step.template_id)
                 .bind(step.offset_value)
                 .bind(step.offset_unit.as_str())
+                .bind(step.direction.as_str())
                 .bind(send_time)
                 .bind(user_id)
                 .execute(&mut **tx)
@@ -1115,25 +1161,59 @@ fn store_time(day: NaiveDate, time: NaiveTime) -> Option<DateTime<Utc>> {
         .map(|at| at.with_timezone(&Utc))
 }
 
-/// When a rule's message for an appointment at `start` goes out.
+/// The store day an appointment ends: an all-day one's last date (its end may
+/// be the next midnight), else its end's day in Indianapolis.
+fn end_day(start: NaiveDateTime, end: NaiveDateTime, all_day: bool) -> NaiveDate {
+    if all_day {
+        (end - Duration::seconds(1)).date().max(start.date())
+    } else {
+        end.max(start)
+            .and_utc()
+            .with_timezone(&Indianapolis)
+            .date_naive()
+    }
+}
+
+/// When an appointment ends: all-day ones at the store midnight after their
+/// last day.
+fn effective_end(start: NaiveDateTime, end: NaiveDateTime, all_day: bool) -> DateTime<Utc> {
+    if all_day {
+        let next = end_day(start, end, all_day) + Duration::days(1);
+        store_time(next, NaiveTime::MIN).unwrap_or_else(|| end.and_utc())
+    } else {
+        end.max(start).and_utc()
+    }
+}
+
+/// When a rule's message for an appointment from `start` to `end` goes out:
+/// before the start, or after the end.
 pub fn send_at(
     value: i32,
     unit: OffsetUnit,
+    direction: Direction,
     send_time: Option<NaiveTime>,
     start: NaiveDateTime,
+    end: NaiveDateTime,
     all_day: bool,
 ) -> Option<DateTime<Utc>> {
-    let begins = effective_start(start, all_day);
-    match (unit, send_time) {
-        (OffsetUnit::Days, Some(time)) => {
+    let days = Duration::days(i64::from(value));
+    let minutes = Duration::minutes(unit.minutes(value));
+    match (direction, unit, send_time) {
+        (Direction::Before, OffsetUnit::Days, Some(time)) => {
             let day = if all_day {
                 start.date()
             } else {
-                begins.with_timezone(&Indianapolis).date_naive()
+                effective_start(start, all_day)
+                    .with_timezone(&Indianapolis)
+                    .date_naive()
             };
-            store_time(day - Duration::days(i64::from(value)), time)
+            store_time(day - days, time)
         }
-        _ => Some(begins - Duration::minutes(unit.minutes(value))),
+        (Direction::Before, _, _) => Some(effective_start(start, all_day) - minutes),
+        (Direction::After, OffsetUnit::Days, Some(time)) => {
+            store_time(end_day(start, end, all_day) + days, time)
+        }
+        (Direction::After, _, _) => Some(effective_end(start, end, all_day) + minutes),
     }
 }
 
@@ -1208,6 +1288,7 @@ struct DueRule {
     channel: String,
     offset_value: i32,
     offset_unit: String,
+    direction: String,
     send_time: Option<String>,
     subject: Option<String>,
     body: String,
@@ -1218,6 +1299,7 @@ struct DueRule {
 struct Appointment {
     id: i32,
     start_date: NaiveDateTime,
+    end_date: NaiveDateTime,
     all_day: bool,
     location: Option<String>,
     created_date: Option<DateTime<Utc>>,
@@ -1442,8 +1524,8 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
     let mut run = RuleRun::default();
     let rules: Vec<DueRule> = sqlx::query_as(
         "SELECT r.id, r.company_id, CAST(m.channel AS CHAR) AS channel, r.offset_value,
-                CAST(r.offset_unit AS CHAR) AS offset_unit, TIME_FORMAT(r.send_time, '%H:%i') AS send_time,
-                m.subject, m.body, r.created_at
+                CAST(r.offset_unit AS CHAR) AS offset_unit, CAST(r.direction AS CHAR) AS direction,
+                TIME_FORMAT(r.send_time, '%H:%i') AS send_time, m.subject, m.body, r.created_at
            FROM schedule_notification_rules r
            JOIN schedule_notification_flows f ON f.id = r.flow_id
             AND f.is_active = 1 AND f.deleted_at IS NULL
@@ -1458,14 +1540,27 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
     let now = Utc::now();
     for rule in rules {
         let unit = OffsetUnit::parse(&rule.offset_unit);
+        let direction = Direction::parse(&rule.direction);
         let time = rule
             .send_time
             .as_deref()
             .and_then(|time| NaiveTime::parse_from_str(time, "%H:%M").ok());
         // Two days more than the offset covers a time of day and all-day events.
         let window = unit.minutes(rule.offset_value) + 2 * 24 * 60;
+        // Before: appointments starting within the window. After: ones that
+        // ended within it.
+        let when = match direction {
+            Direction::Before => {
+                "e.start_date > UTC_TIMESTAMP() - INTERVAL 1 DAY
+                 AND e.start_date <= UTC_TIMESTAMP() + INTERVAL ? MINUTE"
+            }
+            Direction::After => {
+                "e.end_date > UTC_TIMESTAMP() - INTERVAL ? MINUTE
+                 AND e.start_date <= UTC_TIMESTAMP() + INTERVAL 1 DAY"
+            }
+        };
         let events: Vec<Appointment> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT e.id, e.start_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
+            "SELECT e.id, e.start_date, e.end_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
                     e.location, e.created_date, e.created_user_id,
                     CAST(COALESCE(tc.id, sc.id) AS SIGNED) AS customer_id
                FROM schedule_notification_rules r
@@ -1473,8 +1568,7 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
                JOIN events e ON {FLOW_APPLIES}
                {EVENT_CUSTOMER}
               WHERE r.id = ? AND e.deleted_date IS NULL AND e.unscheduled = 0 AND NULLIF(TRIM(e.rrule), '') IS NULL
-                AND e.start_date > UTC_TIMESTAMP() - INTERVAL 1 DAY
-                AND e.start_date <= UTC_TIMESTAMP() + INTERVAL ? MINUTE
+                AND {when}
                 AND NOT EXISTS (SELECT 1 FROM schedule_notification_sends n
                                  WHERE n.rule_id = r.id AND n.event_id = e.id AND n.start_date = e.start_date)
               ORDER BY e.start_date, e.id LIMIT ?"
@@ -1485,14 +1579,18 @@ pub async fn send_due(state: &AppState) -> Result<RuleRun, sqlx::Error> {
         .fetch_all(pool)
         .await?;
         for event in events {
-            if effective_start(event.start_date, event.all_day) <= now {
+            if direction == Direction::Before
+                && effective_start(event.start_date, event.all_day) <= now
+            {
                 continue;
             }
             let Some(at) = send_at(
                 rule.offset_value,
                 unit,
+                direction,
                 time,
                 event.start_date,
+                event.end_date,
                 event.all_day,
             ) else {
                 continue;
@@ -1630,7 +1728,7 @@ pub async fn send_confirmation(
     .await?
     .ok_or_else(|| bad("Template not found"))?;
     let event: Appointment = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT e.id, e.start_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
+        "SELECT e.id, e.start_date, e.end_date, COALESCE(e.all_day, 0) <> 0 AS all_day,
                 e.location, e.created_date, e.created_user_id,
                 CAST(COALESCE(tc.id, sc.id) AS SIGNED) AS customer_id
            FROM events e
@@ -1677,29 +1775,90 @@ mod tests {
     fn rules_send_before_the_start() {
         // 10:00 Indianapolis (EDT) on Oct 20 = 14:00 UTC.
         let start = at("2026-10-20 14:00");
+        let before = |value, unit, time, start, all_day| {
+            send_at(value, unit, Direction::Before, time, start, start, all_day)
+        };
         assert_eq!(
-            send_at(1, OffsetUnit::Days, None, start, false),
+            before(1, OffsetUnit::Days, None, start, false),
             Some(at("2026-10-19 14:00").and_utc())
         );
         assert_eq!(
-            send_at(2, OffsetUnit::Hours, None, start, false),
+            before(2, OffsetUnit::Hours, None, start, false),
             Some(at("2026-10-20 12:00").and_utc())
         );
         // 1 day before at 9:00 AM store time = 13:00 UTC on Oct 19.
         let nine = NaiveTime::from_hms_opt(9, 0, 0);
         assert_eq!(
-            send_at(1, OffsetUnit::Days, nine, start, false),
+            before(1, OffsetUnit::Days, nine, start, false),
             Some(at("2026-10-19 13:00").and_utc())
         );
         // 1 AM UTC Oct 21 is still Oct 20 in Indianapolis.
         assert_eq!(
-            send_at(1, OffsetUnit::Days, nine, at("2026-10-21 01:00"), false),
+            before(1, OffsetUnit::Days, nine, at("2026-10-21 01:00"), false),
             Some(at("2026-10-19 13:00").and_utc())
         );
         // An all-day event's day is its date.
         assert_eq!(
-            send_at(1, OffsetUnit::Days, nine, at("2026-10-20 00:00"), true),
+            before(1, OffsetUnit::Days, nine, at("2026-10-20 00:00"), true),
             Some(at("2026-10-19 13:00").and_utc())
+        );
+    }
+
+    #[test]
+    fn rules_after_send_after_the_end() {
+        // 10:00 to 16:00 Indianapolis (EDT) on Oct 20 = 14:00 to 20:00 UTC.
+        let (start, end) = (at("2026-10-20 14:00"), at("2026-10-20 20:00"));
+        assert_eq!(
+            send_at(
+                2,
+                OffsetUnit::Hours,
+                Direction::After,
+                None,
+                start,
+                end,
+                false
+            ),
+            Some(at("2026-10-20 22:00").and_utc())
+        );
+        // 1 day after at 9:00 AM store time = 13:00 UTC on Oct 21.
+        let nine = NaiveTime::from_hms_opt(9, 0, 0);
+        assert_eq!(
+            send_at(
+                1,
+                OffsetUnit::Days,
+                Direction::After,
+                nine,
+                start,
+                end,
+                false
+            ),
+            Some(at("2026-10-21 13:00").and_utc())
+        );
+        // An all-day event ending at the next midnight ends on its own date.
+        let (day, next) = (at("2026-10-20 00:00"), at("2026-10-21 00:00"));
+        assert_eq!(
+            send_at(1, OffsetUnit::Days, Direction::After, nine, day, next, true),
+            Some(at("2026-10-21 13:00").and_utc())
+        );
+        // ...and an hour after it is 1 AM the next day (05:00 UTC).
+        assert_eq!(
+            send_at(1, OffsetUnit::Hours, Direction::After, None, day, day, true),
+            Some(at("2026-10-21 05:00").and_utc())
+        );
+    }
+
+    #[test]
+    fn steps_sort_in_send_order() {
+        let mut steps = [
+            step_order(1, OffsetUnit::Days, Direction::After, Some("09:00")),
+            step_order(1, OffsetUnit::Hours, Direction::Before, None),
+            step_order(1, OffsetUnit::Hours, Direction::After, None),
+            step_order(1, OffsetUnit::Days, Direction::Before, Some("09:00")),
+        ];
+        steps.sort();
+        assert_eq!(
+            steps.map(|(minutes, _)| minutes),
+            [-24 * 60, -60, 60, 24 * 60]
         );
     }
 

@@ -100,7 +100,7 @@ fn customer_or_default(name: Option<&str>) -> &str {
 }
 
 async fn customer_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(), sqlx::Error> {
-    // The company's own flow on the event sends instead.
+    // The company's own flow on the event reminds instead (a step before it).
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE appointment_reminders r JOIN events e ON e.id = r.event_id
             SET r.status = 'cancelled', r.error_message = 'replaced_by_schedule_rule'
@@ -108,7 +108,8 @@ async fn customer_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(
             AND EXISTS (SELECT 1 FROM schedule_notification_flows f
                          WHERE f.company_id = r.company_id AND {}
                            AND EXISTS (SELECT 1 FROM schedule_notification_rules nr
-                                        WHERE nr.flow_id = f.id AND nr.deleted_at IS NULL))",
+                                        WHERE nr.flow_id = f.id AND nr.deleted_at IS NULL
+                                          AND nr.direction = 'before'))",
         notifications::FLOW_APPLIES
     )))
     .execute(&state.pool)
