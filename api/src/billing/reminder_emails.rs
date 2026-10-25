@@ -4,9 +4,12 @@
 //! the email grants access. Port of the CRM's `billingReminderEmails.ts`, plus
 //! the first-charge notice (transactional only, no marketing).
 
+use super::catalog::SIGNUP_TZ;
 use super::reminders::{DunningKind, FirstChargeQuote, ReminderStep};
 use super::{BILLING_PATH, format_billing_date};
-use chrono::NaiveDateTime;
+use crate::onboarding_call::commitment::{Commitment, Status};
+use crate::signup::consent::long_date;
+use chrono::{NaiveDateTime, TimeZone};
 use std::fmt::Write;
 
 /// Subject, HTML and plain-text parts of one email.
@@ -283,6 +286,95 @@ pub fn format_money(cents: i64) -> String {
     format!("{sign}${grouped}.{:02}", cents % 100)
 }
 
+/// `November 20, 2026`: the buyer's calendar day ([`SIGNUP_TZ`]) of a UTC time.
+pub fn format_local_date(at: NaiveDateTime) -> String {
+    long_date(SIGNUP_TZ.from_utc_datetime(&at).date_naive())
+}
+
+/// `Tue, Nov 4 at 10:00 AM EST`: a UTC time in [`SIGNUP_TZ`], with its zone.
+pub fn format_local_time(at: NaiveDateTime) -> String {
+    SIGNUP_TZ
+        .from_utc_datetime(&at)
+        .format("%a, %b %-d at %-I:%M %p %Z")
+        .to_string()
+}
+
+/// The onboarding call's status line in the first-charge email.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardingLine {
+    Complete,
+    /// A call is booked; its start, when stored.
+    Booked {
+        start_at: Option<NaiveDateTime>,
+    },
+    /// Not booked yet: the deadline and the fee it avoids.
+    NotBooked {
+        deadline_at: NaiveDateTime,
+        fee_cents: i64,
+    },
+    /// The deadline passed and the fee notice went out: the charge date.
+    NoticeSent {
+        charge_at: NaiveDateTime,
+        fee_cents: i64,
+    },
+}
+
+impl OnboardingLine {
+    /// Completed, booked, pending or notice sent; nothing for other statuses.
+    pub fn of(commitment: &Commitment) -> Option<Self> {
+        match commitment.status {
+            Status::Completed => Some(Self::Complete),
+            Status::Booked => Some(Self::Booked {
+                start_at: commitment.booking.as_ref().map(|call| call.start_at),
+            }),
+            Status::Pending => Some(Self::NotBooked {
+                deadline_at: commitment.deadline_at,
+                fee_cents: commitment.fee_cents,
+            }),
+            Status::NoticeSent => Some(commitment.charge_after.map_or(
+                Self::NotBooked {
+                    deadline_at: commitment.deadline_at,
+                    fee_cents: commitment.fee_cents,
+                },
+                |charge_at| Self::NoticeSent {
+                    charge_at,
+                    fee_cents: commitment.fee_cents,
+                },
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn text(self) -> String {
+        match self {
+            Self::Complete => "Onboarding: complete.".into(),
+            Self::Booked { start_at: None } => "Your onboarding call is booked.".into(),
+            Self::Booked {
+                start_at: Some(start_at),
+            } => format!(
+                "Your onboarding call is booked for {}.",
+                format_local_time(start_at)
+            ),
+            Self::NotBooked {
+                deadline_at,
+                fee_cents,
+            } => format!(
+                "Onboarding: not booked yet. Complete it by {} to avoid the onboarding fee of {}.",
+                format_local_date(deadline_at),
+                format_money(fee_cents)
+            ),
+            Self::NoticeSent {
+                charge_at,
+                fee_cents,
+            } => format!(
+                "Onboarding was not completed. The onboarding fee of {} will be charged on {}.",
+                format_money(fee_cents),
+                format_local_date(charge_at)
+            ),
+        }
+    }
+}
+
 pub struct FirstChargeEmailInput<'a> {
     pub company_name: &'a str,
     pub user_name: Option<&'a str>,
@@ -291,13 +383,15 @@ pub struct FirstChargeEmailInput<'a> {
     /// The payments app's account page (`payments_account_url()`), where a
     /// Manager can use "Request cancellation".
     pub account_url: &'a str,
+    /// The onboarding call's status, when the company has one to mention.
+    pub onboarding: Option<OnboardingLine>,
 }
 
 /// The notice 7 days before the first charge of a self-serve subscription.
 pub fn render_first_charge_email(input: &FirstChargeEmailInput<'_>) -> RenderedEmail {
     let company = company_or_default(input.company_name);
     let link = billing_link(input.app_url);
-    let date = format_billing_date(input.quote.charge_at);
+    let date = format_local_date(input.quote.charge_at);
     let amount = format_money(input.quote.amount_cents);
     let method = input
         .quote
@@ -340,7 +434,8 @@ pub fn render_first_charge_email(input: &FirstChargeEmailInput<'_>) -> RenderedE
         .iter()
         .map(|line| format!("- {}: {}", line.label, format_money(line.amount_cents)))
         .collect();
-    let parts = vec![
+    let onboarding = input.onboarding.map(OnboardingLine::text);
+    let mut parts = vec![
         html_paragraph(&escape_html(&hello)),
         html_paragraph(&intro(&company_html, &escape_html(method))),
         html_paragraph("This includes:"),
@@ -348,19 +443,23 @@ pub fn render_first_charge_email(input: &FirstChargeEmailInput<'_>) -> RenderedE
         html_paragraph(per_user),
         html_paragraph(&cancel_html),
         html_paragraph(change),
-        html_button(&link, VIEW_BILLING),
-        html_footer(&company_html),
     ];
-    let text = [
+    let mut text = vec![
         hello,
         intro(company, method),
         format!("This includes:\n{}", lines_text.join("\n")),
         per_user.to_string(),
         cancel,
         change.to_string(),
-        format!("{VIEW_BILLING}: {link}"),
-        footer(company),
     ];
+    if let Some(line) = onboarding {
+        parts.push(html_paragraph(&escape_html(&line)));
+        text.push(line);
+    }
+    parts.push(html_button(&link, VIEW_BILLING));
+    parts.push(html_footer(&company_html));
+    text.push(format!("{VIEW_BILLING}: {link}"));
+    text.push(footer(company));
     RenderedEmail {
         subject: format!("Your first Granite Manager charge is on {date}"),
         html: wrap_html(parts),
@@ -510,6 +609,7 @@ mod tests {
             quote: &quote,
             app_url: "https://app.example.com/",
             account_url: ACCOUNT_URL,
+            onboarding: None,
         });
 
         assert_eq!(
@@ -565,6 +665,7 @@ mod tests {
             quote: &quote,
             app_url: APP_URL,
             account_url: ACCOUNT_URL,
+            onboarding: None,
         });
         assert!(email.text.starts_with("Hello,"));
         assert!(
@@ -577,6 +678,169 @@ mod tests {
                 .text
                 .contains("charged to the payment method on file, and then")
         );
+    }
+
+    fn onboarding_text(onboarding: Option<OnboardingLine>) -> RenderedEmail {
+        let quote = quote();
+        render_first_charge_email(&FirstChargeEmailInput {
+            company_name: "Rock & Co",
+            user_name: None,
+            quote: &quote,
+            app_url: APP_URL,
+            account_url: ACCOUNT_URL,
+            onboarding,
+        })
+    }
+
+    #[test]
+    fn the_first_charge_email_states_the_onboarding_status() {
+        let complete = onboarding_text(Some(OnboardingLine::Complete));
+        assert!(
+            complete
+                .text
+                .contains("\n\nOnboarding: complete.\n\nView billing: ")
+        );
+        assert!(complete.html.contains(">Onboarding: complete.</p>"));
+        let booked = onboarding_text(Some(OnboardingLine::Booked {
+            start_at: Some(at("2026-11-04 15:00:00")),
+        }));
+        assert!(
+            booked
+                .text
+                .contains("Your onboarding call is booked for Wed, Nov 4 at 10:00 AM EST.")
+        );
+        let unknown_time = onboarding_text(Some(OnboardingLine::Booked { start_at: None }));
+        assert!(
+            unknown_time
+                .text
+                .contains("Your onboarding call is booked.")
+        );
+        let pending = onboarding_text(Some(OnboardingLine::NotBooked {
+            deadline_at: at("2026-11-21 03:00:00"),
+            fee_cents: 60_000,
+        }));
+        assert!(pending.text.contains(
+            "Onboarding: not booked yet. Complete it by November 20, 2026 to avoid the onboarding fee of $600.00."
+        ));
+        assert_eq!(pending.html.matches("href=").count(), 1);
+        let noticed = onboarding_text(Some(OnboardingLine::NoticeSent {
+            charge_at: at("2026-11-28 02:00:00"),
+            fee_cents: 60_000,
+        }));
+        assert!(noticed.text.contains(
+            "Onboarding was not completed. The onboarding fee of $600.00 will be charged on November 27, 2026."
+        ));
+        let none = onboarding_text(None);
+        assert!(!none.text.contains("Onboarding"));
+        assert!(!none.html.contains("Onboarding"));
+    }
+
+    #[test]
+    fn dates_and_times_are_local_to_the_signup_zone() {
+        assert_eq!(
+            format_local_date(at("2026-11-21 03:00:00")),
+            "November 20, 2026"
+        );
+        assert_eq!(
+            format_local_date(at("2026-11-21 05:00:00")),
+            "November 21, 2026"
+        );
+        assert_eq!(
+            format_local_time(at("2026-10-27 14:30:00")),
+            "Tue, Oct 27 at 10:30 AM EDT"
+        );
+        assert_eq!(
+            format_local_time(at("2026-11-05 01:00:00")),
+            "Wed, Nov 4 at 8:00 PM EST"
+        );
+        let quote = FirstChargeQuote {
+            charge_at: at("2026-10-09 02:00:00"),
+            ..quote()
+        };
+        let email = render_first_charge_email(&FirstChargeEmailInput {
+            company_name: "Rock & Co",
+            user_name: None,
+            quote: &quote,
+            app_url: APP_URL,
+            account_url: ACCOUNT_URL,
+            onboarding: None,
+        });
+        assert_eq!(
+            email.subject,
+            "Your first Granite Manager charge is on October 8, 2026"
+        );
+        assert!(email.text.contains("To cancel before October 8, 2026"));
+    }
+
+    #[test]
+    fn only_open_or_completed_commitments_get_a_line() {
+        use crate::onboarding_call::commitment::{Booking, new_commitment};
+        let base = new_commitment(
+            7,
+            at("2026-10-01 12:00:00"),
+            at("2026-10-31 12:00:00"),
+            60_000,
+        )
+        .commitment;
+        let with = |status| Commitment {
+            status,
+            ..base.clone()
+        };
+        assert_eq!(
+            OnboardingLine::of(&with(Status::Completed)),
+            Some(OnboardingLine::Complete)
+        );
+        let call = Booking {
+            invitee_uri: "i".into(),
+            event_uri: "e".into(),
+            start_at: at("2026-10-20 15:00:00"),
+            end_at: at("2026-10-20 16:00:00"),
+            reschedule_url: None,
+            cancel_url: None,
+            booked_at: at("2026-10-02 12:00:00"),
+        };
+        let booked = Commitment {
+            booking: Some(call),
+            ..with(Status::Booked)
+        };
+        assert_eq!(
+            OnboardingLine::of(&booked),
+            Some(OnboardingLine::Booked {
+                start_at: Some(at("2026-10-20 15:00:00"))
+            })
+        );
+        assert_eq!(
+            OnboardingLine::of(&with(Status::Booked)),
+            Some(OnboardingLine::Booked { start_at: None })
+        );
+        let not_booked = Some(OnboardingLine::NotBooked {
+            deadline_at: at("2026-10-31 12:00:00"),
+            fee_cents: 60_000,
+        });
+        assert_eq!(OnboardingLine::of(&with(Status::Pending)), not_booked);
+        let noticed = Commitment {
+            charge_after: Some(at("2026-11-07 12:00:00")),
+            ..with(Status::NoticeSent)
+        };
+        assert_eq!(
+            OnboardingLine::of(&noticed),
+            Some(OnboardingLine::NoticeSent {
+                charge_at: at("2026-11-07 12:00:00"),
+                fee_cents: 60_000
+            })
+        );
+        assert_eq!(OnboardingLine::of(&with(Status::NoticeSent)), not_booked);
+        for status in [
+            Status::Waived,
+            Status::Suspended,
+            Status::FeeInvoiced,
+            Status::FeePaid,
+            Status::FeeFailed,
+            Status::FeeSkipped,
+            Status::Void,
+        ] {
+            assert_eq!(OnboardingLine::of(&with(status)), None);
+        }
     }
 
     #[test]

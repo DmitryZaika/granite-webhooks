@@ -47,6 +47,10 @@ pub struct StripeFailure {
     pub message: String,
     /// Stripe's `error.code`, else `error.type`, else `http_<status>`.
     pub code: String,
+    /// The HTTP status; 0 when Stripe was not asked.
+    pub status: u16,
+    /// Stripe's `error.type` (`card_error`, `invalid_request_error`), if any.
+    pub kind: Option<String>,
 }
 
 impl std::fmt::Display for StripeFailure {
@@ -60,6 +64,8 @@ impl StripeFailure {
         Self {
             message: message.into(),
             code: code.into(),
+            status: 0,
+            kind: None,
         }
     }
 }
@@ -177,10 +183,10 @@ impl Stripe {
         let body: Value = match response.json().await {
             Ok(body) => body,
             Err(_) if status.is_server_error() => {
-                return Err(StripeError::Server(StripeFailure::new(
-                    status.to_string(),
-                    format!("http_{}", status.as_u16()),
-                )));
+                return Err(StripeError::Server(StripeFailure {
+                    status: status.as_u16(),
+                    ..StripeFailure::new(status.to_string(), format!("http_{}", status.as_u16()))
+                }));
             }
             Err(err) => return Err(StripeError::Request(err.without_url().to_string())),
         };
@@ -193,10 +199,14 @@ impl Stripe {
             .or_else(|| error["type"].as_str())
             .filter(|code| !code.is_empty())
             .map_or_else(|| format!("http_{}", status.as_u16()), str::to_string);
-        let message = StripeFailure::new(
-            error["message"].as_str().unwrap_or("Stripe request failed"),
-            code,
-        );
+        let message = StripeFailure {
+            status: status.as_u16(),
+            kind: error["type"].as_str().map(str::to_string),
+            ..StripeFailure::new(
+                error["message"].as_str().unwrap_or("Stripe request failed"),
+                code,
+            )
+        };
         Err(
             if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 StripeError::Server(message)
@@ -1178,6 +1188,132 @@ pub async fn latest_event(
             }))
         }
         other => Ok(Some(other)),
+    }
+}
+
+/// The onboarding fee invoice (03-stripe.md section 3.5).
+#[derive(Debug, Clone)]
+pub struct FeeInvoice<'a> {
+    pub customer: &'a str,
+    pub company_id: i32,
+    /// `YYYY-MM-DD` of the deadline the fee is for.
+    pub deadline: &'a str,
+    /// The company's stored payment method, charged instead of the
+    /// customer's default when set.
+    pub payment_method: Option<&'a str>,
+    pub description: &'a str,
+    pub automatic_tax: bool,
+    /// `onboarding-fee:<company_id>:<deadline>`.
+    pub idempotency_key: &'a str,
+}
+
+/// The onboarding fee: a standalone invoice created first, its one item
+/// attached with `invoice=` (so no other pending item is swept in), then
+/// finalized and paid. Every POST carries an idempotency key.
+impl Stripe {
+    /// The customer's invoices, any status, newest first (up to 100).
+    pub async fn customer_invoices(&self, customer: &str) -> Result<Vec<Value>, StripeError> {
+        let list = self
+            .get(
+                "/v1/invoices",
+                &[("customer", customer.into()), ("limit", "100".into())],
+            )
+            .await?;
+        Ok(data(list))
+    }
+
+    /// A draft invoice that collects automatically and picks up no pending
+    /// items, tagged `metadata[kind]=onboarding_fee`.
+    pub async fn create_fee_invoice(&self, fee: &FeeInvoice<'_>) -> Result<Value, StripeError> {
+        let mut form: Vec<(&str, String)> = vec![
+            ("customer", fee.customer.into()),
+            ("collection_method", "charge_automatically".into()),
+            ("auto_advance", "false".into()),
+            ("pending_invoice_items_behavior", "exclude".into()),
+            ("description", fee.description.into()),
+            ("metadata[kind]", "onboarding_fee".into()),
+            ("metadata[company_id]", fee.company_id.to_string()),
+            ("metadata[deadline]", fee.deadline.into()),
+        ];
+        if let Some(method) = fee.payment_method {
+            form.push(("default_payment_method", method.into()));
+        }
+        if fee.automatic_tax {
+            form.push(("automatic_tax[enabled]", "true".into()));
+        }
+        self.post_keyed("/v1/invoices", &form, fee.idempotency_key)
+            .await
+    }
+
+    /// One USD line on a draft invoice.
+    pub async fn create_invoice_item(
+        &self,
+        customer: &str,
+        invoice: &str,
+        amount_cents: i64,
+        description: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            "/v1/invoiceitems",
+            &[
+                ("customer", customer.into()),
+                ("invoice", invoice.into()),
+                ("amount", amount_cents.to_string()),
+                ("currency", "usd".into()),
+                ("description", description.into()),
+            ],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Finalizes a draft invoice without automatic advancement.
+    pub async fn finalize_invoice(
+        &self,
+        id: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/invoices/{}/finalize", path_part(id)),
+            &[("auto_advance", "false".into())],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Charges an open invoice now; a decline is `StripeError::Api`.
+    pub async fn pay_invoice(&self, id: &str, idempotency_key: &str) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/invoices/{}/pay", path_part(id)),
+            &[],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Deletes a draft invoice; `Missing` when already gone.
+    pub async fn delete_invoice(&self, id: &str) -> Result<Value, StripeError> {
+        self.send(
+            reqwest::Method::DELETE,
+            &format!("/v1/invoices/{}", path_part(id)),
+            &[],
+        )
+        .await
+    }
+
+    /// Voids an open invoice (a draft is deleted instead).
+    pub async fn void_invoice(
+        &self,
+        id: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/invoices/{}/void", path_part(id)),
+            &[],
+            idempotency_key,
+        )
+        .await
     }
 }
 

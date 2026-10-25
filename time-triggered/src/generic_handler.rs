@@ -298,6 +298,24 @@ async fn run_subscription_maintenance() {
     }
 }
 
+/// The onboarding job starts no Calendly, Stripe or mail work after 20 s;
+/// 10 s more cover the call in flight.
+const ONBOARDING_COMMITMENTS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Onboarding call reminders, tolling, the fee notice and invoice; a failure
+/// never aborts the tick.
+async fn run_onboarding_commitments() {
+    let result = post_api_job_within(
+        "onboarding-commitments",
+        "onboarding commitments",
+        ONBOARDING_COMMITMENTS_TIMEOUT,
+    )
+    .await;
+    if let Err(error) = report_job("onboarding-commitments", result).await {
+        tracing::error!(?error, "Failed to run onboarding commitments; continuing");
+    }
+}
+
 /// Starts the supplier price file job without waiting for it: a big PDF takes
 /// minutes, and the API Lambda keeps working after this request gives up.
 /// Sent to the long-running deployment (`API_STREAM_URL`) when there is one.
@@ -426,17 +444,30 @@ pub(crate) async fn function_handler(
             }
         };
 
-    reported(
-        "cancel-pending-emails",
-        cancel_pending_emails_left_list(pool).await,
-    )
-    .await?;
-    reported(
-        "cancel-pending-emails",
-        cancel_pending_emails_for_non_leads(pool).await,
-    )
-    .await?;
-    let ready_emails = reported("scheduled-emails", get_ready_scheduled_emails(pool).await).await?;
+    // The jobs that end the tick on failure; onboarding runs either way, then
+    // the failure ends the tick.
+    let ready: Result<Vec<ScheduledEmail>, Error> = async {
+        reported(
+            "cancel-pending-emails",
+            cancel_pending_emails_left_list(pool).await,
+        )
+        .await?;
+        reported(
+            "cancel-pending-emails",
+            cancel_pending_emails_for_non_leads(pool).await,
+        )
+        .await?;
+        Ok(reported("scheduled-emails", get_ready_scheduled_emails(pool).await).await?)
+    }
+    .await;
+    if let Err(error) = &ready {
+        tracing::error!(
+            ?error,
+            "Failed to prepare scheduled emails; ending the tick after onboarding"
+        );
+    }
+    run_onboarding_commitments().await;
+    let ready_emails = ready?;
     let processed_email_count = if automated_email_send_window_is_open_now() {
         let mut failed = 0usize;
         let mut first_error = None;
@@ -582,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn billing_reminders_run_before_fallible_jobs_and_do_not_abort_the_tick() {
+    fn billing_runs_before_and_onboarding_after_the_fallible_jobs_and_neither_aborts_the_tick() {
         let source = include_str!("generic_handler.rs");
         let start = source
             .find("pub(crate) async fn function_handler")
@@ -600,6 +631,21 @@ mod tests {
             "billing must run before the `?` jobs"
         );
         assert!(!handler.contains("process_billing_reminders().await?"));
+        let onboarding = handler
+            .find("run_onboarding_commitments().await")
+            .expect("onboarding commitments call");
+        let last_fallible = handler
+            .rfind("get_ready_scheduled_emails(pool).await")
+            .expect("the last `?` job");
+        let tick_ends = handler
+            .find("ready?")
+            .expect("the `?` jobs' failure ends the tick");
+        assert!(
+            billing < first_fallible && last_fallible < onboarding && onboarding < tick_ends,
+            "onboarding commitments run after the `?` jobs and before their failure ends the tick"
+        );
+        assert!(source[..end].contains("\"onboarding-commitments\","));
+        assert!(source[..end].contains("Failed to run onboarding commitments; continuing"));
     }
 
     #[test]

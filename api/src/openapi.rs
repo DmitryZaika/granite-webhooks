@@ -70,6 +70,7 @@ pub const DEVICE_SECURITY: &str = "device_token";
         (name = "quickbooks", description = "QuickBooks Online invoices and customers"),
         (name = "followups", description = "AI follow-ups: the company rule they obey, timelines and enrollments"),
         (name = "billing", description = "The company's Granite Manager subscription (Stripe)"),
+        (name = "onboarding-call", description = "The self-serve onboarding call: complete it within 30 days of signup or pay the onboarding fee (Terms section 11)"),
         (name = "jobs", description = "Scheduled jobs the time-triggered Lambda runs (job key, no session)"),
         (name = "posthog-autofix", description = "Callbacks of the PostHog auto-fix GitHub workflow (callback secret, no session)"),
         (name = "phone", description = "Granite Phone, business calling through Telnyx: the app's sign-in and devices, calls, contacts and settings, and their admin pages"),

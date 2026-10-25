@@ -107,6 +107,8 @@ pub struct AppState {
     pub phone: PhoneConfig,
     /// The PostHog auto-fix intake and callbacks (`POSTHOG_AUTOFIX_*`).
     pub autofix: crate::posthog_autofix::Autofix,
+    /// Onboarding with Dima: Calendly and `ONBOARDING_FEE_CHARGING`.
+    pub onboarding_call: crate::onboarding_call::Config,
 }
 
 /// Where the SES identity lists come from.
@@ -189,7 +191,14 @@ impl AppState {
             push: Push::disabled(),
             phone: PhoneConfig::default(),
             autofix: crate::posthog_autofix::Autofix::disabled(),
+            onboarding_call: crate::onboarding_call::Config::disabled(),
         }
+    }
+
+    #[must_use]
+    pub fn with_onboarding_call(mut self, config: crate::onboarding_call::Config) -> Self {
+        self.onboarding_call = config;
+        self
     }
 
     #[must_use]
@@ -430,6 +439,7 @@ impl AppState {
                 &std::env::var("SIGNATURE_SESSION_SECRET").unwrap_or_default(),
             )
             .with_autofix(crate::posthog_autofix::Autofix::from_env())
+            .with_onboarding_call(crate::onboarding_call::Config::from_env())
             .with_signup(crate::signup::SignupConfig::from_env()))
     }
 

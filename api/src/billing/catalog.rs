@@ -322,11 +322,10 @@ pub fn trial_end(now: DateTime<Utc>) -> NaiveDateTime {
         .trunc_subsecs(0)
 }
 
-/// When the onboarding deadline passes (UTC): `now` + 30 days.
+/// When the onboarding deadline passes (UTC): the end (23:59:59 local) of
+/// [`deadline_on`], the day the consent names.
 pub fn onboarding_deadline(now: DateTime<Utc>) -> NaiveDateTime {
-    (now + Duration::days(ONBOARDING_DEADLINE_DAYS))
-        .naive_utc()
-        .trunc_subsecs(0)
+    crate::onboarding_call::commitment::end_of_local_day(deadline_on(signup_day(now)))
 }
 
 /// Units of the extra-user item for `users` users.
@@ -478,10 +477,16 @@ mod tests {
     }
 
     #[test]
-    fn onboarding_deadline_is_thirty_days_on() {
+    fn onboarding_deadline_is_the_end_of_the_local_day_thirty_days_on() {
+        // 15:00 EDT on Oct 23; Nov 22 ends at 23:59:59 EST.
         assert_eq!(
             onboarding_deadline(utc("2026-10-23T19:00:00.500Z")).to_string(),
-            "2026-11-22 19:00:00"
+            "2026-11-23 04:59:59"
+        );
+        // 21:30 EDT on Oct 23 is still the 23rd locally.
+        assert_eq!(
+            onboarding_deadline(utc("2026-10-24T01:30:00Z")).to_string(),
+            "2026-11-23 04:59:59"
         );
     }
 

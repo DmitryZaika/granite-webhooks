@@ -16,6 +16,7 @@ use super::{
     BillingInvoice, BillingPlan, CompanyBilling, can_start_checkout, is_ended_subscription_status,
     outstanding_balance_cents,
 };
+use crate::onboarding_call::fee::is_fee_invoice_object;
 use chrono::{DateTime, NaiveDateTime};
 use lambda_http::tracing;
 use serde_json::Value;
@@ -136,6 +137,10 @@ async fn sync_locked(
         return Ok(());
     };
     for invoice in stripe.list_invoices(&customer).await? {
+        // The onboarding fee has its own status: not the subscription's balance.
+        if is_fee_invoice_object(&invoice) {
+            continue;
+        }
         let snapshot = invoice_snapshot(&invoice);
         if snapshot.id.is_empty() || !matches!(snapshot.status.as_str(), "paid" | "open") {
             continue;
