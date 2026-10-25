@@ -19,7 +19,8 @@
 //! On [`DEVICE_ROUTES`] (the app's Emails and Schedule screens, and the
 //! installers' and template makers' own schedule), on [`DEVICE_READ_ROUTES`]
 //! with `GET` (what the phone's email composer and schedule list: calendars,
-//! stones, images, documents, email and text templates) and on [`DEVICE_ACTIONS`] with `POST`
+//! stones, images, documents, email and text templates, my texts over every
+//! provider), on `/v1/sms/{provider}/messages` with `POST` (sending them) and on [`DEVICE_ACTIONS`] with `POST`
 //! (an attachment upload, Improve message, AI reply, filling a template) the cookie
 //! extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
@@ -62,11 +63,13 @@ pub const DEVICE_ROUTES: [&str; 4] = [
     "/v1/me/schedule",
 ];
 
-/// CRM routes the app reads with its device token, `GET` only (the email
-/// and text composers' From Stones, From Images, From Documents and Use
-/// Template lists, and the schedule's calendars). These prefixes and everything under
+/// CRM routes the app reads with its device token, `GET` only (my texts
+/// over every provider for the Text tab of a company without Telnyx, the
+/// email and text composers' From Stones, From Images, From Documents and
+/// Use Template lists, and the schedule's calendars). These prefixes and everything under
 /// them.
-pub const DEVICE_READ_ROUTES: [&str; 6] = [
+pub const DEVICE_READ_ROUTES: [&str; 7] = [
+    "/v1/sms/mine",
     "/v1/calendars",
     "/v1/stones/attachable",
     "/v1/images",
@@ -93,12 +96,24 @@ fn under(path: &str, prefix: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
+/// Providers whose texts the app sends through the CRM's own send route.
+const SMS_SEND_PROVIDERS: [&str; 3] = ["cloudtalk", "ringcentral", "telnyx"];
+
+/// `POST /v1/sms/{provider}/messages`: a text sent from the app's Text tab
+/// through the provider the conversation answers through.
+fn sms_send(path: &str) -> bool {
+    path.strip_prefix("/v1/sms/")
+        .and_then(|rest| rest.strip_suffix("/messages"))
+        .is_some_and(|provider| SMS_SEND_PROVIDERS.contains(&provider))
+}
+
 /// A request the device token may sign: any method on [`DEVICE_ROUTES`],
-/// `GET` on [`DEVICE_READ_ROUTES`], `POST` on [`DEVICE_ACTIONS`].
+/// `GET` on [`DEVICE_READ_ROUTES`], `POST` on [`DEVICE_ACTIONS`] and on a
+/// provider's `/v1/sms/{provider}/messages`.
 fn device_route(method: &Method, path: &str) -> bool {
     DEVICE_ROUTES.iter().any(|prefix| under(path, prefix))
         || (method == Method::GET && DEVICE_READ_ROUTES.iter().any(|prefix| under(path, prefix)))
-        || (method == Method::POST && DEVICE_ACTIONS.contains(&path))
+        || (method == Method::POST && (DEVICE_ACTIONS.contains(&path) || sms_send(path)))
 }
 
 async fn authenticate_with_positions(
@@ -357,9 +372,31 @@ mod tests {
             "/v1/ai/email-template",
             "/v1/ai/agentic-questions",
             "/v1/templates",
-            "/v1/sms/ringcentral/messages",
+            "/v1/sms/other/messages",
+            "/v1/sms/ringcentral/messages/1",
+            "/v1/sms/ringcentral/threads/5551234567/read",
         ] {
             assert!(!device_route(&Method::POST, path), "{path}");
         }
+    }
+
+    #[test]
+    fn my_texts_read_and_send_through_the_crm() {
+        for path in [
+            "/v1/sms/mine/threads",
+            "/v1/sms/mine/threads/3175551234",
+            "/v1/sms/mine/unread-count",
+        ] {
+            assert!(device_route(&Method::GET, path), "{path}");
+            assert!(!device_route(&Method::POST, path), "{path}");
+        }
+        for provider in ["cloudtalk", "ringcentral", "telnyx"] {
+            let path = format!("/v1/sms/{provider}/messages");
+            assert!(device_route(&Method::POST, &path), "{path}");
+            assert!(!device_route(&Method::GET, &path), "{path}");
+        }
+        // The whole company's inbox stays with the CRM session.
+        assert!(!device_route(&Method::GET, "/v1/sms/all/threads"));
+        assert!(!device_route(&Method::GET, "/v1/sms/minex/threads"));
     }
 }
