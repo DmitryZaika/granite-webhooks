@@ -43,6 +43,7 @@ use crate::webhooks_client::OutgoingEmail;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use common::crud::phone_app::users_with_app;
 use common::utils::email_body::escape_html;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
@@ -1398,7 +1399,8 @@ async fn keep_lead_message(
 /// The sales managers get the lead in Telegram with a button per sales rep
 /// (this month's leads on it) to assign it, as the lead pipeline sends new
 /// leads, plus one to open the quote. Managers who could not be reached in
-/// Telegram are emailed when none was. Their phones get a `lead` push.
+/// Telegram are emailed when none was. Their phones get a `lead` push, and
+/// managers with the app get only that.
 async fn notify_managers(
     state: &AppState,
     company_id: i32,
@@ -1449,8 +1451,13 @@ async fn notify_managers(
         None,
     )
     .await;
-    let mut reached = false;
+    // Managers with the app get it there only.
+    let with_app = users_with_app(&state.pool, company_id, &manager_ids).await;
+    let mut reached = !with_app.is_empty();
     for manager in &managers {
+        if with_app.contains(&manager.id) {
+            continue;
+        }
         let Some(chat_id) = manager.telegram_id else {
             continue;
         };
@@ -1500,7 +1507,7 @@ async fn notify_managers(
 }
 
 /// The customer's sales rep gets the quote in Telegram (lead alerts), else
-/// by email, and a `lead` push on their phones.
+/// by email, and a `lead` push on their phones (only that with the app).
 async fn notify_rep(
     state: &AppState,
     company_id: i32,
@@ -1519,6 +1526,13 @@ async fn notify_rep(
         None,
     )
     .await;
+    // A rep with the app gets it there only.
+    if users_with_app(&state.pool, company_id, &[rep.id])
+        .await
+        .contains(&rep.id)
+    {
+        return;
+    }
     if let Some(chat_id) = rep.telegram_id {
         let text = format!("{title}.\n{}", notice.details());
         let rows = vec![vec![

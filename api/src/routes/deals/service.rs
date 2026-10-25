@@ -10,6 +10,7 @@ use crate::state::AppState;
 use crate::telegram::Bot;
 use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::America::Indiana::Indianapolis;
+use common::crud::phone_app::has_app;
 use common::telegram::crm::format_activity_notification;
 use common::utils::email_send_window::{
     clamp_automated_email_send_at, clamp_automated_sms_send_at,
@@ -411,6 +412,10 @@ async fn try_notify(
         else {
             continue;
         };
+        // The app has it already.
+        if has_app(&state.pool, recipient).await {
+            continue;
+        }
         let text = format_activity_notification(
             kind.as_str(),
             people.customer_name.as_deref(),

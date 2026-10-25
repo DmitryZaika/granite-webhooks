@@ -12,6 +12,7 @@ use crate::libs::constants::{
 };
 use crate::libs::types::BasicResponse;
 
+use common::crud::phone_app::users_with_app;
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 
@@ -95,12 +96,25 @@ where
     bot.send_message(ChatId(chat_id), message.to_string()).await
 }
 
-fn get_manager_telegram_ids(users: &[SalesUser]) -> Vec<i64> {
-    users
+/// The managers' Telegram chats, leaving out managers with the app (they get
+/// the lead there only), and whether any manager has the app.
+async fn get_manager_telegram_ids(
+    pool: &MySqlPool,
+    company_id: i32,
+    users: &[SalesUser],
+) -> (Vec<i64>, bool) {
+    let managers: Vec<&SalesUser> = users
         .iter()
         .filter(|u| u.position_id == SALES_MANAGER)
+        .collect();
+    let ids: Vec<i32> = managers.iter().map(|u| u.id).collect();
+    let with_app = users_with_app(pool, company_id, &ids).await;
+    let telegram_ids = managers
+        .iter()
+        .filter(|u| !with_app.contains(&u.id))
         .filter_map(|u| u.telegram_id)
-        .collect()
+        .collect();
+    (telegram_ids, !with_app.is_empty())
 }
 
 async fn persist_lead_messages(
@@ -169,9 +183,12 @@ where
             )
         })
         .collect();
-    let telegram_ids = get_manager_telegram_ids(&all_users);
+    let (telegram_ids, app) = get_manager_telegram_ids(pool, company_id, &all_users).await;
 
     if telegram_ids.is_empty() {
+        if app {
+            return Ok(());
+        }
         tracing::error!(
             ?company_id,
             position_id = SALES_MANAGER,
@@ -290,8 +307,11 @@ where
         || "Unknown".to_string(),
         |u| u.name.clone().unwrap_or_else(|| "Unknown".to_string()),
     );
-    let telegram_ids = get_manager_telegram_ids(&all_users);
+    let (telegram_ids, app) = get_manager_telegram_ids(pool, company_id, &all_users).await;
     if telegram_ids.is_empty() {
+        if app {
+            return false;
+        }
         tracing::error!(
             ?company_id,
             position_id = SALES_MANAGER,

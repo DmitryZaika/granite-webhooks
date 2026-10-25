@@ -6,6 +6,7 @@ use common::crud::notifications::{
     mark_deadline_reminder_telegram_sent, unmark_deadline_reminder_telegram_sent,
 };
 use common::crud::outbound_email::{OutboundScheduledEmail, record_outbound_scheduled_email};
+use common::crud::phone_app::has_app;
 use common::crud::scheduled_emails::{
     ScheduledEmail, cancel_pending_emails_for_non_leads, cancel_pending_emails_left_list,
     get_ready_scheduled_emails, mark_scheduled_email_as_sent,
@@ -28,8 +29,8 @@ fn activity_reminder_needs_telegram(
 }
 
 /// Sends the activity deadline reminders that just came due: a push to the
-/// user's phones (through the API) and a Telegram message when they turned
-/// those on. Each is marked first, so it goes out once; it is unmarked only
+/// user's phones (through the API) and, without the app, a Telegram message
+/// when they turned those on. Each is marked first, so it goes out once; it is unmarked only
 /// when Telegram refused it and no phone took it.
 async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize, Error> {
     let reminders = get_due_activity_deadline_reminders(pool).await?;
@@ -56,10 +57,11 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
             continue;
         }
         let phones = push_notification_to_phones(reminder.id).await;
+        // A user with the app gets it there only.
         let wants_telegram = activity_reminder_needs_telegram(
             reminder.telegram_activity_notifications,
             reminder.notifications_telegram_id,
-        );
+        ) && !has_app(pool, reminder.user_id).await;
         let telegram = match (&bot, reminder.notifications_telegram_id) {
             (Some(bot), Some(telegram_id)) if wants_telegram => {
                 Some(send_deadline_reminder_telegram(bot, telegram_id, &reminder).await)

@@ -12,6 +12,7 @@ use axum::Json;
 use axum::extract::State;
 use chrono::{NaiveDate, Timelike, Utc};
 use chrono_tz::America::Indiana::Indianapolis;
+use common::crud::phone_app::users_with_app;
 use lambda_http::tracing;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -169,7 +170,11 @@ pub async fn send_digests(state: &AppState, day: NaiveDate) -> Result<DigestRun,
                 tracing::warn!(?error, user_id, "maintenance push failed");
                 0
             });
+        // A user with the app gets it there only.
         let telegram = telegram_id.is_some()
+            && !users_with_app(&state.pool, company_id, &[user_id])
+                .await
+                .contains(&user_id)
             && state
                 .webhooks
                 .notify_telegram(user_id, &digest(items))

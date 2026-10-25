@@ -16,6 +16,7 @@ use crate::telegram::utils::parse_code;
 use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
 use axum::extract::State;
 use axum::http::StatusCode;
+use common::crud::phone_app::users_with_app;
 use common::crud::scheduled_emails::schedule_templates_for_deal_list;
 use lambda_http::tracing;
 use reqwest::Client;
@@ -332,6 +333,13 @@ async fn handle_assign_lead<T: Telegram>(
         Audience::Rep(position.user_id),
     )
     .await;
+    // A rep with the app gets it there only.
+    if users_with_app(pool, position.company_id, &[position.user_id])
+        .await
+        .contains(&position.user_id)
+    {
+        return OK_RESPONSE;
+    }
     if let Some(telegram_id) = tg_info.telegram_id {
         let final_message = format!("You were assigned a lead. Click here: \n{lead_link}");
         return bot
