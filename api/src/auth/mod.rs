@@ -21,7 +21,8 @@
 //! with `GET` (what the phone's composers, schedule, Text tab and More
 //! screens read: calendars, deals and their stages, customers, stones,
 //! suppliers, sales, images, documents, email and text templates, my texts
-//! over every provider), on `/v1/sms/{provider}/messages` with `POST`
+//! over every provider, a pushed CRM notification), on
+//! `/v1/sms/{provider}/messages` with `POST`
 //! (sending those texts) and on [`DEVICE_ACTIONS`] with `POST` (an
 //! attachment upload, Improve message, AI reply, filling a template) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
@@ -70,9 +71,10 @@ pub const DEVICE_ROUTES: [&str; 4] = [
 /// email and text composers' From Stones, From Images, From Documents and
 /// Use Template lists, the suggestions under an email's To, Cc and Bcc, the
 /// schedule's calendars, and the More screens: Deals, Customers, Stones,
-/// Suppliers, Images and Transactions). These prefixes and everything under
-/// them; writes there still need the CRM session.
-pub const DEVICE_READ_ROUTES: [&str; 13] = [
+/// Suppliers, Images and Transactions; and the CRM notification a push names).
+/// These prefixes and everything under them; writes there still need the CRM
+/// session.
+pub const DEVICE_READ_ROUTES: [&str; 14] = [
     "/v1/sms/mine",
     "/v1/calendars",
     "/v1/stones",
@@ -86,6 +88,7 @@ pub const DEVICE_READ_ROUTES: [&str; 13] = [
     "/v1/deal-lists",
     "/v1/suppliers",
     "/v1/transactions",
+    "/v1/notifications",
 ];
 
 /// CRM actions the app's composer calls with its device token: exactly these
@@ -360,6 +363,7 @@ mod tests {
             "/v1/suppliers/directory",
             "/v1/transactions",
             "/v1/transactions/7",
+            "/v1/notifications/7",
         ] {
             assert!(device_route(&Method::GET, path), "{path}");
             for method in [Method::POST, Method::PUT, Method::DELETE] {
