@@ -38,7 +38,7 @@ pub const COMPANIES_PER_RUN: u32 = 25;
 /// Each company's run is due this long after its last start.
 pub const COMPANY_EVERY_HOURS: i64 = 23;
 /// No Calendly, Stripe or mail work is started after this.
-pub const RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+pub const RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
 /// Calendly requests one company's run may make.
 pub const CALENDLY_CALLS_PER_COMPANY: u32 = 10;
 /// Calendly takes at most 7 days of slots per request.

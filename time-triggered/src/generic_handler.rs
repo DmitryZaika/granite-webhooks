@@ -298,9 +298,9 @@ async fn run_subscription_maintenance() {
     }
 }
 
-/// The onboarding job starts no Calendly, Stripe or mail work after 20 s;
-/// 10 s more cover the call in flight.
-const ONBOARDING_COMMITMENTS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// The onboarding job starts no Calendly, Stripe or mail work after 15 s;
+/// 5 s more cover the call in flight (the api finishes it on its own).
+const ONBOARDING_COMMITMENTS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Onboarding call reminders, tolling, the fee notice and invoice; a failure
 /// never aborts the tick.

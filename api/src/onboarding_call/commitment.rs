@@ -457,8 +457,16 @@ fn days_given_back(span: Duration) -> i64 {
 
 /// The deadline moved: with the deadline in the future again the notice
 /// cycle ends and a sent notice is withdrawn (back to booked or pending).
-/// Suspended stays suspended.
+/// Suspended stays suspended, but a notice it holds was about the old
+/// deadline: it is dropped, so a later resumption sends a new one.
 fn withdraw_stale_notice(commitment: &mut Commitment, now: NaiveDateTime) -> bool {
+    if commitment.status == Status::Suspended {
+        let held = commitment.notice_sent_at.is_some();
+        commitment.notice_sent_at = None;
+        commitment.charge_after = None;
+        commitment.notice_cycle_at = None;
+        return held;
+    }
     if commitment.deadline_at <= now {
         return false;
     }
@@ -752,10 +760,12 @@ fn suspends_before(c: &Commitment) -> NaiveDateTime {
 fn resume(c: &mut Commitment, now: NaiveDateTime) -> &'static str {
     c.suspended_at = None;
     c.notice_cycle_at = None;
+    // Only a notice sent after the current deadline passed is about it.
     let notice_holds = now >= c.deadline_at
         && c.charge_after.is_some()
-        && c.notice_sent_at
-            .is_some_and(|sent| now - sent <= Duration::days(NOTICE_VALID_DAYS));
+        && c.notice_sent_at.is_some_and(|sent| {
+            sent >= c.deadline_at && now - sent <= Duration::days(NOTICE_VALID_DAYS)
+        });
     if notice_holds {
         c.status = Status::NoticeSent;
         return "notice_sent";
@@ -1947,6 +1957,49 @@ mod tests {
             assert_eq!(c.charge_after, Some(at("2026-11-07 12:00")));
         }
         assert_eq!(due_at(&c, "2026-11-07 12:00"), [Due::Invoice]);
+    }
+
+    #[test]
+    fn a_deadline_moved_while_suspended_needs_a_new_notice_before_any_charge() {
+        // Notice 10-31 12:00 (charge 11-07 12:00), request 11-02, extended on 11-03.
+        let suspended = run(
+            &noticed(&base()),
+            &requested("2026-11-02 09:00"),
+            "2026-11-02 10:00",
+        )
+        .outcome
+        .commitment;
+        let extended =
+            superuser_action(&suspended, Action::Extend, ACTOR, at("2026-11-03 10:00")).unwrap();
+        let c = &extended.commitment;
+        assert_eq!(c.status, Status::Suspended);
+        assert_eq!(c.deadline_at, at("2026-11-14 11:00"));
+        assert_eq!((c.notice_sent_at, c.charge_after), (None, None));
+        assert_eq!(extended.events[0].detail["notice_withdrawn"], true);
+
+        let day = run(c, &facts(), "2026-11-20 10:00");
+        let resumed = &day.outcome.commitment;
+        assert_eq!(resumed.status, Status::Pending);
+        assert_eq!(resumed.charge_after, None);
+        assert_eq!(resumed.notice_cycle_at, Some(at("2026-11-20 10:00")));
+        assert_eq!(day.due, [Due::Notice]);
+    }
+
+    #[test]
+    fn a_notice_sent_before_the_current_deadline_is_never_resumed() {
+        let mut held = run(
+            &noticed(&base()),
+            &requested("2026-11-02 09:00"),
+            "2026-11-02 10:00",
+        )
+        .outcome
+        .commitment;
+        // As if the deadline had moved past the notice without clearing it.
+        held.deadline_at = at("2026-11-05 10:00");
+        let day = run(&held, &facts(), "2026-11-20 10:00");
+        assert_eq!(day.outcome.commitment.status, Status::Pending);
+        assert_eq!(day.outcome.commitment.charge_after, None);
+        assert_eq!(day.due, [Due::Notice]);
     }
 
     #[test]

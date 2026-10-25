@@ -215,6 +215,23 @@ async fn record_event(
     .await
 }
 
+/// One Stripe call of the fee may take this long, so a run stays inside its
+/// share of the time-triggered tick.
+const STRIPE_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn fee_stripe(state: &AppState) -> crate::billing::stripe::Stripe {
+    let mut stripe = state.stripe.clone();
+    stripe.request_timeout = STRIPE_CALL_TIMEOUT;
+    stripe
+}
+
+/// `invoice.voided` for an invoice we withdrew ourselves (`metadata[withdrawn]`).
+fn voided_by_us(invoice: &Value) -> bool {
+    invoice["metadata"]["withdrawn"]
+        .as_str()
+        .is_some_and(|reason| !reason.is_empty())
+}
+
 /// Withdraws the recorded fee invoice `invoice_id` before any charge: a
 /// draft is deleted, an open invoice never attempted voided, then the
 /// commitment moves on ([`invoice_withdrawn`]). A paid invoice is recorded
@@ -226,7 +243,7 @@ async fn withdraw(
     reason: Withdrawal,
     now: NaiveDateTime,
 ) -> Result<Charged, FeeError> {
-    let stripe = &state.stripe;
+    let stripe = &fee_stripe(state);
     let invoice = match stripe.invoice(invoice_id).await {
         Ok(invoice) => Some(invoice),
         Err(StripeError::Missing(_)) => None,
@@ -242,6 +259,16 @@ async fn withdraw(
             Err(err) => return Err(stripe_error(&err)),
         },
         Some((Some("open"), false)) => {
+            // Tagged first: the `invoice.voided` event of our own void must
+            // not read as Stripe staff waiving the fee.
+            stripe
+                .mark_invoice_withdrawn(
+                    invoice_id,
+                    reason.as_str(),
+                    &format!("onboarding-fee:{invoice_id}:withdrawn"),
+                )
+                .await
+                .map_err(|e| stripe_error(&e))?;
             stripe
                 .void_invoice(invoice_id, &format!("onboarding-fee:{invoice_id}:void"))
                 .await
@@ -402,7 +429,7 @@ async fn fee_invoice(
     payment_method: Option<&str>,
 ) -> Result<Value, FeeError> {
     let company_id = commitment.company_id;
-    let stripe = &state.stripe;
+    let stripe = &fee_stripe(state);
     let deadline = deadline_key(commitment.deadline_at);
     match (commitment.status, commitment.stripe_invoice_id.as_deref()) {
         (Status::FeeInvoiced, Some(id)) => stripe.invoice(id).await.map_err(|e| stripe_error(&e)),
@@ -449,7 +476,7 @@ async fn pay(
     key: &str,
     now: NaiveDateTime,
 ) -> Result<Option<Value>, FeeError> {
-    let stripe = &state.stripe;
+    let stripe = &fee_stripe(state);
     match stripe.pay_invoice(invoice_id, &format!("{key}:pay")).await {
         Ok(invoice) => Ok(Some(invoice)),
         Err(err) if is_decline(&err) => {
@@ -491,7 +518,7 @@ pub async fn charge(
     let commitment = &stored.commitment;
     let company_id = commitment.company_id;
     let pool = &state.pool;
-    let stripe = &state.stripe;
+    let stripe = &fee_stripe(state);
     let facts = charge_facts(state, company_id).await?;
     let blocked = withdrawal(commitment, &facts);
     if let (Status::FeeInvoiced, Some(id), Some(reason)) = (
@@ -594,6 +621,10 @@ pub async fn apply_webhook(state: &AppState, event: &Value) -> Result<(), FeeErr
         _ => return Ok(()),
     };
     let invoice = &event["data"]["object"];
+    if kind == InvoiceEvent::Voided && voided_by_us(invoice) {
+        // Our own withdrawal: the run that voided it records the outcome.
+        return Ok(());
+    }
     let (Some(company_id), Some(invoice_id)) = (
         positive_int(&invoice["metadata"]["company_id"]),
         invoice["id"].as_str(),
@@ -619,6 +650,17 @@ mod tests {
             status,
             kind: kind.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn only_our_tagged_voids_are_ours() {
+        assert!(voided_by_us(
+            &json!({ "metadata": { "kind": "onboarding_fee", "withdrawn": "charging_off" } })
+        ));
+        assert!(!voided_by_us(
+            &json!({ "metadata": { "kind": "onboarding_fee" } })
+        ));
+        assert!(!voided_by_us(&json!({ "metadata": { "withdrawn": "" } })));
     }
 
     #[test]

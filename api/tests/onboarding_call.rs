@@ -303,6 +303,18 @@ async fn fake_stripe(stripe: SharedStripe) -> String {
             get(|State(s): State<SharedStripe>, Path(id): Path<String>| async move {
                 invoice_or_404(&s.lock().unwrap(), &id)
             })
+            .post(
+                |State(s): State<SharedStripe>, Path(id): Path<String>, body: String| async move {
+                    let mut s = s.lock().unwrap();
+                    let params = form(&body);
+                    if let (Some(invoice), Some(reason)) =
+                        (s.invoices.get_mut(&id), params.get("metadata[withdrawn]"))
+                    {
+                        invoice["metadata"]["withdrawn"] = json!(reason);
+                    }
+                    invoice_or_404(&s, &id)
+                },
+            )
             .delete(|State(s): State<SharedStripe>, Path(id): Path<String>| async move {
                 let mut s = s.lock().unwrap();
                 s.deletes += 1;
@@ -1736,7 +1748,38 @@ async fn an_open_fee_invoice_is_voided_by_a_cancellation_before_the_charge_date(
         h.stripe.lock().unwrap().invoices["in_fee_left"]["status"],
         "void"
     );
+    assert_eq!(
+        h.stripe.lock().unwrap().invoices["in_fee_left"]["metadata"]["withdrawn"],
+        "cancellation_requested"
+    );
     assert!(h.subjects_to(STAFF_EMAIL).is_empty());
+}
+
+#[test_db::test(seed)]
+async fn the_voided_event_of_our_own_withdrawal_never_waives_the_fee(pool: MySqlPool) {
+    sqlx::query(
+        "UPDATE company_onboarding_commitments
+            SET status = 'fee_invoiced', stripe_invoice_id = 'in_fee_1', version = version + 1
+          WHERE company_id = 20400",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = harness(&pool, ON).await;
+    // Stripe's event can arrive before the run that voided it saves the outcome.
+    let mut ours = fee_event("evt_ours", "invoice.voided", "in_fee_1");
+    ours["data"]["object"]["metadata"]["withdrawn"] = json!("charging_off");
+    post_event(&h.server, &ours).await.assert_status_ok();
+    assert_eq!(status(&pool, PENDING).await, "fee_invoiced");
+
+    // A void by staff in Stripe still waives it.
+    post_event(
+        &h.server,
+        &fee_event("evt_staff", "invoice.voided", "in_fee_1"),
+    )
+    .await
+    .assert_status_ok();
+    assert_eq!(status(&pool, PENDING).await, "waived");
 }
 
 #[test_db::test(seed)]
