@@ -449,14 +449,72 @@ mod tests {
 /// `RingCentral`'s ceiling for `WebHook` subscriptions (20 years).
 const SUBSCRIPTION_EXPIRES_IN_SECONDS: u64 = 630_720_000;
 
-/// What [`ensure_sms_subscription`] did.
+/// What [`ensure_sms_subscription`] or [`renew_sms_subscription`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubscriptionOutcome {
     Created,
     Renewed,
-    /// `LAMBDA_URL` or `RINGCENTRAL_WEBHOOK_TOKEN` is not set, or the
-    /// account has no enabled user extensions.
+    /// Renew only, and the account has no subscription at this address.
+    NotSubscribed,
+    /// Subscriptions are off ([`SubscriptionTarget::from_env`] is `None`), or
+    /// the account has no enabled user extensions.
     Skipped,
+}
+
+/// Where `RingCentral` pushes a company's texts, and the `verificationToken`
+/// it sends back with each push (`Verification-Token`, checked by
+/// `/ringcentral/notify/{company_id}` on the webhooks Lambda).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubscriptionTarget {
+    /// The webhooks Lambda, without a trailing `/`.
+    base: String,
+    token: String,
+}
+
+impl SubscriptionTarget {
+    /// `LAMBDA_URL` (the webhooks Lambda), and the API's one webhooks key:
+    /// `WEBHOOKS_KEY` once it is an access token (`gmk_...`, with the
+    /// `telephony` scope), else the older shared `RINGCENTRAL_WEBHOOK_TOKEN`.
+    /// `None` turns subscriptions off: dev sets no `LAMBDA_URL`, because its
+    /// copy of the database holds production's `RingCentral` credentials.
+    pub fn from_env() -> Option<Self> {
+        let var = |name| std::env::var(name).ok();
+        Self::new(
+            var("LAMBDA_URL").as_deref(),
+            var("WEBHOOKS_KEY").as_deref(),
+            var("RINGCENTRAL_WEBHOOK_TOKEN").as_deref(),
+        )
+    }
+
+    pub fn new(
+        base: Option<&str>,
+        webhooks_key: Option<&str>,
+        legacy_token: Option<&str>,
+    ) -> Option<Self> {
+        let base = base.map(str::trim).unwrap_or_default();
+        let base = base.trim_end_matches('/');
+        let token = match webhooks_key.map(str::trim) {
+            Some(key) if crate::access_token::is_token_shaped(key) => key.to_string(),
+            // RingCentral rejects hyphens; the webhook parses the 32-hex
+            // form as the same UUID.
+            _ => legacy_token.unwrap_or_default().trim().replace('-', ""),
+        };
+        (!base.is_empty() && !token.is_empty()).then(|| Self {
+            base: base.to_string(),
+            token,
+        })
+    }
+
+    /// `/ringcentral/notify/{company_id}` on the webhooks Lambda.
+    pub fn address(&self, company_id: i32) -> String {
+        format!("{}/ringcentral/notify/{company_id}", self.base)
+    }
+
+    /// SHA-256 (hex) of the token, as `company.ringcentral_subscription_token_hash`
+    /// keeps it.
+    pub fn token_hash(&self) -> String {
+        crate::access_token::token_hash(&self.token)
+    }
 }
 
 /// Where `RingCentral` pushes the company's new texts
@@ -489,18 +547,56 @@ pub fn sms_event_filters(extension_ids: &[String]) -> Vec<String> {
 pub async fn ensure_sms_subscription(
     pool: &MySqlPool,
     client: &Client,
+    target: Option<&SubscriptionTarget>,
     company_id: i32,
 ) -> Result<SubscriptionOutcome, ApiError> {
-    let Some(address) = notify_address(company_id) else {
+    let Some(target) = target else {
         return Ok(SubscriptionOutcome::Skipped);
     };
-    // RingCentral rejects hyphens; the webhook parses the 32-hex form as the same UUID.
-    let token = std::env::var("RINGCENTRAL_WEBHOOK_TOKEN")
-        .unwrap_or_default()
-        .trim()
-        .replace('-', "");
-    if token.is_empty() {
-        return Ok(SubscriptionOutcome::Skipped);
+    subscribe(pool, client, target, company_id, false).await
+}
+
+/// Gives the company's subscription at this address the current token and
+/// extensions, but never creates one. For the job that moves subscriptions
+/// to a new token: a copy of the database elsewhere (dev) must not subscribe
+/// production's accounts to itself.
+pub async fn renew_sms_subscription(
+    pool: &MySqlPool,
+    client: &Client,
+    target: &SubscriptionTarget,
+    company_id: i32,
+) -> Result<SubscriptionOutcome, ApiError> {
+    subscribe(pool, client, target, company_id, true).await
+}
+
+async fn subscribe(
+    pool: &MySqlPool,
+    client: &Client,
+    target: &SubscriptionTarget,
+    company_id: i32,
+    renew_only: bool,
+) -> Result<SubscriptionOutcome, ApiError> {
+    let address = target.address(company_id);
+    let subscriptions = request(
+        pool,
+        client,
+        company_id,
+        Method::GET,
+        "subscription",
+        &Body::Empty,
+        None,
+    )
+    .await?;
+    let existing = subscriptions["records"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|record| record["deliveryMode"]["address"].as_str() == Some(address.as_str()))
+        .and_then(|record| record["id"].as_str().map(str::to_string));
+    if renew_only && existing.is_none() {
+        // Nothing here carries an older token.
+        record_token(pool, target, company_id).await?;
+        return Ok(SubscriptionOutcome::NotSubscribed);
     }
     let extensions = request(
         pool,
@@ -527,25 +623,9 @@ pub async fn ensure_sms_subscription(
     if extension_ids.is_empty() {
         return Ok(SubscriptionOutcome::Skipped);
     }
-    let subscriptions = request(
-        pool,
-        client,
-        company_id,
-        Method::GET,
-        "subscription",
-        &Body::Empty,
-        None,
-    )
-    .await?;
-    let existing = subscriptions["records"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|record| record["deliveryMode"]["address"].as_str() == Some(address.as_str()))
-        .and_then(|record| record["id"].as_str().map(str::to_string));
     let body = json!({
         "eventFilters": sms_event_filters(&extension_ids),
-        "deliveryMode": { "transportType": "WebHook", "address": address, "verificationToken": token },
+        "deliveryMode": { "transportType": "WebHook", "address": address, "verificationToken": target.token },
         "expiresIn": SUBSCRIPTION_EXPIRES_IN_SECONDS,
     });
     let (method, path, outcome) = match &existing {
@@ -570,5 +650,65 @@ pub async fn ensure_sms_subscription(
         None,
     )
     .await?;
+    record_token(pool, target, company_id).await?;
     Ok(outcome)
+}
+
+/// Notes which token the company's subscription at this address now has.
+async fn record_token(
+    pool: &MySqlPool,
+    target: &SubscriptionTarget,
+    company_id: i32,
+) -> Result<(), ApiError> {
+    sqlx::query("UPDATE company SET ringcentral_subscription_token_hash = ? WHERE id = ?")
+        .bind(target.token_hash())
+        .bind(company_id)
+        .execute(pool)
+        .await
+        .map_err(|error| ApiError {
+            status: 500,
+            message: Some(error.to_string()),
+        })?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod subscription_tests {
+    use super::SubscriptionTarget;
+
+    const TOKEN: &str = "gmk_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ";
+    const LEGACY: &str = "9ca4dfa8-0eec-46cc-967f-3385624be883";
+
+    fn target(base: &str, key: Option<&str>, legacy: Option<&str>) -> Option<SubscriptionTarget> {
+        SubscriptionTarget::new(Some(base), key, legacy)
+    }
+
+    #[test]
+    fn the_webhooks_key_is_the_token_once_it_is_an_access_token() {
+        let target = target("https://hooks.test/", Some(TOKEN), Some(LEGACY)).unwrap();
+        assert_eq!(target.token, TOKEN);
+        assert_eq!(
+            target.address(12),
+            "https://hooks.test/ringcentral/notify/12"
+        );
+    }
+
+    #[test]
+    fn until_then_the_shared_uuid_without_hyphens() {
+        let target = target("https://hooks.test", Some("remix-key"), Some(LEGACY)).unwrap();
+        assert_eq!(target.token, "9ca4dfa80eec46cc967f3385624be883");
+        assert_eq!(
+            SubscriptionTarget::new(Some("https://hooks.test"), None, Some(LEGACY))
+                .unwrap()
+                .token,
+            "9ca4dfa80eec46cc967f3385624be883"
+        );
+    }
+
+    #[test]
+    fn off_without_an_address_or_a_token() {
+        assert_eq!(target("", Some(TOKEN), None), None);
+        assert_eq!(SubscriptionTarget::new(None, Some(TOKEN), None), None);
+        assert_eq!(target("https://hooks.test", Some("remix-key"), None), None);
+    }
 }

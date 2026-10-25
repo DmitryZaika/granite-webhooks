@@ -671,9 +671,13 @@ async fn follow_ringcentral_link(
     };
     let pool = &state.pool;
     if before.ringcentral_extension_id.as_ref() != Some(extension)
-        && let Err(error) =
-            ringcentral::ensure_sms_subscription(pool, &state.telephony_http, actor.company_id)
-                .await
+        && let Err(error) = ringcentral::ensure_sms_subscription(
+            pool,
+            &state.telephony_http,
+            state.ringcentral_subscriptions.as_ref(),
+            actor.company_id,
+        )
+        .await
     {
         tracing::error!(
             company_id = actor.company_id,

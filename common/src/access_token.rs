@@ -1,10 +1,12 @@
 //! Access tokens: how callers of the webhooks Lambda prove who they are
 //! (`migrations/20261025120000_create-access-tokens.sql`).
 //!
-//! A token is `gmk_` + 32 random bytes in base64url without padding (47
-//! characters). Only its SHA-256 (hex) is stored. 256 random bits cannot be
-//! guessed, so a fast hash is enough and lets the token be looked up by an
-//! index; slow hashes (bcrypt, argon2) are for passwords people choose.
+//! A token is `gmk_` + 43 random letters and digits (47 characters, 256
+//! random bits). No `-`: the `api` Lambda's token is also the
+//! `verificationToken` of its `RingCentral` subscriptions, and `RingCentral`
+//! refuses one there. Only its SHA-256 (hex) is stored. 256 random bits cannot be guessed, so a fast hash
+//! is enough and lets the token be looked up by an index; slow hashes
+//! (bcrypt, argon2) are for passwords people choose.
 //!
 //! A token works when it is not revoked, not expired, has the route's scope,
 //! and, when it belongs to a company, the route's path names that company
@@ -13,9 +15,8 @@
 //! minute per Lambda instance, and a revocation takes at most that long.
 //! Expiry is checked on every request, cached or not.
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{NaiveDateTime, Utc};
+use rand::distr::{Alphanumeric, SampleString};
 use sha2::{Digest, Sha256};
 use sqlx::MySqlPool;
 use std::collections::HashMap;
@@ -26,7 +27,8 @@ use std::time::{Duration, Instant};
 /// What every token starts with: it tells a token from the older shared
 /// secrets, and secret scanners can spot one that leaks.
 pub const TOKEN_PREFIX: &str = "gmk_";
-/// Length of a token: the prefix and 32 bytes in base64url without padding.
+/// Length of a token: the prefix and 43 letters and digits (62 symbols each,
+/// 256 bits in all).
 pub const TOKEN_LEN: usize = TOKEN_PREFIX.len() + 43;
 /// How long a looked-up token (or its absence) is trusted without asking
 /// the database again.
@@ -84,8 +86,8 @@ impl Scope {
 
 /// A new token. Show it once; store only [`token_hash`].
 pub fn new_token() -> String {
-    let bytes: [u8; 32] = rand::random();
-    format!("{TOKEN_PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes))
+    let random = Alphanumeric.sample_string(&mut rand::rng(), TOKEN_LEN - TOKEN_PREFIX.len());
+    format!("{TOKEN_PREFIX}{random}")
 }
 
 /// How a token is stored and looked up: its SHA-256, hex.
@@ -103,7 +105,8 @@ pub fn token_hint(token: &str) -> &str {
     &token[token.len().saturating_sub(4)..]
 }
 
-/// True when `value` has the shape of a token (prefix, length, base64url).
+/// True when `value` has the shape of a token (prefix, length, letters and
+/// digits; `-` and `_` are accepted too, though [`new_token`] makes none).
 /// Anything else is never looked up.
 pub fn is_token_shaped(value: &str) -> bool {
     value.len() == TOKEN_LEN
@@ -446,6 +449,15 @@ mod tests {
         assert_eq!(a.len(), TOKEN_LEN);
         assert!(is_token_shaped(&a));
         assert_ne!(a, b);
+        // RingCentral refuses a `-` in a verificationToken.
+        for _ in 0..200 {
+            let token = new_token();
+            assert!(
+                token[TOKEN_PREFIX.len()..]
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric())
+            );
+        }
     }
 
     #[test]

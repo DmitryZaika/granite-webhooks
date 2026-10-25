@@ -387,7 +387,26 @@ that flag, so copy any new variable to both. The browser reaches it at
 whether a called customer answered (`<API_URL>/v1/followups/call-check`, same
 key) and, after storing an inbound email, has it pushed to the recipients'
 phones (`<API_URL>/v1/emails/inbound-push`, same key); the API sends mail and texts through `webhooks` (`WEBHOOKS_URL`, and
-`WEBHOOKS_KEY` = the webhooks Lambda's `REMIX_KEY`).
+`WEBHOOKS_KEY`).
+
+`WEBHOOKS_KEY` is the API's one credential for `webhooks`: an access token
+with no company and the scopes `internal,leads,telephony` (see "Access tokens"
+in the root `README.md`):
+
+```
+make access-token ARGS="create --name 'api Lambda' --scopes internal,leads,telephony --internal --no-expiry"
+```
+
+It is sent as `Authorization` on every call, and it is also the
+`verificationToken` of the companies' `RingCentral` SMS subscriptions
+(`RingCentral` sends it back on each push to `/ringcentral/notify`). Until
+`WEBHOOKS_KEY` is an access token it holds the webhooks Lambda's `REMIX_KEY`,
+and subscriptions get the older `RINGCENTRAL_WEBHOOK_TOKEN` instead. After a
+change of `WEBHOOKS_KEY`, `POST /v1/jobs/contact-sync` renews every
+subscription with the new token, two companies a minute; a failed renewal is
+tried again 2 hours later. Subscriptions are only made where `LAMBDA_URL` (the
+webhooks Lambda) is set: not on dev, whose database holds production's
+`RingCentral` credentials.
 
 ## Phone (Telnyx)
 
@@ -599,8 +618,9 @@ production:
   `POST /v1/ai/design` on `api-dev.granite-manager.com` are routed to it by the
   CloudFront distribution (60 s between bytes), so the session cookie reaches it.
   Without that, a long AI answer on dev hits `granite-api-dev`'s 30 s limit.
-- Their secrets (`SESSION_SECRET`, `LAMBDA_KEY`, `REMIX_KEY`/`WEBHOOKS_KEY`,
-  `WEBHOOK_SECRET`) are their own.
+- Their secrets (`SESSION_SECRET`, `LAMBDA_KEY`, `WEBHOOKS_KEY`,
+  `WEBHOOK_SECRET`) are their own: dev's `WEBHOOKS_KEY` is a token in the
+  dev database.
 - `SESSION_COOKIE_DOMAIN=none`: the dev session cookie is host-only on
   `api-dev.granite-manager.com`, so signing in on dev never replaces the
   production cookie on `.granite-manager.com`. The browser then sends both

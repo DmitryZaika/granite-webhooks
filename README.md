@@ -50,14 +50,19 @@ effect within a minute.
 
 ```
 make access-token ARGS="create --name 'Acme Zapier' --scopes leads --company-id 12 --expires 2027-10-25"
-make access-token ARGS="create --name 'CRM backend' --scopes internal --internal --no-expiry"
+make access-token ARGS="create --name 'api Lambda' --scopes internal,leads,telephony --internal --no-expiry"
 make access-token ARGS="list"
 make access-token ARGS="revoke 7"
 ```
 
 Cargo pins `DATABASE_URL` to the local MySQL, so set
 `ACCESS_TOKEN_DATABASE_URL` to create tokens in the dev or production
-database. The token is printed once.
+database. The token is printed once. Tokens are letters and digits only:
+`RingCentral` refuses a `-` in a subscription's `verificationToken`.
+
+The `api` Lambda uses one token for everything (`WEBHOOKS_KEY`, see
+`api/README.md`): its calls here, and the `verificationToken` of the
+`RingCentral` SMS subscriptions it makes.
 
 While callers switch, routes use `Transitional<...>`
 (`webhooks/src/axum_helpers/access_token.rs`): a working token gets in, and
