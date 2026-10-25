@@ -8,6 +8,7 @@
 //! - `POST /email/send` (Remix key) → `{ "message_id": "…@us-east-2.amazonses.com" }`
 //! - `POST /sms/send` (Remix key): see [`sms`]
 
+use crate::axum_helpers::access_token::Transitional;
 pub mod body;
 pub mod sms;
 
@@ -106,7 +107,7 @@ impl EmailTransport for Ses {
 }
 
 pub async fn send_handler(
-    _: RemixBackend,
+    _: Transitional<RemixBackend>,
     Json(email): Json<OutgoingEmail>,
 ) -> Result<Json<SentEmail>, SendError> {
     deliver(&CustomClient {}, &Ses, email).await.map(Json)
@@ -339,7 +340,10 @@ mod tests {
             ..email()
         };
         let message = String::from_utf8(build_message(&notice, Vec::new())).unwrap();
-        assert!(message.contains("To: undisclosed-recipients:;\r\n"), "{message}");
+        assert!(
+            message.contains("To: undisclosed-recipients:;\r\n"),
+            "{message}"
+        );
         assert!(!message.contains("hidden@example.com"));
     }
 

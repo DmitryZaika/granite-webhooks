@@ -10,9 +10,9 @@ use crate::middleware::request_logger::print_request_body;
 use crate::outbound::send_handler as send_email;
 use crate::outbound::sms::send_handler as send_sms;
 use crate::ringcentral::receive::{
-    call_received as ringcentral_call_received, sms_notification as ringcentral_sms_notification,
-    sms_received as ringcentral_sms_received, sms_sent as ringcentral_sms_sent, sync_ringcentral,
-    unsync_ringcentral,
+    call_received as ringcentral_call_received, handshake as ringcentral_handshake,
+    sms_notification as ringcentral_sms_notification, sms_received as ringcentral_sms_received,
+    sms_sent as ringcentral_sms_sent, sync_ringcentral, unsync_ringcentral,
 };
 use crate::schemas::add_customer::NewLeadForm;
 use crate::telegram::cleanup::delete_lead_telegram_messages;
@@ -31,7 +31,8 @@ use axum::{
 };
 use sqlx::MySqlPool;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
-use utoipa::OpenApi;
+use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::{Modify, OpenApi};
 
 async fn health_check() -> impl IntoResponse {
     OK_RESPONSE
@@ -45,15 +46,60 @@ async fn health_check() -> impl IntoResponse {
 For `/v1/webhooks/new-lead-form/{company_id}`:\n\
 - `referral_source` is optional; when set, prefer `website` or `facebook` for statistics.\n\
 - `form_name` is optional; when set, use the specific form id (e.g. `cabinet_quote`, \
-`facebook_form`, `facebook_cabinet_quote_form`, `quick_quote`)."
+`facebook_form`, `facebook_cabinet_quote_form`, `quick_quote`).\n\n\
+Authenticate with the access token Granite Manager gave you: \
+`Authorization: Bearer gmk_...`. Each token works for one company."
     ),
     paths(new_lead_form),
-    components(schemas(NewLeadForm))
+    components(schemas(NewLeadForm)),
+    modifiers(&AccessTokenAuth),
+    security(("access_token" = []))
 )]
 struct ApiDoc;
 
+/// The `access_token` bearer scheme the docs refer to.
+struct AccessTokenAuth;
+
+impl Modify for AccessTokenAuth {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi.components.get_or_insert_with(Default::default);
+        components.add_security_scheme(
+            "access_token",
+            SecurityScheme::Http(
+                HttpBuilder::new()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .description(Some("An access token (`gmk_...`)."))
+                    .build(),
+            ),
+        );
+    }
+}
+
 async fn openapi_spec() -> impl IntoResponse {
     Json(ApiDoc::openapi())
+}
+
+/// The routes `RingCentral` calls, which answer its subscription handshake
+/// before anything else.
+fn ringcentral_webhooks() -> Router<MySqlPool> {
+    Router::new()
+        .route(
+            "/ringcentral/sms/{company_id}",
+            post(ringcentral_sms_received),
+        )
+        .route(
+            "/ringcentral/sms/sent/{company_id}",
+            post(ringcentral_sms_sent),
+        )
+        .route(
+            "/ringcentral/notify/{company_id}",
+            post(ringcentral_sms_notification),
+        )
+        .route(
+            "/ringcentral/call/{company_id}",
+            post(ringcentral_call_received),
+        )
+        .route_layer(axum::middleware::from_fn(ringcentral_handshake))
 }
 
 pub fn new_main_app(pool: MySqlPool) -> Router {
@@ -96,22 +142,7 @@ pub fn new_main_app(pool: MySqlPool) -> Router {
             "/cloudtalk/sync/{company_id}/{customer_id}",
             post(sync_cloudtalk).delete(unsync_cloudtalk),
         )
-        .route(
-            "/ringcentral/sms/{company_id}",
-            post(ringcentral_sms_received),
-        )
-        .route(
-            "/ringcentral/sms/sent/{company_id}",
-            post(ringcentral_sms_sent),
-        )
-        .route(
-            "/ringcentral/notify/{company_id}",
-            post(ringcentral_sms_notification),
-        )
-        .route(
-            "/ringcentral/call/{company_id}",
-            post(ringcentral_call_received),
-        )
+        .merge(ringcentral_webhooks())
         .route(
             "/ringcentral/sync/{company_id}/{customer_id}",
             post(sync_ringcentral).delete(unsync_ringcentral),

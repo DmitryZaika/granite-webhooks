@@ -35,6 +35,44 @@ When server dies instantly:
 1. Find server: sudo lsof -i :9000
 2. Kill that server: kill -9 <PID>
 
+## Access tokens
+
+Every webhooks route is moving to one kind of credential: an access token
+(`gmk_` + 43 characters) in `Authorization: Bearer <token>`. Telegram sends it
+as its `secret_token` (`X-Telegram-Bot-Api-Secret-Token`) and RingCentral as
+its subscription `verificationToken` (`Verification-Token`).
+
+Tokens live in `access_tokens` (only their SHA-256). Each has scopes
+(`leads`, `internal`, `telephony`, `telegram`, `ses`) and either one company,
+which must match the route's `{company_id}`, or none (internal: every
+company). The Lambda caches a token for 60 seconds, so a revocation takes
+effect within a minute.
+
+```
+make access-token ARGS="create --name 'Acme Zapier' --scopes leads --company-id 12 --expires 2027-10-25"
+make access-token ARGS="create --name 'CRM backend' --scopes internal --internal --no-expiry"
+make access-token ARGS="list"
+make access-token ARGS="revoke 7"
+```
+
+Cargo pins `DATABASE_URL` to the local MySQL, so set
+`ACCESS_TOKEN_DATABASE_URL` to create tokens in the dev or production
+database. The token is printed once.
+
+While callers switch, routes use `Transitional<...>`
+(`webhooks/src/axum_helpers/access_token.rs`): a working token gets in, and
+otherwise the route's old check decides exactly as before (lead forms, SES and
+Telnyx still let everyone in). PostHog shows who has not switched:
+
+- `webhook_legacy_auth`: a request let in (or refused) by the old check, with
+  `route`, `company_id`, `legacy` and `result`.
+- `webhook_access_token_rejected`: a token that did not work, with `reason`.
+
+Each distinct event is sent at most every 10 minutes per Lambda instance.
+When a route's `webhook_legacy_auth` events stop, switch it to
+`AccessToken<scope::...>` (401/403 without a working token) and delete its old
+check from `guards.rs`.
+
 ## Functions
 
 ### Documenso

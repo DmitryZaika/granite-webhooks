@@ -1,3 +1,4 @@
+use crate::axum_helpers::access_token::Transitional;
 use crate::axum_helpers::guards::MarketingUser;
 use crate::axum_helpers::guards::{Telegram, TelegramBot};
 use crate::libs::leads::process_lead;
@@ -13,7 +14,7 @@ use axum::extract::{Json, State};
 use sqlx::MySqlPool;
 
 pub async fn wordpress_contact_form(
-    _: MarketingUser,
+    _: Transitional<MarketingUser>,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<WordpressContactForm>,
@@ -23,7 +24,7 @@ pub async fn wordpress_contact_form(
 }
 
 pub async fn facebook_contact_form(
-    _: MarketingUser,
+    _: Transitional<MarketingUser>,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(contact_form): Json<FaceBookContactForm>,
@@ -46,7 +47,7 @@ stored as sent and flagged for review.\n\n\
     responses((status = CREATED, body = str), (status = INTERNAL_SERVER_ERROR, body = str))
 )]
 pub async fn new_lead_form(
-    _: MarketingUser,
+    _: Transitional<MarketingUser>,
     Path(company_id): Path<i32>,
     State(pool): State<MySqlPool>,
     Json(mut contact_form): Json<NewLeadForm>,
