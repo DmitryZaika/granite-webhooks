@@ -25,8 +25,8 @@
 //! `/v1/sms/{provider}/messages` with `POST`
 //! (sending those texts), on [`DEVICE_ACTIONS`] with `POST` (an
 //! attachment upload, Improve message, AI reply, filling a template) and on
-//! the Deals tab's changes (`deal_write`: a deal, its to-dos, notes, files
-//! and questionnaire answers; not deleting a deal or the board setup) the
+//! the Deals tab's changes (`deal_write`: a deal, its to-dos, notes and
+//! files; not deleting a deal or the board setup) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -132,8 +132,7 @@ fn is_id(segment: &str) -> bool {
 /// win, lose or reopen it (`PUT .../outcome`), its to-dos (`POST
 /// .../activities`, `PATCH|DELETE .../activities/{id}`), its notes and their
 /// comments, its files (`POST .../files`, `DELETE .../files/{source}/{id}`,
-/// `PATCH .../documents/{id}`), its questionnaire answers (`PUT
-/// .../questionnaire-answers`), and the to-do name suggestions
+/// `PATCH .../documents/{id}`), and the to-do name suggestions
 /// (`/v1/deal-activities/suggestions`). Deleting a deal, reordering the
 /// board and the pipeline and stage setup stay with the CRM session.
 fn deal_write(method: &Method, path: &str) -> bool {
@@ -159,7 +158,7 @@ fn deal_write(method: &Method, path: &str) -> bool {
     );
     match parts.as_slice() {
         [id] => is_id(id) && patch,
-        [id, "outcome" | "questionnaire-answers"] => is_id(id) && put,
+        [id, "outcome"] => is_id(id) && put,
         [id, "activities" | "notes" | "files"] => is_id(id) && post,
         [id, "activities" | "notes", item] => is_id(id) && is_id(item) && (patch || delete),
         [id, "notes", note, "comments"] => is_id(id) && is_id(note) && post,
@@ -460,7 +459,6 @@ mod tests {
             (Method::POST, "/v1/deals/7/files"),
             (Method::DELETE, "/v1/deals/7/files/image/4"),
             (Method::PATCH, "/v1/deals/7/documents/4"),
-            (Method::PUT, "/v1/deals/7/questionnaire-answers"),
             (Method::GET, "/v1/deal-activities/suggestions"),
             (Method::POST, "/v1/deal-activities/suggestions/hidden"),
         ] {
@@ -475,6 +473,7 @@ mod tests {
             (Method::POST, "/v1/deals/7/activities/3"),
             (Method::DELETE, "/v1/deals/7/notes"),
             (Method::POST, "/v1/deals/7/outcome"),
+            (Method::PUT, "/v1/deals/7/questionnaire-answers"),
             (Method::POST, "/v1/deal-pipelines"),
             (Method::PATCH, "/v1/deal-pipelines/2"),
             (Method::POST, "/v1/deal-pipelines/2/stages"),
