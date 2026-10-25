@@ -1,14 +1,18 @@
 //! `POST /v1/jobs/maintenance-reminders`: at 9 AM store time, a Telegram
 //! digest of the equipment checks due today to each shop worker and shop
-//! manager of the company. Port of `maintenanceReminders.server.ts`.
+//! manager of the company, and a `maintenance` push to their phones. Port of
+//! `maintenanceReminders.server.ts`.
 
 use super::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::phone::crm_push::push_maintenance;
+use crate::phone::devices::LIVE_DEVICE;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use chrono::{NaiveDate, Timelike, Utc};
 use chrono_tz::America::Indiana::Indianapolis;
+use lambda_http::tracing;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use utoipa::ToSchema;
@@ -26,7 +30,7 @@ pub struct DigestRun {
     pub processed: usize,
     /// Digests sent.
     pub sent: usize,
-    /// Digests Telegram refused (retried next run).
+    /// Digests neither Telegram nor a phone took (retried next run).
     pub failed: usize,
     /// Not 9 AM store time: nothing was looked at.
     pub skipped: bool,
@@ -83,7 +87,8 @@ async fn due_items(
 ///
 /// At 9 AM store time, sends each shop worker and shop manager with Telegram
 /// notifications a list of their company's equipment checks due today, once a
-/// day.
+/// day, and pushes how many there are to the signed-in phones of each shop
+/// worker and shop manager (Telegram linked or not).
 #[utoipa::path(
     post,
     path = "/v1/jobs/maintenance-reminders",
@@ -114,11 +119,18 @@ pub async fn send_digests(state: &AppState, day: NaiveDate) -> Result<DigestRun,
     if due.is_empty() {
         return Ok(run);
     }
-    let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(
-        "SELECT DISTINCT u.id, up.company_id FROM users u
+    // Linked to Telegram, or with a signed-in phone to push to.
+    let mut builder = sqlx::QueryBuilder::<sqlx::MySql>::new(format!(
+        "SELECT DISTINCT u.id, up.company_id, u.notifications_telegram_id FROM users u
            JOIN users_positions up ON up.user_id = u.id AND up.company_id = u.company_id
-          WHERE u.is_deleted = 0 AND u.notifications_telegram_id IS NOT NULL AND up.position_id IN (",
-    );
+          WHERE u.is_deleted = 0
+            AND (u.notifications_telegram_id IS NOT NULL OR EXISTS (
+                  SELECT 1 FROM phone_devices pd
+                    JOIN device_sessions ds ON ds.id = pd.device_session_id
+                   WHERE pd.user_id = u.id AND pd.company_id = up.company_id
+                     AND pd.push_token IS NOT NULL AND {LIVE_DEVICE}))
+            AND up.position_id IN ("
+    ));
     builder
         .push_bind(SHOP_MANAGER_POSITION)
         .push(", ")
@@ -129,8 +141,9 @@ pub async fn send_digests(state: &AppState, day: NaiveDate) -> Result<DigestRun,
         list.push_bind(*company_id);
     }
     builder.push(") ORDER BY up.company_id, u.id");
-    let workers: Vec<(i32, i32)> = builder.build_query_as().fetch_all(&state.pool).await?;
-    for (user_id, company_id) in workers {
+    let workers: Vec<(i32, i32, Option<i64>)> =
+        builder.build_query_as().fetch_all(&state.pool).await?;
+    for (user_id, company_id, telegram_id) in workers {
         let Some(items) = due.get(&company_id).filter(|items| !items.is_empty()) else {
             continue;
         };
@@ -150,11 +163,19 @@ pub async fn send_digests(state: &AppState, day: NaiveDate) -> Result<DigestRun,
         if !claimed {
             continue;
         }
-        if state
-            .webhooks
-            .notify_telegram(user_id, &digest(items))
+        let phones = push_maintenance(state, company_id, user_id, items.len())
             .await
-        {
+            .unwrap_or_else(|error| {
+                tracing::warn!(?error, user_id, "maintenance push failed");
+                0
+            });
+        let telegram = telegram_id.is_some()
+            && state
+                .webhooks
+                .notify_telegram(user_id, &digest(items))
+                .await;
+        // Sent once either took it: a retry would push the phones again.
+        if telegram || phones > 0 {
             run.sent += 1;
         } else {
             sqlx::query(

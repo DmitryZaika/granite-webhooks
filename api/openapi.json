@@ -41476,6 +41476,85 @@
         ]
       }
     },
+    "/v1/notifications/{id}": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Get one activity notification",
+        "description": "The caller's own due activity notification `notif-<id>`, as\n`GET /v1/notifications` lists it, with the deal it opens (`deal_id`).\nThe phone app reads it for a `notification` push, which names only the\nid. 404 for another user's, a dismissed one, or one `GET\n/v1/notifications` would not list.",
+        "operationId": "get_notification",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The notification (`notif-<id>` without the prefix)",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The notification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such notification of the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/customers/{id}/qbo-invoices": {
       "get": {
         "tags": [
@@ -42306,7 +42385,7 @@
           "jobs"
         ],
         "summary": "Send today's maintenance digests",
-        "description": "At 9 AM store time, sends each shop worker and shop manager with Telegram\nnotifications a list of their company's equipment checks due today, once a\nday.",
+        "description": "At 9 AM store time, sends each shop worker and shop manager with Telegram\nnotifications a list of their company's equipment checks due today, once a\nday, and pushes how many there are to the signed-in phones of each shop\nworker and shop manager (Telegram linked or not).",
         "operationId": "run_maintenance_reminders",
         "responses": {
           "200": {
@@ -53987,6 +54066,217 @@
         "security": [
           {
             "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/pushes/notification": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Push a CRM notification to its user's phones",
+        "description": "Called by the `time-triggered` Lambda (job key) when an activity\ndeadline reminder is due, as it sends the Telegram message. The\nnotification is pushed to its user's signed-in phones as data\n`{granite: \"1\", type: \"notification\", notificationId}`: ids only. The app\nreads it with `GET /v1/notifications/{id}`. Nothing is pushed\n(`pushed: 0`) for an unknown notification or a deleted user. Calling it\nagain pushes again.",
+        "operationId": "push_notification",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPush"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Phones told",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushSent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/pushes/lead": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Push a lead alert to phones",
+        "description": "Called by the `webhooks` Lambda (job key) as it sends a lead alert to\nTelegram: to the sales rep `user_id`, else to every sales manager of the\ncompany (linked to Telegram or not). Pushed as data `{granite: \"1\",\ntype: \"lead\", kind, customerId, dealId}` (`dealId` left out when the lead\nhas no deal yet): ids only. Nothing is pushed (`pushed: 0`) for another\ncompany's or a deleted customer. Calling it again pushes again.",
+        "operationId": "push_lead",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadPush"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Phones told",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushSent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
+    "/v1/phone/pushes/test": {
+      "post": {
+        "tags": [
+          "phone"
+        ],
+        "summary": "Send me a test push (temporary)",
+        "description": "Sends one push of `kind` to the caller's signed-in phones, as the real\nevent would, so the app's Settings can show each notification. The CRM\nkinds save a real notification first (on the caller's newest deal; it\nshows in the bell too); the activity reminder uses the caller's latest\nopen activity that has a time; lead kinds name a real customer. 409 when\nthere is nothing to test with.",
+        "operationId": "send_test_push",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestPush"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Phones told",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushSent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Nothing to test with",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_token": []
           }
         ]
       }
@@ -67498,7 +67788,7 @@
           },
           "failed": {
             "type": "integer",
-            "description": "Digests Telegram refused (retried next run).",
+            "description": "Digests neither Telegram nor a phone took (retried next run).",
             "minimum": 0
           },
           "skipped": {
@@ -70361,6 +70651,10 @@
           "offset_unit": {
             "$ref": "#/components/schemas/OffsetUnit"
           },
+          "direction": {
+            "$ref": "#/components/schemas/Direction",
+            "description": "Default `before`."
+          },
           "send_time": {
             "type": [
               "string",
@@ -72536,6 +72830,16 @@
         },
         "additionalProperties": false
       },
+      "LeadKind": {
+        "type": "string",
+        "description": "What a lead push is about.",
+        "enum": [
+          "new",
+          "repeat",
+          "assigned",
+          "quote"
+        ]
+      },
       "LeadProject": {
         "type": "object",
         "description": "A project (the lead's business or one of its jobs).",
@@ -72647,6 +72951,46 @@
               "$ref": "#/components/schemas/ProjectSale"
             },
             "description": "Its sales."
+          }
+        }
+      },
+      "LeadPush": {
+        "type": "object",
+        "description": "Body of `POST /v1/phone/pushes/lead`.",
+        "required": [
+          "company_id",
+          "customer_id",
+          "kind"
+        ],
+        "properties": {
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The lead's company."
+          },
+          "customer_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The lead (a customer of `company_id`)."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Its deal; else the customer's newest live deal, if any."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/LeadKind"
+          },
+          "user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Who is told: this user (the sales rep); the company's sales managers\nwhen left out."
           }
         }
       },
@@ -74927,6 +75271,14 @@
               "null"
             ],
             "description": "Billing: the button text."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The deal an activity notification is about (the phone app opens it)."
           }
         }
       },
@@ -74988,6 +75340,20 @@
           "telegram_activity_notifications": {
             "type": "boolean",
             "description": "Deal activities and other CRM alerts."
+          }
+        }
+      },
+      "NotificationPush": {
+        "type": "object",
+        "description": "Body of `POST /v1/phone/pushes/notification`.",
+        "required": [
+          "notification_id"
+        ],
+        "properties": {
+          "notification_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The `notifications` row (`notif-<id>` in `GET /v1/notifications`)."
           }
         }
       },
@@ -79851,6 +80217,20 @@
           "purged": {
             "type": "integer",
             "description": "Messages erased.",
+            "minimum": 0
+          }
+        }
+      },
+      "PushSent": {
+        "type": "object",
+        "description": "How many phones were told.",
+        "required": [
+          "pushed"
+        ],
+        "properties": {
+          "pushed": {
+            "type": "integer",
+            "description": "Phones FCM accepted the push for; 0 when there was nothing to push or\nno signed-in phone.",
             "minimum": 0
           }
         }
@@ -89449,6 +89829,34 @@
             "description": "The caller once answered every one of its questions right in one try."
           }
         }
+      },
+      "TestPush": {
+        "type": "object",
+        "description": "Body of `POST /v1/phone/pushes/test`.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/TestPushKind"
+          }
+        }
+      },
+      "TestPushKind": {
+        "type": "string",
+        "description": "What `POST /v1/phone/pushes/test` sends.",
+        "enum": [
+          "activity_added",
+          "note_added",
+          "comment_added",
+          "activity_reminder",
+          "appointment_reminder",
+          "lead_new",
+          "lead_repeat",
+          "lead_assigned",
+          "lead_quote",
+          "maintenance"
+        ]
       },
       "TestQuestion": {
         "type": "object",

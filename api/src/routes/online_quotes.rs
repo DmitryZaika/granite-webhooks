@@ -20,6 +20,7 @@
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::phone::crm_push::{LeadKind, push_lead_logged};
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::edit::new_id;
 use crate::quote_pricing::js::{arr, num, on, truthy};
@@ -1397,7 +1398,7 @@ async fn keep_lead_message(
 /// The sales managers get the lead in Telegram with a button per sales rep
 /// (this month's leads on it) to assign it, as the lead pipeline sends new
 /// leads, plus one to open the quote. Managers who could not be reached in
-/// Telegram are emailed when none was.
+/// Telegram are emailed when none was. Their phones get a `lead` push.
 async fn notify_managers(
     state: &AppState,
     company_id: i32,
@@ -1438,6 +1439,16 @@ async fn notify_managers(
             managers.push(user);
         }
     }
+    let manager_ids: Vec<i32> = managers.iter().map(|m| m.id).collect();
+    push_lead_logged(
+        state,
+        company_id,
+        &manager_ids,
+        LeadKind::Quote,
+        customer_id,
+        None,
+    )
+    .await;
     let mut reached = false;
     for manager in &managers {
         let Some(chat_id) = manager.telegram_id else {
@@ -1489,7 +1500,7 @@ async fn notify_managers(
 }
 
 /// The customer's sales rep gets the quote in Telegram (lead alerts), else
-/// by email.
+/// by email, and a `lead` push on their phones.
 async fn notify_rep(
     state: &AppState,
     company_id: i32,
@@ -1499,6 +1510,15 @@ async fn notify_rep(
     branding: &Branding,
 ) {
     let title = format!("{} finished the online quote", notice.customer);
+    push_lead_logged(
+        state,
+        company_id,
+        &[rep.id],
+        LeadKind::Quote,
+        customer_id,
+        None,
+    )
+    .await;
     if let Some(chat_id) = rep.telegram_id {
         let text = format!("{title}.\n{}", notice.details());
         let rows = vec![vec![

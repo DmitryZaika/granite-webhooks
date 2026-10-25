@@ -8,6 +8,7 @@ use crate::crud::leads::{
 use crate::crud::users::{UserTgInfo, get_user_tg_info};
 use crate::libs::alerts::alert_lead_not_notified;
 use crate::libs::constants::{CREATED_RESPONSE, ERR_DB, internal_error};
+use crate::libs::phone_push::{Audience, LeadKind, push_lead};
 use crate::libs::types::BasicResponse;
 use crate::ringcentral::api::sync_customer_to_ring_central;
 use crate::schemas::add_customer::LeadPayload;
@@ -25,8 +26,8 @@ use sqlx::MySqlPool;
 const REGISTER_SUBJECT: &str = "Granite Manager";
 const REGISTER_MESSAGE: &str = "Connect Telegram in the CRM to receive lead notifications: https://granite-manager.com/link-telegram-both";
 
-/// Tells the sales rep and the managers about a repeated lead; emails an
-/// alert when neither could be reached in Telegram.
+/// Tells the sales rep and the managers about a repeated lead (Telegram and
+/// their phones); emails an alert when neither could be reached in Telegram.
 #[allow(clippy::too_many_arguments)]
 async fn notify_repeat_lead<T, V: LeadPayload>(
     pool: &MySqlPool,
@@ -41,6 +42,17 @@ async fn notify_repeat_lead<T, V: LeadPayload>(
 ) where
     T: Telegram + Send + Sync + 'static + Clone,
 {
+    for audience in [Audience::Rep(user_id), Audience::Managers] {
+        let customer = i64::from(customer_id);
+        push_lead(
+            company_id,
+            customer,
+            Some(deal_id),
+            LeadKind::Repeat,
+            audience,
+        )
+        .await;
+    }
     let rep_notified = if let Some(chat_id) = user_info.telegram_id {
         let message = format!(
             "You received a REPEATED lead {name}, click here: {}",
@@ -144,6 +156,15 @@ where
             "You received a REPEATED lead {name} with no sales rep, click here: {}\n{form}",
             lead_url(deal.id)
         );
+        let customer = i64::from(existing.id);
+        push_lead(
+            company_id,
+            customer,
+            Some(deal.id),
+            LeadKind::Repeat,
+            Audience::Managers,
+        )
+        .await;
         if let Err(e) =
             send_telegram_manager_assign(pool, company_id, message, customer_id, true, bot).await
         {
@@ -181,6 +202,15 @@ where
                 "You received a REPEATED lead {name}, click here: {}",
                 lead_url(deal.id)
             );
+            let customer = i64::from(existing.id);
+            push_lead(
+                company_id,
+                customer,
+                Some(deal.id),
+                LeadKind::Repeat,
+                Audience::Managers,
+            )
+            .await;
             if let Err(e) =
                 send_telegram_manager_assign(pool, company_id, message, customer_id, false, bot)
                     .await
@@ -259,6 +289,15 @@ where
         "You received a REPEATED lead with no sales rep \n{form}",
         // form.to_string()
     );
+    let customer = i64::from(existing.id);
+    push_lead(
+        company_id,
+        customer,
+        None,
+        LeadKind::Repeat,
+        Audience::Managers,
+    )
+    .await;
     match send_telegram_manager_assign(pool, company_id, message, clean_id, false, bot).await {
         Ok(()) => Ok(None),
         Err(e) => {
@@ -293,6 +332,15 @@ where
             return internal_error("Error creating lead from New Lead Form");
         }
     };
+    let customer = i64::try_from(result.last_insert_id()).unwrap_or_default();
+    push_lead(
+        company_id,
+        customer,
+        None,
+        LeadKind::New,
+        Audience::Managers,
+    )
+    .await;
     let tg_result = send_telegram_manager_assign(
         pool,
         company_id,

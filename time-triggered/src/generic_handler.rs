@@ -2,8 +2,8 @@ use crate::posthog::{report_failure, reported};
 use crate::schemas::{EventBridgeEvent, OutgoingMessage};
 use common::amazon::email::{assigned_sender_from, send_message_from};
 use common::crud::notifications::{
-    get_due_activity_deadline_reminders, mark_deadline_reminder_telegram_sent,
-    unmark_deadline_reminder_telegram_sent,
+    DueActivityDeadlineReminder, get_due_activity_deadline_reminders,
+    mark_deadline_reminder_telegram_sent, unmark_deadline_reminder_telegram_sent,
 };
 use common::crud::outbound_email::{OutboundScheduledEmail, record_outbound_scheduled_email};
 use common::crud::scheduled_emails::{
@@ -27,86 +27,146 @@ fn activity_reminder_needs_telegram(
     telegram_activity_notifications && notifications_telegram_id.is_some()
 }
 
+/// Sends the activity deadline reminders that just came due: a push to the
+/// user's phones (through the API) and a Telegram message when they turned
+/// those on. Each is marked first, so it goes out once; it is unmarked only
+/// when Telegram refused it and no phone took it.
 async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize, Error> {
     let reminders = get_due_activity_deadline_reminders(pool).await?;
-    let sendable = reminders.iter().any(|reminder| {
-        activity_reminder_needs_telegram(
-            reminder.telegram_activity_notifications,
-            reminder.notifications_telegram_id,
-        )
-    });
-    if !sendable {
+    if reminders.is_empty() {
         return Ok(0);
     }
-    let token = match std::env::var("TELOXIDE_NOTIFICATIONS_TOKEN")
+    let bot = match std::env::var("TELOXIDE_NOTIFICATIONS_TOKEN")
         .or_else(|_| std::env::var("TELEGRAM_NOTIFICATIONS_BOT_TOKEN"))
     {
-        Ok(value) => value,
+        Ok(token) => Some(teloxide::Bot::new(token)),
         Err(error) => {
             tracing::warn!(
                 ?error,
-                "Telegram notifications token is not set; skipping activity deadline reminders"
+                "Telegram notifications token is not set; activity deadline reminders go to phones only"
             );
-            return Ok(0);
+            None
         }
     };
-    let bot = teloxide::Bot::new(token);
     let mut sent_count = 0usize;
 
     for reminder in reminders {
-        if !activity_reminder_needs_telegram(
-            reminder.telegram_activity_notifications,
-            reminder.notifications_telegram_id,
-        ) {
-            continue;
-        }
-        let Some(telegram_id) = reminder.notifications_telegram_id else {
-            continue;
-        };
-        let message = common::telegram::crm::format_activity_notification(
-            "activity_deadline_reminder",
-            reminder.customer_name.as_deref(),
-            None,
-            &reminder.message,
-            i32::try_from(reminder.deal_id).unwrap_or(i32::MAX),
-        );
-        let Ok(button_url) = message.button_url.parse::<reqwest::Url>() else {
-            tracing::error!(
-                notification_id = reminder.id,
-                url = %message.button_url,
-                "Invalid activity reminder telegram button url"
-            );
-            continue;
-        };
         let marked = mark_deadline_reminder_telegram_sent(pool, reminder.id).await?;
         if marked.rows_affected() < 1 {
             continue;
         }
-        let keyboard = InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
-            message.button_label.to_string(),
-            button_url,
-        )]]);
-        match bot
-            .send_message(ChatId(telegram_id), message.text)
-            .reply_markup(keyboard)
-            .await
-        {
-            Ok(_) => {
-                sent_count += 1;
+        let phones = push_notification_to_phones(reminder.id).await;
+        let wants_telegram = activity_reminder_needs_telegram(
+            reminder.telegram_activity_notifications,
+            reminder.notifications_telegram_id,
+        );
+        let telegram = match (&bot, reminder.notifications_telegram_id) {
+            (Some(bot), Some(telegram_id)) if wants_telegram => {
+                Some(send_deadline_reminder_telegram(bot, telegram_id, &reminder).await)
             }
-            Err(error) => {
-                tracing::error!(
-                    ?error,
-                    notification_id = reminder.id,
-                    user_id = reminder.user_id,
-                    "Failed to send activity deadline reminder telegram notification"
-                );
-                unmark_deadline_reminder_telegram_sent(pool, reminder.id).await?;
-            }
+            _ => None,
+        };
+        if telegram == Some(true) || phones > 0 {
+            sent_count += 1;
+        } else if telegram == Some(false) {
+            unmark_deadline_reminder_telegram_sent(pool, reminder.id).await?;
         }
     }
 
     Ok(sent_count)
+}
+
+/// The reminder's Telegram message, with a button to its deal: whether
+/// Telegram took it.
+async fn send_deadline_reminder_telegram(
+    bot: &teloxide::Bot,
+    telegram_id: i64,
+    reminder: &DueActivityDeadlineReminder,
+) -> bool {
+    let message = common::telegram::crm::format_activity_notification(
+        "activity_deadline_reminder",
+        reminder.customer_name.as_deref(),
+        None,
+        &reminder.message,
+        i32::try_from(reminder.deal_id).unwrap_or(i32::MAX),
+    );
+    let Ok(button_url) = message.button_url.parse::<reqwest::Url>() else {
+        tracing::error!(
+            notification_id = reminder.id,
+            url = %message.button_url,
+            "Invalid activity reminder telegram button url"
+        );
+        return false;
+    };
+    let keyboard = InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
+        message.button_label.to_string(),
+        button_url,
+    )]]);
+    match bot
+        .send_message(ChatId(telegram_id), message.text)
+        .reply_markup(keyboard)
+        .await
+    {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                notification_id = reminder.id,
+                user_id = reminder.user_id,
+                "Failed to send activity deadline reminder telegram notification"
+            );
+            false
+        }
+    }
+}
+
+/// How long the API may take to push one reminder to the phones.
+const PHONE_PUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Asks the API to push notification `notification_id` to its user's phones
+/// (`POST <API_URL>/v1/phone/pushes/notification`): how many phones it told,
+/// 0 on any failure (logged).
+async fn push_notification_to_phones(notification_id: u64) -> usize {
+    let (Ok(api_url), Ok(lambda_key)) = (std::env::var("API_URL"), std::env::var("LAMBDA_KEY"))
+    else {
+        return 0;
+    };
+    let url = format!(
+        "{}/v1/phone/pushes/notification",
+        api_url.trim_end_matches('/')
+    );
+    let sent = Client::new()
+        .post(url)
+        .header("Authorization", lambda_key)
+        .timeout(PHONE_PUSH_TIMEOUT)
+        .json(&serde_json::json!({ "notification_id": notification_id }))
+        .send()
+        .await;
+    match sent {
+        Ok(response) if response.status().is_success() => response
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|body| body["pushed"].as_u64())
+            .and_then(|pushed| usize::try_from(pushed).ok())
+            .unwrap_or(0),
+        Ok(response) => {
+            tracing::warn!(
+                notification_id,
+                status = response.status().as_u16(),
+                "Reminder push refused"
+            );
+            0
+        }
+        Err(error) => {
+            tracing::warn!(
+                notification_id,
+                error = %error.without_url(),
+                "Reminder push not sent"
+            );
+            0
+        }
+    }
 }
 
 /// Why a job of the API did not run.
@@ -547,9 +607,9 @@ mod tests {
         let body = &source[fn_start..fn_end];
         assert!(
             body.contains(
-                "Telegram notifications token is not set; skipping activity deadline reminders"
+                "Telegram notifications token is not set; activity deadline reminders go to phones only"
             ),
-            "Missing Telegram token must skip reminders instead of failing the tick"
+            "Missing Telegram token must still push reminders instead of failing the tick"
         );
         assert!(
             !body.contains("map_err(|error| Error::from(error.to_string()))"),
