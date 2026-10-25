@@ -23,8 +23,10 @@
 //! suppliers, sales, images, documents, email and text templates, my texts
 //! over every provider, a pushed CRM notification), on
 //! `/v1/sms/{provider}/messages` with `POST`
-//! (sending those texts) and on [`DEVICE_ACTIONS`] with `POST` (an
-//! attachment upload, Improve message, AI reply, filling a template) the
+//! (sending those texts), on [`DEVICE_ACTIONS`] with `POST` (an
+//! attachment upload, Improve message, AI reply, filling a template) and on
+//! the Deals tab's changes (`deal_write`: a deal, its to-dos, notes and
+//! files; not deleting a deal or the board setup) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
@@ -71,14 +73,16 @@ pub const DEVICE_ROUTES: [&str; 4] = [
 /// email and text composers' From Stones, From Images, From Documents and
 /// Use Template lists, the suggestions under an email's To, Cc and Bcc, the
 /// schedule's calendars, and the More screens: Deals, Customers, Stones,
-/// Suppliers, Images and Transactions; and the CRM notification a push names).
+/// Suppliers, Images (with its folders) and Transactions; and the CRM
+/// notification a push names).
 /// These prefixes and everything under them; writes there still need the CRM
 /// session.
-pub const DEVICE_READ_ROUTES: [&str; 14] = [
+pub const DEVICE_READ_ROUTES: [&str; 15] = [
     "/v1/sms/mine",
     "/v1/calendars",
     "/v1/stones",
     "/v1/images",
+    "/v1/image-library",
     "/v1/documents",
     "/v1/email-templates",
     "/v1/sms-templates",
@@ -120,13 +124,83 @@ fn sms_send(path: &str) -> bool {
         .is_some_and(|provider| SMS_SEND_PROVIDERS.contains(&provider))
 }
 
+/// A whole id segment: digits only.
+fn is_id(segment: &str) -> bool {
+    !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The changes the app's Deals tab makes with its device token, exactly
+/// these: create a deal (`POST /v1/deals`), edit it (`PATCH /v1/deals/{id}`),
+/// win, lose or reopen it (`PUT .../outcome`), its to-dos (`POST
+/// .../activities`, `PATCH|DELETE .../activities/{id}`), its notes and their
+/// comments, its files (`POST .../files`, `DELETE .../files/{source}/{id}`,
+/// `PATCH .../documents/{id}`), and the to-do name suggestions
+/// (`/v1/deal-activities/suggestions`). Deleting a deal, reordering the
+/// board and the pipeline and stage setup stay with the CRM session.
+fn deal_write(method: &Method, path: &str) -> bool {
+    if let Some(rest) = path.strip_prefix("/v1/deal-activities/suggestions") {
+        return (rest.is_empty() && method == Method::GET)
+            || (rest == "/hidden" && method == Method::POST);
+    }
+    let Some(rest) = path.strip_prefix("/v1/deals") else {
+        return false;
+    };
+    if rest.is_empty() {
+        return method == Method::POST;
+    }
+    let Some(rest) = rest.strip_prefix('/') else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('/').collect();
+    let (post, put, patch, delete) = (
+        method == Method::POST,
+        method == Method::PUT,
+        method == Method::PATCH,
+        method == Method::DELETE,
+    );
+    match parts.as_slice() {
+        [id] => is_id(id) && patch,
+        [id, "outcome"] => is_id(id) && put,
+        [id, "activities" | "notes" | "files"] => is_id(id) && post,
+        [id, "activities" | "notes", item] => is_id(id) && is_id(item) && (patch || delete),
+        [id, "notes", note, "comments"] => is_id(id) && is_id(note) && post,
+        [id, "notes", note, "comments", comment] => {
+            is_id(id) && is_id(note) && is_id(comment) && delete
+        }
+        [id, "documents", document] => is_id(id) && is_id(document) && patch,
+        [id, "files", source, file] => is_id(id) && !source.is_empty() && is_id(file) && delete,
+        _ => false,
+    }
+}
+
+/// The text and email templates the app's Use Template list adds, edits and
+/// deletes with its device token: `POST /v1/sms-templates` and
+/// `/v1/email-templates`, `PUT|DELETE` on `/{id}` of either (the caller's own,
+/// or an admin's company ones, as on the web). Their attachments and the
+/// picker order stay with the CRM session.
+fn template_write(method: &Method, path: &str) -> bool {
+    let rest = path
+        .strip_prefix("/v1/sms-templates")
+        .or_else(|| path.strip_prefix("/v1/email-templates"));
+    match rest {
+        Some("") => method == Method::POST,
+        Some(rest) => rest
+            .strip_prefix('/')
+            .is_some_and(|id| is_id(id) && (method == Method::PUT || method == Method::DELETE)),
+        None => false,
+    }
+}
+
 /// A request the device token may sign: any method on [`DEVICE_ROUTES`],
 /// `GET` on [`DEVICE_READ_ROUTES`], `POST` on [`DEVICE_ACTIONS`] and on a
-/// provider's `/v1/sms/{provider}/messages`.
+/// provider's `/v1/sms/{provider}/messages`, and the Deals tab's changes
+/// ([`deal_write`]) and the templates' ([`template_write`]).
 fn device_route(method: &Method, path: &str) -> bool {
     DEVICE_ROUTES.iter().any(|prefix| under(path, prefix))
         || (method == Method::GET && DEVICE_READ_ROUTES.iter().any(|prefix| under(path, prefix)))
         || (method == Method::POST && (DEVICE_ACTIONS.contains(&path) || sms_send(path)))
+        || deal_write(method, path)
+        || template_write(method, path)
 }
 
 async fn authenticate_with_positions(
@@ -348,14 +422,11 @@ mod tests {
             "/v1/calendars",
             "/v1/stones/attachable",
             "/v1/images",
+            "/v1/image-library",
             "/v1/documents",
-            "/v1/email-templates",
-            "/v1/sms-templates",
             "/v1/customers/email-recipients",
             "/v1/customers/page",
             "/v1/customers/7",
-            "/v1/deals",
-            "/v1/deals/7/notes",
             "/v1/deal-groups",
             "/v1/deal-lists",
             "/v1/stones",
@@ -370,11 +441,7 @@ mod tests {
                 assert!(!device_route(&method, path), "{method} {path}");
             }
         }
-        for path in [
-            "/v1/calendars/7",
-            "/v1/email-templates/3",
-            "/v1/sms-templates/3",
-        ] {
+        for path in ["/v1/calendars/7"] {
             assert!(!device_route(&Method::PUT, path), "{path}");
             assert!(!device_route(&Method::DELETE, path), "{path}");
         }
@@ -387,6 +454,73 @@ mod tests {
         ] {
             assert!(!device_route(&Method::GET, path), "{path}");
         }
+    }
+
+    #[test]
+    fn the_deals_tab_changes_deals_but_not_the_board_setup() {
+        for (method, path) in [
+            (Method::GET, "/v1/deals"),
+            (Method::GET, "/v1/deals/7/stage-history"),
+            (Method::POST, "/v1/deals"),
+            (Method::PATCH, "/v1/deals/7"),
+            (Method::PUT, "/v1/deals/7/outcome"),
+            (Method::POST, "/v1/deals/7/activities"),
+            (Method::PATCH, "/v1/deals/7/activities/3"),
+            (Method::DELETE, "/v1/deals/7/activities/3"),
+            (Method::POST, "/v1/deals/7/notes"),
+            (Method::PATCH, "/v1/deals/7/notes/3"),
+            (Method::DELETE, "/v1/deals/7/notes/3"),
+            (Method::POST, "/v1/deals/7/notes/3/comments"),
+            (Method::DELETE, "/v1/deals/7/notes/3/comments/9"),
+            (Method::POST, "/v1/deals/7/files"),
+            (Method::DELETE, "/v1/deals/7/files/image/4"),
+            (Method::PATCH, "/v1/deals/7/documents/4"),
+            (Method::GET, "/v1/deal-activities/suggestions"),
+            (Method::POST, "/v1/deal-activities/suggestions/hidden"),
+        ] {
+            assert!(device_route(&method, path), "{method} {path}");
+        }
+        for (method, path) in [
+            (Method::DELETE, "/v1/deals/7"),
+            (Method::PUT, "/v1/deals/7"),
+            (Method::POST, "/v1/deals/reorder"),
+            (Method::POST, "/v1/deals/7"),
+            (Method::PATCH, "/v1/deals/x"),
+            (Method::POST, "/v1/deals/7/activities/3"),
+            (Method::DELETE, "/v1/deals/7/notes"),
+            (Method::POST, "/v1/deals/7/outcome"),
+            (Method::PUT, "/v1/deals/7/questionnaire-answers"),
+            (Method::POST, "/v1/deal-pipelines"),
+            (Method::PATCH, "/v1/deal-pipelines/2"),
+            (Method::POST, "/v1/deal-pipelines/2/stages"),
+            (Method::DELETE, "/v1/deal-stages/2"),
+            (Method::POST, "/v1/dealsx"),
+            (Method::DELETE, "/v1/deal-activities/suggestions"),
+        ] {
+            assert!(!device_route(&method, path), "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn templates_are_added_edited_and_deleted_from_the_phone() {
+        for kind in ["sms-templates", "email-templates"] {
+            let list = format!("/v1/{kind}");
+            let one = format!("/v1/{kind}/3");
+            assert!(device_route(&Method::GET, &list), "{list}");
+            assert!(device_route(&Method::POST, &list), "{list}");
+            assert!(!device_route(&Method::PUT, &list), "{list}");
+            assert!(!device_route(&Method::DELETE, &list), "{list}");
+            assert!(device_route(&Method::PUT, &one), "{one}");
+            assert!(device_route(&Method::DELETE, &one), "{one}");
+            assert!(!device_route(&Method::POST, &one), "{one}");
+            assert!(!device_route(&Method::PUT, &format!("/v1/{kind}/x")));
+        }
+        assert!(!device_route(
+            &Method::POST,
+            "/v1/email-templates/3/attachments"
+        ));
+        assert!(!device_route(&Method::PUT, "/v1/sms-templates/order"));
+        assert!(!device_route(&Method::POST, "/v1/sms-templatesx"));
     }
 
     #[test]
