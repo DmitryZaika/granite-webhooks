@@ -13,8 +13,9 @@ use crate::phone::customer_index;
 use crate::phone::numbers::{is_nanp, last10, to_e164};
 use crate::routes::customers::phones::storage_format;
 use crate::routes::customers::service::{
-    audit_name, open_deal_in, record_reassignment, start_drips,
+    audit_name, open_deal_in, record_reassignment, start_drips, sync_emails,
 };
+use crate::routes::me::account::valid_email;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -204,7 +205,7 @@ pub struct LookupMatch {
     pub number: String,
     /// The newest customer with that phone or phone 2; null when none.
     pub contact: Option<IndexContact>,
-    /// The coworker whose direct line it is; null when none.
+    /// The coworker with this number (any of theirs); null when none.
     pub coworker: Option<Coworker>,
 }
 
@@ -218,8 +219,8 @@ pub struct ContactLookup {
 /// Look numbers up
 ///
 /// Who each number is: the newest customer of the company with that phone
-/// or phone 2, and the coworker whose direct line it is (matched by the
-/// last 10 digits; numbers with fewer digits match nothing). Up to 20
+/// or phone 2, and the coworker with that number, any of theirs (matched
+/// by the last 10 digits; numbers with fewer digits match nothing). Up to 20
 /// numbers. Device token only.
 #[utoipa::path(
     post,
@@ -273,7 +274,10 @@ pub async fn lookup_contacts(
                 .as_ref()
                 .and_then(|key| {
                     coworkers.iter().find(|coworker| {
-                        coworker.e164.as_deref().and_then(last10).as_ref() == Some(key)
+                        coworker
+                            .phones
+                            .iter()
+                            .any(|phone| last10(&phone.e164).as_ref() == Some(key))
                     })
                 })
                 .cloned();
@@ -388,15 +392,31 @@ pub struct NewContact {
     /// Their company name; null or empty for none.
     #[serde(default)]
     pub company: Option<String>,
+    /// Their email (becomes the customer's primary address); null or empty
+    /// for none.
+    #[serde(default)]
+    pub email: Option<String>,
+    /// Their street address, as typed; null or empty for none.
+    #[serde(default)]
+    pub address: Option<String>,
+}
+
+/// A trimmed optional text: None when empty, else at most `max` characters.
+fn optional_text(value: Option<&str>, max: usize) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(max).collect())
 }
 
 /// Create a contact
 ///
-/// Creates a customer with this name, phone and company, with the caller as
-/// the sales rep (source `call-in`) and an open deal, and returns them as an
-/// index contact; calls from the number match them at once. 400
-/// `invalid_phone` unless a US or Canada number; 400 for an empty or too
-/// long name. Device token only.
+/// Creates a customer with this name, phone, company, email and address,
+/// with the caller as the sales rep (source `call-in`) and an open deal, and
+/// returns them as an index contact; calls from the number match them at
+/// once. 400 `invalid_phone` unless a US or Canada number; 400 for an empty
+/// or too long name or an invalid email; 409 when another customer of the
+/// company has the email. Device token only.
 #[utoipa::path(
     post,
     path = "/v1/phone/contacts",
@@ -405,7 +425,8 @@ pub struct NewContact {
     request_body = NewContact,
     responses(
         (status = 201, description = "Created", body = IndexContact),
-        (status = 400, description = "`invalid_phone`, or the name is empty or too long", body = ErrorBody),
+        (status = 400, description = "`invalid_phone`, the name is empty or too long, or the email is invalid", body = ErrorBody),
+        (status = 409, description = "Another customer of the company has this email", body = ErrorBody),
         (status = 401, description = "No valid device token", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -425,24 +446,25 @@ pub async fn create_contact(
         ));
     }
     let phone = stored_phone(&input.phone).ok_or_else(|| bad_request("invalid_phone"))?;
-    let company = input
-        .company
-        .as_deref()
-        .map(str::trim)
-        .filter(|company| !company.is_empty())
-        .map(|company| company.chars().take(255).collect::<String>());
+    let company = optional_text(input.company.as_deref(), 255);
+    let email = optional_text(input.email.as_deref(), 255);
+    if email.as_deref().is_some_and(|email| !valid_email(email)) {
+        return Err(ApiError::BadRequest("Enter a valid email.".into()));
+    }
+    let address = optional_text(input.address.as_deref(), 255);
     let created_by = audit_name(user.name.as_deref());
     // The customer, its audit line and its open deal together, or nothing.
     let mut tx = pool.begin().await?;
     let id = sqlx::query(
-        "INSERT INTO customers (name, phone, company_id, company_name, source, sales_rep,
-                                assigned_date, created_by)
-         VALUES (?, ?, ?, ?, 'call-in', ?, NOW(), ?)",
+        "INSERT INTO customers (name, phone, company_id, company_name, address, source,
+                                sales_rep, assigned_date, created_by)
+         VALUES (?, ?, ?, ?, ?, 'call-in', ?, NOW(), ?)",
     )
     .bind(name)
     .bind(&phone)
     .bind(user.company_id)
     .bind(&company)
+    .bind(&address)
     .bind(user.id)
     .bind(&created_by)
     .execute(&mut *tx)
@@ -455,6 +477,9 @@ pub async fn create_contact(
         return Err(ApiError::Internal(
             "customer id clashes with the sample".into(),
         ));
+    }
+    if let Some(email) = &email {
+        sync_emails(&mut tx, id, std::slice::from_ref(email), user.id).await?;
     }
     record_reassignment(
         &mut *tx,

@@ -210,3 +210,57 @@ async fn the_app_reads_emails_and_the_schedule_with_its_device_token(pool: MySql
         .await
         .assert_status_ok();
 }
+
+#[test_db::test(seed)]
+async fn the_composer_reads_its_lists_but_cannot_change_them(pool: MySqlPool) {
+    // Rita (user 100, company 100) signed in on her phone.
+    add_session(&pool, 305, 100, 100).await;
+    let (server, _) = phone_server(pool.clone()).await;
+
+    // From Stones, From Images, From Documents, Use Template, the email
+    // recipient suggestions and the schedule's calendars read with the
+    // device token, as with her cookie.
+    for path in [
+        "/v1/stones/attachable",
+        "/v1/images",
+        "/v1/documents",
+        "/v1/email-templates",
+        "/v1/sms-templates",
+        "/v1/calendars",
+        "/v1/customers/email-recipients?term=a&include_users=true",
+    ] {
+        let by_phone = server.get(path).add_header(HEADER, token(305)).await;
+        by_phone.assert_status_ok();
+        let by_cookie = server.get(path).with_session(sessions::REP).await;
+        by_cookie.assert_status_ok();
+        assert_eq!(
+            by_phone.json::<Value>(),
+            by_cookie.json::<Value>(),
+            "{path}"
+        );
+    }
+
+    // Those lists are read-only to the phone: a write needs the CRM session.
+    server
+        .post("/v1/email-templates")
+        .add_header(HEADER, token(305))
+        .json(&json!({ "template_name": "x", "template_subject": "x", "template_body": "x" }))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    server
+        .delete("/v1/calendars/1")
+        .add_header(HEADER, token(305))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // An email attachment's upload URL comes with the token (the send route
+    // asks for its `token`).
+    let upload = server
+        .post("/v1/uploads")
+        .add_header(HEADER, token(305))
+        .json(&json!({ "folder": "emails", "file_name": "kitchen.jpg",
+                       "content_type": "image/jpeg" }))
+        .await;
+    assert_ne!(upload.status_code(), StatusCode::UNAUTHORIZED);
+    assert_ne!(upload.status_code(), StatusCode::FORBIDDEN);
+}

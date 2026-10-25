@@ -1,6 +1,6 @@
 //! The contact index the app searches offline (D13/D15): every live customer
-//! of the company (but the onboarding sample), and coworkers with a direct
-//! line.
+//! of the company (but the onboarding sample), and coworkers with a phone
+//! number (a direct line, a RingCentral or CloudTalk number, their own).
 //!
 //! Syncing: a full download pages by id; a since-sync returns customers
 //! changed (`customers.updated_at`), added or called since the cursor, and
@@ -9,7 +9,7 @@
 //! depends on, so an unchanged index answers 304.
 
 use super::customer_index;
-use super::numbers::last10;
+use super::numbers::{last10, to_e164};
 use super::wire_enum;
 use crate::routes::auth::sha256_hex;
 use chrono::{DateTime, Duration, Utc};
@@ -78,7 +78,8 @@ pub struct IndexContact {
     pub last_call_at: Option<DateTime<Utc>>,
 }
 
-/// A coworker the user can call: a user of the company with a direct line.
+/// A coworker the user can call: a user of the company with at least one
+/// phone number.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Coworker {
@@ -86,9 +87,22 @@ pub struct Coworker {
     pub user_id: i32,
     /// Name (the email when the user has none).
     pub name: String,
-    /// Their direct line, E.164.
+    /// Their first number (`phones[0]`), E.164; the one to call.
     pub e164: Option<String>,
-    /// The line's label; null when empty.
+    /// That number's label; null when empty.
+    pub label: Option<String>,
+    /// Every number they have, first the Granite Phone direct lines, then
+    /// RingCentral, CloudTalk and their own phone; no number twice.
+    pub phones: Vec<CoworkerPhone>,
+}
+
+/// One of a coworker's numbers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct CoworkerPhone {
+    /// The number, E.164.
+    pub e164: String,
+    /// What it is: a direct line's own label (null when it has none),
+    /// `RingCentral`, `CloudTalk` or `Mobile` (their own phone).
     pub label: Option<String>,
 }
 
@@ -353,35 +367,79 @@ pub async fn customer_for_number(
         .remove(last10))
 }
 
-/// Users of the company with a direct line (their first one), but `except`,
-/// by name.
+/// A user and the numbers kept on their profile.
+#[derive(FromRow)]
+struct UserNumbers {
+    id: i32,
+    name: Option<String>,
+    email: String,
+    ringcentral_phone_number: Option<String>,
+    cloudtalk_phone_number: Option<String>,
+    phone_number: Option<String>,
+}
+
+/// Users of the company with at least one phone number, but `except`, by
+/// name: every direct line, then their RingCentral, CloudTalk and own
+/// numbers.
 pub async fn coworkers(
     pool: &MySqlPool,
     company_id: i32,
     except: i32,
 ) -> sqlx::Result<Vec<Coworker>> {
-    let rows: Vec<(i32, Option<String>, String, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.name, u.email, n.e164, n.label
-           FROM telnyx_number_users nu
-           JOIN telnyx_numbers n ON n.id = nu.number_id AND n.kind = 'direct' AND n.active <> 0
-           JOIN users u ON u.id = nu.user_id AND u.company_id = n.company_id AND u.is_deleted = 0
-          WHERE n.company_id = ? AND u.id <> ?
-          ORDER BY u.id, n.id",
+    let users: Vec<UserNumbers> = sqlx::query_as(
+        "SELECT u.id, u.name, u.email, u.ringcentral_phone_number,
+                    u.cloudtalk_phone_number, u.phone_number
+               FROM users u
+              WHERE u.company_id = ? AND u.is_deleted = 0 AND u.id <> ?
+              ORDER BY u.id",
     )
     .bind(company_id)
     .bind(except)
     .fetch_all(pool)
     .await?;
-    let mut coworkers: Vec<Coworker> = Vec::new();
-    for (user_id, name, email, e164, label) in rows {
-        if coworkers.last().is_some_and(|last| last.user_id == user_id) {
-            continue;
-        }
-        coworkers.push(Coworker {
-            user_id,
-            name: non_empty(name).unwrap_or(email),
-            e164: Some(e164),
+    let lines: Vec<(i32, String, String)> = sqlx::query_as(
+        "SELECT nu.user_id, n.e164, n.label
+           FROM telnyx_number_users nu
+           JOIN telnyx_numbers n ON n.id = nu.number_id AND n.kind = 'direct' AND n.active <> 0
+          WHERE n.company_id = ?
+          ORDER BY nu.user_id, n.id",
+    )
+    .bind(company_id)
+    .fetch_all(pool)
+    .await?;
+    let mut direct: HashMap<i32, Vec<CoworkerPhone>> = HashMap::new();
+    for (user_id, e164, label) in lines {
+        direct.entry(user_id).or_default().push(CoworkerPhone {
+            e164,
             label: non_empty(Some(label)),
+        });
+    }
+    let mut coworkers: Vec<Coworker> = Vec::new();
+    for user in users {
+        let mut found = direct.remove(&user.id).unwrap_or_default();
+        let others = [
+            (user.ringcentral_phone_number, "RingCentral"),
+            (user.cloudtalk_phone_number, "CloudTalk"),
+            (user.phone_number, "Mobile"),
+        ];
+        for (number, label) in others {
+            if let Some(e164) = number.as_deref().and_then(to_e164) {
+                found.push(CoworkerPhone {
+                    e164,
+                    label: Some(label.to_string()),
+                });
+            }
+        }
+        let phones = distinct_phones(found);
+        let Some(first) = phones.first() else {
+            continue;
+        };
+        coworkers.push(Coworker {
+            user_id: user.id,
+            name: non_empty(user.name).unwrap_or(user.email),
+            e164: Some(first.e164.clone()),
+            label: first.label.clone(),
+            phones,
         });
     }
     coworkers.sort_by(|a, b| {
@@ -391,6 +449,22 @@ pub async fn coworkers(
             .then(a.user_id.cmp(&b.user_id))
     });
     Ok(coworkers)
+}
+
+/// The numbers in order, each once (by its last 10 digits).
+fn distinct_phones(phones: Vec<CoworkerPhone>) -> Vec<CoworkerPhone> {
+    let mut seen: Vec<String> = Vec::new();
+    phones
+        .into_iter()
+        .filter(|phone| {
+            let key = last10(&phone.e164).unwrap_or_else(|| phone.e164.clone());
+            if seen.contains(&key) {
+                return false;
+            }
+            seen.push(key);
+            true
+        })
+        .collect()
 }
 
 /// Where a since-sync starts: changes from `since`, and customers with ids
@@ -484,14 +558,15 @@ pub async fn version(
     let mut fingerprint =
         format!("v1|{me}|{count}|{max_id}|{changed_at}|{deals}|{deals_hash}|{last_call}");
     for coworker in coworkers {
-        let _ = write!(
-            fingerprint,
-            "|{}:{}:{}:{}",
-            coworker.user_id,
-            coworker.name,
-            coworker.e164.as_deref().unwrap_or_default(),
-            coworker.label.as_deref().unwrap_or_default()
-        );
+        let _ = write!(fingerprint, "|{}:{}", coworker.user_id, coworker.name);
+        for phone in &coworker.phones {
+            let _ = write!(
+                fingerprint,
+                ":{}={}",
+                phone.e164,
+                phone.label.as_deref().unwrap_or_default()
+            );
+        }
     }
     Ok(IndexVersion {
         count,

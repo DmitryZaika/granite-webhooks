@@ -49311,7 +49311,7 @@
           "phone"
         ],
         "summary": "Look numbers up",
-        "description": "Who each number is: the newest customer of the company with that phone\nor phone 2, and the coworker whose direct line it is (matched by the\nlast 10 digits; numbers with fewer digits match nothing). Up to 20\nnumbers. Device token only.",
+        "description": "Who each number is: the newest customer of the company with that phone\nor phone 2, and the coworker with that number, any of theirs (matched\nby the last 10 digits; numbers with fewer digits match nothing). Up to 20\nnumbers. Device token only.",
         "operationId": "lookup_phone_contacts",
         "requestBody": {
           "content": {
@@ -49378,7 +49378,7 @@
           "phone"
         ],
         "summary": "Create a contact",
-        "description": "Creates a customer with this name, phone and company, with the caller as\nthe sales rep (source `call-in`) and an open deal, and returns them as an\nindex contact; calls from the number match them at once. 400\n`invalid_phone` unless a US or Canada number; 400 for an empty or too\nlong name. Device token only.",
+        "description": "Creates a customer with this name, phone, company, email and address,\nwith the caller as the sales rep (source `call-in`) and an open deal, and\nreturns them as an index contact; calls from the number match them at\nonce. 400 `invalid_phone` unless a US or Canada number; 400 for an empty\nor too long name or an invalid email; 409 when another customer of the\ncompany has the email. Device token only.",
         "operationId": "create_phone_contact",
         "requestBody": {
           "content": {
@@ -49402,7 +49402,7 @@
             }
           },
           "400": {
-            "description": "`invalid_phone`, or the name is empty or too long",
+            "description": "`invalid_phone`, the name is empty or too long, or the email is invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -49413,6 +49413,16 @@
           },
           "401": {
             "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another customer of the company has this email",
             "content": {
               "application/json": {
                 "schema": {
@@ -50899,7 +50909,7 @@
           "phone"
         ],
         "summary": "Text from one of my lines",
-        "description": "Sends an SMS from `ourNumberId` (a number I may call from) to `to`\n(US and Canada only) and returns it (`queued`; Telnyx's delivery events\nupdate it), with the thread marked read for me. 400 `invalid_phone` or\na bad text (1 to 1600 characters), 403 `texting_disabled` /\n`not_my_line`, 409 `opted_out` (the person texted STOP), 429\n`rate_limited` (ten texts a minute, shared with the CRM) with\n`retryAfterSecs`, 502 when Telnyx failed.",
+        "description": "Sends an SMS from `ourNumberId` (a number I may call from) to `to`\n(US and Canada only) and returns it (`queued`; Telnyx's delivery events\nupdate it), with the thread marked read for me. Files from\n`POST /v1/sms/attachments` go with it (pictures as MMS, other files as\nlinks). 400 `invalid_phone`, a bad text (up to 1600 characters, a text or\na file), or a bad file (`invalid_attachment`, `too_many_images`,\n`images_disabled`), 403 `texting_disabled` /\n`not_my_line`, 409 `opted_out` (the person texted STOP), 429\n`rate_limited` (ten texts a minute, shared with the CRM) with\n`retryAfterSecs`, 502 when Telnyx failed.",
         "operationId": "send_phone_text",
         "requestBody": {
           "content": {
@@ -50923,7 +50933,7 @@
             }
           },
           "400": {
-            "description": "`invalid_phone`, `empty_message` or `text_too_long`",
+            "description": "`invalid_phone`, `empty_message`, `text_too_long`, `invalid_attachment`, `too_many_images` or `images_disabled`",
             "content": {
               "application/json": {
                 "schema": {
@@ -64563,10 +64573,11 @@
       },
       "Coworker": {
         "type": "object",
-        "description": "A coworker the user can call: a user of the company with a direct line.",
+        "description": "A coworker the user can call: a user of the company with at least one\nphone number.",
         "required": [
           "userId",
-          "name"
+          "name",
+          "phones"
         ],
         "properties": {
           "userId": {
@@ -64583,14 +64594,41 @@
               "string",
               "null"
             ],
-            "description": "Their direct line, E.164."
+            "description": "Their first number (`phones[0]`), E.164; the one to call."
           },
           "label": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The line's label; null when empty."
+            "description": "That number's label; null when empty."
+          },
+          "phones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CoworkerPhone"
+            },
+            "description": "Every number they have, first the Granite Phone direct lines, then\nRingCentral, CloudTalk and their own phone; no number twice."
+          }
+        }
+      },
+      "CoworkerPhone": {
+        "type": "object",
+        "description": "One of a coworker's numbers.",
+        "required": [
+          "e164"
+        ],
+        "properties": {
+          "e164": {
+            "type": "string",
+            "description": "The number, E.164."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it is: a direct line's own label (null when it has none),\n`RingCentral`, `CloudTalk` or `Mobile` (their own phone)."
           }
         }
       },
@@ -73028,7 +73066,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Coworker",
-                "description": "The coworker whose direct line it is; null when none."
+                "description": "The coworker with this number (any of theirs); null when none."
               },
               {
                 "type": "null"
@@ -73990,6 +74028,20 @@
               "null"
             ],
             "description": "Their company name; null or empty for none."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their email (becomes the customer's primary address); null or empty\nfor none."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their street address, as typed; null or empty for none."
           }
         }
       },
@@ -84019,8 +84071,7 @@
         "description": "Body of `POST /v1/phone/texts`.",
         "required": [
           "ourNumberId",
-          "to",
-          "text"
+          "to"
         ],
         "properties": {
           "ourNumberId": {
@@ -84034,7 +84085,14 @@
           },
           "text": {
             "type": "string",
-            "description": "The text, 1 to 1600 characters."
+            "description": "The text, up to 1600 characters; may be empty with files."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SmsFile"
+            },
+            "description": "Up to ten files made ready by `POST /v1/sms/attachments` (pictures go\nas MMS, other files as links), as for the CRM's texts."
           }
         }
       },
