@@ -8,6 +8,7 @@
 //! and [`fre!`] macros compile a literal once, like a JS literal.
 
 use regex::Regex;
+use std::sync::OnceLock;
 
 /// Rewrites JS-only escapes to their Rust equivalents.
 pub fn translate(pattern: &str) -> String {
@@ -136,7 +137,7 @@ macro_rules! re {
     };
     ($pattern:expr, $flags:expr) => {{
         static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-        RE.get_or_init(|| $crate::followups::js::js_regex($pattern, $flags))
+        $crate::followups::js::cached_regex(&RE, $pattern, $flags)
     }};
 }
 
@@ -148,8 +149,24 @@ macro_rules! fre {
     };
     ($pattern:expr, $flags:expr) => {{
         static RE: std::sync::OnceLock<fancy_regex::Regex> = std::sync::OnceLock::new();
-        RE.get_or_init(|| $crate::followups::js::js_fancy($pattern, $flags))
+        $crate::followups::js::cached_fancy(&RE, $pattern, $flags)
     }};
+}
+
+// The macros' `get_or_init` lives here, not in each expansion: a closure per
+// call site was a separate `OnceLock` instantiation for each of ~1,500 regexes.
+#[doc(hidden)]
+pub fn cached_regex(cell: &'static OnceLock<Regex>, pattern: &str, flags: &str) -> &'static Regex {
+    cell.get_or_init(|| js_regex(pattern, flags))
+}
+
+#[doc(hidden)]
+pub fn cached_fancy(
+    cell: &'static OnceLock<fancy_regex::Regex>,
+    pattern: &str,
+    flags: &str,
+) -> &'static fancy_regex::Regex {
+    cell.get_or_init(|| js_fancy(pattern, flags))
 }
 
 /// `fancy_regex` `is_match`, false on a backtracking limit like a non-match.
