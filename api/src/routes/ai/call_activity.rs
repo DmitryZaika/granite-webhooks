@@ -11,6 +11,7 @@ use crate::ai::{Caller, Chat, MINI_MODEL};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use crate::voicemail::{greeting_only, sounds_like_voicemail};
 use axum::Json;
@@ -18,7 +19,6 @@ use axum::extract::State;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::ToSchema;
 
 /// A voicemail this short gets the default activity without asking the AI.
 const VOICEMAIL_SKIP_AI_WORDS: usize = 50;
@@ -143,7 +143,7 @@ fn parse_instant(value: Option<&str>) -> Option<DateTime<Utc>> {
 /// The follow-up tasks of a call (call backs, links and quotes to send,
 /// photos to wait for, on-site estimates) with their deadlines, read by AI
 /// and checked against the transcript.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/call-activities",
     operation_id = "extract_call_activities",

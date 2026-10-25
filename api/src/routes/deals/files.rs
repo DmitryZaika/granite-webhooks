@@ -7,6 +7,7 @@ use super::queries::deal_in_company;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::routes::uploads::{attach, remove, schemas::UploadFolder};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
@@ -16,7 +17,6 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 const DOCUMENT_EXTENSIONS: &[&str] = &["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt"];
 
@@ -140,7 +140,7 @@ async fn require_deal(state: &AppState, company_id: i32, deal_id: i64) -> ApiRes
 /// List a deal's photos and documents
 ///
 /// Newest first. Private files come with a link valid for an hour.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deals/{id}/files",
     operation_id = "list_deal_files",
@@ -211,7 +211,7 @@ pub async fn list(
 /// Each URL must be a file uploaded to the `deals` folder. PDFs, Word, Excel,
 /// CSV and text files become documents (named after `name`, without the
 /// upload id prefix), anything else a photo.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/deals/{id}/files",
     operation_id = "attach_deal_files",
@@ -306,7 +306,7 @@ fn display_name(name: &str) -> Option<String> {
 /// Sets the display name of a document row (`source` `documents` in
 /// `GET /v1/deals/{id}/files`); older documents stored with the photos
 /// cannot be renamed.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/deals/{id}/documents/{document_id}",
     operation_id = "rename_deal_document",
@@ -360,7 +360,7 @@ pub async fn rename_document(
 /// Delete a deal file
 ///
 /// Removes the row (`source` from the file listing) and the stored file.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/deals/{id}/files/{source}/{file_id}",
     operation_id = "delete_deal_file",

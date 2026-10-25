@@ -6,13 +6,13 @@
 
 use super::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use crate::supplier_file_processor::{LiveExtractor, reclaim_stale, run_once};
 use axum::Json;
 use axum::extract::State;
 use serde::Serialize;
 use std::time::{Duration, Instant};
-use utoipa::ToSchema;
 
 /// Stop claiming new files after this long, so a run ends well before a
 /// 15-minute Lambda timeout.
@@ -29,7 +29,7 @@ pub struct SupplierFilesRun {
 ///
 /// Returns files stuck in processing to the queue, then processes waiting
 /// files (newest first) until none is left or ten minutes have passed.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/supplier-files",
     operation_id = "run_supplier_files",

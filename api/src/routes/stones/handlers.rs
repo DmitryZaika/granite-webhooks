@@ -22,7 +22,7 @@ use axum::http::StatusCode;
 /// Filters combine with AND; list filters take the parameter repeated and
 /// match any value. Color ids come from the colors list, supplier ids from
 /// the suppliers list.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/stones",
     operation_id = "list_stones",
@@ -56,7 +56,7 @@ pub async fn list(
 /// (not displayed) stones, plus the ids of its colors. Deleted stones and
 /// stones of other companies are 404. List its slabs with
 /// `GET /v1/stones/{id}/slabs`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/stones/{id}",
     operation_id = "get_stone",
@@ -91,7 +91,7 @@ pub async fn get(
 /// the sale of the slab they were cut from. Ordered by slab id; group by
 /// `bundle` for display. Sell an available slab with the sales routes,
 /// resize one with `PATCH /v1/slabs/{id}`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/stones/{id}/slabs",
     operation_id = "list_stone_slabs",
@@ -129,7 +129,7 @@ pub async fn slabs(
 /// same fields and slab counts as `GET /v1/stones`. By default only
 /// displayed stones that are regular stock or have an available whole slab;
 /// see `include_sold_out` and `include_hidden`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/stones/search",
     operation_id = "search_stones",
@@ -160,7 +160,7 @@ pub async fn search(
 /// `LO-YYYYMMDD-XXXX`) or one slab per bundle label, all with the given
 /// size. Used while selling a slab that is not in the system yet. Returns
 /// the stone and the new slab ids, ready to put on a sale.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/stones/quick",
     operation_id = "quick_add_stone",

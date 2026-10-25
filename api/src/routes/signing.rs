@@ -15,6 +15,8 @@
 //! `nativeSigningController.server.ts`; `SignWell` documents get their
 //! embedded signing link (the Remix `sign.$documentId` loader).
 
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::signatures::MAX_INLINE_BYTES;
 use crate::routes::signwell_webhook::notify_status;
 use crate::signing_pdf::{
@@ -37,8 +39,6 @@ use serde_json::Value;
 use sha2::Sha256;
 use sqlx::{MySql, Transaction};
 use std::collections::{BTreeMap, HashSet};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -502,7 +502,7 @@ pub struct InvitationToken {
 /// Trades the invitation link's token for a 30-minute signing session
 /// (`__Host-native_signing_<document>` cookie of this host). Opening the link
 /// counts as the signer viewing the document (the sender is told once).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/public/signing/{document_id}/session",
     operation_id = "open_signing_session",
@@ -704,7 +704,7 @@ async fn view_for(state: &AppState, document_id: &str, raw: &str) -> SignerResul
 /// For a native document: the document and the signer's state (needs the
 /// session cookie from `.../session`). For a `SignWell` document: its
 /// embedded signing page.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/signing/{document_id}",
     operation_id = "get_signing_page",
@@ -787,7 +787,7 @@ pub struct SigningAction {
 /// `idempotencyKey`, `answers` by field id), resumes an interrupted finish,
 /// or declines. Must come from the signing page's origin with the session
 /// cookie and its `csrf`. Answers the updated view.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/public/signing/{document_id}/actions",
     operation_id = "act_on_signing",
@@ -1571,7 +1571,7 @@ pub struct DownloadKind {
 /// `prepared`: the document to review (while it can be signed), shown
 /// inline. `completed`: the signed copy, as an attachment. Needs the
 /// session cookie. Big files redirect to a short-lived link.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/signing/{document_id}/download",
     operation_id = "download_signing_document",

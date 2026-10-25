@@ -5,6 +5,7 @@ use super::{audit, bad_request};
 use crate::auth::device::DeviceUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::blocking::{
     self, BlockedAction, CallBlocking, DEFAULT_ANNOUNCEMENT, MAX_ANNOUNCEMENT_CHARS, MAX_ENTRIES,
     SpamAction,
@@ -14,7 +15,6 @@ use axum::Json;
 use axum::extract::State;
 use serde::Deserialize;
 use serde_json::json;
-use utoipa::ToSchema;
 
 /// Body of `PUT /v1/phone/call-blocking`: the whole setting (the screen's
 /// SAVE).
@@ -81,7 +81,7 @@ fn entries(list: &[String], area_codes: bool) -> ApiResult<Vec<String>> {
 /// calls with no caller ID are blocked (the defaults until an admin saves:
 /// spam rings, blocked callers hear the default announcement, nothing is
 /// blocked). Company admins only (403 `admin_only`). Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/call-blocking",
     operation_id = "get_phone_call_blocking",
@@ -112,7 +112,7 @@ pub async fn get_call_blocking(
 /// sorted). Audited. Company admins only (403 `admin_only`). 400
 /// `invalid_entry` for an entry that is not a number (or, for blocked, a
 /// 3-digit area code), or what is wrong. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/phone/call-blocking",
     operation_id = "save_phone_call_blocking",

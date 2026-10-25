@@ -25,6 +25,7 @@ use super::send_window::{
     next_send_at_avoiding_sunday,
 };
 use crate::auth::session::{SessionUser, find_user};
+use crate::openapi::ToSchema;
 use crate::routes::emails::send::{Cleaned, deliver};
 use crate::routes::sms::provider::SmsProvider;
 use crate::state::AppState;
@@ -32,7 +33,6 @@ use crate::webhooks_client::OutgoingSms;
 use chrono::{Duration, NaiveDateTime, Utc};
 use lambda_http::tracing;
 use serde::Serialize;
-use utoipa::ToSchema;
 
 const DISPATCH_BATCH_LIMIT: i64 = 50;
 /// One company's backlog cannot fill the whole batch.

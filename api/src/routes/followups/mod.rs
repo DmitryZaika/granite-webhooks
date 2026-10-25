@@ -22,8 +22,8 @@ pub mod offer;
 pub mod signature;
 pub mod timeline;
 
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()

@@ -17,8 +17,8 @@ pub mod queries;
 pub mod schemas;
 mod writes;
 
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()

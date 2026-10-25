@@ -117,6 +117,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "ammonia",
+ "api-macros",
  "aws-credential-types",
  "aws-sigv4",
  "aws-smithy-runtime-api",
@@ -154,12 +155,23 @@ dependencies = [
  "tokio-stream",
  "tower",
  "tower-http",
+ "tower-layer",
+ "tower-service",
  "unicode-normalization",
  "url",
  "utoipa 6.0.0",
  "utoipa-axum",
  "uuid",
  "zune-heic",
+]
+
+[[package]]
+name = "api-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

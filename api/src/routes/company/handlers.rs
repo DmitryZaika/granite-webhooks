@@ -13,7 +13,7 @@ use axum::extract::State;
 /// it has set up (QuickBooks connection, e-signatures, inbound email,
 /// CloudTalk, RingCentral). Use it to decide what to offer before calling the
 /// routes behind those features.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/company/features",
     operation_id = "get_company_features",
@@ -34,7 +34,7 @@ pub async fn features(
 }
 
 /// Query of `GET /v1/company/drive-miles`.
-#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[derive(Debug, serde::Deserialize, crate::openapi::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct DriveMilesQuery {
     /// Where to drive to.
@@ -43,7 +43,7 @@ pub struct DriveMilesQuery {
 }
 
 /// `GET /v1/company/drive-miles`.
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Serialize, crate::openapi::ToSchema)]
 pub struct DriveMiles {
     /// Driving miles, one decimal; null when unknown.
     pub miles: Option<f64>,
@@ -53,7 +53,7 @@ pub struct DriveMiles {
 ///
 /// Miles by car from the company's address to `address`; null when either
 /// address is missing or there is no route.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/company/drive-miles",
     operation_id = "get_drive_miles",
@@ -94,7 +94,7 @@ pub async fn drive_miles(
 }
 
 /// `GET /v1/company/tax-rate`.
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Serialize, crate::openapi::ToSchema)]
 pub struct TaxRate {
     /// The company's state sales tax in percent; 0 when not set.
     pub state_tax_pct: f64,
@@ -104,7 +104,7 @@ pub struct TaxRate {
 ///
 /// The state sales tax the company charges, for price calculators (0 when
 /// not set).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/company/tax-rate",
     operation_id = "get_company_tax_rate",

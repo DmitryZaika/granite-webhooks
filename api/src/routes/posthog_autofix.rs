@@ -8,6 +8,8 @@
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::posthog_autofix::callback::{
     Applied, CallbackError, authorized, record_result, record_started,
 };
@@ -19,8 +21,6 @@ use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
 use chrono::Utc;
 use serde::Serialize;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -53,7 +53,7 @@ impl From<Applied> for CallbackApplied {
 /// `changed: false`. Any other status (for example a run the intake never
 /// dispatched) answers 409, and the workflow must stop. Uses the callback
 /// secret, not a session.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/posthog-autofix/runs/{id}/started",
     operation_id = "start_posthog_autofix_run",
@@ -93,7 +93,7 @@ pub async fn started(
 /// timed out is still recorded. Repeating a result answers 200 with
 /// `changed: false` and sends no second email. A result for a run that never
 /// started answers 409. Uses the callback secret, not a session.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/posthog-autofix/runs/{id}/result",
     operation_id = "finish_posthog_autofix_run",

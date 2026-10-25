@@ -10,11 +10,11 @@ pub mod handlers;
 pub mod schemas;
 
 use crate::error::ApiError;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use crate::storage::{Storage, icon_key};
 use crate::thumbnails::make_icon;
 use axum::http::{HeaderName, header};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()

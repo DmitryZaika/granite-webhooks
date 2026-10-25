@@ -9,6 +9,7 @@ use super::{
 };
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::IntoParams;
 use crate::phone::call_log::{self, CallFacts, End};
 use crate::phone::calls::{CallDirection, CallStatus};
 use crate::phone::outcomes;
@@ -20,7 +21,6 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use lambda_http::tracing;
 use serde::Deserialize;
-use utoipa::IntoParams;
 
 /// Query of the Call via my cell callbacks.
 #[derive(Debug, Deserialize, IntoParams)]
@@ -44,7 +44,7 @@ async fn via_cell_call(state: &AppState, hook: &Hook, call_id: i64) -> ApiResult
 /// answers: "Press 1 to call {customer's name, or the number digit by
 /// digit}." (`<Gather>` one key, 8 seconds, to `via-cell-gather`), else
 /// hang up. A call that is over (or not a Call via my cell) hangs up.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/via-cell",
     operation_id = "prompt_telnyx_via_cell",
@@ -119,7 +119,7 @@ async fn prompt(state: &AppState, hook: &Hook, call_id: i64) -> ApiResult<Respon
 /// on the customer's leg; when the company records outgoing calls the call
 /// is recorded and the customer hears "This call may be recorded."
 /// (`notice`) first. Any other key ends the call (logged as canceled).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/via-cell-gather",
     operation_id = "dial_telnyx_via_cell",
@@ -203,7 +203,7 @@ async fn dial_customer(state: &AppState, hook: &Hook, call_id: i64) -> ApiResult
 /// The `<Number url>` the customer's leg of Call via my cell fetches when
 /// the company records outgoing calls: "This call may be recorded.", then
 /// the call connects.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/notice",
     operation_id = "play_telnyx_recording_notice",

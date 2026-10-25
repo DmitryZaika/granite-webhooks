@@ -4,6 +4,7 @@
 use super::{TexmlRequest, taken, texml};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::IntoParams;
 use crate::phone::call_log;
 use crate::phone::events;
 use crate::phone::recordings::{self, RecordingKind};
@@ -13,7 +14,6 @@ use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use serde::Deserialize;
-use utoipa::IntoParams;
 
 /// Query of `recording`.
 #[derive(Debug, Deserialize, IntoParams)]
@@ -42,7 +42,7 @@ pub struct RecordingParams {
 /// still needs AI notes on). Each copy
 /// counts as an attempt; one that fails leaves the recording pending for
 /// the phone job to retry. Repeats and other statuses change nothing.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/recording",
     operation_id = "copy_telnyx_recording",

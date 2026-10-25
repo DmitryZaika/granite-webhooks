@@ -6,6 +6,7 @@ use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::routes::schedule::notifications;
 use crate::state::AppState;
 use axum::Json;
@@ -14,7 +15,6 @@ use axum::http::StatusCode;
 use chrono::{NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
-use utoipa::ToSchema;
 
 /// The QuickBooks invoice shown on an event.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -425,7 +425,7 @@ const fn not_found() -> ApiError {
 ///
 /// Puts an event on one of the company's calendars, optionally copying
 /// comments and attachments from another event.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/events",
     operation_id = "create_event",
@@ -548,7 +548,7 @@ fn change_messages(
 ///
 /// Saves every field, logs what changed in the event's history, and
 /// re-times its appointment reminders when it moved.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/events/{id}",
     operation_id = "update_event",
@@ -657,7 +657,7 @@ pub async fn update(
 /// Delete an event
 ///
 /// Hides the event and cancels its pending appointment reminders.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/events/{id}",
     operation_id = "delete_event",

@@ -6,12 +6,12 @@
 use crate::auth::{AdminUser, CurrentUser};
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// The first day of a week.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -32,7 +32,7 @@ pub struct ScheduleSettings {
 ///
 /// The day the company's schedule starts its weeks on (Sunday unless an
 /// admin picked Monday).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/schedule/settings",
     operation_id = "get_schedule_settings",
@@ -65,7 +65,7 @@ pub async fn settings(
 /// Set the schedule settings
 ///
 /// Saves the day the company's schedule starts its weeks on, for everyone.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/schedule/settings",
     operation_id = "set_schedule_settings",

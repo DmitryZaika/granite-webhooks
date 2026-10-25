@@ -20,6 +20,8 @@
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::created::CreatedId;
 use crate::routes::uploads::schemas::UploadFolder;
 use crate::state::AppState;
@@ -30,8 +32,6 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::MySqlPool;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -224,7 +224,7 @@ async fn insert(
 /// List quote forms
 ///
 /// The company's forms by sequence; `active=true` for the ones quotes offer.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quote-forms",
     operation_id = "list_quote_forms",
@@ -262,7 +262,7 @@ pub struct NewQuoteForm {
 /// Add a quote form
 ///
 /// Last in order.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quote-forms",
     operation_id = "create_quote_form",
@@ -293,7 +293,7 @@ pub async fn create_form(
 /// Duplicate a quote form
 ///
 /// A copy named "… (copy)", last in order.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quote-forms/{id}/copies",
     operation_id = "copy_quote_form",
@@ -333,7 +333,7 @@ pub struct FormOrder {
 ///
 /// Sequence 1, 2, 3… in this order: the order the print and send dialogs
 /// list them in.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quote-forms/order",
     operation_id = "reorder_quote_forms",
@@ -376,7 +376,7 @@ pub async fn reorder_forms(
 /// Get a quote form
 ///
 /// With its layout (for printing and the editor).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quote-forms/{id}",
     operation_id = "get_quote_form",
@@ -420,7 +420,7 @@ pub struct SavedQuoteForm {
 /// Save a quote form
 ///
 /// Name, status, sequence and layout, as the editor stores every change.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quote-forms/{id}",
     operation_id = "save_quote_form",
@@ -486,7 +486,7 @@ pub struct FormStatus {
 /// Activate or deactivate a quote form
 ///
 /// Inactive forms are not offered on quotes.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/quote-forms/{id}",
     operation_id = "set_quote_form_status",
@@ -525,7 +525,7 @@ pub async fn set_form_status(
 /// Delete a quote form
 ///
 /// It is no longer offered; quotes printed with it are unchanged.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/quote-forms/{id}",
     operation_id = "delete_quote_form",
@@ -587,7 +587,7 @@ pub async fn load_letterhead(pool: &MySqlPool, company_id: i32) -> ApiResult<Let
 /// Get the form letterhead
 ///
 /// The company name, address, website and logo a printed form shows.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quote-forms/letterhead",
     operation_id = "get_quote_form_letterhead",
@@ -629,7 +629,7 @@ pub struct FinishedImage {
 ///
 /// Checks an image uploaded to `quote-forms/` and, for a header logo, cuts
 /// off its blank border.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quote-forms/images",
     operation_id = "finish_quote_form_image",

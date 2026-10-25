@@ -21,9 +21,9 @@ pub mod notify;
 pub mod reminders;
 pub mod writes;
 
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::schedule::notifications;
 use crate::state::AppState;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()

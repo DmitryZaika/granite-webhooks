@@ -9,13 +9,13 @@ use super::threads::attachments;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
-use utoipa::{IntoParams, ToSchema};
 
 /// Newest texts returned.
 const LIMIT: i64 = 200;
@@ -135,7 +135,7 @@ fn digits(phone: &str) -> Option<String> {
 /// (none for a deal of another company). With `phone`: every text with
 /// those phones. Echoes of the company's own sends and unsent texts are
 /// left out.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/{provider}/history",
     operation_id = "list_sms_history",

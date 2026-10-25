@@ -12,12 +12,12 @@ use super::fuzzy::find_by_name;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::openapi::{IntoParams, ToSchema};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
 
 /// Query of `GET /v1/customers/sms-contacts`.
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -112,7 +112,7 @@ fn checked_phone(digits: &str) -> ApiResult<String> {
 ///
 /// Customers whose name matches `term` (typos allowed) or whose phone
 /// contains its digits, and suppliers by name or phone.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/sms-contacts",
     operation_id = "find_sms_contacts",
@@ -200,7 +200,7 @@ pub async fn sms_contacts(
 ///
 /// The company's live customer whose phone or second phone is this number
 /// (with or without the country code), for an incoming call.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/by-phone",
     operation_id = "find_customer_by_phone",
@@ -266,7 +266,7 @@ pub async fn by_phone(
 /// Saves the phone as the customer's phone, or as the second phone when the
 /// first is taken, and pushes the customer to the telephony address books
 /// so the conversation shows their name.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/customers/{id}/phone",
     operation_id = "link_customer_phone",
@@ -324,7 +324,7 @@ pub async fn link_phone(
 ///
 /// A new customer with just a name and the phone, for an unknown number in
 /// the SMS inbox.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/customers/from-phone",
     operation_id = "create_customer_from_phone",

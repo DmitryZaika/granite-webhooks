@@ -9,7 +9,7 @@ use axum::extract::State;
 ///
 /// Returns the non-deleted users of the caller's company who hold the sales
 /// rep position. Use their ids for the `sales_rep` filter of `GET /v1/customers`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/users/sales-reps",
     operation_id = "list_sales_reps",
@@ -34,7 +34,7 @@ pub async fn sales_reps(
 ///
 /// The non-deleted employees of the caller's company by name ("User {id}"
 /// when blank), e.g. to hide a calendar from one of them.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/users/employees",
     operation_id = "list_employees",

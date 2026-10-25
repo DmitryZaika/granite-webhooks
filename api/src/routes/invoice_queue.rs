@@ -7,14 +7,14 @@
 
 use crate::auth::AdminUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -67,7 +67,7 @@ const COLUMNS: &str = "s.id, s.sale_date, c.name AS customer_name, u.name AS sel
 /// List sales to invoice
 ///
 /// The company's sales with no QuickBooks invoice yet, newest first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/invoice-queue",
     operation_id = "list_invoice_queue",
@@ -102,7 +102,7 @@ pub async fn list(
 ///
 /// One sale of the company with its customer's email, phone, address and
 /// QuickBooks link, to review before invoicing.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/invoice-queue/{sale_id}",
     operation_id = "get_invoice_queue_sale",

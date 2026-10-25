@@ -4,13 +4,13 @@
 
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
-use utoipa::ToSchema;
 
 /// Most open requests checked with `SignWell` per call.
 const MAX_REFRESH: i64 = 50;
@@ -199,7 +199,7 @@ pub async fn refresh(
 ///
 /// Documents sent to the customer for e-signature, newest first. Open
 /// `SignWell` requests are checked with `SignWell` first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/{id}/signature-requests",
     operation_id = "list_customer_signature_requests",

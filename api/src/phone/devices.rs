@@ -2,6 +2,7 @@
 //! telephony credential and our own pushes to them.
 
 use super::company::CompanyConfig;
+use crate::openapi::ToSchema;
 use crate::push::{Delivery, PushError};
 use crate::serde_helpers::js_date_required;
 use crate::state::AppState;
@@ -13,7 +14,6 @@ use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
 use std::collections::BTreeMap;
 use std::time::Duration as StdDuration;
-use utoipa::ToSchema;
 
 /// A Telnyx credential works this long after it is created or extended.
 pub const CREDENTIAL_DAYS: i64 = 30;

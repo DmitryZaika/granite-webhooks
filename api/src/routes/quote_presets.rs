@@ -14,14 +14,14 @@
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -146,7 +146,7 @@ async fn exists(state: &AppState, table: &str, company_id: i32, id: i32) -> Resu
 /// List quote tax rates
 ///
 /// The company's tax rates, by sequence then name.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quote-tax-rates",
     operation_id = "list_quote_tax_rates",
@@ -177,7 +177,7 @@ pub async fn list_tax_rates(
 /// Add a quote tax rate
 ///
 /// Adds a tax rate quotes can pick.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quote-tax-rates",
     operation_id = "create_quote_tax_rate",
@@ -226,7 +226,7 @@ pub async fn create_tax_rate(
 /// Save a quote tax rate
 ///
 /// Saves the name, sequence and percent of a tax rate.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quote-tax-rates/{id}",
     operation_id = "update_quote_tax_rate",
@@ -269,7 +269,7 @@ pub async fn update_tax_rate(
 /// Delete a quote tax rate
 ///
 /// Removes a tax rate from the lists; quotes keep what they saved.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/quote-tax-rates/{id}",
     operation_id = "delete_quote_tax_rate",
@@ -295,7 +295,7 @@ pub async fn delete_tax_rate(
 /// List quote payment terms
 ///
 /// The company's payment terms, by sequence then name.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quote-payment-terms",
     operation_id = "list_quote_payment_terms",
@@ -326,7 +326,7 @@ pub async fn list_payment_terms(
 /// Add quote payment terms
 ///
 /// Adds payment terms quotes can pick.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quote-payment-terms",
     operation_id = "create_quote_payment_term",
@@ -375,7 +375,7 @@ pub async fn create_payment_term(
 /// Save quote payment terms
 ///
 /// Saves the name, sequence and text of payment terms.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quote-payment-terms/{id}",
     operation_id = "update_quote_payment_term",
@@ -418,7 +418,7 @@ pub async fn update_payment_term(
 /// Delete quote payment terms
 ///
 /// Removes payment terms from the lists; quotes keep what they saved.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/quote-payment-terms/{id}",
     operation_id = "delete_quote_payment_term",
@@ -476,7 +476,7 @@ pub struct OnlineQuoteOptionInput {
 /// The extras the company's online quote can offer, by sequence then name.
 /// A company that never had any gets Laminate tear out, Stone tear out and
 /// 10 year sealer, all off.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/online-quote-options",
     operation_id = "list_online_quote_options",
@@ -541,7 +541,7 @@ pub async fn enabled_online_options(
 /// Add an online quote option
 ///
 /// Adds an extra the online quote can offer.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/online-quote-options",
     operation_id = "create_online_quote_option",
@@ -589,7 +589,7 @@ pub async fn create_online_option(
 /// Save an online quote option
 ///
 /// Saves the name, sequence and whether customers are offered it.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/online-quote-options/{id}",
     operation_id = "update_online_quote_option",
@@ -631,7 +631,7 @@ pub async fn update_online_option(
 /// Delete an online quote option
 ///
 /// Removes the option; quotes keep the extras they got.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/online-quote-options/{id}",
     operation_id = "delete_online_quote_option",
@@ -691,7 +691,7 @@ fn rounding(value: f64) -> f64 {
 ///
 /// The company's measurement defaults for new quotes (defaults when none
 /// are saved).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quote-settings",
     operation_id = "get_quote_settings",
@@ -740,7 +740,7 @@ pub async fn load_quote_settings(
 /// Save the quote settings
 ///
 /// Saves the company's measurement rounding and default counter depth.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quote-settings",
     operation_id = "save_quote_settings",
@@ -869,7 +869,7 @@ pub struct QuoteEmailTemplateOrder {
 /// Saves a drag on the templates table: each company template's sequence
 /// becomes its place in `ids` (1 = first, the default). Other ids are
 /// ignored; templates left out go after the given ones, in their old order.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quote-email-templates/order",
     operation_id = "reorder_quote_email_templates",
@@ -932,7 +932,7 @@ async fn company_template(state: &AppState, company_id: i32, id: i32) -> Result<
 /// List quote email templates
 ///
 /// The company's templates by sequence, then the caller's own (`personal`).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quote-email-templates",
     operation_id = "list_quote_email_templates",
@@ -979,7 +979,7 @@ fn template_fields(
 /// Add a quote email template
 ///
 /// Adds a company template every sales rep can use, at `sequence`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quote-email-templates",
     operation_id = "create_quote_email_template",
@@ -1020,7 +1020,7 @@ pub async fn create_email_template(
 /// Save a quote email template
 ///
 /// Saves a company template and moves it to `sequence`.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quote-email-templates/{id}",
     operation_id = "update_quote_email_template",
@@ -1064,7 +1064,7 @@ pub async fn update_email_template(
 /// Delete a quote email template
 ///
 /// Deletes a company template and renumbers the others.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/quote-email-templates/{id}",
     operation_id = "delete_quote_email_template",

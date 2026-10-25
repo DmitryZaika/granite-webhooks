@@ -9,6 +9,7 @@ use super::history::customer_emails;
 use crate::ai::{Caller, Chat, MINI_MODEL};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::{IntoParams, ToSchema};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -17,7 +18,6 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
-use utoipa::{IntoParams, ToSchema};
 
 const RECENT_MESSAGES: usize = 30;
 const MAX_ROWS: i64 = 1000;
@@ -238,7 +238,7 @@ pub struct EstimateTime {
 ///
 /// Reads the customer's last 30 texts and emails with AI and returns the
 /// in-home estimate time both sides agreed on, if there is an exact one.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/{id}/estimate-time",
     operation_id = "find_customer_estimate_time",

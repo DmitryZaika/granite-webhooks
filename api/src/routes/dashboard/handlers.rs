@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 /// the company the request acts in, in screen order. An empty list means no
 /// layout is saved (or every widget was removed). Save it with
 /// `PUT /v1/me/dashboard/widgets`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/dashboard/widgets",
     operation_id = "get_my_dashboard_layout",
@@ -43,7 +43,7 @@ pub async fn layout(
 /// twice keeps its first place. Each widget added or removed compared with the
 /// saved layout is recorded for analytics (not on the first save, which has
 /// nothing to compare with). Returns the layout as saved.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/me/dashboard/widgets",
     operation_id = "save_my_dashboard_layout",
@@ -77,7 +77,7 @@ pub async fn save_layout(
 ///
 /// Stores one use of a dashboard widget (a click, a changed value, an add or
 /// remove) for product analytics. Returns no body.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/me/dashboard/widget-events",
     operation_id = "record_dashboard_widget_event",

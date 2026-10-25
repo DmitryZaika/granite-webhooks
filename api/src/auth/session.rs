@@ -1,9 +1,9 @@
 //! Port of `getUser` + `handlePermissions` from the Remix app's
 //! `app/utils/session.server.ts`. Keep the two in sync until Remix is gone.
 
+use crate::openapi::ToSchema;
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
-use utoipa::ToSchema;
 
 /// Sessions older than this are rejected even if `expiration_date` is later
 /// (Remix `SESSION_MAX_AGE_MONTHS`).

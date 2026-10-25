@@ -1,6 +1,6 @@
+use crate::openapi::{IntoParams, ToSchema};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::{IntoParams, ToSchema};
 
 /// Query string of `GET /v1/faucets`. Every filter is optional.
 #[derive(Debug, Default, Deserialize, IntoParams)]

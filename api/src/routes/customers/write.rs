@@ -11,12 +11,12 @@ use super::service::{
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// How a customer heard of the company.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -110,7 +110,7 @@ impl Temperature {
 }
 
 /// Query of `DELETE /v1/customers/{id}`.
-#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+#[derive(Debug, Default, Deserialize, crate::openapi::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct DeleteQuery {
     /// Also delete the customer's live deals (required when it has any).
@@ -174,7 +174,7 @@ async fn check_rep(state: &AppState, company_id: i32, rep: Option<i32>) -> ApiRe
 /// refused). Without a sales rep, a sales rep creating a customer (other
 /// than a walk-in) becomes its rep. An assigned customer gets an open deal
 /// and an audit line; the telephony address books are updated.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/customers",
     operation_id = "create_customer",
@@ -256,7 +256,7 @@ pub async fn create(
 /// first one primary). A new sales rep is recorded in the audit trail (with
 /// the sales manager's original assignment of a lead first), stamps the
 /// first assignment date, and gets the open deal.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/customers/{id}",
     operation_id = "update_customer",
@@ -362,7 +362,7 @@ pub async fn update(
 /// Records the change in the audit trail, stamps the first assignment
 /// date, gives the rep the open deal and two reminders (text within a
 /// day, check within three).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/customers/{id}/sales-rep",
     operation_id = "set_customer_sales_rep",
@@ -425,7 +425,7 @@ pub async fn set_sales_rep(
 /// Set a lead's temperature
 ///
 /// `hot`, `medium` or `cold`, or null to clear it.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/customers/{id}/temperature",
     operation_id = "set_customer_temperature",
@@ -500,7 +500,7 @@ pub struct InvalidInput {
 ///
 /// Records why the lead is invalid, unassigns it and hides its live deals
 /// (each deletion audited). Admins and sales managers only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/customers/{id}/invalid",
     operation_id = "mark_customer_invalid",
@@ -579,7 +579,7 @@ pub async fn mark_invalid(
 /// Hides the customer (soft delete) and removes it from the telephony
 /// address books. A customer with live deals needs `cascade_deals=true`,
 /// which hides the deals too. Admins and sales managers only.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/customers/{id}",
     operation_id = "delete_customer",

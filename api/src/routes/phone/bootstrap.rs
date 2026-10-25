@@ -4,6 +4,7 @@
 
 use crate::auth::device::DeviceUser;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::phone::availability::Availability;
 use crate::phone::calls::{self, Unread};
 use crate::phone::company::{self, CompanyConfig, RecordingMode};
@@ -19,7 +20,6 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use utoipa::ToSchema;
 
 /// The notices the app shows once per version, and what the user accepted.
 // The wire names are the contract's (`recordingVersion` ...).
@@ -107,7 +107,7 @@ pub struct Texting {
 /// the notices to show, the contact index's version and the unread counts.
 /// Device token only. Next: `POST /v1/phone/devices` when `device` is null,
 /// `GET /v1/phone/contacts/index` when `contacts.etag` changed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/bootstrap",
     operation_id = "get_phone_bootstrap",

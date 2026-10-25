@@ -6,6 +6,7 @@
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -14,7 +15,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{AssertSqlSafe, FromRow, MySqlPool};
 use std::collections::HashMap;
-use utoipa::ToSchema;
 
 use crate::serde_helpers::js_date;
 
@@ -106,7 +106,7 @@ async fn in_company(
 /// The live customers of the family the customer belongs to (its parent and
 /// the parent's projects, or the customer and its own projects), by name,
 /// with their addresses, newest deal stage and sales.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/{id}/projects",
     operation_id = "list_customer_projects",
@@ -192,7 +192,7 @@ pub async fn projects(
 /// Link a customer under a parent
 ///
 /// Makes the customer a project of `parent_id` (both of the company).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/customers/{id}/parent",
     operation_id = "set_customer_parent",
@@ -255,7 +255,7 @@ pub struct CustomerSale {
 /// List a customer's sales
 ///
 /// The company's sales to the customer, newest first, with the seller.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/{id}/sales",
     operation_id = "list_customer_sales",

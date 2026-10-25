@@ -17,6 +17,8 @@ use crate::commissions::{
 };
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::pricing::price_quote;
 use crate::quote_pricing::{load_company_quote, price_list_for_quote};
 use crate::routes::created::CreatedId;
@@ -31,8 +33,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::MySqlPool;
 use std::collections::HashMap;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -109,7 +109,7 @@ pub async fn load_rules(pool: &MySqlPool, company_id: i32) -> ApiResult<Vec<Comm
 /// List commission rules
 ///
 /// The company's rules, highest priority first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/commission-rules",
     operation_id = "list_commission_rules",
@@ -282,7 +282,7 @@ async fn save_rule(
 /// Add a commission rule
 ///
 /// It applies from the next sync.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/commission-rules",
     operation_id = "create_commission_rule",
@@ -309,7 +309,7 @@ pub async fn create_rule(
 /// Save a commission rule
 ///
 /// Replaces the whole rule; it applies from the next sync.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/commission-rules/{id}",
     operation_id = "update_commission_rule",
@@ -346,7 +346,7 @@ pub async fn update_rule(
 /// Delete a commission rule
 ///
 /// Commissions already worked out keep what they earned.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/commission-rules/{id}",
     operation_id = "delete_commission_rule",
@@ -406,7 +406,7 @@ pub async fn load_settings(pool: &MySqlPool, company_id: i32) -> ApiResult<Commi
 /// Get the commission settings
 ///
 /// Friday payroll and no base until saved.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/commission-settings",
     operation_id = "get_commission_settings",
@@ -429,7 +429,7 @@ pub async fn get_settings(
 /// Save the commission settings
 ///
 /// A negative base becomes 0; the weekday is kept within 0 to 6.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/commission-settings",
     operation_id = "save_commission_settings",
@@ -586,7 +586,7 @@ pub struct Commissions {
 /// The caller's (`mine`) or, for admins, everyone's (`company`) signed
 /// quotes with what they earn, and the paychecks: paid commissions, monthly
 /// goal bonuses and the weekly base per payroll date.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/commissions",
     operation_id = "list_commissions",
@@ -657,7 +657,7 @@ struct SignedQuote {
 /// (the matching `QuickBooks` invoice). Quotes paid and signed over 60 days
 /// ago are left alone.
 #[allow(clippy::too_many_lines)]
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/commissions/sync",
     operation_id = "sync_commissions",
@@ -814,7 +814,7 @@ pub struct Payout {
 /// Mark commissions paid out
 ///
 /// Only commissions whose customer paid are marked.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/commissions/payouts",
     operation_id = "pay_out_commissions",

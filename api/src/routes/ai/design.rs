@@ -9,12 +9,12 @@
 
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::{IntoParams, ToSchema};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Query, State};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
 
 const IMAGE_SUBTYPES: [&str; 6] = ["jpeg", "jpg", "png", "webp", "heic", "heif"];
 
@@ -63,7 +63,7 @@ pub struct EmailedPictures {
 ///
 /// Image attachments of emails the caller received, newest first, with the
 /// customer who sent each when known.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/ai/design/pictures",
     operation_id = "list_ai_design_pictures",
@@ -156,7 +156,7 @@ pub struct DesignDeal {
 /// List the caller's deals for a design
 ///
 /// The caller's own live deals, newest first (at most 200).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/ai/design/deals",
     operation_id = "list_ai_design_deals",

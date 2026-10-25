@@ -61,7 +61,7 @@ async fn require_own(state: &AppState, user: &SessionUser, id: i32) -> ApiResult
 /// Questionnaires the caller made (for an admin also the company-wide
 /// ones), newest first, each with its live questions in creation order.
 /// Only these can be renamed, deleted or have questions changed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/questionnaires",
     operation_id = "list_own_questionnaires",
@@ -120,7 +120,7 @@ pub async fn list_own(
 ///
 /// A questionnaire of the caller's own with at least one question (admins
 /// may start with none and add them with `POST .../questions`).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/questionnaires",
     operation_id = "create_questionnaire",
@@ -183,7 +183,7 @@ pub async fn create(
 /// Rename a questionnaire
 ///
 /// Only the caller's own questionnaires.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/questionnaires/{id}",
     operation_id = "rename_questionnaire",
@@ -220,7 +220,7 @@ pub async fn rename(
 ///
 /// Soft-deletes one of the caller's questionnaires with its questions, and
 /// unsets it as the caller's default.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/questionnaires/{id}",
     operation_id = "delete_questionnaire",
@@ -267,7 +267,7 @@ pub async fn delete(
 /// Add a question to a questionnaire
 ///
 /// Appends a question to one of the caller's own questionnaires.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/questionnaires/{id}/questions",
     operation_id = "add_questionnaire_question",
@@ -324,7 +324,7 @@ async fn require_question(state: &AppState, id: i32, question_id: i32) -> ApiRes
 ///
 /// Rewrites a live question of one of the caller's own questionnaires;
 /// answers already given stay attached to it.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/questionnaires/{id}/questions/{question_id}",
     operation_id = "update_questionnaire_question",
@@ -364,7 +364,7 @@ pub async fn update_question(
 /// Delete a question
 ///
 /// Soft-deletes a question of one of the caller's own questionnaires.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/questionnaires/{id}/questions/{question_id}",
     operation_id = "delete_questionnaire_question",
@@ -441,7 +441,7 @@ async fn require_live_deal(state: &AppState, user: &SessionUser, deal_id: i64) -
 /// The company's shared questionnaires and the caller's own (those with
 /// questions), by id, each question with the deal's answer (empty when not
 /// answered).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deals/{id}/questionnaires",
     operation_id = "list_deal_questionnaires",
@@ -515,7 +515,7 @@ fn answers_note(questions: &[UsableQuestion], answers: &HashMap<i32, String>) ->
 /// are ignored). With `create_note`, the non-empty answers are also added to
 /// the deal as a note (which notifies the deal's people); that needs at
 /// least one answer and fits 5000 characters.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/deals/{id}/questionnaire-answers",
     operation_id = "save_deal_questionnaire_answers",
@@ -615,7 +615,7 @@ pub async fn save_answers(
 /// Get the caller's default questionnaire
 ///
 /// The questionnaire the deal Questionnaire tab opens first; null when unset.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/default-questionnaire",
     operation_id = "get_default_questionnaire",
@@ -645,7 +645,7 @@ pub async fn get_default(
 /// Set the caller's default questionnaire
 ///
 /// Any live questionnaire the caller can use (shared or their own).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/me/default-questionnaire",
     operation_id = "set_default_questionnaire",

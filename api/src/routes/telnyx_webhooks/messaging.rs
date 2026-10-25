@@ -33,7 +33,7 @@ const UNKNOWN_STATUS_RETRY_SECS: i64 = 120;
 /// sent (`delivered`, or failed with Telnyx's code; `40300` marks the phone
 /// opted out). Other events are taken and ignored. Ed25519-signed,
 /// always required. Answers 200; Telnyx sends it again on any other status.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/messaging",
     operation_id = "take_telnyx_messaging_event",

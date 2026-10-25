@@ -6,6 +6,7 @@ use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::extract::MultiQuery;
+use crate::openapi::ToSchema;
 use crate::routes::customers::history::{CustomerHistory, lead_history};
 use crate::routes::customers::queries::{find_customer, search_customers};
 use crate::routes::customers::schemas::{CustomerDetail, CustomerSearchQuery, CustomerSearchRow};
@@ -21,7 +22,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::HashMap;
-use utoipa::ToSchema;
 
 /// A lead's card.
 #[derive(Debug, Serialize, ToSchema)]
@@ -38,7 +38,7 @@ pub struct LeadCard {
 /// A lead's card
 ///
 /// A live lead of the company with its deals and reassignments.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/marketing/{company_id}/leads/{id}/info",
     operation_id = "get_marketing_lead_card",
@@ -145,7 +145,7 @@ pub struct LeadProject {
 ///
 /// The lead's business (its parent, or itself) and every project under
 /// it, by name, with their sales.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/marketing/{company_id}/leads/{id}/projects",
     operation_id = "list_marketing_lead_projects",
@@ -243,7 +243,7 @@ pub struct LeadUploadRequest {
 ///
 /// A presigned `PUT` URL for a picture to attach to a new lead, and the
 /// public URL to send as its `file_url`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/marketing/{company_id}/uploads",
     operation_id = "create_marketing_upload",
@@ -294,7 +294,7 @@ pub async fn upload(
 ///
 /// The employee customer search (`GET /v1/customers/search`) for the
 /// marketing team's "find a customer" box.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/marketing/{company_id}/customers/search",
     operation_id = "search_marketing_customers",

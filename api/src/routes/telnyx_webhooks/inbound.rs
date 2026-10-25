@@ -52,7 +52,7 @@ use chrono::Utc;
 /// `missed_call` push. A repeated request answers the same call again. An
 /// internal error answers the fallback TeXML (`<Redirect>`). 403 when the
 /// number, account or connection is not the token's company's.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/inbound",
     operation_id = "answer_telnyx_inbound_call",

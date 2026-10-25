@@ -7,6 +7,7 @@ use super::attachments::{is_image, readable_attachment};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::images::{self, ImageError};
+use crate::openapi::IntoParams;
 use crate::state::AppState;
 use crate::storage::Storage;
 use axum::extract::{Path, Query, State};
@@ -16,7 +17,6 @@ use lambda_http::tracing;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
-use utoipa::IntoParams;
 
 /// Query of the preview.
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -32,7 +32,7 @@ pub struct PreviewQuery {
 }
 
 /// Where a picture is (`link=true`).
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Serialize, crate::openapi::ToSchema)]
 pub struct PictureLink {
     /// The picture, valid an hour.
     pub url: String,
@@ -116,7 +116,7 @@ async fn blocking<T: Send + 'static>(
 /// JPEG; other pictures redirect to the stored file. With `icon=true` the
 /// answer is a small JPEG (fits 320 x 320) itself; with `link=true` it is
 /// the picture's URL as JSON instead of a redirect.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/email-attachments/{id}/preview",
     operation_id = "preview_email_attachment",

@@ -8,6 +8,7 @@ use crate::ai::{Caller, Chat, MINI_MODEL};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -15,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::time::Duration;
-use utoipa::ToSchema;
 
 /// Most blanks sent to the AI.
 pub const MAX_CANDIDATES: usize = 300;
@@ -135,7 +135,7 @@ fn parse(reply: &str, known: &HashSet<i64>) -> Option<Vec<DetectedField>> {
 /// The e-signature editor's Auto-detect: for each blank (with the words
 /// around it) the AI says whether it is a signature, a date, a text field
 /// (with a label) or decoration to skip.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/signature-fields",
     operation_id = "detect_signature_fields",

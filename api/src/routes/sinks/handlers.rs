@@ -18,7 +18,7 @@ use axum::http::StatusCode;
 /// not on display are included (`is_display`). Sold out models (no free unit
 /// and not regular stock) are hidden unless `include_sold_out=true`. Filters
 /// combine with AND; `type` takes the parameter repeated and matches any value.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sinks",
     operation_id = "list_sinks",
@@ -49,7 +49,7 @@ pub async fn list(
 ///
 /// Returns a live sink model of the caller's company with its unit counts
 /// (`units` includes the `installed_units` on sales).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sinks/{id}",
     operation_id = "get_sink",
@@ -81,7 +81,7 @@ pub async fn get(
 /// Creates a sink model of the caller's company with its image (an upload
 /// to the `sinks` folder; the thumbnail is made here) and, with `units`,
 /// that many units in stock.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sinks",
     operation_id = "create_sink",
@@ -112,7 +112,7 @@ pub async fn create(
 /// `image_url` replaces the image (the old file is deleted). With `units`,
 /// free units are added or removed to reach that total; units installed on
 /// sales are never removed (400 when `units` is below them).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/sinks/{id}",
     operation_id = "update_sink",
@@ -143,7 +143,7 @@ pub async fn update(
 ///
 /// Hides the model and its free units from every list. Units already
 /// installed on sales stay on those sales.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/sinks/{id}",
     operation_id = "delete_sink",
@@ -170,7 +170,7 @@ pub async fn delete(
 /// List a sink model's installed photos
 ///
 /// Returns the project photos of the model, oldest first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sinks/{id}/images",
     operation_id = "list_sink_images",
@@ -199,7 +199,7 @@ pub async fn images(
 ///
 /// Saves uploads to the `sinks` folder as project photos of the model and
 /// stores their thumbnails.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sinks/{id}/images",
     operation_id = "add_sink_images",
@@ -230,7 +230,7 @@ pub async fn add_images(
 /// Delete an installed photo of a sink model
 ///
 /// Deletes the photo and its stored file.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/sinks/{id}/images/{image_id}",
     operation_id = "delete_sink_image",

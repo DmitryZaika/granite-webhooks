@@ -10,6 +10,7 @@ use crate::auth::session::SessionUser;
 use crate::automation_notice::{self, Snapshot};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::routes::templates::handlers::template_body_error;
 use crate::routes::templates::schemas::TemplateScope;
 use crate::sql::push_in;
@@ -22,7 +23,6 @@ use common::utils::email_send_window::{FollowupChannel, followup_next_send_at};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySql, MySqlPool, QueryBuilder, Transaction};
 use std::collections::{HashMap, HashSet};
-use utoipa::ToSchema;
 
 /// The flow the AI writes for one customer; not listed with the others.
 const AI_FLOW_NAME: &str = "Generated with AI";
@@ -363,7 +363,7 @@ const FLOW_COLUMNS: &str = "id, user_id, name, created_at, updated_at";
 ///
 /// The company's flows and the caller's own (not the per-customer AI flows),
 /// company flows first, newest first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms-flows",
     operation_id = "list_sms_flows",
@@ -410,7 +410,7 @@ pub async fn list(
 ///
 /// One of the company's flows or the caller's own, including an AI flow
 /// the caller confirmed for a customer.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms-flows/{id}",
     operation_id = "get_sms_flow",
@@ -529,7 +529,7 @@ async fn insert_steps(
 /// `step_needs_template_or_text`, `invalid_template_body`,
 /// `template_has_custom_variables`, `sms_text_too_long`,
 /// `template_not_found`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sms-flows",
     operation_id = "create_sms_flow",
@@ -677,7 +677,7 @@ async fn reschedule(pool: &MySqlPool, company_id: i32, flow_id: i32) -> Result<(
 ///
 /// Replaces the name and steps of the caller's flow (admins: a company
 /// flow); customers already in it keep their place, on the new timing.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/sms-flows/{id}",
     operation_id = "update_sms_flow",
@@ -731,7 +731,7 @@ pub async fn update(
 /// Delete an SMS flow
 ///
 /// Customers in it stop receiving it.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/sms-flows/{id}",
     operation_id = "delete_sms_flow",

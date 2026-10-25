@@ -15,6 +15,8 @@ use crate::auth::EmployeeUser;
 use crate::auth::session::{SessionUser, find_user};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::emails::schemas::{SendAttachment, SignatureRequestInput};
 use crate::routes::emails::send::{Cleaned, deliver};
 use crate::routes::sms::provider::SmsProvider;
@@ -28,8 +30,6 @@ use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::MySqlPool;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// Due messages sent per table and call.
 const DUE_BATCH_LIMIT: i64 = 20;
@@ -711,7 +711,7 @@ pub struct SmsQuery {
 /// List my scheduled texts to a phone
 ///
 /// Sends the caller's due messages first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/delayed/sms",
     operation_id = "list_delayed_sms",
@@ -762,7 +762,7 @@ pub struct EmailsQuery {
 /// List my scheduled emails in a conversation or to a customer
 ///
 /// Sends the caller's due messages first; empty without a thread or customer.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/delayed/emails",
     operation_id = "list_delayed_emails",
@@ -816,7 +816,7 @@ pub struct EditPending {
 /// Edit a scheduled message
 ///
 /// Replaces the text (an email's body) and the send time.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/delayed/{kind}/{id}",
     operation_id = "edit_delayed",
@@ -884,7 +884,7 @@ pub async fn edit(
 /// Send a scheduled message now
 ///
 /// Sends it right away, even if the customer has written since.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/delayed/{kind}/{id}/send-now",
     operation_id = "send_delayed_now",
@@ -925,7 +925,7 @@ pub async fn send_now(
 /// Cancel a scheduled message
 ///
 /// It will not be sent.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/delayed/{kind}/{id}",
     operation_id = "cancel_delayed",

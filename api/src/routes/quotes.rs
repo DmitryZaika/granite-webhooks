@@ -11,14 +11,14 @@
 
 use crate::auth::{EmployeeUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::quote_editor::STONE_IN_STOCK_SQL;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -93,7 +93,7 @@ pub struct QuoteList {
 /// Every quote of the caller's company that is not deleted (only one
 /// customer's with `customer_id`), newest first, with its customer, price
 /// list and when its email was last viewed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quotes",
     operation_id = "list_quotes",
@@ -154,7 +154,7 @@ pub async fn list_quotes(
 /// Delete a quote
 ///
 /// Soft-deletes one of the company's quotes: it leaves the list, its rows stay.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/quotes/{id}",
     operation_id = "delete_quote",
@@ -254,7 +254,7 @@ fn picture(url: Option<String>) -> Option<String> {
 /// layout. What is left of a partly sold slab is marked `leftover`.
 /// `stone_url` is the photo of such a stone that is in stock (regular
 /// stock or a free slab), null when none is.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quotes/inventory-slabs",
     operation_id = "list_quote_inventory_slabs",
@@ -371,7 +371,7 @@ fn valid_print_name(name: &str) -> Option<&str> {
 /// bucket (`quote-previews/`) and a link to open it under its file name in
 /// the print window. Replaces the CRM's in-memory preview (10 minutes);
 /// the bucket's lifecycle rule removes old previews.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quotes/print-previews",
     operation_id = "create_quote_print_preview",

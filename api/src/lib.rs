@@ -73,7 +73,6 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::get};
 use state::AppState;
-use std::sync::Arc;
 
 async fn health_check() -> &'static str {
     "ok"
@@ -200,8 +199,7 @@ fn panic_response(panic: Box<dyn std::any::Any + Send + 'static>) -> Response {
 
 pub fn app(state: AppState) -> Router {
     let cors = state.cors_layer();
-    let (routes, spec) = openapi::router_with_spec();
-    let spec: Arc<str> = spec.to_json().expect("OpenAPI spec serializes").into();
+    let (routes, spec) = openapi::router_and_spec_json();
     let all_routes = Router::new()
         .route("/", get(health_check))
         .route(

@@ -19,6 +19,8 @@ use crate::auth::ShopOrEmployeeUser;
 use crate::auth::session::{SessionUser, user_positions};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
 use axum::Json;
@@ -27,8 +29,6 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{MySqlConnection, MySqlPool};
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -163,7 +163,7 @@ pub struct TransactionDetail {
 ///
 /// The sale with its customer and seller, its slabs (with their cut state,
 /// size, room and remnants) and its sinks.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/transactions/{id}",
     operation_id = "get_transaction",
@@ -276,7 +276,7 @@ pub struct CutOptions {
 ///
 /// Stamps the slab's cut date (once) and updates the sale's status; with
 /// `with_remnants` (admins and the shop) its unsold remnants are deleted.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/transactions/{id}/slabs/{slab_id}/cut",
     operation_id = "cut_sale_slab",
@@ -331,7 +331,7 @@ pub async fn cut(
 /// it is a remnant, else its stone's) goes back to its parent and to its
 /// pieces: sold pieces take it and unsold ones are deleted, or else the
 /// first unsold piece takes it and the others are deleted.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/transactions/{id}/slabs/{slab_id}/uncut",
     operation_id = "uncut_sale_slab",
@@ -503,7 +503,7 @@ pub struct PartialCut {
 /// `admin|shop.transactions.edit` `partial-cut` bookkeeping): it resizes the
 /// first piece with `replace_first`, else adds a piece copying the slab's
 /// sale details; unless `add_another`, the slab is then marked cut.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/transactions/{id}/slabs/{slab_id}/partial-cut",
     operation_id = "partial_cut_sale_slab",
@@ -660,7 +660,7 @@ async fn off_sale(tx: &mut MySqlConnection, slab_id: i32, sale_id: i32) -> Resul
 ///
 /// Deletes the slab's unsold remnants and frees it (its room and sale
 /// details are cleared).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/transactions/{id}/slabs/{slab_id}/remove",
     operation_id = "remove_sale_slab",
@@ -721,7 +721,7 @@ pub struct Replacement {
 ///
 /// Puts a free slab on the sale with the old slab's room and sale details
 /// (and cut state), deletes the old slab's unsold remnants and frees it.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/transactions/{id}/slabs/{slab_id}/replace",
     operation_id = "replace_sale_slab",
@@ -803,7 +803,7 @@ pub struct SquareFeet {
 /// Set a slab's square feet
 ///
 /// The square feet of the room the slab is in, as the shop measured it.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/transactions/{id}/slabs/{slab_id}/square-feet",
     operation_id = "set_sale_slab_square_feet",
@@ -862,7 +862,7 @@ pub struct AddedSlab {
 ///
 /// Puts a free slab on the sale in the room, with the details of the
 /// room's first slab (its seam, edge, price...).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/transactions/{id}/slabs",
     operation_id = "add_sale_slab",

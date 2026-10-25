@@ -5,11 +5,11 @@
 //! own paths. Remix: `admin.sinks.*` and `admin.faucets.*` routes.
 
 use crate::error::ApiError;
+use crate::openapi::ToSchema;
 use crate::routes::uploads::{self, schemas::UploadFolder};
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use sqlx::{AssertSqlSafe, FromRow, MySqlConnection};
-use utoipa::ToSchema;
 
 /// Which model table a request is about.
 #[derive(Debug, Clone, Copy)]

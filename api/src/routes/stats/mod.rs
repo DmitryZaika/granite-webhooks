@@ -16,8 +16,8 @@ pub mod queries;
 pub mod schemas;
 pub mod widget_layout;
 
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// The current month and the two before it.
 pub const MESSAGE_MONTHS: u32 = 3;

@@ -4,6 +4,7 @@ use super::bad_request;
 use crate::auth::device::DeviceUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::availability::{Availability, WorkingHours};
 use crate::phone::call_rules::{self, ForwardAllTo};
 use crate::phone::hold_music;
@@ -21,7 +22,6 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Duration, SubsecRound, Utc};
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// `GET /v1/phone/caller-ids`.
 #[derive(Debug, Serialize, ToSchema)]
@@ -41,7 +41,7 @@ pub struct CallerIds {
 /// The company numbers the user may call from (direct lines first, then
 /// shared lines, then the main line) and the one to preselect. Device token
 /// only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/caller-ids",
     operation_id = "list_phone_caller_ids",
@@ -218,7 +218,7 @@ async fn hold_music_change(
 /// `/v1/phone/call-rules`. 400 `not_a_caller_id`, `cell_not_verified`,
 /// `invalid_phone`, `invalid_pin`, `pin_required`, `invalid_hold_music`, or
 /// a message for bad hours or timeouts. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/phone/settings",
     operation_id = "update_phone_settings",
@@ -423,7 +423,7 @@ pub struct AvailabilityInput {
 /// is `outside_hours` when the user is available but outside their working
 /// hours. While not available, calls go to the number's fallback (and still
 /// show in Recents). Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/phone/availability",
     operation_id = "set_phone_availability",
@@ -488,7 +488,7 @@ pub struct NoticeAcceptance {
 /// the 911 notice (on this phone); accepting again is fine. 400 for a
 /// version that does not exist (below 1 or above the current one). Device
 /// token only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/notices/accept",
     operation_id = "accept_phone_notice",

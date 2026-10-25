@@ -49,7 +49,7 @@ async fn require_deal(state: &AppState, user: &SessionUser, deal_id: i64) -> Api
 /// deals with the given `status` has an unfinished activity whose deadline
 /// day has passed. Fetch the stages with `GET /v1/deal-lists?group_id=` and
 /// the cards with `GET /v1/deals?group_id=`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deal-groups",
     operation_id = "list_deal_groups",
@@ -81,7 +81,7 @@ pub async fn list_groups(
 /// order. Without it: every live stage of every displayed group the company
 /// can use, ordered by group name then position (for pickers such as the bulk
 /// email "send to a stage" list).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deal-lists",
     operation_id = "list_deal_lists",
@@ -114,7 +114,7 @@ pub async fn list_lists(
 /// carries its customer (null when deleted), whether it has photos, emails
 /// and notes, its unfinished activities (count, earliest deadline, the one
 /// due first) and the phone of a running SMS follow-up flow.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deals",
     operation_id = "list_board_deals",
@@ -157,7 +157,7 @@ pub async fn board(
 /// Returns a live deal of the company: stage, group, outcome, amounts, the
 /// customer and how many deals they have, and how many files are attached.
 /// Related reads: `/stage-history`, `/activities`, `/notes`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deals/{id}",
     operation_id = "get_deal",
@@ -187,7 +187,7 @@ pub async fn get(
 ///
 /// Every stage the deal entered, oldest first; `exited_at` is null for the
 /// current stay. The last entry of a closed deal tells when it was closed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deals/{id}/stage-history",
     operation_id = "get_deal_stage_history",
@@ -219,7 +219,7 @@ pub async fn stage_history(
 /// caller who is a sales rep becomes the rep of a customer without one. Drip
 /// emails and SMS of the stage are scheduled for lead customers, and the
 /// customer is pushed to the company's CloudTalk contacts.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/deals",
     operation_id = "create_deal",
@@ -380,7 +380,7 @@ fn parse_due_date(raw: &str) -> ApiResult<NaiveDate> {
 /// A won or lost deal stays closed and keeps its close date; reopen it with
 /// `PUT /v1/deals/{id}/outcome`. Changing `customer_id` gives the deal to
 /// another customer of the company.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/deals/{id}",
     operation_id = "update_deal",
@@ -498,7 +498,7 @@ pub async fn update(
 /// the same treatment as `PATCH /v1/deals/{id}` with `list_id` (history, and
 /// drips for open deals; won and lost deals stay closed). Every deal and
 /// stage must belong to the company, otherwise nothing is saved.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/deals/reorder",
     operation_id = "reorder_deals",
@@ -583,7 +583,7 @@ async fn move_stage(
 /// `won` and `lost` close the deal (clearing the expected close date; `lost`
 /// stores `lost_reason`). `open` reopens a closed deal in its stage (or its
 /// last live stage) and schedules the stage's drips again.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/deals/{id}/outcome",
     operation_id = "set_deal_outcome",
@@ -646,7 +646,7 @@ pub async fn set_outcome(
 /// Delete a deal
 ///
 /// Soft-deletes the deal and records who deleted it in the customer's history.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/deals/{id}",
     operation_id = "delete_deal",
@@ -694,7 +694,7 @@ pub async fn delete(
 /// any of their email addresses or their exact name. The caller's own deals
 /// come first, then newest. Each deal carries up to two notes and two
 /// activities as a preview.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deals/by-customer",
     operation_id = "list_customer_deals",
@@ -740,7 +740,7 @@ pub async fn by_customer(
 /// Email addresses of the caller's customers (they are the sales rep) with a
 /// live open deal in stage `id`; won and lost deals count when asked. Each
 /// address once, lowercased, sorted.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deal-lists/{id}/recipients",
     operation_id = "list_deal_list_recipients",
@@ -823,7 +823,7 @@ fn activity_name(name: &str) -> ApiResult<String> {
 /// List a deal's activities
 ///
 /// Live activities of the deal, newest first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deals/{id}/activities",
     operation_id = "list_deal_activities",
@@ -854,7 +854,7 @@ pub async fn list_activities(
 /// Creates a to-do. The deal owner and the customer's sales rep are notified
 /// (in the app and on Telegram), and a deadline with a time schedules a
 /// reminder for the owner at that time.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/deals/{id}/activities",
     operation_id = "create_deal_activity",
@@ -933,7 +933,7 @@ pub async fn create_activity(
 /// Changes the fields sent. Editing name, deadline or priority notifies the
 /// deal's people and reschedules the reminder; `is_completed: true` marks it
 /// done (and drops its reminder), `false` reopens it.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/deals/{id}/activities/{activity_id}",
     operation_id = "update_deal_activity",
@@ -1040,7 +1040,7 @@ pub async fn update_activity(
 /// Delete an activity
 ///
 /// Soft-deletes it, drops its reminder and notifies the deal's people.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/deals/{id}/activities/{activity_id}",
     operation_id = "delete_deal_activity",
@@ -1089,7 +1089,7 @@ pub async fn delete_activity(
 ///
 /// Up to 50 names of live activities the caller created, most used first,
 /// then most recently used; for the activity name input's suggestions.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deal-activities/suggestions",
     operation_id = "list_activity_suggestions",
@@ -1118,7 +1118,7 @@ pub async fn activity_suggestions(
 ///
 /// Removes it from the caller's suggestions for good, however often they use
 /// it after. Hiding a hidden name again is a no-op.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/deal-activities/suggestions/hidden",
     operation_id = "hide_activity_suggestion",
@@ -1193,7 +1193,7 @@ async fn require_note(
 /// List a deal's notes
 ///
 /// Live notes, newest first, each with its live comments oldest first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deals/{id}/notes",
     operation_id = "list_deal_notes",
@@ -1222,7 +1222,7 @@ pub async fn list_notes(
 /// Add a note to a deal
 ///
 /// Up to 5000 characters. Notifies the deal's people.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/deals/{id}/notes",
     operation_id = "create_deal_note",
@@ -1278,7 +1278,7 @@ pub async fn create_note(
 /// Edit or pin a note
 ///
 /// Changes the text (notifying the deal's people) and/or pins it.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/deals/{id}/notes/{note_id}",
     operation_id = "update_deal_note",
@@ -1341,7 +1341,7 @@ pub async fn update_note(
 /// Delete a note
 ///
 /// Soft-deletes it. When an admin deletes it, the deal's people are notified.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/deals/{id}/notes/{note_id}",
     operation_id = "delete_deal_note",
@@ -1388,7 +1388,7 @@ pub async fn delete_note(
 ///
 /// Up to 2000 characters. Only admins' comments carry their name, and only
 /// those notify the deal's people.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/deals/{id}/notes/{note_id}/comments",
     operation_id = "create_deal_note_comment",
@@ -1452,7 +1452,7 @@ pub async fn create_comment(
 /// Delete a comment
 ///
 /// Soft-deletes it. When an admin deletes it, the deal's people are notified.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/deals/{id}/notes/{note_id}/comments/{comment_id}",
     operation_id = "delete_deal_note_comment",

@@ -5,14 +5,14 @@
 
 use crate::auth::ShopOrEmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Query, State};
 use chrono::{Days, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(cut_stats))
@@ -78,7 +78,7 @@ fn by_most(map: BTreeMap<String, f64>) -> Vec<MaterialSqft> {
 /// was cut and by stone type, for the caller's company. A slab's square
 /// feet are its `square_feet`, else length × width / 144. Rooms with any
 /// uncut slab are left out.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/shop/cut-stats",
     operation_id = "get_shop_cut_stats",

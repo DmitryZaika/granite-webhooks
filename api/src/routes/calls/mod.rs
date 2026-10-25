@@ -21,6 +21,8 @@ mod transcript;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::company::queries::company_features;
 use crate::routes::sms::provider::SmsProvider;
 use crate::state::AppState;
@@ -37,8 +39,6 @@ use serde_json::{Value, json};
 use std::collections::{HashSet, VecDeque};
 use std::fmt::Write;
 use std::time::{Duration, Instant};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -189,7 +189,7 @@ const TELNYX_CALLS_LIMIT: i64 = 200;
 /// only of the calls the caller may hear, `Telnyx.may_hear`): call the
 /// recording route with `Cdr.recording_link` and `POST /v1/call-transcripts`
 /// with `Cdr.id`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/calls/{provider}",
     operation_id = "list_calls",
@@ -401,7 +401,7 @@ fn ringcentral_error(err: &common::telephony::ringcentral::ApiError) -> String {
 /// `cloudtalk_not_configured`, `agent_not_linked`, `agent_not_online`,
 /// `ringcentral_not_configured`, `my_line_missing`,
 /// `ringcentral_no_call_permission`, `invalid_phone`, `rate_limited`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/calls/{provider}",
     operation_id = "start_call",

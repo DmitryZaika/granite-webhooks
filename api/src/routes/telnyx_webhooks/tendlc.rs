@@ -65,7 +65,7 @@ fn ours(row: &Row, payload: &Value) -> bool {
 /// A number notification updates that number's assignment. Notifications
 /// about another brand or campaign, or seen before, are answered 200 and
 /// change nothing.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/10dlc",
     operation_id = "take_telnyx_10dlc_event",

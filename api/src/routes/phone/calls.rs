@@ -5,6 +5,7 @@ use super::{RateLimited, bad_request, calling_setup, denied, rate_limited, telny
 use crate::auth::device::{DeviceUser, PhoneCaller};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::openapi::{IntoParams, ToSchema};
 use crate::phone::calls::{self, CallFilter, CallRow, Hearer, NOT_TEST_CALL, RecentsQuery};
 use crate::phone::lines::{self, CallerId, default_caller_id};
 use crate::phone::numbers::{is_nanp, last10, to_e164};
@@ -21,7 +22,6 @@ use chrono::{DateTime, Utc};
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
-use utoipa::{IntoParams, ToSchema};
 
 /// Calls per Recents page when the app asks for no number.
 const DEFAULT_PAGE: i64 = 50;
@@ -68,7 +68,7 @@ pub struct CallList {
 /// messages included), `incoming`, `outgoing`, `recorded`; `number` = one
 /// number's calls. Pages by id (`before`, `limit` 1 to 100, default 50).
 /// Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/calls",
     operation_id = "list_phone_calls",
@@ -125,7 +125,7 @@ pub async fn list_calls(
 /// hear it (`hasRecording`). The native calling module reads it (device
 /// header) to word missed-call notifications. 404 for other companies'
 /// calls. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/calls/{id}",
     operation_id = "get_phone_call",
@@ -171,7 +171,7 @@ async fn company_call(pool: &MySqlPool, company_id: i32, id: i64) -> sqlx::Resul
 /// Hides the call from the caller's Recents only (others still see it; it
 /// stays in contact cards and stats). 404 for other companies' calls.
 /// Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/phone/calls/{id}",
     operation_id = "hide_phone_call",
@@ -222,7 +222,7 @@ pub struct SeenInput {
 /// Marks calls seen for the caller (clears them from the unread counts and
 /// shows them as seen): the `ids` sent, or every call in their Recents that
 /// started at or before `upTo`. Send one of the two. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/calls/seen",
     operation_id = "mark_phone_calls_seen",
@@ -308,7 +308,7 @@ pub struct CallStats {
 /// this week (from Monday) and this month, in the company's time zone (its
 /// business hours' zone, else America/Indiana/Indianapolis). Device token
 /// only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/calls/stats",
     operation_id = "get_phone_call_stats",
@@ -391,7 +391,7 @@ pub struct RecordingLink {
 /// answered the users its line rings, the owner of its deal, company admins
 /// and sales managers. 404 when the call has no recording (or is another
 /// company's). Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/calls/{id}/recording",
     operation_id = "get_phone_call_recording",
@@ -461,7 +461,7 @@ pub struct CallNoteCreated {
 /// oldest open deal of the call's customer, and tells the deal's people
 /// like a note written in the CRM. 400 `no_deal` when the call has neither;
 /// 404 for other companies' calls. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/calls/{id}/note",
     operation_id = "add_phone_call_note",
@@ -695,7 +695,7 @@ async fn placed(pool: &MySqlPool, id: i64, sid: Option<&str>) -> sqlx::Result<()
 /// `rate_limited` (6 calls a minute, and the company's daily limit; counted
 /// for all the user's phones and the CRM together). Takes the device token
 /// or the session cookie.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/calls/via-cell",
     operation_id = "call_phone_via_cell",
@@ -799,7 +799,7 @@ pub async fn call_via_cell(
 /// `GET /v1/phone/calls/{id}`. 400 when the phone is not registered; 403
 /// `calling_disabled`; 429 `rate_limited` (6 calls a minute). Device token
 /// only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/calls/test",
     operation_id = "test_phone_call",
@@ -899,7 +899,7 @@ pub struct DeclineInput {
 /// number's no-answer action (AI Assistant, voicemail or forward), which
 /// stops the user's other phones. On a shared line that also rings others,
 /// only this phone stops. Unknown ids are ignored. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/calls/decline",
     operation_id = "decline_phone_call",

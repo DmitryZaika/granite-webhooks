@@ -1,8 +1,8 @@
 use super::schemas::{SalesGoal, TelegramIdsRow};
+use crate::openapi::ToSchema;
 use crate::telegram::Bot;
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
-use utoipa::ToSchema;
 
 /// A position the user holds in the current company.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]

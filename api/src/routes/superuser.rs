@@ -14,6 +14,8 @@ use crate::auth::CurrentUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingEmail, SendFailure};
@@ -22,8 +24,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -49,7 +49,7 @@ pub struct PlainEmail {
 ///
 /// Sends a plain-text email from `noreply@granite-manager.com` through the
 /// webhooks Lambda. Super admins only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/superuser/emails",
     operation_id = "send_superuser_email",
@@ -145,7 +145,7 @@ pub struct OnboardingFeedback {
 /// List onboarding feedback
 ///
 /// Every company's guided-tour ratings, newest first. Super admins only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/onboarding-feedbacks",
     operation_id = "list_onboarding_feedbacks",
@@ -228,7 +228,7 @@ pub struct SignatureAccess {
 /// Every company and its users with whether each may send documents for
 /// signature (eSignatures are given per user, with no company switch);
 /// `company_id` narrows the users to one company. Super admins only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/signature-access",
     operation_id = "list_signature_access",
@@ -297,7 +297,7 @@ pub struct SignatureAccessInput {
 ///
 /// Lets a live user send documents for signature, or stops them. Super
 /// admins only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/superuser/users/{id}/signature-access",
     operation_id = "set_signature_access",
@@ -416,7 +416,7 @@ pub struct WidgetAnalytics {
 ///
 /// How every company's users use their dashboard widgets: uses per widget,
 /// all events and the widgets each dashboard has. Super admins only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/widget-analytics",
     operation_id = "get_widget_analytics",

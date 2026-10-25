@@ -27,7 +27,7 @@ use chrono::Utc;
 /// When another tick is running it returns at once with `busy`. PostHog or
 /// GitHub failures do not fail the call: they are listed in `errors` and
 /// retried on the next tick.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/posthog-autofix",
     operation_id = "run_posthog_autofix",

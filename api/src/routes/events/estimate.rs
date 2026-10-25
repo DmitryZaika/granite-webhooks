@@ -9,13 +9,13 @@ use super::writes::{EventInput, check};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::routes::sms::provider::phone10;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// The onboarding tour's sample customer: booking it saves nothing.
 const SAMPLE_CUSTOMER_ID: i32 = 990_000_021;
@@ -124,7 +124,7 @@ fn bad(message: &str) -> ApiError {
 /// office manager's line (else emails them from their sales rep), and
 /// schedules the customer's and the rep's reminders. The customer needs a
 /// phone or an email.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/events/estimates",
     operation_id = "book_estimate",

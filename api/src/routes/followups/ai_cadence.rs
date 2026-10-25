@@ -16,6 +16,7 @@ use crate::followups::enrollments;
 use crate::followups::generation::GenerationError;
 use crate::followups::processor::{company_sms_provider, process_due_enrollment};
 use crate::followups::send_window::FollowupChannel;
+use crate::openapi::ToSchema;
 use crate::routes::sms::provider::{SmsProvider, valid_thread_phone};
 use crate::state::AppState;
 use axum::Json;
@@ -24,7 +25,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// SMS or email.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -238,7 +238,7 @@ fn checked_target(target: &Target) -> Result<CadenceTarget, &'static str> {
 /// Plans the follow-up for the customer and has the model write it. A
 /// customer who should not be followed up now comes back as 400
 /// `nothing_to_send` with the reason (`force_generate` overrides most).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/followups/ai-cadence/preview",
     operation_id = "preview_ai_cadence",
@@ -327,7 +327,7 @@ pub struct Regenerated {
 ///
 /// Writes the message again, different from the drafts the rep turned down
 /// (400 `regenerate_too_similar` when the model keeps repeating itself).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/followups/ai-cadence/regenerate",
     operation_id = "regenerate_ai_cadence_message",
@@ -430,7 +430,7 @@ async fn visible_flow(
 /// Saves the approved messages as the rep's "Generated with AI" flow and
 /// starts it for the customer (`switch`: replacing the running one). A
 /// first message due now is sent before the response.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/followups/ai-cadence",
     operation_id = "start_ai_cadence",

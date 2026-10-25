@@ -3,10 +3,10 @@
 
 use super::clock::time_zone;
 use super::wire_enum;
+use crate::openapi::ToSchema;
 use crate::serde_helpers::js_date;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// Most time ranges working hours may list.
 const MAX_RANGES: usize = 28;

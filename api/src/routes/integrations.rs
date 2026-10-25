@@ -24,6 +24,8 @@ use crate::auth::{EmployeeUser, UserManager};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::oauth_state;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::qbo::{self, CredentialsSource, QboError};
 use crate::ringcentral_connect::{self, ConnectionStatus};
 use crate::routes::auth::company_subdomain;
@@ -35,8 +37,6 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -149,7 +149,7 @@ struct SettingsRow {
 /// `QuickBooks` and `RingCentral` connections (the latter checked with
 /// `RingCentral`). Superusers and company managers (admins with the Manager
 /// position); superusers may pass `company_id`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/company/settings",
     operation_id = "get_company_settings",
@@ -234,7 +234,7 @@ pub struct CompanySettingsInput {
 ///
 /// Replaces the name, address, logo height and sales tax, and the logo when
 /// a new one is given.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/company/settings",
     operation_id = "save_company_settings",
@@ -333,7 +333,7 @@ pub struct ApiTokenEmail {
 /// Sends Granite Manager's documentation API bearer token
 /// (`GRANITE_MANAGER_DOCS_BEARER_TOKEN`) to the address given. Only for
 /// holders of the Manager position.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/company/api-token-email",
     operation_id = "email_api_token",
@@ -441,7 +441,7 @@ async fn can_connect_quickbooks(state: &AppState, company_id: i32) -> ApiResult<
 ///
 /// Whether the caller's company can connect `QuickBooks` and whether it is
 /// connected (for the connect page).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quickbooks/connection",
     operation_id = "get_quickbooks_connection",
@@ -479,7 +479,7 @@ pub struct AuthorizeLink {
 /// `/redirects/quickbooks/user-auth` on the app's apex domain with `code`,
 /// `state` and `realmId`; post them to `POST /v1/quickbooks/connection`
 /// within 15 minutes.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quickbooks/connection/start",
     operation_id = "start_quickbooks_connection",
@@ -549,7 +549,7 @@ pub struct Connected {
 /// `state` must be one `POST /v1/quickbooks/connection/start` gave this user
 /// for this company in the last 15 minutes (400 "connection expired"
 /// otherwise).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quickbooks/connection",
     operation_id = "finish_quickbooks_connection",
@@ -614,7 +614,7 @@ pub async fn finish_quickbooks(
 /// Disconnect QuickBooks
 ///
 /// Forgets the company's `QuickBooks` connection.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/quickbooks/connection",
     operation_id = "disconnect_quickbooks",
@@ -654,7 +654,7 @@ pub struct RealmDisconnect {
 /// required: anyone could otherwise disconnect a company knowing its realm id
 /// (a signed-out visitor loses nothing: the app asks to reconnect once Intuit
 /// refuses the tokens). Always 204 (it never tells whether it matched).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quickbooks/disconnected",
     operation_id = "quickbooks_disconnected",
@@ -690,7 +690,7 @@ pub struct QuickbooksApp {
 ///
 /// Superusers: stores (encrypted) the client id and secret of an Intuit app
 /// the company connects through instead of the shared one.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/superuser/companies/{id}/quickbooks-app",
     operation_id = "save_company_quickbooks_app",
@@ -742,7 +742,7 @@ pub async fn save_quickbooks_app(
 /// returns to `/redirects/ringcentral/user-auth` on the app's apex domain
 /// with `code` and `state` (or `error`); post them to
 /// `POST /v1/ringcentral/connection` within 15 minutes.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ringcentral/connection/start",
     operation_id = "start_ringcentral_connection",
@@ -790,7 +790,7 @@ pub struct RingcentralCallback {
 ///
 /// Trades the code for tokens, saves the connection and subscribes to the
 /// company's texts (a failed subscription does not undo the connect).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ringcentral/connection",
     operation_id = "finish_ringcentral_connection",
@@ -885,7 +885,7 @@ pub async fn finish_ringcentral(
 ///
 /// Stops `RingCentral` pushing the company's texts and forgets the
 /// connection.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/ringcentral/connection",
     operation_id = "disconnect_ringcentral",

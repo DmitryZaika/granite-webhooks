@@ -1,5 +1,5 @@
+use crate::openapi::ToSchema;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// Where an upload goes; each record type takes files of its own folder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]

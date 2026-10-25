@@ -12,6 +12,8 @@
 use crate::auth::AdminUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::edit::{
     catalog_items_to_create, list_after_move, own_extras, with_extra_ids, without_catalog_id,
 };
@@ -25,8 +27,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
 use std::collections::HashSet;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -119,7 +119,7 @@ pub struct ExtrasCatalog {
 /// List the extras catalog
 ///
 /// In order, with how many extras the price lists still keep themselves.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quote-extras",
     operation_id = "list_quote_extras",
@@ -162,7 +162,7 @@ pub struct NewExtra {
 ///
 /// Every price list offers it, except `off_list_ids`, which each get a
 /// revision that switches it off.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quote-extras",
     operation_id = "create_quote_extra",
@@ -246,7 +246,7 @@ pub struct EditedCatalog {
 ///
 /// Each extra's content and order; extras left out are deleted (price lists
 /// stop offering them). Names must be unique.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quote-extras",
     operation_id = "save_quote_extras",
@@ -324,7 +324,7 @@ pub struct MovedExtras {
 /// Once: extras with the same name become one catalog extra (the first
 /// list's version wins), and each list links to them, keeping its own
 /// prices where they differ.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quote-extras/moves",
     operation_id = "move_quote_list_extras",

@@ -13,12 +13,12 @@ use super::thread::{thread_contents, thread_customer};
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use utoipa::{IntoParams, ToSchema};
 
 /// Threads per page.
 const PAGE_SIZE: i64 = 50;
@@ -128,7 +128,7 @@ const fn super_only(user: &crate::auth::session::SessionUser) -> ApiResult<()> {
 /// A page (50 threads) of the sales mailbox's inbox (mail to it, not from it)
 /// or sent folder, across every company, ranked by each thread's latest
 /// message in the folder. Super admins only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/sales-emails",
     operation_id = "list_sales_mailbox",
@@ -247,7 +247,7 @@ pub async fn list(
 /// Every message of a thread that has mail to or from the sales mailbox,
 /// with attachments and addresses, and who it is with. Read only: opening
 /// it marks nothing read. Super admins only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/sales-emails/{thread_id}",
     operation_id = "get_sales_mailbox_thread",

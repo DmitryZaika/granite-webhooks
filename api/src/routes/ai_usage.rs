@@ -9,13 +9,13 @@
 
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Query, State};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -238,7 +238,7 @@ async fn features(
 /// Spend this month, last month to date, ever and in the range; calls, cost,
 /// success and models by feature; models logged at $0 without a price; and a
 /// page of the range's calls. Optionally one company. Super users only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/ai-usage/overview",
     operation_id = "get_ai_usage_overview",
@@ -437,7 +437,7 @@ fn valid_key(key: &str) -> bool {
 ///
 /// Totals, the five costliest users and the latest calls of a feature in
 /// a date range (optionally one company). Super users only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/ai-usage/feature",
     operation_id = "get_ai_feature_usage",

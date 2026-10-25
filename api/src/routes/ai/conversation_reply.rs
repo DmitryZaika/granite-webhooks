@@ -25,7 +25,7 @@ use axum::extract::State;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use utoipa::ToSchema;
+use crate::openapi::ToSchema;
 
 /// The model when the main one is not available to the key.
 pub const REPLY_FALLBACK_MODEL: &str = "gpt-5.6-luna";
@@ -574,7 +574,7 @@ async fn load_extras(
 /// customer by name only in a new conversation or when the last SMS or email
 /// with them is from an earlier day; otherwise it has no greeting and no
 /// name. Takes several seconds (a larger model).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/conversation-reply",
     operation_id = "draft_conversation_reply",

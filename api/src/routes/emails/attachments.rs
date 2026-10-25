@@ -78,7 +78,7 @@ pub(super) async fn readable_attachment(
 ///
 /// Adds the attachment to the deal's photos (images) or documents (other
 /// files), once: saving it again changes nothing.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/email-attachments/{id}/deal",
     operation_id = "add_email_attachment_to_deal",
@@ -136,7 +136,7 @@ pub async fn add_to_deal(
 /// URLs of the photos and documents of the deal, or of every deal of the
 /// customer (by address or name). Attachments whose URL is listed are
 /// already saved.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deals/file-urls",
     operation_id = "list_deal_file_urls",
@@ -211,7 +211,7 @@ mod tests {
 }
 
 /// A picture sent with an email.
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Serialize, crate::openapi::ToSchema)]
 pub struct EmailImage {
     /// The attachment.
     pub id: i32,
@@ -223,7 +223,7 @@ pub struct EmailImage {
 ///
 /// Image attachments (HEIC included) of one of the company's emails, for the
 /// photo viewer.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/emails/{id}/images",
     operation_id = "list_email_images",

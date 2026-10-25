@@ -21,6 +21,7 @@
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::company::queries::company_features;
 use crate::routes::events::history::{History, record};
 use crate::routes::events::notify::{
@@ -42,7 +43,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::{MySql, MySqlPool, Transaction};
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use utoipa::{IntoParams, ToSchema};
 
 /// Longest text a template may send.
 const MAX_SMS: usize = 1600;
@@ -617,7 +617,7 @@ async fn save_steps(
 /// List the customer notification templates and flows
 ///
 /// Texts are left out while the company has no `CloudTalk` or `RingCentral`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/schedule/notifications",
     operation_id = "list_schedule_notifications",
@@ -646,7 +646,7 @@ pub async fn list(
 /// Add a customer notification template
 ///
 /// A text needs `CloudTalk` or `RingCentral`; an email needs a subject.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/schedule/notifications/templates",
     operation_id = "create_schedule_notification_template",
@@ -687,7 +687,7 @@ pub async fn create_template(
 /// Edit a customer notification template
 ///
 /// The flows using it send the new text from then on.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/schedule/notifications/templates/{id}",
     operation_id = "update_schedule_notification_template",
@@ -736,7 +736,7 @@ pub async fn update_template(
 /// Delete a customer notification template
 ///
 /// Refused while a flow uses it.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/schedule/notifications/templates/{id}",
     operation_id = "delete_schedule_notification_template",
@@ -789,7 +789,7 @@ pub async fn delete_template(
 /// Add a customer notification flow
 ///
 /// Making it the default unsets the calendar's other default.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/schedule/notifications/flows",
     operation_id = "create_schedule_notification_flow",
@@ -846,7 +846,7 @@ pub async fn create_flow(
 ///
 /// Steps sent in `steps` with their id are kept (and not sent again); the
 /// others are added, and steps left out are deleted.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/schedule/notifications/flows/{id}",
     operation_id = "update_schedule_notification_flow",
@@ -901,7 +901,7 @@ pub async fn update_flow(
 /// Delete a customer notification flow
 ///
 /// Events that had it get none of its messages from then on.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/schedule/notifications/flows/{id}",
     operation_id = "delete_schedule_notification_flow",
@@ -963,7 +963,7 @@ pub struct ActiveFlows {
 /// others it can pick instead or as well; with `event_id`, whether it turned
 /// the default off and which others it picked. Texts are left out while
 /// texting is not set up.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/schedule/notifications/active",
     operation_id = "list_active_schedule_notifications",
@@ -1588,7 +1588,7 @@ fn confirmation_failure(code: &str) -> ApiError {
 ///
 /// Sends one of the company's templates to the event's customer right
 /// away, whenever the appointment is, and notes it in the event's history.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/events/{id}/confirmation",
     operation_id = "send_event_confirmation",

@@ -12,6 +12,7 @@ use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::followups::enrollments::{self, Control, Refusal, Target};
 use crate::followups::processor::process_due_enrollment;
+use crate::openapi::ToSchema;
 use crate::routes::sms::provider::{SmsProvider, valid_thread_phone};
 use crate::routes::sms::schemas::ActiveFlow;
 use crate::state::AppState;
@@ -20,7 +21,6 @@ use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::Instant;
-use utoipa::ToSchema;
 
 /// The flow on a customer or thread.
 #[derive(Debug, Serialize, ToSchema)]
@@ -173,7 +173,7 @@ fn phone_target(phone: &str) -> ApiResult<Target> {
 /// A customer's flow
 ///
 /// The flow running for the customer (or the last one that failed).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/{customer_id}/flow",
     operation_id = "get_customer_flow",
@@ -204,7 +204,7 @@ pub async fn get_customer_flow(
 /// its next step now. Refusals come back as a token in `error`
 /// (`flow_not_found`, `agent_not_linked`, `missing_email`, `invalid_status`,
 /// `not_due`, ...).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/customers/{customer_id}/flow",
     operation_id = "act_on_customer_flow",
@@ -236,7 +236,7 @@ pub async fn act_on_customer_flow(
 /// A thread's flow
 ///
 /// The flow running on the phone, for someone who may see it.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/{provider}/threads/{phone}/flow",
     operation_id = "get_sms_thread_flow",
@@ -267,7 +267,7 @@ pub async fn get_thread_flow(
 /// Act on a thread's flow
 ///
 /// Like the customer's, for the phone of an SMS conversation.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sms/{provider}/threads/{phone}/flow",
     operation_id = "act_on_sms_thread_flow",

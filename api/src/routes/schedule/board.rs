@@ -13,6 +13,7 @@
 use crate::auth::{AdminUser, CurrentUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::openapi::{IntoParams, ToSchema};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -20,7 +21,6 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use utoipa::{IntoParams, ToSchema};
 
 /// `positions.id` of an installer.
 const INSTALLER: i32 = 6;
@@ -112,7 +112,7 @@ pub struct ScheduleEvents {
 /// before its end and repeat past its start (the page expands them), with
 /// their customers' names and QuickBooks invoices. Events of calendars
 /// hidden for everyone or from the caller are left out.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/schedule/events",
     operation_id = "list_schedule_events",
@@ -237,7 +237,7 @@ async fn load_events(
 /// The company's unscheduled events (kept off the calendar until someone
 /// picks the date), oldest first, with their customers' names. Events of
 /// calendars hidden for the caller are left out.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/schedule/unscheduled",
     operation_id = "list_unscheduled_events",
@@ -299,7 +299,7 @@ pub struct MyScheduleQuery {
 /// day), on any calendar, with their customers' names. An
 /// admin or superuser may read an installer's or template maker's schedule
 /// with `user_id`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/schedule",
     operation_id = "get_my_schedule",
@@ -374,7 +374,7 @@ fn default_color(user_id: i32) -> &'static str {
 ///
 /// The company's installers and template makers (one entry per role a user
 /// holds), by name, with their schedule colors.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/schedule/people",
     operation_id = "list_schedule_people",
@@ -438,7 +438,7 @@ pub struct PersonColor {
 /// Set a person's schedule color
 ///
 /// Their events on the Installations or Templates calendar show in it.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/schedule/people/{user_id}/color",
     operation_id = "set_schedule_person_color",

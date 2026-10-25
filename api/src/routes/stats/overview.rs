@@ -7,13 +7,13 @@
 use crate::auth::AdminUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::stats::schemas::SmsProvider;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySql, MySqlPool, QueryBuilder};
-use utoipa::{IntoParams, ToSchema};
 
 /// `positions.id` of a sales rep.
 const SALES_REP: i32 = 1;
@@ -688,7 +688,7 @@ async fn sms_per_month_of(
 /// ratings, top sold stones and emails and texts per month, for the
 /// company's admins. Deals count by their last update (conversion and the
 /// table by creation), leads by assignment and other customers by creation.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/stats/overview",
     operation_id = "get_stats_overview",

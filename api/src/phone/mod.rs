@@ -89,7 +89,7 @@ macro_rules! wire_enum {
     ) => {
         $(#[$meta])*
         #[derive(
-            Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+            Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, crate::openapi::ToSchema,
         )]
         pub enum $name {
             $( $(#[$variant_meta])* #[serde(rename = $text)] $variant, )+

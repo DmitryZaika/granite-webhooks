@@ -18,7 +18,7 @@ use axum::extract::State;
 /// created, and the open pipeline (count and amount, whenever created). Only
 /// deals assigned to the user, of live customers of the company and in live
 /// deal lists, count.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/stats/sales",
     operation_id = "get_my_sales_stats",
@@ -46,7 +46,7 @@ pub async fn sales(
 /// Returns how many of the signed-in user's deals were won out of all of
 /// them, overall and by how the customer came in (leads, walk-in, call-in).
 /// All time; deals of deleted customers or in deleted lists are left out.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/stats/deal-conversion",
     operation_id = "get_my_deal_conversion",
@@ -72,7 +72,7 @@ pub async fn deal_conversion(
 /// Returns up to 3 stones the signed-in user sold the most full slabs of this
 /// month so far (sales not cancelled; remnants not counted), most slabs first,
 /// then most square feet. Empty when they sold none.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/stats/top-stones",
     operation_id = "list_my_top_sold_stones",
@@ -100,7 +100,7 @@ pub async fn top_stones(
 /// Returns how many emails the signed-in user sent in each of the current
 /// month and the two before it (UTC), oldest first. Months without emails are
 /// left out. Counts emails of the company and ones with no company.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/stats/sent-emails",
     operation_id = "list_my_sent_emails_per_month",
@@ -132,7 +132,7 @@ pub async fn sent_emails(
 /// Counts sent outbound texts sent by the user or through their CloudTalk
 /// agent / RingCentral extension. Months without texts are left out; with no
 /// provider, `provider` is null and `months` empty.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/stats/sent-sms",
     operation_id = "list_my_sent_sms_per_month",

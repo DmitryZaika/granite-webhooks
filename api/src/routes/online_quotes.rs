@@ -20,6 +20,8 @@
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::edit::new_id;
 use crate::quote_pricing::js::{arr, num, on, truthy};
@@ -49,8 +51,6 @@ use serde_json::{Value, json};
 use sqlx::MySqlPool;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -949,7 +949,7 @@ async fn ready_offer(
 /// counter depth to start with. `available` is false when the company has no
 /// price list with prices or no color to offer. Next, price the drawing with
 /// `POST .../online-quote/prices`. No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/companies/{company_id}/online-quote",
     operation_id = "get_online_quote_setup",
@@ -999,7 +999,7 @@ pub async fn setup(
 /// page prices a quote made now with the company's default price list. A
 /// color's total is null when the list cannot price all of it. Nothing is
 /// saved; save and email it with `POST .../online-quotes`. No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/public/companies/{company_id}/online-quote/prices",
     operation_id = "price_online_quote",
@@ -1547,7 +1547,7 @@ async fn notify_rep(
 /// one goes to the managers. When the email cannot be sent the quote is still
 /// saved (`emailed` false) and the team is told. At most 3 quotes an address
 /// a day. No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/public/companies/{company_id}/online-quotes",
     operation_id = "create_online_quote",

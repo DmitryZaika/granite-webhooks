@@ -7,13 +7,13 @@ use super::board::ScheduleEvent;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use utoipa::{IntoParams, ToSchema};
 
 /// Lines shown under each event.
 const LINES_PER_EVENT: usize = 3;
@@ -104,7 +104,7 @@ const COMMENT_LINES: &str =
 /// The company's events, most recently changed or commented first, each with
 /// its last three history lines and comments. Deleted events and events of
 /// calendars hidden from the caller are left out.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/schedule/activity",
     operation_id = "list_schedule_activity",

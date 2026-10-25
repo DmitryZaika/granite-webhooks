@@ -1,7 +1,7 @@
+use crate::openapi::{IntoParams, ToSchema};
 use crate::serde_helpers::js_date;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
 
 /// Who sees a template.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

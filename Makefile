@@ -144,9 +144,10 @@ api-test: api-db-up
 	DATABASE_URL=$(LOCAL_DB_URL) cargo test -p api
 
 # Regenerates api/openapi.json from the route annotations (no database needed).
+# Only builds with the `openapi` feature run utoipa; the others serve this file.
 .PHONY: api-openapi
 api-openapi:
-	UPDATE_OPENAPI=1 cargo test -p api --test it openapi::spec_file_is_current
+	UPDATE_OPENAPI=1 cargo test -p api --features openapi --test it openapi::generated::spec_file_is_current
 
 # Serves http://localhost:9100/lambda-url/api/... through the Lambda runtime emulator.
 # A dev build, not --release: an edit rebuilds in seconds, not minutes (the

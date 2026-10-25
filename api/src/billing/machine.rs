@@ -398,7 +398,7 @@ pub async fn apply_event<S: BillingStore>(
 }
 
 /// What a page shows about billing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, crate::openapi::ToSchema)]
 pub struct BillingNotice {
     /// Show the past-due banner (managers only).
     pub show_warning: bool,

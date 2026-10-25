@@ -15,6 +15,8 @@ use super::uploads::{self, schemas::UploadFolder};
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -23,8 +25,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -162,7 +162,7 @@ async fn find_image(pool: &MySqlPool, company_id: i32, id: i32) -> ApiResult<Lib
 /// Every image of the company: the live folders by name, each with its
 /// images by name, and the images in no folder. Images of a deleted folder
 /// are not shown.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/image-library",
     operation_id = "get_image_library",
@@ -225,7 +225,7 @@ pub async fn library(
 /// Puts a picture uploaded to the `images` folder (`POST /v1/uploads`) in
 /// the library (its thumbnail is made now), in `folder_id` when that is a
 /// live folder of the company.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/images",
     operation_id = "create_image",
@@ -285,7 +285,7 @@ pub async fn create_image(
 ///
 /// Renames it, replaces its file with a new upload (the old file and its
 /// thumbnail are deleted), and/or moves it to another folder.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/images/{id}",
     operation_id = "update_image",
@@ -346,7 +346,7 @@ pub async fn update_image(
 ///
 /// Takes it out of the library; the file stays in storage (emails and
 /// quotes may show it).
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/images/{id}",
     operation_id = "delete_image",
@@ -382,7 +382,7 @@ pub async fn delete_image(
 ///
 /// An empty folder at the top of the library; images go in with
 /// `PATCH /v1/images/{id}`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/image-folders",
     operation_id = "create_image_folder",
@@ -424,7 +424,7 @@ pub async fn create_folder(
 /// Rename an image folder
 ///
 /// Its images stay in it.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/image-folders/{id}",
     operation_id = "update_image_folder",
@@ -464,7 +464,7 @@ pub async fn update_folder(
 ///
 /// Soft-deletes it; its images stay in the database but are no longer
 /// listed.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/image-folders/{id}",
     operation_id = "delete_image_folder",

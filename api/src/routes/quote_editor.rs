@@ -24,6 +24,8 @@
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::{
     self, load_company_quote, mark_quote_sold, pricing_for_quote, quote_for_contract_file,
@@ -51,8 +53,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
 use std::collections::{BTreeMap, HashMap};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -373,7 +373,7 @@ mod full_address_tests {
 /// customer's sales rep; 400 when neither is one), the customer's address,
 /// phone and email copied, and the price list's default tax rate and payment
 /// terms (else the company's first payment terms).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quotes",
     operation_id = "create_quote",
@@ -1234,7 +1234,7 @@ async fn revision_prices(
 /// (the snapshot it was made with plus today's choices, and today's list),
 /// revisions, emails, contracts, the sales reps, color photos, the sender
 /// address and the caller's unsaved drawing.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quotes/{id}",
     operation_id = "get_quote",
@@ -1394,7 +1394,7 @@ fn blank_is_null(value: Option<String>) -> Option<Option<String>> {
 /// Its info (name, notes, contact, terms, sales rep, customer), settings
 /// (tax, discounts, expiration) and price list. A new price list or its
 /// newest revision gives the quote today's prices on its next load.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/quotes/{id}",
     operation_id = "update_quote",
@@ -1576,7 +1576,7 @@ fn readable(doc: &Value) -> ApiResult<QuoteDoc> {
 /// A new immutable revision (with each option's total) that becomes the
 /// quote's drawing; the caller's unsaved drawing is dropped. A sold-out color
 /// saves too (the customer cannot accept that option until it is changed).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quotes/{id}/drawing",
     operation_id = "save_quote_drawing",
@@ -1684,7 +1684,7 @@ pub struct UnsavedDrawing {
 /// Keep an unsaved drawing
 ///
 /// The caller's work in progress, offered back when they open the editor.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quotes/{id}/autosave",
     operation_id = "autosave_quote_drawing",
@@ -1724,7 +1724,7 @@ pub async fn save_autosave(
 /// Drop the unsaved drawing
 ///
 /// The caller's work in progress on this quote.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/quotes/{id}/autosave",
     operation_id = "discard_quote_autosave",
@@ -1764,7 +1764,7 @@ pub struct RevisionDrawing {
 /// Get a revision's drawing
 ///
 /// To load into the editor.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quotes/{id}/revisions/{revision_id}",
     operation_id = "get_quote_revision",
@@ -1799,7 +1799,7 @@ pub async fn revision_drawing(
 ///
 /// The price list's newest revision and today's prices; sinks placed from
 /// a sink model take its current type and shape.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quotes/{id}/prices",
     operation_id = "update_quote_prices",
@@ -1871,7 +1871,7 @@ pub struct SaleResult {
 ///
 /// The quote keeps the option sold and its deal is won with that option's
 /// total (a won deal is made when the customer has none).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quotes/{id}/sale",
     operation_id = "mark_quote_sold",
@@ -1916,7 +1916,7 @@ pub async fn mark_sold(
 /// Undo a sale
 ///
 /// The quote is active again (no option, no signature) and its deal reopens.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/quotes/{id}/sale",
     operation_id = "undo_quote_sale",
@@ -1985,7 +1985,7 @@ pub struct QuoteCopy {
 ///
 /// A new draft for the same customer and deal with the quote's notes, tax,
 /// discounts and terms, optionally its address and drawing.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quotes/{id}/copies",
     operation_id = "copy_quote",
@@ -2127,7 +2127,7 @@ pub struct PortalToken {
 /// Get the customer link
 ///
 /// Made the first time it is asked for.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quotes/{id}/portal-token",
     operation_id = "quote_portal_token",
@@ -2261,7 +2261,7 @@ fn link_tags(text: &str, with: &str) -> String {
 /// Sends the customer a link to the quote (from the caller's sending
 /// address, replies to the caller), records it with the revision and
 /// expiration, and moves the deal to "Got a Quote".
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quotes/{id}/emails",
     operation_id = "email_quote",
@@ -2462,7 +2462,7 @@ pub struct EmailLink {
 /// Switch an email's link off or on
 ///
 /// The customer link from that email stops (or starts again) opening the quote.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/quotes/{id}/emails/{email_id}",
     operation_id = "set_quote_email_link",
@@ -2512,7 +2512,7 @@ pub struct QuotePrint {
 ///
 /// Shown in the deal's history as "Quote printed"; the deal moves to "Got a
 /// Quote". Never blocks the print.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quotes/{id}/prints",
     operation_id = "record_quote_print",
@@ -2586,7 +2586,7 @@ pub struct MyEmailTemplates {
 ///
 /// The company's quote email templates and the caller's own, in the
 /// caller's order, with the one to start with.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/quote-email-templates",
     operation_id = "list_my_quote_email_templates",
@@ -2697,7 +2697,7 @@ fn my_template(input: &MyTemplateInput) -> ApiResult<(String, String, String)> {
 /// Save a template of my own
 ///
 /// Only the caller sees it.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/me/quote-email-templates",
     operation_id = "create_my_quote_email_template",
@@ -2742,7 +2742,7 @@ pub async fn create_my_email_template(
 /// Edit a template of my own
 ///
 /// Never a company template.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/me/quote-email-templates/{id}",
     operation_id = "update_my_quote_email_template",
@@ -2798,7 +2798,7 @@ pub async fn update_my_email_template(
 /// Delete a template of my own
 ///
 /// Never a company template.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/me/quote-email-templates/{id}",
     operation_id = "delete_my_quote_email_template",

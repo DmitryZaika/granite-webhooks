@@ -6,12 +6,12 @@
 //! from an unused refresh, so that item reads the stored `auto_cache`.
 
 use crate::deliverability::Dns;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use sqlx::MySqlPool;
 use std::collections::{HashMap, HashSet};
-use utoipa::ToSchema;
 
 /// Every item, in the order shown.
 pub const ITEM_KEYS: [&str; 15] = [

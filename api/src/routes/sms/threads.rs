@@ -331,7 +331,7 @@ pub(super) async fn unread_threads(
 /// A page of the caller's SMS conversations (`scope=all`: the company's, for
 /// admins), latest first — or unread first when narrowed to one rep. A
 /// search matches phone digits, message text and customer or supplier names.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/{provider}/threads",
     operation_id = "list_sms_threads",
@@ -429,7 +429,7 @@ pub async fn list_threads(
 /// Count unread conversations
 ///
 /// Conversations with unread messages, for the sidebar badge.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/{provider}/unread-count",
     operation_id = "count_unread_sms_threads",
@@ -466,7 +466,7 @@ struct AlertRow {
 /// Up to 50 unread conversations whose latest message came from the
 /// customer, for desktop notifications. Empty for a user without an agent id
 /// (Telnyx: without a line) or a company without the provider.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/{provider}/desktop-alerts",
     operation_id = "list_sms_desktop_alerts",
@@ -560,7 +560,7 @@ pub(super) async fn provider_alerts(
 /// The company's users with an agent (`CloudTalk`) or extension
 /// (`RingCentral`) id, or with a Telnyx line (`agent_id` = their user id),
 /// for the admin inbox's rep filter.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/{provider}/sales-reps",
     operation_id = "list_sms_sales_reps",

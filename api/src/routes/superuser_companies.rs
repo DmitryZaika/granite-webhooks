@@ -21,6 +21,8 @@ use crate::auth::session::SessionUser;
 use crate::deliverability::{self, DomainTrust};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::phone::revoke::{RevokeReason, revoke_company_phones};
 use crate::routes::created::CreatedId;
 use crate::routes::onboarding::store::{self, OnboardingState};
@@ -33,8 +35,6 @@ use axum::http::StatusCode;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -154,7 +154,7 @@ struct SummaryRow {
 /// tours progress, connected integrations, feature switches and whether
 /// Stripe payment is required. The slower checks are per company:
 /// `/domain-trust`, `/ses-inbound`, `/setup-checklist`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/companies",
     operation_id = "list_platform_companies",
@@ -281,7 +281,7 @@ pub struct CompanyDetails {
 /// Get a company
 ///
 /// A company's settings, keys and switches, as the edit form shows them.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/companies/{id}",
     operation_id = "get_platform_company",
@@ -479,7 +479,7 @@ struct DefaultTemplate {
 /// templates and customer sources, the statistics widgets hidden, a
 /// `walk-in@<subdomain>.com` employee for the check-in kiosk, and checks
 /// its domain's deliverability.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/superuser/companies",
     operation_id = "create_platform_company",
@@ -579,7 +579,7 @@ pub async fn create_company(
 ///
 /// Replaces the company's settings, keys and switches (and its logo when a
 /// new one is given), then re-checks its domain's deliverability.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/superuser/companies/{id}",
     operation_id = "update_platform_company",
@@ -692,7 +692,7 @@ pub struct ConfirmName {
 /// Marks the company deleted. `confirm_name` must be its exact name (400
 /// otherwise). Its Granite Phone calling is switched off and its phones are
 /// signed out (Telnyx credentials and push tokens dropped).
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/superuser/companies/{id}",
     operation_id = "delete_platform_company",
@@ -807,7 +807,7 @@ struct UserRow {
 ///
 /// The company's active users with their roles, `CloudTalk` fields and
 /// guided tours progress, and how many users were deleted.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/companies/{id}/users",
     operation_id = "list_platform_company_users",
@@ -909,7 +909,7 @@ async fn company_domain(state: &AppState, id: i32) -> ApiResult<Option<String>> 
 /// Checks the company domain's email deliverability (DNS: MX, SPF, DMARC,
 /// DKIM, blocklists; a check of the same domain from the last week is
 /// reused) and answers it; null when the company has no usable domain.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/companies/{id}/domain-trust",
     operation_id = "get_platform_company_domain_trust",
@@ -956,7 +956,7 @@ pub struct SesInbound {
 ///
 /// Whether SES verified the company's domain and its MX points at SES email
 /// receiving, i.e. whether customers' replies reach the CRM.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/companies/{id}/ses-inbound",
     operation_id = "get_platform_company_ses_inbound",
@@ -1023,7 +1023,7 @@ async fn facts(state: &AppState, id: i32) -> ApiResult<CompanyFacts> {
 /// What is done of the company's setup: subdomain DNS, domain, key people,
 /// inbound email (SES), stones on its website, tours, integrations; each
 /// automatically or ticked by hand.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/companies/{id}/setup-checklist",
     operation_id = "get_platform_company_setup_checklist",
@@ -1060,7 +1060,7 @@ pub struct Tick {
 ///
 /// Marks a checklist item done (or not) by hand; automatic checks still
 /// count either way.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/superuser/companies/{id}/setup-checklist/items/{key}",
     operation_id = "tick_platform_company_setup_item",
@@ -1103,7 +1103,7 @@ pub struct Switch {
 ///
 /// Turns `quickbooks`, `signature`, `onboarding` or `leaderboard` on or off
 /// for the company (an explicit setting, over the platform default).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/superuser/companies/{id}/features/{feature}",
     operation_id = "switch_platform_company_feature",
@@ -1158,7 +1158,7 @@ pub async fn switch_feature(
 ///
 /// Whether the company's access depends on its Stripe subscription (off:
 /// it pays some other way).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/superuser/companies/{id}/billing-required",
     operation_id = "set_platform_company_billing_required",

@@ -10,6 +10,7 @@ use super::JobCaller;
 use crate::auth::session::find_user;
 use crate::error::{ApiResult, ErrorBody};
 use crate::followups::processor::{FollowupRun, process_due_followups, rep_sms_provider};
+use crate::openapi::ToSchema;
 use crate::routes::calls::to_e164;
 use crate::routes::delayed::{DueRun, process_due_in};
 use crate::routes::sms::flows::variable_names;
@@ -20,7 +21,6 @@ use axum::Json;
 use axum::extract::State;
 use lambda_http::tracing;
 use serde::Serialize;
-use utoipa::ToSchema;
 
 const DRIP_BATCH_LIMIT: i64 = 50;
 const SMS_MAX_TEXT: usize = 1600;
@@ -283,7 +283,7 @@ pub async fn process_due_drips(state: &AppState) -> Result<DripRun, sqlx::Error>
 ///
 /// Sends the due steps of SMS / email flows, the drip texts of lead lists
 /// and everyone's scheduled emails and texts.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/sms-followups",
     operation_id = "run_sms_followups",

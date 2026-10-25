@@ -27,6 +27,8 @@ use crate::auth::session::SessionUser;
 use crate::auth::{CompanyManager, CurrentUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::phone::company;
 use crate::phone::tendlc::{
     self as form, Row, TenDlcDraft, TenDlcFeedback, TenDlcProblem, TenDlcStatus, UseCase, audit,
@@ -40,8 +42,6 @@ use axum::extract::{Path, State};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -259,7 +259,7 @@ async fn save(
 /// main line. Save it with `PUT`, then `POST .../ready`. The company's
 /// Managers only (the Manager position in the company; admins without it
 /// get 403).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/tendlc",
     operation_id = "get_tendlc_registration",
@@ -299,7 +299,7 @@ pub async fn get_tendlc_registration(
 /// message flow and help message may change. 400 for a field longer than
 /// Telnyx takes or a change it no longer takes. Audited. The company's
 /// Managers only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/phone/admin/tendlc",
     operation_id = "save_tendlc_registration",
@@ -332,7 +332,7 @@ pub async fn save_tendlc_registration(
 /// nothing is saved yet or it is not complete (the first of `problems`);
 /// 409 once it is with Telnyx. Marking a ready one again changes nothing.
 /// Audited. The company's Managers only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/admin/tendlc/ready",
     operation_id = "mark_tendlc_registration_ready",
@@ -638,7 +638,7 @@ async fn review(state: &AppState, company_id: i32) -> ApiResult<TenDlcReview> {
 /// name, how many problems block sending it, Telnyx's statuses and when it
 /// was marked ready and sent. Open one with
 /// `GET /v1/superuser/companies/{id}/tendlc`. Superusers only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/tendlc",
     operation_id = "list_tendlc_registrations",
@@ -693,7 +693,7 @@ pub async fn list_tendlc_registrations(
 /// company saved one, `registration.saved` is false and the form is a
 /// suggested first draft (a superuser may fill it in with `PUT`). 404 when
 /// the company does not exist. Superusers only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/companies/{id}/tendlc",
     operation_id = "get_company_tendlc",
@@ -724,7 +724,7 @@ pub async fn get_company_tendlc(
 /// does for its Managers (same checks: 409 once it is with Telnyx, 400 for
 /// a field too long or a change Telnyx no longer takes); the first save
 /// makes the registration. Returns the review. Audited. Superusers only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/superuser/companies/{id}/tendlc",
     operation_id = "save_company_tendlc",
@@ -777,7 +777,7 @@ pub struct TenDlcCost {
 /// cost extra (Telnyx's 10DLC price list). 400 when the form has no use
 /// case yet or Telnyx refused; 502 when Telnyx did not answer; 503 when
 /// Telnyx is not set up on the server. Superusers only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/companies/{id}/tendlc/cost",
     operation_id = "get_company_tendlc_cost",
@@ -845,7 +845,7 @@ pub async fn get_company_tendlc_cost(
 /// (nothing was made); 409 when sent already (use `.../resend`) or another
 /// send runs; 502 when Telnyx did not answer about the brand; 503 when
 /// Telnyx is not set up on the server. Audited. Superusers only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/superuser/companies/{id}/tendlc/send",
     operation_id = "send_company_tendlc",
@@ -899,7 +899,7 @@ pub struct TenDlcResendInput {
 /// appeal is written, or Telnyx refused the first change; 409 when it was
 /// never sent or Telnyx is reviewing it; 502 when Telnyx did not answer;
 /// 503 when Telnyx is not set up on the server. Audited. Superusers only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/superuser/companies/{id}/tendlc/resend",
     operation_id = "resend_company_tendlc",
@@ -951,7 +951,7 @@ pub async fn resend_company_tendlc(
 /// registered gets its campaign. Returns the review. 409 before it was
 /// sent; 400 or 502 when Telnyx refused or did not answer; 503 when Telnyx
 /// is not set up on the server. Superusers only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/superuser/companies/{id}/tendlc/refresh",
     operation_id = "refresh_company_tendlc",
@@ -1012,7 +1012,7 @@ pub struct TenDlcNumbersAssigned {
 /// while another send runs; 400 when the company has no active numbers;
 /// 503 when Telnyx is not set up on the server. Audited (counts only).
 /// Superusers only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/superuser/companies/{id}/tendlc/numbers",
     operation_id = "assign_company_tendlc_numbers",

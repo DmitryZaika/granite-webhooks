@@ -20,7 +20,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
+use crate::openapi::{IntoParams, ToSchema};
 
 /// Threads per page by default, and at most.
 const DEFAULT_THREADS: i64 = 30;
@@ -166,7 +166,7 @@ async fn my_thread(
 /// other number, the customer with it, the newest text and my unread count;
 /// `unread` totals every thread. 403 `texting_disabled` unless the company
 /// texts through Telnyx. Next: `GET /v1/phone/texts/threads/{key}/messages`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/texts/threads",
     operation_id = "list_phone_text_threads",
@@ -227,7 +227,7 @@ pub async fn list_text_threads(
 /// `GET /v1/phone/texts/media/{id}`), status, error and sender, and the
 /// thread itself. 404 for a thread that is not one of my lines' (or has no
 /// texts). Opening it does not mark it read: `POST .../read` does.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/texts/threads/{key}/messages",
     operation_id = "list_phone_text_messages",
@@ -271,7 +271,7 @@ pub async fn list_text_messages(
 /// notification starts here: the `text` push names only the text
 /// (`textId`), never the number or the thread. 404 for a text that is not
 /// on one of my lines (or another company's). Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/texts/messages/{id}/thread",
     operation_id = "get_phone_text_thread",
@@ -305,7 +305,7 @@ pub async fn text_thread(
 ///
 /// A 5-minute link to a picture or file of a text on one of my lines. 404
 /// for one that is not.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/texts/media/{id}",
     operation_id = "get_phone_text_media",
@@ -362,7 +362,7 @@ pub async fn text_media(
 /// `not_my_line`, 409 `opted_out` (the person texted STOP), 429
 /// `rate_limited` (ten texts a minute, shared with the CRM) with
 /// `retryAfterSecs`, 502 when Telnyx failed.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/texts",
     operation_id = "send_phone_text",
@@ -480,7 +480,7 @@ pub async fn send_text(
 ///
 /// Marks the other number's texts read for me (the CRM's unread counts
 /// follow). 404 for a thread that is not one of my lines'.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/texts/threads/{key}/read",
     operation_id = "mark_phone_text_thread_read",

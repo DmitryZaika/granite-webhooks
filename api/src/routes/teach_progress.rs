@@ -5,13 +5,13 @@
 
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::Serialize;
 use sqlx::FromRow;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(progress))
@@ -65,7 +65,7 @@ pub struct TeachProgress {
 ///
 /// The company's sales reps and every answer they gave to the training
 /// questions.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/teach-mode/progress",
     operation_id = "get_teach_progress",

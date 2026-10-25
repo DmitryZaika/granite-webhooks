@@ -8,6 +8,7 @@ use crate::ai::{Caller, Chat, MINI_MODEL};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::routes::quickbooks::invoice::{EditableInvoice, Line};
 use crate::state::AppState;
 use axum::Json;
@@ -15,7 +16,6 @@ use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::HashSet;
-use utoipa::ToSchema;
 
 const SYSTEM_PROMPT: &str = r#"You edit QuickBooks Online invoices for a granite/countertop business.
 Given the current invoice JSON and a user instruction, return ONLY valid JSON for the full updated invoice in the same shape.
@@ -209,7 +209,7 @@ pub fn merge(current: &EditableInvoice, proposed: EditableInvoice) -> EditableIn
 ///
 /// Applies a plain-language instruction to the invoice with AI and returns
 /// the result for the editor to preview. Nothing is saved.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/invoice-edit",
     operation_id = "propose_invoice_edit",

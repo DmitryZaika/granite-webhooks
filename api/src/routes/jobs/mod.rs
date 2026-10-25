@@ -30,10 +30,10 @@ pub mod supplier_files;
 pub mod survey_notifications;
 
 use crate::error::ApiError;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()

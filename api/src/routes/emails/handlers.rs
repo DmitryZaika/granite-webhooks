@@ -44,7 +44,7 @@ pub fn mailbox(user: &SessionUser) -> Mailbox {
 /// `scope=admin` (admins only) lists every employee's mail of the company
 /// instead, optionally only one user's (`sales_rep`); drafts read as the
 /// inbox there.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/emails/threads",
     operation_id = "list_email_threads",
@@ -90,7 +90,7 @@ pub async fn list(
 /// coworkers' mail to them), threads in the trash and drafts. `scope=admin`
 /// (admins only) counts the whole company's unread inbox and trash
 /// (`sales_rep`: one user's), with no drafts.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/emails/folder-counts",
     operation_id = "count_email_folders",
@@ -124,7 +124,7 @@ pub async fn counts(
 ///
 /// Unread inbox threads and the newest unread message id (to notice new
 /// mail between polls). Always 0 when the company has no inbound email.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/emails/unread",
     operation_id = "get_unread_email_count",
@@ -213,7 +213,7 @@ pub(super) fn unread_inbox(mailbox: &Mailbox) -> Sql {
 /// one). Any thread of the caller's company can be read. Opening it does not
 /// mark it read: call
 /// `POST /v1/emails/threads/{thread_id}/read`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/emails/threads/{thread_id}",
     operation_id = "get_email_thread",
@@ -254,7 +254,7 @@ pub async fn get_thread(
 /// Stamps every unread live message of the thread that the caller did not
 /// send (what opening the conversation used to do). Any thread of the
 /// caller's company.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/emails/threads/{thread_id}/read",
     operation_id = "read_email_thread",
@@ -346,7 +346,7 @@ macro_rules! thread_write {
         #[doc = $summary]
         #[doc = ""]
         #[doc = $doc]
-        #[utoipa::path(
+        #[crate::openapi::path(
             post,
             path = $path,
             operation_id = $op,
@@ -432,7 +432,7 @@ thread_write!(
 ///
 /// Permanently deletes the trashed messages of the caller's own threads
 /// (at most 50 threads) and their open tracking. Live messages are kept.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/emails/threads/purge",
     operation_id = "purge_email_threads",
@@ -506,7 +506,7 @@ pub async fn purge(
 /// The newest matching message of up to 8 conversations of a folder
 /// (needs 2 or more characters). `scope=admin` searches the whole company's
 /// mail (admins only; `sales_rep` narrows it to one user's mail).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/emails/search-suggestions",
     operation_id = "suggest_email_threads",

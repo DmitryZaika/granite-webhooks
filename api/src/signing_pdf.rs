@@ -11,6 +11,7 @@
 // stamps land on the same points.
 #![allow(clippy::suboptimal_flops)]
 
+use crate::openapi::ToSchema;
 use crate::pdf::{Font, Image};
 use base64::Engine;
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
@@ -19,7 +20,6 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use unicode_normalization::UnicodeNormalization;
-use utoipa::ToSchema;
 
 pub const SIGNATURE_IMAGE_PREFIX: &str = "data:image/png;base64,";
 const SIGNATURE_IMAGE_MAX_LENGTH: usize = 300_000;

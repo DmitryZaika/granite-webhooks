@@ -1,6 +1,6 @@
+use crate::openapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 /// The signed-in user's monthly sales goal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]

@@ -9,6 +9,7 @@ use crate::ai::{Caller, Chat, MINI_MODEL};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::routes::calls::recording::transcribe_call;
 use crate::routes::calls::{cloudtalk_calls, ringcentral, to_e164};
 use crate::state::AppState;
@@ -19,7 +20,6 @@ use chrono_tz::America::Indiana::Indianapolis;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
-use utoipa::ToSchema;
 
 const MAX_EMAILS: usize = 60;
 const MAX_SMS: i64 = 80;
@@ -456,7 +456,7 @@ fn context(documents: &[Document]) -> String {
 /// Answers a question from the customer's emails, texts, deal notes and
 /// activities (and, with `include_calls`, transcripts of their last two
 /// recorded calls), with links to the sources.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/customers/{id}/activity-search",
     operation_id = "search_customer_activity",

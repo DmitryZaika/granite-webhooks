@@ -10,6 +10,7 @@ use super::{audit, telnyx_failed};
 use crate::auth::AdminUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::availability::WorkingHours;
 use crate::phone::company::{self, RecordingMode};
 use crate::phone::lines::NumberKind;
@@ -28,7 +29,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{FromRow, MySqlPool};
 use std::collections::{HashMap, HashSet};
-use utoipa::ToSchema;
 
 /// Longest number label.
 const LABEL_CHARS: usize = 100;
@@ -280,7 +280,7 @@ pub(super) async fn company_number(
 /// /v1/phone/admin/numbers/{id}`; add the TeXML app's numbers with `POST
 /// /v1/phone/admin/numbers/import`. Company admins (and super admins,
 /// superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/numbers",
     operation_id = "list_phone_admin_numbers",
@@ -420,7 +420,7 @@ async fn all_in_company(pool: &MySqlPool, company_id: i32, user_ids: &[i32]) -> 
 /// one; every user must be a live user of the company, else 400). Returns
 /// the number as saved. The change is written to the phone audit log.
 /// Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/phone/admin/numbers/{id}",
     operation_id = "update_phone_admin_number",
@@ -520,7 +520,7 @@ pub async fn update_admin_number(
 /// when Telnyx is not set up for the company (no TeXML app saved), 503
 /// when Telnyx is not set up on the server, 502 when Telnyx fails. Company
 /// admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/admin/numbers/import",
     operation_id = "import_phone_admin_numbers",
@@ -651,7 +651,7 @@ pub(super) async fn import_numbers(
 /// with whose phone it is and its Telnyx SIP user. Sign one out with
 /// `DELETE /v1/phone/admin/devices/{id}`. Company admins (and super admins,
 /// superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/devices",
     operation_id = "list_phone_admin_devices",
@@ -693,7 +693,7 @@ pub async fn list_admin_devices(
 /// token cleared. 404 when it is not the company's or is signed out
 /// already. Written to the phone audit log. Company admins (and super
 /// admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/phone/admin/devices/{id}",
     operation_id = "revoke_phone_admin_device",
@@ -757,7 +757,7 @@ pub struct CompanyHours {
 /// The main line's business hours and holidays. 404 until Telnyx is
 /// connected for the company. Company admins (and super admins,
 /// superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/hours",
     operation_id = "get_phone_admin_hours",
@@ -792,7 +792,7 @@ pub async fn get_admin_hours(
 /// otherwise. 404 until Telnyx is connected for the company.
 /// Written to the phone audit log. Company admins (and super admins,
 /// superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/phone/admin/hours",
     operation_id = "save_phone_admin_hours",
@@ -861,7 +861,7 @@ pub struct CompanyRecording {
 /// Which calls are recorded and the notice played on recorded outgoing
 /// calls. 404 until Telnyx is connected for the company. Company
 /// admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/recording",
     operation_id = "get_phone_admin_recording",
@@ -895,7 +895,7 @@ pub async fn get_admin_recording(
 /// spoken); 400 otherwise. 404 until Telnyx is connected for the
 /// company. Written to the phone audit log. Company admins (and super
 /// admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/phone/admin/recording",
     operation_id = "save_phone_admin_recording",

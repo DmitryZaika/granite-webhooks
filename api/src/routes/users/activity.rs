@@ -8,6 +8,7 @@
 use crate::auth::AdminUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::leaderboard::queries::{CallSmsPointsRow, Window, call_sms_points_by_user};
 use crate::state::AppState;
 use axum::Json;
@@ -16,7 +17,6 @@ use chrono::{Datelike, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
 use std::collections::HashMap;
-use utoipa::{IntoParams, ToSchema};
 
 /// Days of activity listed.
 const DAYS: i64 = 90;
@@ -758,7 +758,7 @@ async fn email_rows(
 /// deleted, users and customers added, texts and emails (matched to customers
 /// by phone and address), newest first; the sales reps; and, while the
 /// leaderboard is on, everyone's calls, texts and points in the table's days.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/users/activity",
     operation_id = "list_users_activity",

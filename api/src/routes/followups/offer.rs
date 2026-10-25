@@ -8,13 +8,13 @@
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
-use utoipa::ToSchema;
 
 /// Longest offer, in characters, after trimming.
 pub const MAX_CHARS: usize = 500;
@@ -60,7 +60,7 @@ pub async fn load(pool: &MySqlPool, company_id: i32) -> Result<Option<SavedOffer
 ///
 /// The company's current offer the AI may mention in follow-ups, and its last
 /// day. An empty offer when none is saved.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/followups/offer",
     operation_id = "get_followup_offer",
@@ -90,7 +90,7 @@ pub async fn get(
 /// empty (or blank) offer clears it. Saving the same offer again changes
 /// nothing, so running follow-ups keep the copy written for it. Answers the
 /// saved offer.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/followups/offer",
     operation_id = "save_followup_offer",

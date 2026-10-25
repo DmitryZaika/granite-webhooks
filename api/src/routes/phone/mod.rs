@@ -87,6 +87,8 @@ mod texts;
 mod web;
 
 use crate::error::ApiError;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::phone::company::{self, CompanyConfig};
 use crate::state::AppState;
 use crate::telnyx::TelnyxError;
@@ -97,8 +99,6 @@ use axum::response::{IntoResponse, Response};
 use lambda_http::tracing;
 use serde::Serialize;
 use sqlx::MySqlExecutor;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()

@@ -6,6 +6,7 @@
 
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::IntoParams;
 use crate::pdf::{Font, Image, PAGE_HEIGHT, PAGE_WIDTH, Page};
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
@@ -16,7 +17,6 @@ use base64::engine::general_purpose::STANDARD;
 use lambda_http::tracing;
 use serde::Deserialize;
 use std::time::Duration;
-use utoipa::IntoParams;
 
 /// The onboarding tour's sample checklist.
 const SAMPLE_ID: i64 = 990_000_051;
@@ -221,7 +221,7 @@ pub struct PdfQuery {
 ///
 /// The checklist with its checks, comments and the customer's signature,
 /// under the company logo.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/checklists/{id}/pdf",
     operation_id = "get_checklist_pdf",

@@ -22,6 +22,7 @@ use crate::auth::session::SessionUser;
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::IntoParams;
 use crate::routes::company::queries::company_features;
 use crate::state::AppState;
 use axum::Json;
@@ -30,7 +31,6 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sqlx::MySqlPool;
 use std::collections::HashMap;
-use utoipa::IntoParams;
 
 /// The providers to read and the agent id to narrow each to: every provider
 /// unfiltered without a rep, else those the rep (a user id) has an agent id on.
@@ -85,7 +85,7 @@ struct Merged {
 /// phone, latest first — or unread first when narrowed to one rep
 /// (`agent_id` = the rep's user id from `/v1/sms/all/sales-reps`). A search
 /// matches phone digits, message text and customer or supplier names.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/all/threads",
     operation_id = "list_all_sms_threads",
@@ -119,7 +119,7 @@ pub async fn list_threads(
 /// extension, a Telnyx line), merged by phone: unread first, then latest.
 /// Each provider's part is what its own inbox shows the caller. A search
 /// matches phone digits, message text and customer or supplier names.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/mine/threads",
     operation_id = "list_my_sms_threads",
@@ -359,7 +359,7 @@ async fn summaries(
 /// (page back by raising `limit`; `before_id` is ignored), the customer or
 /// supplier it belongs to and the SMS flow running on it. `agent_id` reads
 /// as one rep (their user id). Never sendable: the admin inbox is read-only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/all/threads/{phone}",
     operation_id = "get_all_sms_thread",
@@ -399,7 +399,7 @@ pub async fn get_thread(
 /// else the first they can; `canSend` is false when they can text through
 /// none. Opening it in the caller's own inbox marks it read (`unreadCount`
 /// is 0).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/mine/threads/{phone}",
     operation_id = "get_my_sms_thread",
@@ -524,7 +524,7 @@ async fn merged_thread(
 ///
 /// The company's users with an agent or extension id on any provider, for
 /// the admin inbox's rep filter; `agent_id` is the user's id.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/all/sales-reps",
     operation_id = "list_all_sms_sales_reps",
@@ -571,7 +571,7 @@ pub async fn sales_reps(
 /// provider they text through (as `GET /v1/sms/mine/threads`), for the
 /// sidebar badge. A phone with unread texts through two providers counts
 /// twice.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/mine/unread-count",
     operation_id = "count_my_unread_sms_threads",
@@ -609,7 +609,7 @@ pub struct AlertsQuery {
 /// As `GET /v1/sms/{provider}/desktop-alerts` for every provider the caller
 /// texts through: one alert per phone (the latest), newest first, at most
 /// 50, each opening the conversation on the caller's `inbox` page.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/mine/desktop-alerts",
     operation_id = "list_my_sms_desktop_alerts",

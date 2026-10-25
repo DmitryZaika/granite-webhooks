@@ -15,7 +15,7 @@ use axum::http::StatusCode;
 /// sinks and faucets installed, and the room options. 404 when the sale is
 /// not the company's or no slab is left on it. Save changes with
 /// `PUT /v1/sales/{id}`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sales/{id}",
     operation_id = "get_sale",
@@ -50,7 +50,7 @@ pub async fn get(
 /// faucets take one free unit of each model, installed on the room's first
 /// slab. A customer without a sales rep gets the seller. All or nothing: any
 /// error leaves the data unchanged.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sales",
     operation_id = "create_sale",
@@ -84,7 +84,7 @@ pub async fn create(
 /// faucets with the body (the seller only when `seller_id` is given). Slabs
 /// may be ones the sale already has or available ones; slabs left out are
 /// freed, with their sinks and faucets. All or nothing.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/sales/{id}",
     operation_id = "update_sale",
@@ -122,7 +122,7 @@ pub async fn update(
 /// Marks the sale cancelled, frees its slabs and the sinks and faucets on
 /// them, and removes the free remnants its partial slabs left. Remnants that
 /// another sale bought are kept. Returns no body.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sales/{id}/unsell",
     operation_id = "unsell_sale",

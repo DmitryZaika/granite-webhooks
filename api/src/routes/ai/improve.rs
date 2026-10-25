@@ -6,11 +6,11 @@ use crate::ai::{Caller, Chat, MINI_MODEL};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 const SHARED: &str = "Your job is to improve customer-facing business messages at tone level 2 on a 1-3 scale. Level 1 is too plain: only grammar and spelling fixes with almost no word changes. Level 3 is too fancy: stiff, wordy, or corporate. Always write level 2: clear, friendly, professional, and noticeably improved wording. Fix grammar and spelling, and upgrade weak or casual phrasing to slightly better words while keeping the same meaning and a natural voice. You must improve wording, not just proofread. Words like typically, prepare, and please let me know are good level 2 wording. Do not avoid them. Good level 2 upgrades: \"you said you'll call me\" -> \"you mentioned you'll call me back\"; \"I wanted to check in\" -> \"I wanted to follow up\"; \"let me know if that works\" -> \"please let me know if that works for you\"; \"we cut a 30 inch hole\" -> \"we typically prepare a 30 inch opening for the stove\". Do not go to level 3. Avoid stiff phrasing such as \"consistently ensures\", \"please be advised\", \"identified any factors\", \"may necessitate\", \"at your earliest convenience\", or adding extra clauses that sound like legal or marketing copy. Keep sentences straightforward. Keep commas. Do not delete commas that are already there, and use a comma where normal English needs one: after a name you are speaking to (\"I'm sorry, Kevin\") and before but (\"isn't feeling well, but\"). Do not add new facts, promises, dates, prices, or ideas. Never change a day, date, time, or other fact that is already in the draft. Monday must stay Monday. Do not use any outside conversation to rewrite the draft. The only customer detail you may correct is a misspelled first name, and only when a separate name instruction gives that exact name. Keep every http or https URL exactly as written — do not remove, shorten, or rewrite deposit, payment, or other links. Keep the same language as the input. Return only the improved text with no explanations or labels. Bad level 3: \"Please be advised that we will prepare your opening on schedule, which consistently ensures a proper fit. Kindly inform us if you have identified any factors that may necessitate on-site cutting at your earliest convenience.\" Good level 2: \"We typically prepare a 30 inch opening for the stove, which should give you a proper fit. Please let me know if anything on your end would need cutting on site.\"";
 
@@ -78,7 +78,7 @@ fn name_rule(customer_name: Option<&str>) -> Option<String> {
 /// better wording, same meaning, facts and links. The reply is the raw text.
 /// With `partial`, only a selected part of a draft is sent and the reply is
 /// shaped to be put back in its place.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/improve",
     operation_id = "improve_message",

@@ -1,8 +1,8 @@
+use crate::openapi::ToSchema;
 use crate::serde_helpers::js_date;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 /// A post-installation checklist: what the installer checked on site after
 /// installing countertops, signed by the customer.

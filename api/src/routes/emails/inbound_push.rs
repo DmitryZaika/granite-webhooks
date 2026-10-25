@@ -9,6 +9,7 @@ use super::handlers::{has_inbound_email, unread_inbox};
 use super::sql::{Mailbox, Sql, normalized};
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::devices::push_to_users;
 use crate::routes::jobs::JobCaller;
 use crate::state::AppState;
@@ -17,7 +18,6 @@ use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
 use std::collections::BTreeMap;
-use utoipa::ToSchema;
 
 /// Body of `POST /v1/emails/inbound-push`.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -135,7 +135,7 @@ async fn recipients(pool: &MySqlPool, email_id: i64, company_id: i32) -> sqlx::R
 /// an unknown, deleted or draft email, one sent by an employee, a company
 /// without inbound email, or when nobody's inbox shows it. Calling it again
 /// pushes again.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/emails/inbound-push",
     operation_id = "push_inbound_email",

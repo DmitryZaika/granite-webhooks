@@ -1,10 +1,10 @@
 use crate::error::ApiError;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::serde_helpers::js_date;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::BTreeMap;
-use utoipa::{IntoParams, ToSchema};
 
 /// Query string of `GET /v1/customers`; same params the Remix page URL carries.
 #[derive(Debug, Default, Deserialize, IntoParams)]

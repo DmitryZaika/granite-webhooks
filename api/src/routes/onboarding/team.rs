@@ -8,13 +8,13 @@
 use super::store::{self, OnboardingState};
 use crate::auth::AdminUser;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::routes::company::queries::company_features;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::Serialize;
 use std::collections::HashSet;
-use utoipa::ToSchema;
 
 const SHOP_MANAGER: i32 = 3;
 const SHOP_WORKER: i32 = 4;
@@ -96,7 +96,7 @@ fn env_on(name: &str) -> bool {
 /// tour registry reads (admin, manager and shop positions, a texting line),
 /// the company's capabilities and everyone's saved tours progress. While
 /// the company's guided tours are off, `enabled` is false and the list empty.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/onboarding/team",
     operation_id = "get_onboarding_team",

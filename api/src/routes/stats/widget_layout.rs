@@ -12,6 +12,7 @@ use crate::auth::AdminUser;
 use crate::auth::cookie::{cookie_value, decode_plain, encode_plain};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -20,7 +21,6 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::ToSchema;
 
 const ONE_YEAR: i64 = 60 * 60 * 24 * 365;
 /// A layout is a few dozen widget ids; anything bigger is not one.
@@ -46,7 +46,7 @@ pub struct WidgetLayout {
 ///
 /// The widget layout this browser saved for the company (its cookie), and
 /// whether a board without one starts empty.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/stats/widget-layout",
     operation_id = "get_statistics_widget_layout",
@@ -93,7 +93,7 @@ pub struct SaveWidgetLayout {
 /// Save the Statistics widget layout
 ///
 /// Stores the whole layout in this browser's cookie for the company.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/stats/widget-layout",
     operation_id = "save_statistics_widget_layout",

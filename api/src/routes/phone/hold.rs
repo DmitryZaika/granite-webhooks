@@ -6,6 +6,7 @@
 use crate::auth::device::{DeviceUser, PhoneCaller};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::hold_music::{self, MAX_UPLOAD_BYTES, TRACKS};
 use crate::phone::numbers::is_nanp;
 use crate::phone::settings;
@@ -17,7 +18,6 @@ use chrono::Utc;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 /// A built-in hold music track.
 #[derive(Debug, Serialize, ToSchema)]
@@ -47,7 +47,7 @@ pub struct HoldMusicOptions {
 /// public MP3 link each for the preview, and the upload size limit. My
 /// choice is `holdMusic` in `GET /v1/phone/bootstrap` `settings`; change it
 /// with `PUT /v1/phone/settings`. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/hold-music",
     operation_id = "list_phone_hold_music",
@@ -109,7 +109,7 @@ pub struct HoldMusicUpload {
 /// (`PUT /v1/phone/settings` `holdMusic: custom`, `holdMusicUrl`). 400
 /// `invalid_hold_music` for another kind of file; 503 when uploads are not
 /// set up on the server. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/hold-music/upload",
     operation_id = "start_phone_hold_music_upload",
@@ -238,7 +238,7 @@ impl LiveCall {
 /// `music: false`. 404 when I am on no call; 409 `hold_unavailable` for a
 /// Call via my cell call or a test call. Takes the device token or the
 /// session cookie.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/phone/calls/hold",
     operation_id = "set_live_call_hold",

@@ -15,6 +15,8 @@ use crate::auth::ShopOrEmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
 use axum::Json;
@@ -23,8 +25,6 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Days, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -154,7 +154,7 @@ pub struct Maintenance {
 /// Shop maintenance
 ///
 /// The company's equipment, checks, their conditions and completions.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/shop/maintenance",
     operation_id = "get_shop_maintenance",
@@ -357,7 +357,7 @@ fn valid_equipment(input: &EquipmentInput) -> Result<(String, String), ApiError>
 /// Add equipment
 ///
 /// Adds a piece of equipment. Shop managers only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/shop/maintenance/items",
     operation_id = "create_maintenance_item",
@@ -399,7 +399,7 @@ pub async fn create_item(
 /// Save equipment
 ///
 /// Saves a piece of equipment. Shop managers only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/shop/maintenance/items/{id}",
     operation_id = "update_maintenance_item",
@@ -457,7 +457,7 @@ async fn item_exists(state: &AppState, company_id: i32, id: i32) -> Result<(), A
 ///
 /// Deletes a piece of equipment with its checks and conditions. Shop
 /// managers only.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/shop/maintenance/items/{id}",
     operation_id = "delete_maintenance_item",
@@ -671,7 +671,7 @@ pub struct CreatedCheck {
 /// Adds a check to a piece of equipment with its conditions, due from
 /// today. Hour conditions need usage per day and days per month (the
 /// check's own or the equipment's). Shop managers only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/shop/maintenance/checks",
     operation_id = "create_maintenance_check",
@@ -750,7 +750,7 @@ async fn check_equipment(state: &AppState, company_id: i32, id: i32) -> Result<i
 ///
 /// Saves a check and replaces its conditions (due again from today). Shop
 /// managers only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/shop/maintenance/checks/{id}",
     operation_id = "update_maintenance_check",
@@ -821,7 +821,7 @@ pub async fn update_check(
 /// Delete a check
 ///
 /// Deletes a check and its conditions. Shop managers only.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/shop/maintenance/checks/{id}",
     operation_id = "delete_maintenance_check",
@@ -1017,7 +1017,7 @@ async fn save_completion(
 ///
 /// Records a completion, starts every condition of the check over from
 /// today and, with a meter reading, saves it as the new starting reading.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/shop/maintenance/checks/{id}/complete",
     operation_id = "complete_maintenance_check",
@@ -1113,7 +1113,7 @@ pub struct HoursInput {
 /// Record hours used
 ///
 /// Sets the hours used on an hour condition and moves its due day.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/shop/maintenance/conditions/{id}/hours",
     operation_id = "update_maintenance_hours",

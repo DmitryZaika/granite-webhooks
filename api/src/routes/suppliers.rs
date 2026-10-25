@@ -16,6 +16,8 @@
 use crate::auth::AdminUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::calls::to_e164;
 use crate::routes::created::CreatedId as Created;
 use crate::routes::uploads::{self, schemas::UploadFolder};
@@ -31,8 +33,6 @@ use lambda_http::tracing;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -160,7 +160,7 @@ async fn owned_supplier(state: &AppState, id: i32, company_id: i32) -> ApiResult
 ///
 /// Creates a supplier of the company and adds its phone number to the
 /// company's `CloudTalk` contacts. Returns its id.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/suppliers",
     operation_id = "create_supplier",
@@ -204,7 +204,7 @@ pub async fn create_supplier(
 /// Get a supplier
 ///
 /// One supplier of the company with its contact details.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/suppliers/{id}",
     operation_id = "get_supplier",
@@ -231,7 +231,7 @@ pub async fn get_supplier(
 ///
 /// Replaces the supplier's details and updates its `CloudTalk` contact
 /// (removed when the phone number is gone).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/suppliers/{id}",
     operation_id = "update_supplier",
@@ -279,7 +279,7 @@ pub async fn update_supplier(
 /// Deletes the supplier (and its price files) and removes it from the
 /// company's `CloudTalk` contacts. Stones, sinks and faucets that named it
 /// keep their supplier id (as before); 409 if the database refuses.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/suppliers/{id}",
     operation_id = "delete_supplier",
@@ -363,7 +363,7 @@ pub struct SupplierFile {
 /// The supplier's price files, newest first, with their processing state.
 /// Files in `pending`/`processing` are picked up by the processor within a
 /// minute; poll while any is.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/suppliers/{id}/files",
     operation_id = "list_supplier_files",
@@ -410,7 +410,7 @@ pub struct NewSupplierFile {
 /// Records an uploaded price file as `pending`; the processor turns it into
 /// searchable prices within a minute (`GET /v1/suppliers/{id}/files` shows
 /// its state).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/suppliers/{id}/files",
     operation_id = "add_supplier_file",
@@ -473,7 +473,7 @@ pub async fn add_file(
 ///
 /// Deletes a price file of one of the company's suppliers, its prices and
 /// the stored file.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/supplier-files/{id}",
     operation_id = "delete_supplier_file",

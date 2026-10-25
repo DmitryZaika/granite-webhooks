@@ -11,6 +11,7 @@ use crate::error::{ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::followups::enrollments::stop_after_customer_conversation;
 use crate::followups::processor::company_sms_provider;
+use crate::openapi::ToSchema;
 use crate::routes::calls::recording::{CallTranscriptError, transcribe_call};
 use crate::routes::jobs::JobCaller;
 use crate::routes::sms::provider::SmsProvider;
@@ -22,7 +23,6 @@ use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
-use utoipa::ToSchema;
 
 /// Shorter calls are not checked.
 const MIN_TALKING_SECONDS: i64 = 30;
@@ -243,7 +243,7 @@ fn preview(text: &str) -> Option<String> {
 /// the customer's running SMS / email flows. `call_id` may be a Granite
 /// Phone call `tx_<id>` (the transcript kept on it is checked); the API runs
 /// those checks itself.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/followups/call-check",
     operation_id = "check_followup_call",

@@ -12,13 +12,13 @@ use crate::chat::crm_manual;
 use crate::chat::manual_feedback::{self, DialogMessage};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use utoipa::ToSchema;
 
 const ESCALATION_MESSAGE: &str =
     "I'm sorry — your review was added to our team and we will check it.";
@@ -118,7 +118,7 @@ fn non_empty(value: Option<String>) -> Option<String> {
 /// `dislike`: a corrected answer from the manual and the user's access
 /// (attempt 1 or 2). `approve` / `escalate`: the conversation is saved for
 /// the super admins' instruction corrections page.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/crm-manual-feedback",
     operation_id = "give_crm_manual_feedback",

@@ -6,11 +6,11 @@
 //! `company_domain_trust`. Port of the CRM's
 //! `deliverability.provider.server.ts` and `domainReputation.server.ts`.
 
+use crate::openapi::ToSchema;
 use regex::Regex;
 use serde::Serialize;
 use sqlx::MySqlPool;
 use std::sync::LazyLock;
-use utoipa::ToSchema;
 
 /// A DNS answer that is not records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

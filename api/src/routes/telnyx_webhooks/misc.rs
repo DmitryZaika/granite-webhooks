@@ -5,6 +5,7 @@
 use super::{Hook, TexmlRequest, failed, hang_up, texml};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::IntoParams;
 use crate::phone::call_log::{self, Answer};
 use crate::phone::numbers::last10;
 use crate::state::AppState;
@@ -14,7 +15,6 @@ use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-use utoipa::IntoParams;
 
 /// What the test call says.
 const TEST_MESSAGE: &str = "This is a Granite Phone test call. Your phone can take calls. Goodbye.";
@@ -43,7 +43,7 @@ pub struct CellCodeParams {
 /// The TeXML our test call fetches when the phone answers: a short message,
 /// then hang up. The test call is logged as answered (it never shows in
 /// Recents or stats). Any other call hangs up.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/test-call",
     operation_id = "speak_telnyx_test_call",
@@ -95,7 +95,7 @@ async fn greet(state: &AppState, hook: &Hook, call_id: i64) -> ApiResult<Respons
 /// read when the code expired or was used, when the user is not the
 /// token's company's, or when the request's `To` is missing or not the cell
 /// being verified.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/cell-code",
     operation_id = "read_telnyx_cell_code",

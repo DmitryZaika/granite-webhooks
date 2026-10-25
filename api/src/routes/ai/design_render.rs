@@ -13,6 +13,7 @@ use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::kitchen_design::{self, DesignStone, MAX_KITCHEN_BYTES, MAX_STONES, Prepared};
+use crate::openapi::{IntoParams, ToSchema};
 use crate::state::AppState;
 use axum::Json;
 use axum::body::Body;
@@ -29,7 +30,6 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
-use utoipa::{IntoParams, ToSchema};
 
 /// Query of `GET /v1/ai/design/stones`.
 #[derive(Debug, Deserialize, IntoParams)]
@@ -63,7 +63,7 @@ pub struct DesignStones {
 ///
 /// The company's displayed stones that have a picture and are in stock
 /// (a free slab, their own or a linked stone's, or regular stock).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/ai/design/stones",
     operation_id = "list_ai_design_stones",
@@ -164,7 +164,7 @@ fn kitchen_bytes(data_url: &str) -> Result<Vec<u8>, ApiError> {
 /// `data:` URL) or `{"type":"stoneError","stoneName","error"}`, `{"type":
 /// "ping"}` every 10 s, and finally `{"type":"done","count"}` or
 /// `{"type":"error","error"}` when no stone worked.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/design",
     operation_id = "design_kitchen",

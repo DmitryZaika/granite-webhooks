@@ -15,6 +15,7 @@ use super::{audit, telnyx_failed};
 use crate::auth::{AdminUser, CurrentUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::phone::company;
 use crate::phone::numbers::{is_nanp, last10, to_e164};
 use crate::state::AppState;
@@ -29,7 +30,6 @@ use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::MySqlPool;
-use utoipa::{IntoParams, ToSchema};
 
 /// A new company's daily spend limits in Telnyx, in dollars (calls, texts).
 const DAILY_CALL_SPEND: &str = "25.00";
@@ -379,7 +379,7 @@ async fn provision(
 /// the company runs, 502 when Telnyx fails (what was made is kept; try
 /// again), 503 when Telnyx is not set up on the server. Written to the
 /// phone audit log. Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/admin/connect",
     operation_id = "connect_phone_admin_telnyx",
@@ -409,7 +409,7 @@ pub async fn connect_telnyx(
 /// As `POST /v1/phone/admin/connect`, for any company; answers the
 /// company's whole setup. 404 for an unknown or deleted company.
 /// Superusers only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/superuser/companies/{id}/telnyx/connect",
     operation_id = "connect_company_telnyx",
@@ -502,7 +502,7 @@ impl From<AvailableNumber> for BuyableNumber {
 /// 12), with their monthly and up-front price. 400 unless `areaCode` is
 /// three digits, 502 when Telnyx fails, 503 when Telnyx is not set up on
 /// the server. Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/numbers/available",
     operation_id = "search_phone_admin_numbers",
@@ -562,7 +562,7 @@ pub struct BuyNumber {
 /// the company has it already, 502 when Telnyx fails (the number may be
 /// taken: search again). Written to the phone audit log. Company admins
 /// (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/admin/numbers/buy",
     operation_id = "buy_phone_admin_number",

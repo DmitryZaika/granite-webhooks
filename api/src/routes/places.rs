@@ -8,13 +8,13 @@
 
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 const US_STATES: [&str; 56] = [
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS",
@@ -156,7 +156,7 @@ fn component<'a>(place: &'a Value, kind: &str, text: &str) -> Option<&'a str> {
 ///
 /// US addresses for typed text (3 characters or more), with their parts.
 /// A suggestion without a ZIP gets one from the place, else from geocoding.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/places/autocomplete",
     operation_id = "autocomplete_address",
@@ -247,7 +247,7 @@ pub struct PlaceDetails {
 /// Get a place's address
 ///
 /// The address parts of a suggestion picked from the autocomplete.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/places/{place_id}",
     operation_id = "get_place",

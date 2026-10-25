@@ -11,13 +11,13 @@
 use super::customer_index;
 use super::numbers::{last10, to_e164};
 use super::wire_enum;
+use crate::openapi::ToSchema;
 use crate::routes::auth::sha256_hex;
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use sqlx::{FromRow, MySql, MySqlPool, QueryBuilder};
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use utoipa::ToSchema;
 
 /// The onboarding sample customer, never shown in the app.
 pub const SAMPLE_CUSTOMER_ID: i32 = 990_000_021;

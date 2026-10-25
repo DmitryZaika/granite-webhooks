@@ -8,6 +8,7 @@
 use super::invoice::{number, text};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::qbo::{Access, QboError, escape};
 use crate::state::AppState;
 use axum::Json;
@@ -18,7 +19,6 @@ use lambda_http::tracing;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashSet;
-use utoipa::ToSchema;
 
 /// A data row of a `QuickBooks` summary report.
 #[derive(Debug, Clone, PartialEq)]
@@ -332,7 +332,7 @@ fn currency(report: &Report) -> String {
 ///
 /// The sum of the caller's classes in this month's Sales by Class report,
 /// with the periods the sales goal panel shows.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/qbo-sales",
     operation_id = "get_my_qbo_sales",
@@ -588,7 +588,7 @@ fn customer_rows(report: &Report, invoices: &[DatedInvoice]) -> Vec<CustomerSale
 ///
 /// The customers in this month's Sales by Customer report for the caller's
 /// classes, each with this month's invoices.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/qbo-sales/customers",
     operation_id = "list_my_qbo_sales_customers",

@@ -6,6 +6,7 @@
 //! was paid, and the paychecks (commissions, monthly goal bonuses, the
 //! weekly base) per payroll date.
 
+use crate::openapi::ToSchema;
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::js::{arr, num};
 use crate::quote_pricing::pricing::{OptionPrice, PriceLine};
@@ -17,7 +18,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
-use utoipa::ToSchema;
 
 /// A commission rule (`CommissionRule`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]

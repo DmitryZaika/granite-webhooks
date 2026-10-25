@@ -10,13 +10,13 @@
 use crate::auth::CurrentUser;
 use crate::auth::session::{SUPER_ADMIN_POSITION, SessionUser, UserPositionRow, user_positions};
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::company::queries::company_features;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::Serialize;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(shell))
@@ -155,7 +155,7 @@ pub fn user_portal(user: &SessionUser, rows: &[UserPositionRow]) -> Option<Strin
 /// The signed-in user (in the company they act in), the super admin company
 /// switcher, the acting company's name and logo, the portal a position locks
 /// the user into, and the features and permissions the frame switches on.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/app/shell",
     operation_id = "get_app_shell",

@@ -69,7 +69,7 @@ jobs:
 
       - name: OpenAPI checks
         if: inputs.cargo_args == ''
-        run: cargo test -p api --test it -- openapi::
+        run: cargo test -p api --features openapi --test it -- openapi::
 
       - name: Granite Phone tests
         if: inputs.cargo_args == ''

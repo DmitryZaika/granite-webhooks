@@ -12,10 +12,10 @@
 
 use super::provider::{Param, SAMPLE_PHONES, SmsProvider, marks};
 use crate::auth::session::SessionUser;
+use crate::openapi::ToSchema;
 use serde::Deserialize;
 use sqlx::MySqlPool;
 use std::collections::BTreeSet;
-use utoipa::ToSchema;
 
 /// Whose conversations to list.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, ToSchema)]

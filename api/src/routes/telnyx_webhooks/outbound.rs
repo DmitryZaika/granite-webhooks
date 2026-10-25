@@ -166,7 +166,7 @@ impl Payload {
 /// `call.hangup` (final status, talk time, the CRM follow-through),
 /// `call.recording.saved` (the recording is copied to the private bucket).
 /// Every event is stored and handled once.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/outbound",
     operation_id = "take_telnyx_call_control_event",

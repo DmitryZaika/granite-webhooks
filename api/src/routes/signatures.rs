@@ -11,6 +11,8 @@
 
 use crate::auth::EmployeeUser;
 use crate::error::ApiError;
+use crate::openapi::IntoParams;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
@@ -19,8 +21,6 @@ use lambda_http::tracing;
 use lopdf::{Dictionary, Document, Object, StringFormat};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use utoipa::IntoParams;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -251,7 +251,7 @@ struct NativeRow {
 /// The document as sent, or signed once the customer signed it, from the
 /// private signature bucket; one over 4 MB redirects to a presigned link.
 /// For a browser tab: errors are plain text.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/signatures/{id}/document",
     operation_id = "open_native_signature_document",
@@ -433,7 +433,7 @@ pub(crate) async fn signwell_completed_pdf_url(
 /// The signed PDF, titled and named "<document> signed.pdf"; the original
 /// file while it is not signed. One over 4 MB is stored in the bucket and
 /// redirects to a presigned link. For a browser tab: errors are plain text.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/signature-requests/{id}/signed-pdf",
     operation_id = "open_signed_pdf",

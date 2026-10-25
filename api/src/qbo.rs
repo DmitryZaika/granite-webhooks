@@ -418,7 +418,7 @@ impl Qbo {
 }
 
 /// Where the app's credentials come from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, crate::openapi::ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum CredentialsSource {
     /// The company's own app (a superuser saved its keys).

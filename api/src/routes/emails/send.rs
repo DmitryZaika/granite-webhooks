@@ -40,7 +40,7 @@ const MAX_DELAY_DAYS: i64 = 90;
 /// `send_together` each get their own message and conversation. Each message
 /// is recorded with its participants and attachments, and the deal's
 /// customer gets the recipients' new addresses.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/emails",
     operation_id = "send_email",

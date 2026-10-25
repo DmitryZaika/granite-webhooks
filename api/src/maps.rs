@@ -3,13 +3,13 @@
 //! Configured with `GOOGLE_MAPS_API_KEY`; without it every distance is
 //! unknown and no map is drawn.
 
+use crate::openapi::ToSchema;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use utoipa::ToSchema;
 
 const ROUTE_MATRIX_URL: &str = "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix";
 const MAPS_API_URL: &str = "https://maps.googleapis.com/maps/api";

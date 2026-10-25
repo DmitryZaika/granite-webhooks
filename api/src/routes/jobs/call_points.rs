@@ -12,6 +12,7 @@
 use super::JobCaller;
 use crate::ai::Caller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::routes::calls::recording::{CallTranscriptError, transcribe_call};
 use crate::state::AppState;
 use crate::voicemail::classify;
@@ -24,7 +25,6 @@ use reqwest::Method;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use utoipa::ToSchema;
 
 const CLOUDTALK_PAGE: usize = 1000;
 const MAX_PAGES: usize = 10;
@@ -471,7 +471,7 @@ pub async fn classify_pending(state: &AppState, limit: i64) -> Result<usize, sql
 ///
 /// Pulls reps' outbound calls into the call points table, then transcribes
 /// and classifies a few of the calls long enough to need it.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/call-points",
     operation_id = "run_call_points",

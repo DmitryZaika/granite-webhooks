@@ -6,6 +6,7 @@
 use super::activity::{customers_by_phone, last10};
 use crate::auth::AdminUser;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::{IntoParams, ToSchema};
 use crate::phone::calls::{CallDirection, CallStatus};
 use crate::routes::calls::ringcentral::map_record;
 use crate::routes::calls::telnyx::{self, TelnyxCall};
@@ -18,7 +19,6 @@ use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-use utoipa::{IntoParams, ToSchema};
 
 const PAGE_SIZE: usize = 200;
 const MAX_PAGES_PER_AGENT: usize = 5;
@@ -402,7 +402,7 @@ fn started(row: &CallActivity) -> Option<DateTime<Utc>> {
 /// `telnyx_call`), newest first. Users without a `CloudTalk` agent or
 /// `RingCentral` extension, and companies without either, have no
 /// `CloudTalk` or `RingCentral` calls.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/users/call-activity",
     operation_id = "list_user_call_activity",

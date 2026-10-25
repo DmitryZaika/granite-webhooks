@@ -1,9 +1,9 @@
+use crate::openapi::ToSchema;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use lambda_http::tracing;
 use serde::Serialize;
-use utoipa::ToSchema;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {

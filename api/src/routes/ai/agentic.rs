@@ -15,12 +15,12 @@ use crate::auth::EmployeeUser;
 use crate::auth::agent::{self, AgentRunner, Claims, TOKEN_TTL_SECS};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// Longest question, in UTF-16 units like the browser counts.
 pub const MAX_QUESTION_LENGTH: usize = 8000;
@@ -82,7 +82,7 @@ pub fn chat_title(question: &str) -> String {
 ///
 /// Queues a question for the claude-job-runner agent, in the caller's latest
 /// chat or a new one. Poll `GET /v1/ai/agentic-questions/{id}` for the answer.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/agentic-questions",
     operation_id = "ask_agent",
@@ -180,7 +180,7 @@ struct JobRow {
 ///
 /// Where the caller's question is, and the agent's answer once it is done.
 /// Other people's questions read as not found.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/ai/agentic-questions/{id}",
     operation_id = "get_agentic_question",
@@ -260,7 +260,7 @@ pub struct AgentToken {
 /// they asked in. It reads only (plus `POST /v1/call-transcripts`), never as
 /// a superuser, and works for 30 minutes or until the question is answered.
 /// Ask for a new one when it runs out mid-answer.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/agentic-questions/{id}/agent-token",
     operation_id = "issue_agent_token",

@@ -12,6 +12,8 @@
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -19,8 +21,6 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -61,7 +61,7 @@ pub struct FeedbackReview {
 /// List manual feedback to review
 ///
 /// Unresolved threads users approved or escalated, newest first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/manual-feedback",
     operation_id = "list_manual_feedback_reviews",
@@ -108,7 +108,7 @@ pub struct Resolve {
 ///
 /// Marks the thread reviewed; with `apply_manual_change` its proposed
 /// section text replaces that section of the CRM manual for the chat.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/superuser/manual-feedback/{id}/resolve",
     operation_id = "resolve_manual_feedback_review",

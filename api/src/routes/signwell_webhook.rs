@@ -16,6 +16,8 @@
 //! `sellQuoteForSignedContract`).
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::{self, js::num_str};
 use crate::routes::emails::signature_mail::{Branding, status_html};
 use crate::state::AppState;
@@ -30,8 +32,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
 use sqlx::MySqlPool;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(check, receive))
@@ -54,7 +54,7 @@ pub struct WebhookQuery {
 /// Check the webhook URL
 ///
 /// Answers `SignWell` checking that the webhook URL is there.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/webhooks/signwell",
     operation_id = "check_signwell_webhook",
@@ -72,7 +72,7 @@ pub async fn check() -> Json<WebhookOk> {
 /// forward, the sender is notified, and a signed contract sells its quote.
 /// Needs `?token=` / `x-webhook-token` (`SIGNWELL_WEBHOOK_SECRET`) or the
 /// event's hash (`SIGNWELL_WEBHOOK_ID`); no session.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/signwell",
     operation_id = "receive_signwell_webhook",

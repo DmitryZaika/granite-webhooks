@@ -20,7 +20,7 @@ use axum::response::{IntoResponse, Response};
 /// Returns every supplier of the caller's company, by name (with `has`, only
 /// those the company has stones, sinks or faucets of). Stones, sinks and
 /// faucets refer to them by `supplier_id`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/suppliers",
     operation_id = "list_suppliers",
@@ -48,7 +48,7 @@ pub async fn suppliers(
 ///
 /// Every supplier of the caller's company with its contact details and files,
 /// by id. The onboarding sample supplier is the page's to place.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/suppliers/directory",
     operation_id = "list_supplier_directory",
@@ -92,7 +92,7 @@ pub async fn supplier_directory(
 ///
 /// Returns every color a stone can be tagged with (the same list for all
 /// companies), by name. Stones carry them as `color_ids`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/colors",
     operation_id = "list_colors",
@@ -192,7 +192,7 @@ async fn delete<B: serde::Serialize>(
 ///
 /// Returns the materials stones of the company can have (`granite`,
 /// `quartz`...), by name. A stone's `type` must be one of them.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/stone-types",
     operation_id = "list_stone_types",
@@ -218,7 +218,7 @@ pub async fn stone_types(
 ///
 /// Creates a type for the caller's company. Names are unique per company,
 /// ignoring case.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/stone-types",
     operation_id = "create_stone_type",
@@ -246,7 +246,7 @@ pub async fn create_stone_type(
 ///
 /// Renames the type and sets the new name on every stone of the company that
 /// had the old one.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/stone-types/{id}",
     operation_id = "rename_stone_type",
@@ -277,7 +277,7 @@ pub async fn rename_stone_type(
 ///
 /// Deletes a type no live stone uses. When stones still use it, answers 409
 /// with those stones; delete or retype them first.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/stone-types/{id}",
     operation_id = "delete_stone_type",
@@ -308,7 +308,7 @@ pub async fn delete_stone_type(
 ///
 /// Returns the sink types of the company (`composite`, `farm house`...), by
 /// name. A sink model's `type` must be one of them.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sink-types",
     operation_id = "list_sink_types",
@@ -334,7 +334,7 @@ pub async fn sink_types(
 ///
 /// Creates a sink type for the caller's company. Names are unique per
 /// company, ignoring case.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sink-types",
     operation_id = "create_sink_type",
@@ -362,7 +362,7 @@ pub async fn create_sink_type(
 ///
 /// Renames the type and sets the new name on every sink model of the company
 /// that had the old one.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/sink-types/{id}",
     operation_id = "rename_sink_type",
@@ -393,7 +393,7 @@ pub async fn rename_sink_type(
 ///
 /// Deletes a type no live sink model uses. When models still use it, answers
 /// 409 with those models; delete or retype them first.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/sink-types/{id}",
     operation_id = "delete_sink_type",

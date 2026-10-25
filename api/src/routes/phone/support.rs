@@ -4,6 +4,7 @@ use super::{RateLimited, bad_request, rate_limited};
 use crate::auth::device::DeviceUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::SUPPORT_EMAIL;
 use crate::phone::alerts::{AlertSource, alert_e911};
 use crate::phone::numbers::n11_code;
@@ -18,7 +19,6 @@ use serde::Deserialize;
 use sqlx::MySqlPool;
 use std::fmt::Write as _;
 use std::sync::LazyLock;
-use utoipa::ToSchema;
 
 const NO_REPLY: &str = "noreply@granite-manager.com";
 /// What a problem report keeps.
@@ -48,7 +48,7 @@ pub struct E911Input {
 /// again (still 204); an emergency code after another N11 code does. 400
 /// `invalid_phone` for anything but an N11 or emergency code. Device token
 /// only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/e911",
     operation_id = "report_phone_e911",
@@ -209,7 +209,7 @@ fn clip(text: &str, max: usize) -> String {
 /// summary, 500 log lines). At most 3 reports an hour per phone (429 with
 /// `retryAfterSecs`); a report that could not be sent does not count.
 /// Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/diagnostics",
     operation_id = "send_phone_diagnostics",

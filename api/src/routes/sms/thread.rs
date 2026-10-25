@@ -511,7 +511,7 @@ pub(super) fn checked_phone(phone: &str) -> ApiResult<String> {
 /// customer or supplier it belongs to and the SMS flow running on it. A
 /// conversation the caller may not see comes back without messages. The
 /// onboarding tour's sample phone is not a real conversation (404).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms/{provider}/threads/{phone}",
     operation_id = "get_sms_thread",
@@ -624,7 +624,7 @@ async fn set_marker(
 /// Mark a conversation read
 ///
 /// Clears the conversation's unread messages for the caller.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sms/{provider}/threads/{phone}/read",
     operation_id = "mark_sms_thread_read",
@@ -653,7 +653,7 @@ pub async fn mark_read(
 /// Mark a conversation unread
 ///
 /// Keeps the conversation unread for the caller until it is opened again.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sms/{provider}/threads/{phone}/unread",
     operation_id = "mark_sms_thread_unread",

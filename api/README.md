@@ -25,7 +25,7 @@ api/
       mod.rs             merges every domain router
       <domain>/
         mod.rs           router() registering handlers with routes! + a doc list of the routes
-        handlers.rs      #[utoipa::path] + auth extractor + params -> query -> Json
+        handlers.rs      #[crate::openapi::path] + auth extractor + params -> query -> Json
         queries.rs       SQL, one function per database read
         schemas.rs       request params, response rows (serde + FromRow + ToSchema)
   tests/
@@ -214,7 +214,7 @@ answer 400 with a message the page can show.
 2. Add rows to `seed/local_seed.sql` (append only; ids >= 100) covering each
    branch of the query (filters, NULLs, deleted rows, a second company).
 3. For each read: add a function in `queries.rs`, a handler with
-   `#[utoipa::path]`, `.routes(routes!(handlers::name))` in the domain
+   `#[crate::openapi::path]`, `.routes(routes!(handlers::name))` in the domain
    `mod.rs`, and tests. `make api-openapi`, then `make api-test`.
 4. Frontend: add typed callers in `app/lib/api/<domain>.ts`, fetch them with
    React Query in the page, delete the route's `loader`, and prove the page
@@ -267,15 +267,22 @@ Changing an existing row breaks assertions in both repos; add a new row.
 
 ## OpenAPI
 
-The spec is generated from the code with `utoipa` and served unauthenticated
-at `GET /openapi.json`; the same document is checked in as `api/openapi.json`.
+The spec is generated from the code with `utoipa` and checked in as
+`api/openapi.json`, which `GET /openapi.json` serves unauthenticated. utoipa
+only runs with the `openapi` cargo feature (`make api-openapi`, and CI's
+OpenAPI checks): it is a large share of the crate's compile time. Without it
+`#[crate::openapi::path]` reads only the method and the path, `routes!`
+registers handlers straight with axum, and `ToSchema`/`IntoParams` derive
+nothing (`api/macros`); `every_documented_operation_is_routed` checks that
+every operation of the checked-in spec still reaches its handler.
 AI agents turn each operation into a tool: `operationId` becomes the tool
 name, `summary` + `description` its description, and the parameter and schema
 descriptions tell it what to send and what comes back.
 
 For every route:
 
-- **Handler**: `#[utoipa::path(...)]` with the method, full `path`, an explicit
+- **Handler**: `#[crate::openapi::path(...)]` (the arguments of
+  `#[utoipa::path]`) with the method, full `path`, an explicit
   verb_noun `operation_id` (`list_customers`, not `list`), `tag` = the domain,
   `params(...)` / `request_body = ...`, every status the handler can return
   (`body = ErrorBody` for errors; always 401, 403 when it takes

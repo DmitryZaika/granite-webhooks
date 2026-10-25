@@ -156,7 +156,7 @@ pub async fn is_connected(pool: &MySqlPool, company_id: i32) -> Result<bool, sql
 }
 
 /// What a test call says about a saved connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, crate::openapi::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionStatus {
     Connected,

@@ -5,6 +5,7 @@
 use crate::auth::AdminUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::routes::created::CreatedId;
 use crate::state::AppState;
 use axum::Json;
@@ -12,7 +13,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
-use utoipa::ToSchema;
 
 /// The shared starter pipeline.
 const SHARED_GROUP: i32 = 1;
@@ -113,7 +113,7 @@ async fn check_group(
 /// Every pipeline of the company (shown or hidden) and the shared one, with
 /// their stages. The shared pipeline is the default while none of the
 /// company's own is.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deal-pipelines",
     operation_id = "list_deal_pipelines",
@@ -169,7 +169,7 @@ pub async fn list(
 /// Create a pipeline
 ///
 /// Adds an empty pipeline to the company.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/deal-pipelines",
     operation_id = "create_deal_pipeline",
@@ -209,7 +209,7 @@ pub async fn create(
 ///
 /// Shows or hides a pipeline, or makes it the company's default (the
 /// shared pipeline is the default when none of the company's own is).
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/deal-pipelines/{id}",
     operation_id = "update_deal_pipeline",
@@ -274,7 +274,7 @@ pub async fn update(
 /// Delete a pipeline
 ///
 /// Deletes one of the company's pipelines and its stages.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/deal-pipelines/{id}",
     operation_id = "delete_deal_pipeline",
@@ -315,7 +315,7 @@ pub async fn delete(
 /// Add a stage
 ///
 /// Adds a stage at the end of one of the company's pipelines.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/deal-pipelines/{id}/stages",
     operation_id = "create_deal_stage",
@@ -377,7 +377,7 @@ pub async fn create_stage(
 /// Order a pipeline's stages
 ///
 /// Saves the order of the stages (every stage of the pipeline, first to last).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/deal-pipelines/{id}/stage-order",
     operation_id = "order_deal_stages",
@@ -430,7 +430,7 @@ pub async fn order_stages(
 /// Delete a stage
 ///
 /// Deletes a stage of one of the company's pipelines.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/deal-stages/{id}",
     operation_id = "delete_deal_stage",

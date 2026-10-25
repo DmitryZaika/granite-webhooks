@@ -6,6 +6,7 @@ use super::sources::source_named;
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::customers::service::sync_emails;
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
@@ -15,7 +16,6 @@ use axum::http::StatusCode;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::{IntoParams, ToSchema};
 
 /// SQL: the lead (`c`) came from Facebook.
 const FACEBOOK: &str = "LOWER(c.referral_source) IN ('facebook', 'facebook-form', 'facebook form')";
@@ -198,7 +198,7 @@ fn bound<'q, O>(
 ///
 /// The company's leads (or walk-ins) created in the range, newest first,
 /// with their live deals, the company's stages and invalid / lost counts.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/marketing/{company_id}/leads",
     operation_id = "list_marketing_leads",
@@ -362,7 +362,7 @@ pub struct CreatedLead {
 /// Saves a lead (source `leads`, created by "Marketing team") with its
 /// emails, then hands it to the lead pipeline, which opens its deal and
 /// tells the sales team.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/marketing/{company_id}/leads",
     operation_id = "create_marketing_lead",
@@ -461,7 +461,7 @@ pub struct EditableLead {
 /// Get a lead
 ///
 /// A live lead of the company, for its edit form.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/marketing/{company_id}/leads/{id}",
     operation_id = "get_marketing_lead",
@@ -507,7 +507,7 @@ pub async fn get(
 /// Edit a lead
 ///
 /// Saves the name, phones, address, message and emails of a live lead.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/marketing/{company_id}/leads/{id}",
     operation_id = "update_marketing_lead",
@@ -573,7 +573,7 @@ pub async fn update(
 ///
 /// Deletes a live lead and its deals, and removes the Telegram messages
 /// about it.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/marketing/{company_id}/leads/{id}",
     operation_id = "delete_marketing_lead",

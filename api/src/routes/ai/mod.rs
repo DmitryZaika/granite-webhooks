@@ -37,8 +37,8 @@ pub mod manual_feedback;
 pub mod reply_context;
 pub mod signature_fields;
 
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()

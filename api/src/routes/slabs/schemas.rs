@@ -1,5 +1,5 @@
+use crate::openapi::ToSchema;
 use serde::Deserialize;
-use utoipa::ToSchema;
 
 /// Body of `PATCH /v1/slabs/{id}`: the fields to change. Length and width
 /// go together.
@@ -18,7 +18,7 @@ pub struct UpdateSlab {
 }
 
 /// Query string of `GET /v1/slabs`.
-#[derive(Debug, Default, serde::Deserialize, utoipa::IntoParams)]
+#[derive(Debug, Default, serde::Deserialize, crate::openapi::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ListSlabsQuery {
     /// Slab ids to return; repeat the parameter (`?id=1&id=2`). Required:

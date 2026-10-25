@@ -1,8 +1,8 @@
 use super::provider::SmsProvider;
 use super::scope::SmsScope;
+use crate::openapi::{IntoParams, ToSchema};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
 
 /// Which way a message went, seen from the company.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]

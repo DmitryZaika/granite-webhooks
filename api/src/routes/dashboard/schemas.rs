@@ -1,5 +1,5 @@
+use crate::openapi::ToSchema;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// A widget of the employee dashboard. Must match `EmployeeDashboardWidgetId`
 /// in the frontend (`app/utils/employeeDashboardWidgets.ts`).

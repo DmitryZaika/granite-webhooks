@@ -6,6 +6,7 @@
 
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::routes::emails::deal_history::{
     CUSTOMER_PARTICIPANT_EMAILS, HistoryEmail, address_emails, history_sql, merge,
     record_missing_sends, with_thread_attachments,
@@ -17,7 +18,6 @@ use axum::extract::{Path, State};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{AssertSqlSafe, FromRow, MySqlPool};
-use utoipa::ToSchema;
 
 /// `customers_history.reassigned_to` of a deal deletion: `deal_deleted:<id>`.
 const DEAL_DELETED_PREFIX: &str = "deal_deleted:";
@@ -230,7 +230,7 @@ type CustomerRow = (
 /// created, deleted, won or lost), reassignments, email history (first
 /// recording drips that were sent but are missing from it) and the
 /// activities and notes of the live deals. Deleted customers included.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/{id}/history",
     operation_id = "get_customer_history",

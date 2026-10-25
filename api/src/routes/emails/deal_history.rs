@@ -6,6 +6,7 @@ use super::sql::{Arg, CLIENT_OPEN_MIN_DELAY, Sql, normalize_address};
 use super::thread::from_email;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
 use axum::Json;
@@ -14,7 +15,6 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
 use std::collections::{HashMap, HashSet};
-use utoipa::ToSchema;
 
 /// A message of a deal's or customer's email history.
 #[derive(Debug, Clone, Serialize, FromRow, ToSchema)]
@@ -431,7 +431,7 @@ async fn record_send(pool: &MySqlPool, row: &MissingSend) -> Result<(), sqlx::Er
 /// not in `emails`. Messages carry real open counts. Before reading, sent
 /// list drips missing from the history are recorded (so the page always
 /// shows them). Open a conversation with `GET /v1/emails/threads/{thread_id}`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deals/{id}/emails",
     operation_id = "list_deal_emails",

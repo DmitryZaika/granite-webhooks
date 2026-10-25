@@ -29,7 +29,7 @@ pub async fn list_suppliers(
 }
 
 /// Items a supplier must have to be listed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, crate::openapi::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SupplierItems {
     Stones,
@@ -38,7 +38,7 @@ pub enum SupplierItems {
 }
 
 /// Query of `GET /v1/suppliers`.
-#[derive(Debug, Default, serde::Deserialize, utoipa::IntoParams)]
+#[derive(Debug, Default, serde::Deserialize, crate::openapi::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct SuppliersQuery {
     /// Only suppliers of the company's `stones`, `sinks` or `faucets`.

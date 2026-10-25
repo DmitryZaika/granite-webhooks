@@ -5,6 +5,7 @@ use super::{RateLimited, denied, rate_limited, telnyx_failed};
 use crate::auth::device::DeviceUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::company::{self, CompanyConfig};
 use crate::phone::devices::{self, CREDENTIAL_DAYS, CredentialError, PhoneDevice};
 use crate::phone::older_than;
@@ -21,7 +22,6 @@ use chrono::{DateTime, Duration, SubsecRound, Utc};
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
-use utoipa::ToSchema;
 
 /// Longest device name kept.
 const DEVICE_NAME_CHARS: usize = 100;
@@ -95,7 +95,7 @@ pub(super) fn credential_failed(err: CredentialError) -> ApiError {
 /// off. A `pushToken` here or later (`PUT .../push-token`) lets us push
 /// missed calls; no other phone keeps that token. Device token only. Next:
 /// `POST /v1/phone/devices/{id}/token`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/devices",
     operation_id = "register_phone_device",
@@ -314,7 +314,7 @@ async fn app_version(pool: &MySqlPool, device_id: i64) -> sqlx::Result<Option<St
 /// version in `X-Granite-App-Version` when sent, which is also saved; else
 /// the registered one), 404 when `id` is not this session's phone. The
 /// native calling module calls it too, with the same headers.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/devices/{id}/token",
     operation_id = "mint_phone_device_token",
@@ -408,7 +408,7 @@ pub async fn mint_device_token(
 /// pushes: missed calls, voicemails, AI messages, new emails, sign-outs. No
 /// other phone keeps the token. 404 when `id` is not this session's phone. The native
 /// calling module calls it too.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/phone/devices/{id}/push-token",
     operation_id = "set_phone_push_token",

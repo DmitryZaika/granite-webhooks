@@ -5,12 +5,12 @@ use crate::ai::{Caller, Chat, MINI_MODEL};
 use crate::auth::AdminUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-use utoipa::ToSchema;
 
 /// The CRM's `TEMPLATE_VARIABLES`: key and label.
 const VARIABLES: [(&str, &str); 14] = [
@@ -90,7 +90,7 @@ pub struct EmailTemplateDraft {
 ///
 /// Writes a template name, subject and HTML body from a description, using
 /// the built-in `{{variables}}` where it can.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/email-template",
     operation_id = "draft_email_template",

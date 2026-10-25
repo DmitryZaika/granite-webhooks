@@ -17,6 +17,8 @@ use crate::auth::device::{
 use crate::auth::session::{SessionUser, effective_user, find_user, user_positions};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::phone::revoke::{RevokeReason, revoke_device_session};
 use crate::routes::auth::{
     client_ip, normalized_credentials, record_failed_login, sha256_hex, too_many_failures,
@@ -32,8 +34,6 @@ use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Months, SubsecRound, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -282,7 +282,7 @@ async fn signed_in_user(pool: &MySqlPool, user_id: i32) -> sqlx::Result<Option<S
 /// `invalid_credentials`. The sign-in lasts 12 months, or until the phone
 /// is unused for 30 days, signs out or is revoked. Next:
 /// `POST /v1/phone/devices` registers the phone for calling.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/auth/device-sessions",
     operation_id = "create_device_session",
@@ -378,7 +378,7 @@ pub async fn sign_in(
 /// Ends the device session of the request's `X-Granite-Device` token: the
 /// token stops working, the phone's Telnyx credential is deleted and its
 /// push token cleared. The app then wipes its local data. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/auth/device-sessions/current",
     operation_id = "delete_current_device_session",
@@ -401,7 +401,7 @@ pub async fn sign_out(State(state): State<AppState>, device: DeviceUser) -> ApiR
 /// first; `current` marks the phone making the request (always false with
 /// the CRM's cookie). Revoke one with `DELETE /v1/me/devices/{id}`. Takes
 /// the device token or the session cookie (employees, admins, superusers).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/devices",
     operation_id = "list_my_devices",
@@ -440,7 +440,7 @@ pub async fn list_devices(
 /// working, its Telnyx credential is deleted and the phone is told to wipe
 /// itself. 404 when the session is not the caller's or is signed out already.
 /// Takes the device token or the session cookie.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/me/devices/{id}",
     operation_id = "revoke_my_device",

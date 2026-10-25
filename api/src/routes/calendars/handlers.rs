@@ -3,11 +3,11 @@ use super::schemas::{Calendar, HiddenUser};
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::IntoParams;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::Deserialize;
-use utoipa::IntoParams;
 
 /// Query of `GET /v1/calendars`.
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -25,7 +25,7 @@ pub struct ListQuery {
 /// Estimates calendars come first and are created on the fly when a company
 /// lacks them (so every company has them). With `all=true` (admins), every
 /// live calendar, hidden ones too, for Admin > Schedule.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/calendars",
     operation_id = "list_calendars",
@@ -59,7 +59,7 @@ pub async fn list(
 /// Who each calendar is hidden from
 ///
 /// Every (calendar, user) pair an admin hid in Admin > Schedule.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/calendars/hidden-users",
     operation_id = "list_calendar_hidden_users",

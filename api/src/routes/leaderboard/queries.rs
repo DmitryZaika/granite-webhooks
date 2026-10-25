@@ -362,7 +362,7 @@ fn push_call_sms_ctes(q: &mut QueryBuilder<MySql>, company_id: i32, window: Wind
 const NO_CALLS_POSITIONS: [i32; 2] = [8, 6];
 
 /// A user's calls and hand-sent texts in a window.
-#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow, utoipa::ToSchema)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow, crate::openapi::ToSchema)]
 pub struct CallSmsPointsRow {
     /// The user.
     pub user_id: i32,

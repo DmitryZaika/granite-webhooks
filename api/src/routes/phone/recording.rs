@@ -12,6 +12,7 @@ use super::{denied, telnyx_failed};
 use crate::auth::device::PhoneCaller;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::company::{self, RecordingMode};
 use crate::phone::numbers::is_nanp;
 use crate::state::AppState;
@@ -20,7 +21,6 @@ use axum::extract::State;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 /// What both sides hear when a recording starts or resumes (unless the
 /// company set a notice recording of its own).
@@ -97,7 +97,7 @@ impl LiveCall {
 /// company does not record, a TeXML call without the company's Telnyx
 /// account id saved, or no recording to resume); 502 when Telnyx failed.
 /// Takes the device token or the session cookie.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/phone/calls/recording",
     operation_id = "set_live_call_recording",

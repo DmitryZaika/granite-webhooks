@@ -13,13 +13,13 @@ use super::uploads::{self, schemas::UploadFolder};
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -71,7 +71,7 @@ async fn find(state: &AppState, company_id: i32, id: i32) -> ApiResult<LibraryFi
 ///
 /// The company's supports with their pictures (thumbnails have `-icon`
 /// before the extension), by name.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/supports",
     operation_id = "list_supports",
@@ -100,7 +100,7 @@ pub async fn list(
 ///
 /// A picture uploaded to the `supports` folder (`POST /v1/uploads`) under
 /// `name`; its thumbnail is made now.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/supports",
     operation_id = "create_support",
@@ -149,7 +149,7 @@ pub async fn create(
 ///
 /// Renames it; with `url`, its picture is replaced by a new upload and the
 /// old picture and thumbnail are deleted from storage.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/supports/{id}",
     operation_id = "update_support",
@@ -196,7 +196,7 @@ pub async fn update(
 /// Delete a support
 ///
 /// Removes it from the company's supports.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/supports/{id}",
     operation_id = "delete_support",

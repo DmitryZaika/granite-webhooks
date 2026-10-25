@@ -3,12 +3,12 @@
 use super::sql::{CLIENT_OPEN_MIN_DELAY, can_read_thread};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use serde::Serialize;
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 /// Most opens returned.
 const MAX_READS: i64 = 200;
@@ -28,7 +28,7 @@ pub struct EmailRead {
 /// first (at most 200). Opens in the first 5 seconds after sending are left
 /// out: those are mail scanners and image proxies, not the client. The
 /// latest of these is the `client_read_at` the mailbox lists show.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/emails/{id}/reads",
     operation_id = "list_email_reads",

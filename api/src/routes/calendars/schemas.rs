@@ -1,6 +1,6 @@
+use crate::openapi::ToSchema;
 use serde::Serialize;
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 /// A calendar of the company's schedule.
 #[derive(Debug, Clone, Serialize, FromRow, ToSchema)]

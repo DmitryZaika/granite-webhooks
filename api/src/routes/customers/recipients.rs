@@ -6,13 +6,13 @@
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
 use std::collections::HashSet;
-use utoipa::{IntoParams, ToSchema};
 
 /// Query of `GET /v1/customers/email-recipients`.
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -174,7 +174,7 @@ async fn users(
 /// company or address, tolerating one typo in the address; with a domain
 /// typed, every address of that domain. Best matches first, at most 15.
 /// With `include_users`, also the company's users (empty `term`: all).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/email-recipients",
     operation_id = "suggest_email_recipients",

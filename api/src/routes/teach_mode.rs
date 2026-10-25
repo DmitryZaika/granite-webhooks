@@ -21,6 +21,8 @@ use crate::ai::{Caller, Chat, MINI_MODEL};
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::created::CreatedId;
 use crate::state::AppState;
 use axum::Json;
@@ -32,8 +34,6 @@ use sqlx::FromRow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::time::Duration;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -147,7 +147,7 @@ fn completed_instructions(questions: &[TestQuestion], attempts: &[AttemptRow]) -
 /// The company's questions visible to employees with their answers, and the
 /// instructions they test, each marked completed when the caller once
 /// answered all its questions right in one try.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/teach-mode",
     operation_id = "get_teach_mode",
@@ -251,7 +251,7 @@ pub struct AttemptResult {
 ///
 /// Grades the caller's answers (a skipped question is wrong) and saves them as
 /// their next try at those questions.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/teach-mode/attempts",
     operation_id = "submit_teach_mode_attempt",
@@ -372,7 +372,7 @@ pub struct AdminQuestions {
 /// List the questions
 ///
 /// Every question of the company, published or draft, with its answers.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/teach-mode/questions",
     operation_id = "list_teach_mode_questions",
@@ -528,7 +528,7 @@ async fn insert_question(
 /// Add a question
 ///
 /// A published multiple-choice question on one of the company's instructions.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/teach-mode/questions",
     operation_id = "create_teach_mode_question",
@@ -572,7 +572,7 @@ pub async fn create_question(
 ///
 /// Saves the text and the answers: listed answers with an id are updated,
 /// those without are added, and the question's other answers are deleted.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/teach-mode/questions/{id}",
     operation_id = "update_teach_mode_question",
@@ -660,7 +660,7 @@ pub async fn update_question(
 /// Delete a question
 ///
 /// Soft-deletes one of the company's questions; past answers stay.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/teach-mode/questions/{id}",
     operation_id = "delete_teach_mode_question",
@@ -704,7 +704,7 @@ pub struct Visibility {
 /// Publish or hide a question
 ///
 /// Shows the question to employees, or moves it back to the drafts.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/teach-mode/questions/{id}/visibility",
     operation_id = "set_teach_mode_question_visibility",
@@ -757,7 +757,7 @@ pub struct QuestionCount {
 /// Publish an instruction's drafts
 ///
 /// Shows every draft question of the instruction to employees.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/teach-mode/instructions/{id}/publish",
     operation_id = "publish_teach_mode_instruction",
@@ -975,7 +975,7 @@ fn parse_generated(raw: &str) -> Result<Vec<Generated>, String> {
 ///
 /// Asks the AI for a multiple-choice test covering the instruction (up to 30
 /// questions, avoiding the existing ones) and adds them published.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/teach-mode/instructions/{id}/generate",
     operation_id = "generate_teach_mode_questions",

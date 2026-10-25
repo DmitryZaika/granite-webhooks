@@ -14,9 +14,9 @@
 
 use super::numbers::{is_nanp, to_e164};
 use super::wire_enum;
+use crate::openapi::ToSchema;
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
-use utoipa::ToSchema;
 
 /// What callers from blocked numbers hear by default.
 pub const DEFAULT_ANNOUNCEMENT: &str =

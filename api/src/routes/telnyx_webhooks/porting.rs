@@ -15,6 +15,7 @@
 
 use super::{company_for, taken, verify};
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::phone::company::CompanyConfig;
 use crate::phone::porting::{self as port, Notice, PortRow, PortStatus, RefreshError};
 use crate::state::AppState;
@@ -24,7 +25,6 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use lambda_http::tracing;
 use serde_json::Value;
-use utoipa::ToSchema;
 
 /// A Telnyx porting notification. Most come as `{"data": <event>, "meta":
 /// {...}}`, some as the event itself.
@@ -59,7 +59,7 @@ fn text(value: &Value) -> Option<String> {
 /// admins; an order split off ours is saved as the company's too; a deleted
 /// draft is marked deleted. Notifications about orders that are not the
 /// company's, or seen before, are answered 200 and change nothing.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/porting",
     operation_id = "receive_telnyx_porting_event",

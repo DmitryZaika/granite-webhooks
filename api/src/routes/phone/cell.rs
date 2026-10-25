@@ -8,6 +8,7 @@ use super::{bad_request, calling_setup, denied, rate_limited, telnyx_failed};
 use crate::auth::device::PhoneCaller;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::limits;
 use crate::phone::lines::{self, default_caller_id};
 use crate::phone::numbers::{is_nanp, to_e164};
@@ -21,7 +22,6 @@ use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 /// Wrong codes allowed before the code is void.
 const CODE_TRIES: i64 = 5;
@@ -108,7 +108,7 @@ fn code_wait(calls: &CodeCalls) -> Option<u64> {
 /// `calling_disabled` while the company's calling is off or it has no
 /// number to call from. Takes the device token or the session cookie (the
 /// CRM's phone dock verifies the cell for Call via my cell).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/cell/verify",
     operation_id = "verify_phone_cell",
@@ -234,7 +234,7 @@ pub async fn verify_cell(
 /// becomes the verified cell (`cellNumber` in the settings returned). 400
 /// `wrong_code` for a wrong, expired or used-up code (5 tries, then ask for
 /// a new call). Takes the device token or the session cookie.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/cell/confirm",
     operation_id = "confirm_phone_cell",

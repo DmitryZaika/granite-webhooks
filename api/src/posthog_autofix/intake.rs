@@ -11,13 +11,13 @@ use super::policy::{self, Candidate};
 use super::posthog::{Issue, IssueEvents, IssueSource};
 use super::signature::{self, Fingerprint};
 use super::writeback::IssueWriter;
+use crate::openapi::ToSchema;
 use chrono::{DateTime, Duration, Utc};
 use lambda_http::tracing;
 use serde::Serialize;
 use sqlx::{MySqlConnection, MySqlPool};
 use std::collections::HashMap;
 use std::fmt::Display;
-use utoipa::ToSchema;
 
 /// Everything a tick talks to.
 pub struct Deps<'a, S, D, M, W> {

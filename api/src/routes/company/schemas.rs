@@ -1,6 +1,6 @@
+use crate::openapi::ToSchema;
 use serde::Serialize;
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 /// What the company the request acts in has switched on or set up. Pages use
 /// it to decide which features, widgets and links to offer.

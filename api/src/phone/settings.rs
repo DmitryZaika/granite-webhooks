@@ -8,10 +8,10 @@ use super::availability::{Availability, WorkingHours};
 use super::call_rules::ForwardAllTo;
 use super::lines::CallerId;
 use super::wire_enum;
+use crate::openapi::ToSchema;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{FromRow, MySql, MySqlPool, Transaction};
-use utoipa::ToSchema;
 
 /// The recording notice's current version; the app shows it again when this
 /// grows.

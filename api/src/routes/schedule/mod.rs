@@ -20,6 +20,8 @@ use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
 use crate::maps::Point;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::events::history::{History, record};
 use crate::routes::events::reminders;
 use crate::state::AppState;
@@ -29,8 +31,6 @@ use chrono::NaiveDateTime;
 use route::{TimedStop, assign_time_slots, solve_open_route};
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// Most stops one route may have.
 pub const MAX_ROUTE_STOPS: usize = 20;
@@ -105,7 +105,7 @@ pub struct DayMap {
 ///
 /// A map with the company address and the stops numbered in order, joined by
 /// a line. Null image without Google Maps or when no address is found.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/schedule/day-map",
     operation_id = "get_schedule_day_map",
@@ -200,7 +200,7 @@ fn bad(message: &str) -> ApiError {
 /// hands the day's existing start times out in that order (each event keeps
 /// its length). All-day and repeating events are ordered but keep their
 /// times. Moved events get a history line and re-timed reminders.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/schedule/optimize-route",
     operation_id = "optimize_schedule_route",

@@ -6,11 +6,11 @@ use crate::ai::{Caller, Chat, MINI_MODEL};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 pub(crate) const VOICEMAIL_PROMPT: &str = r#"Summarize this outbound sales voicemail into a minimal CRM note for a countertop company.
 
@@ -88,7 +88,7 @@ pub struct CallNote {
 /// Summarize a call
 ///
 /// A CRM note of the job facts in a sales call (or a short voicemail note).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/call-note",
     operation_id = "summarize_call_note",

@@ -5,13 +5,13 @@ use super::queries::SYSTEM_CALENDARS;
 use crate::auth::AdminUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
-use utoipa::ToSchema;
 
 /// Body of `POST /v1/calendars` and `PUT /v1/calendars/{id}`.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -34,7 +34,7 @@ pub struct CalendarHidden {
 }
 
 /// Path of `PUT /v1/calendars/{id}/hidden-users/{user_id}`.
-#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[derive(Debug, Deserialize, crate::openapi::IntoParams)]
 #[into_params(parameter_in = Path)]
 pub struct HiddenUserPath {
     /// Calendar id.
@@ -92,7 +92,7 @@ fn is_system(slug: Option<&str>) -> bool {
 /// Add a calendar
 ///
 /// The built-in calendars' names are reserved.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/calendars",
     operation_id = "create_calendar",
@@ -138,7 +138,7 @@ pub async fn create(
 /// Edit a calendar
 ///
 /// Saves the name and color; a built-in calendar only changes color.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/calendars/{id}",
     operation_id = "update_calendar",
@@ -182,7 +182,7 @@ pub async fn update(
 /// Hide or show a calendar
 ///
 /// A hidden calendar is left off everyone's schedule.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/calendars/{id}/hidden",
     operation_id = "set_calendar_hidden",
@@ -216,7 +216,7 @@ pub async fn set_hidden(
 /// Delete a calendar
 ///
 /// Removes a calendar the company added; built-in ones stay.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/calendars/{id}",
     operation_id = "delete_calendar",
@@ -253,7 +253,7 @@ pub async fn delete(
 /// Hide a calendar from one user, or show it again
 ///
 /// A calendar hidden from a user is left off their schedule, with its events.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/calendars/{id}/hidden-users/{user_id}",
     operation_id = "set_calendar_hidden_for_user",

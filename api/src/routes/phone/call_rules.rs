@@ -5,6 +5,7 @@ use super::bad_request;
 use crate::auth::device::DeviceUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::availability::WorkingHours;
 use crate::phone::call_rules::{
     self, CallRule, MAX_CALLERS, MAX_MESSAGE_CHARS, MAX_NAME_CHARS, MAX_RULES, RuleAction,
@@ -20,7 +21,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::{MySqlPool, QueryBuilder};
-use utoipa::ToSchema;
 
 /// `GET /v1/phone/call-rules`.
 #[derive(Debug, Serialize, ToSchema)]
@@ -243,7 +243,7 @@ struct MyLineRow {
 /// when the company has none) and whether the line rings only me (where my
 /// rules decide whole calls). For the "Incoming calls" summary and a rule's
 /// "number called" condition. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/lines",
     operation_id = "list_phone_lines",
@@ -323,7 +323,7 @@ async fn my_rule(pool: &MySqlPool, user: &DeviceUser, id: i64) -> ApiResult<Call
 /// My custom incoming call rules, in the order they are tried. "Forward all
 /// calls", Do not disturb and working hours are in `GET /v1/phone/bootstrap`
 /// `settings` / `availability`. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/call-rules",
     operation_id = "list_phone_call_rules",
@@ -355,7 +355,7 @@ pub async fn list_call_rules(
 /// ring. Do not disturb and "Forward all calls" win over rules. At most 20
 /// rules (400 `too_many_rules`). 400 `invalid_phone`, `unknown_contact`,
 /// `not_my_number`, or what is wrong. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/call-rules",
     operation_id = "create_phone_call_rule",
@@ -421,7 +421,7 @@ pub async fn create_call_rule(
 /// flipped for its switch); it keeps its place in the order. 404 when the
 /// rule is not mine; 400 as for `POST /v1/phone/call-rules`. Device token
 /// only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/phone/call-rules/{id}",
     operation_id = "update_phone_call_rule",
@@ -472,7 +472,7 @@ pub async fn update_call_rule(
 /// Delete an incoming call rule
 ///
 /// Deletes my rule; 404 when it is not mine. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/phone/call-rules/{id}",
     operation_id = "delete_phone_call_rule",

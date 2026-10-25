@@ -40,7 +40,7 @@ pub struct Correction {
 }
 
 /// One message of the conversation the feedback is about.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, crate::openapi::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DialogMessage {
     /// `user` or `assistant`.
@@ -56,7 +56,7 @@ pub struct DialogMessage {
 }
 
 /// Who said a dialog message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, crate::openapi::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DialogRole {
     User,

@@ -41,7 +41,7 @@ pub struct StoredObject {
 
 #[derive(Clone)]
 pub enum Storage {
-    S3(S3Storage),
+    S3(Box<S3Storage>),
     /// In-memory bucket for tests; "uploads" go through [`Storage::put`].
     Memory(MemoryStorage),
     /// No bucket configured: upload routes answer 503.
@@ -86,13 +86,13 @@ impl Storage {
         );
         let public_base = var("STORAGE_PUBLIC_URL")
             .unwrap_or_else(|| format!("https://{bucket}.s3.{region}.amazonaws.com"));
-        Self::S3(S3Storage::new(
+        Self::S3(Box::new(S3Storage::new(
             credentials,
             &region,
             var("STORAGE_ENDPOINT"),
             bucket,
             &public_base,
-        ))
+        )))
     }
 
     /// This storage, with `bucket` out of reach of stored URLs (empty:
@@ -135,6 +135,8 @@ impl Storage {
 
     /// A URL the browser can `PUT` the file to, with this exact
     /// `Content-Type` header.
+    // Signing is local, but presigning stays async for its callers.
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn presign_put(&self, key: &str, content_type: &str) -> Result<String, StorageError> {
         match self {
             Self::S3(s3) => s3
@@ -156,6 +158,8 @@ impl Storage {
     /// (shown inline, with `content_type` when given). Any other URL, a URI
     /// that cannot be signed here, or one in a private bucket (see
     /// [`Storage::keeping_private`]) is returned as it is.
+    // Signing is local, but presigning stays async for its callers.
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn readable_url(&self, url: &str, content_type: Option<&str>) -> String {
         let Self::S3(s3) = self else {
             return url.to_string();
@@ -301,7 +305,7 @@ impl Storage {
                 "GET",
                 &s3.bucket_url(bucket, "publicAccessBlock"),
                 &[],
-                Default::default(),
+                axum::body::Bytes::new(),
             )
             .await?
             .s3_result()
@@ -324,7 +328,7 @@ impl Storage {
                 "GET",
                 &s3.bucket_url(bucket, "policyStatus"),
                 &[],
-                Default::default(),
+                axum::body::Bytes::new(),
             )
             .await?
             .s3_result()
@@ -373,6 +377,8 @@ impl Storage {
 
     /// [`Storage::presign_get_in`] with a link that works for `ttl` (the
     /// usual one works an hour), e.g. 5 minutes for call recordings.
+    // Signing is local, but presigning stays async for its callers.
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn presign_get_in_for(
         &self,
         bucket: Option<&str>,
@@ -543,7 +549,7 @@ impl Storage {
         match self {
             Self::S3(s3) => {
                 let url = s3.object_url(&s3.bucket, key);
-                s3.send("DELETE", &url, &[], Default::default())
+                s3.send("DELETE", &url, &[], axum::body::Bytes::new())
                     .await?
                     .s3_result()
                     .await?;
@@ -652,10 +658,10 @@ impl S3Storage {
 
     /// Virtual-hosted style on AWS, path style on `STORAGE_ENDPOINT`.
     fn bucket_base(&self, bucket: &str) -> String {
-        match &self.endpoint {
-            Some(endpoint) => format!("{endpoint}/{bucket}"),
-            None => format!("https://{bucket}.s3.{}.amazonaws.com", self.signer.region()),
-        }
+        self.endpoint.as_ref().map_or_else(
+            || format!("https://{bucket}.s3.{}.amazonaws.com", self.signer.region()),
+            |endpoint| format!("{endpoint}/{bucket}"),
+        )
     }
 
     fn object_url(&self, bucket: &str, key: &str) -> String {
@@ -705,7 +711,7 @@ impl S3Storage {
                 "GET",
                 &self.object_url(bucket, key),
                 &[],
-                Default::default(),
+                axum::body::Bytes::new(),
             )
             .await?;
         match response.s3_result().await {
@@ -729,7 +735,7 @@ impl S3Storage {
                 "HEAD",
                 &self.object_url(bucket, key),
                 &[],
-                Default::default(),
+                axum::body::Bytes::new(),
             )
             .await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
@@ -782,13 +788,13 @@ mod tests {
 
     #[tokio::test]
     async fn stored_urls_never_reach_the_private_bucket() {
-        let storage = Storage::S3(S3Storage::new(
+        let storage = Storage::S3(Box::new(S3Storage::new(
             Credentials::new("key", "secret", None, None, "test"),
             "us-east-2",
             None,
             "files".into(),
             "https://files.s3.us-east-2.amazonaws.com",
-        ))
+        )))
         .keeping_private(" signatures ");
         let private = "s3://signatures/signatures/9/completed-x.pdf";
         assert_eq!(storage.readable_url(private, None).await, private);

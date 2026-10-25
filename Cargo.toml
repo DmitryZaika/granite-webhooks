@@ -4,6 +4,7 @@ members = [
     "webhooks",
     "time-triggered",
     "api",
+    "api/macros",
     "test-db",
     "test-db/macros",
 ]

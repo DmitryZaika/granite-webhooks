@@ -22,6 +22,7 @@ use crate::followups::greeting::{conversation_recency, greeting_instruction};
 use crate::followups::js::{js_len, js_slice, trim};
 use crate::followups::prompt::FollowupTimelineMessage;
 use crate::followups::send_window::FollowupChannel;
+use crate::openapi::ToSchema;
 use crate::routes::ai::conversation_reply::REPLY_FALLBACK_MODEL;
 use crate::routes::ai::reply_context;
 use crate::routes::sms::provider::valid_thread_phone;
@@ -35,7 +36,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
-use utoipa::ToSchema;
 
 /// About 1,000 tokens of conversation.
 const TIMELINE_MAX_CHARS: usize = 4_000;
@@ -577,7 +577,7 @@ pub struct InventoryUrl {
 /// The stones page link
 ///
 /// The company's customer stones page, which the composer offers to insert.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/ai/compose/inventory-url",
     operation_id = "compose_inventory_url",
@@ -627,7 +627,7 @@ pub struct Completion {
 ///
 /// The next few words of the rep's draft (or, with an empty draft, how the
 /// next message starts), from the conversation and the rep's notes.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/compose/autocomplete",
     operation_id = "compose_autocomplete",
@@ -816,7 +816,7 @@ pub fn build_rep_notes_prompt(
 ///
 /// The rep sent something other than the AI's suggestion: keeps the pair and
 /// rewrites the rep's writing notes from it and the few before it.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/compose/learn",
     operation_id = "compose_learn",

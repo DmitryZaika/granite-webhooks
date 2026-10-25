@@ -5,6 +5,7 @@ use super::bad_request;
 use crate::auth::device::DeviceUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::openapi::{IntoParams, ToSchema};
 use crate::phone::calls::{self, CallRow};
 use crate::phone::contacts::{
     self, CardDeal, Coworker, Cursor, INDEX_PAGE, IndexContact, SAMPLE_CUSTOMER_ID,
@@ -25,7 +26,6 @@ use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use utoipa::{IntoParams, ToSchema};
 
 /// Most numbers one lookup takes.
 const MAX_LOOKUP: usize = 20;
@@ -103,7 +103,7 @@ fn full_page(mut contacts: Vec<IndexContact>) -> (Vec<IndexContact>, Option<i64>
 /// `GET /v1/phone/bootstrap` `contacts.etag`) answers 304 when nothing
 /// changed, on a since-sync only. Later pages (`after`) carry no `ETag`.
 /// Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/contacts/index",
     operation_id = "get_phone_contact_index",
@@ -222,7 +222,7 @@ pub struct ContactLookup {
 /// or phone 2, and the coworker with that number, any of theirs (matched
 /// by the last 10 digits; numbers with fewer digits match nothing). Up to 20
 /// numbers. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/contacts/lookup",
     operation_id = "lookup_phone_contacts",
@@ -326,7 +326,7 @@ pub struct ContactCard {
 /// deals (stage, outcome, amount, newest note) and the last 20 calls with
 /// them, and the link to their CRM page. 404 for other companies' customers,
 /// deleted ones and the onboarding sample. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/contacts/{id}",
     operation_id = "get_phone_contact_card",
@@ -417,7 +417,7 @@ fn optional_text(value: Option<&str>, max: usize) -> Option<String> {
 /// once. 400 `invalid_phone` unless a US or Canada number; 400 for an empty
 /// or too long name or an invalid email; 409 when another customer of the
 /// company has the email. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/contacts",
     operation_id = "create_phone_contact",
@@ -532,7 +532,7 @@ pub struct Phone2Taken {
 /// nothing. Calls from the customer's numbers match them at once (a
 /// replaced phone 2 no longer does). Returns the contact. 400
 /// `invalid_phone`; 404 for other companies' customers. Device token only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/contacts/{id}/phones",
     operation_id = "add_phone_contact_number",

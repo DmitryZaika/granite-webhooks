@@ -21,6 +21,8 @@ pub mod sales;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::qbo::{Access, QboError, escape, valid_id};
 use crate::state::AppState;
 use axum::Json;
@@ -31,8 +33,6 @@ use invoice::{EditableInvoice, InvoiceSummary, editable, summary, text, update_p
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -248,7 +248,7 @@ async fn invoices_for(
 /// customer not linked yet is matched by email, then by name, and linked.
 /// `status` says why there are none when `QuickBooks` is not connected or
 /// has no matching customer.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/{id}/qbo-invoices",
     operation_id = "list_customer_qbo_invoices",
@@ -374,7 +374,7 @@ async fn fetch_invoice(
 /// Get a customer's QuickBooks invoice
 ///
 /// One invoice of the customer, for the invoice editor.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/{id}/qbo-invoices/{invoice_id}",
     operation_id = "get_customer_qbo_invoice",
@@ -438,7 +438,7 @@ async fn save(
 /// Lines the editor removed are deleted; discounts and tax stay. When
 /// `QuickBooks` refuses a stale version the update is retried once on the
 /// current one.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/customers/{id}/qbo-invoices/{invoice_id}",
     operation_id = "update_customer_qbo_invoice",
@@ -501,7 +501,7 @@ fn pdf_response(invoice_id: &str, bytes: Vec<u8>) -> impl IntoResponse + use<> {
 /// Get a customer's QuickBooks invoice as a PDF
 ///
 /// The invoice's PDF, once it is known to be this customer's.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/{id}/qbo-invoices/{invoice_id}/pdf",
     operation_id = "get_customer_qbo_invoice_pdf",
@@ -550,7 +550,7 @@ pub async fn customer_invoice_pdf_of(
 ///
 /// Any invoice of the company's `QuickBooks`, for the rep's sales panel and
 /// schedule events.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/qbo/invoices/{invoice_id}/pdf",
     operation_id = "get_qbo_invoice_pdf",
@@ -610,7 +610,7 @@ pub struct QboCustomers {
 ///
 /// `QuickBooks` customers whose display name contains `name` (up to 25), or
 /// whose primary email is `email`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/qbo/customers",
     operation_id = "search_qbo_customers",

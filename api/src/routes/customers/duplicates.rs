@@ -4,12 +4,12 @@ use super::service::normalize_emails;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySql, QueryBuilder};
-use utoipa::{IntoParams, ToSchema};
 
 /// Query of `GET /v1/customers/duplicates`.
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -52,7 +52,7 @@ const LAST10: &str = "RIGHT(REGEXP_REPLACE(COALESCE({col}, ''), '[^0-9]', ''), 1
 /// Up to 5 live customers of the company that already have one of the
 /// phones (last 10 digits) or addresses, for the "already exists" warning
 /// of the add form. Empty without any contact.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/duplicates",
     operation_id = "find_duplicate_customers",

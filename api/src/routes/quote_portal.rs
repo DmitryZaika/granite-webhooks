@@ -9,6 +9,8 @@
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::pricing::{OptionPrice, price_quote};
 use crate::quote_pricing::{
@@ -30,8 +32,6 @@ use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -182,7 +182,7 @@ async fn form_data(
 /// link (`e`) counts as a view, and each view is kept with its time, IP
 /// address and browser (listed on the quote's emails). A switched-off link
 /// answers `inactive`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/quote-portal/{token}",
     operation_id = "get_quote_portal",
@@ -370,7 +370,7 @@ pub struct Acceptance {
 /// total, and notified in the app when the quote has a deal; the customer is
 /// emailed their own copy with a link back to the quote. Refused once signed,
 /// for an option with a sold-out color, or when the link is switched off.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/public/quote-portal/{token}/acceptance",
     operation_id = "accept_quote_portal",

@@ -18,6 +18,8 @@
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::edit::{normalize, own_extras, validate};
 use crate::quote_pricing::js::{arr, get, truthy};
 use crate::quote_pricing::load_stock;
@@ -33,8 +35,6 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{MySql, MySqlPool, Transaction};
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -271,7 +271,7 @@ pub struct PriceLists {
 /// List price lists
 ///
 /// Every list of the company, with the one new quotes get.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quote-price-lists",
     operation_id = "list_quote_price_lists",
@@ -307,7 +307,7 @@ pub struct NewPriceList {
 /// Create a price list
 ///
 /// An empty list (list-wide settings only), last in order.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quote-price-lists",
     operation_id = "create_quote_price_list",
@@ -352,7 +352,7 @@ pub async fn create_price_list(
 /// Duplicate a price list
 ///
 /// A copy named "… (copy)" with the current prices, right after it.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quote-price-lists/{id}/copies",
     operation_id = "copy_quote_price_list",
@@ -400,7 +400,7 @@ pub struct DefaultPriceList {
 /// Choose the default price list
 ///
 /// New quotes get this list; it is activated. The lists keep their order.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quote-price-lists/default",
     operation_id = "set_default_quote_price_list",
@@ -456,7 +456,7 @@ pub struct PriceListOrder {
 /// Saves a drag on the lists table: each list's sequence becomes its place
 /// in `ids` (1 = first). Other companies' ids are ignored; lists left out go
 /// after the given ones, in their old order.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quote-price-lists/order",
     operation_id = "reorder_quote_price_lists",
@@ -548,7 +548,7 @@ async fn check_name(pool: &MySqlPool, id: i32, company_id: i32, name: &str) -> A
 /// Rename or (de)activate a price list
 ///
 /// Without a new revision.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/quote-price-lists/{id}",
     operation_id = "update_quote_price_list",
@@ -592,7 +592,7 @@ pub async fn update_price_list(
 /// Delete a price list
 ///
 /// Quotes made with it keep their prices; it can no longer be picked.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/quote-price-lists/{id}",
     operation_id = "delete_quote_price_list",
@@ -714,7 +714,7 @@ pub struct PriceListEditor {
 ///
 /// Its prices as saved and as matched to today's inventory, the stones and
 /// sinks in stock, and its history.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quote-price-lists/{id}",
     operation_id = "get_quote_price_list",
@@ -880,7 +880,7 @@ async fn save_stone_display(pool: &MySqlPool, company_id: i32, info: &Value) -> 
 /// sinks' cutouts and colors' display are saved onto the inventory, the
 /// list is matched to the inventory, keeps only its own extras, and must be
 /// unambiguous (else 422 with every problem).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/quote-price-lists/{id}",
     operation_id = "save_quote_price_list",
@@ -972,7 +972,7 @@ pub struct RestoredRevision {
 /// Restore a revision
 ///
 /// The revision's prices become a new revision.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/quote-price-lists/{id}/revisions/{revision_id}/restore",
     operation_id = "restore_quote_price_list_revision",

@@ -10,12 +10,12 @@ use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
-use utoipa::ToSchema;
 
 const SYSTEM_PROMPT: &str = "
   You are an expert sales email assistant. Your purpose is to generate professional, persuasive, and realistically usable emails.
@@ -205,7 +205,7 @@ pub struct DraftedEmail {
 ///
 /// The first email to a new lead, from what they told us (their request,
 /// project and source), introducing the rep and ending with a question.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/first-contact-email",
     operation_id = "draft_first_contact_email",

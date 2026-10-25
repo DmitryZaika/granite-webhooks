@@ -20,14 +20,14 @@ use crate::billing::{
 };
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::{AppState, origin_allowed};
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -58,7 +58,7 @@ pub struct BillingGate {
 /// (`restricted`: only the billing pages work) and whether managers see the
 /// past-due warning with the grace days left. Checks Stripe now and then
 /// (throttled); errors keep access.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/billing/gate",
     operation_id = "get_billing_gate",
@@ -205,7 +205,7 @@ pub struct BillingOverview {
 /// The subscription (refreshed from Stripe first), the card on file, the
 /// plans and the invoices. Managers only; other users read
 /// `GET /v1/billing/gate`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/billing",
     operation_id = "get_billing",
@@ -287,7 +287,7 @@ pub struct PlanChoice {
 /// A Stripe Checkout link that subscribes the company to the plan; Stripe
 /// returns to `/admin/billing?checkout=success` (or `cancel`). Only while the
 /// company has no running subscription (400 otherwise: change the plan).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/billing/checkout",
     operation_id = "create_billing_checkout",
@@ -343,7 +343,7 @@ pub struct PortalChoice {
 ///
 /// A Stripe billing portal link for the company's customer, returning to
 /// `/admin/billing`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/billing/portal",
     operation_id = "create_billing_portal",
@@ -378,7 +378,7 @@ pub async fn portal(
 /// Change the plan
 ///
 /// Moves the running subscription to another plan (prorated).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/billing/subscription",
     operation_id = "change_billing_plan",
@@ -440,7 +440,7 @@ pub struct ReactivationQuote {
 ///
 /// For a suspended company: the plan and price to pay, the saved cards and
 /// the Stripe.js key; then pay with `POST /v1/billing/reactivation`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/billing/reactivation",
     operation_id = "get_billing_reactivation",

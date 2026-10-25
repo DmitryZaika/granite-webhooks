@@ -6,14 +6,14 @@
 use crate::auth::AdminUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(results))
@@ -99,7 +99,7 @@ const INVITATION: &str = "message_id REGEXP '^checklist-survey-[0-9]+$'";
 /// The post-install survey answers of the last `days` days with the
 /// invitation count, the answer count, each sales rep's average and the
 /// invitations sent per day.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/survey-results",
     operation_id = "get_survey_results",

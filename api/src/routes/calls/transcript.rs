@@ -6,13 +6,13 @@ use crate::ai::Caller;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// Body of `POST /v1/call-transcripts`.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -44,7 +44,7 @@ pub struct CallTranscript {
 /// hear it (only the call's user, the users of its direct line, for an
 /// unanswered incoming call the users its line rings, its deal's owner,
 /// admins and sales managers may).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/call-transcripts",
     operation_id = "transcribe_call",

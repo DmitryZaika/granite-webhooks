@@ -21,11 +21,11 @@ use super::availability::{AvailabilityStatus, WorkingHours};
 use super::numbers::{is_nanp, last10, to_e164};
 use super::settings::UserSettings;
 use super::wire_enum;
+use crate::openapi::ToSchema;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool, QueryBuilder};
 use std::collections::HashMap;
-use utoipa::ToSchema;
 
 /// Rules a user may have.
 pub const MAX_RULES: usize = 20;

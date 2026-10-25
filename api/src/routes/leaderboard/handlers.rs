@@ -18,7 +18,7 @@ use axum::extract::State;
 /// `period=month` this month so far. When the signed-in user is not a Sales
 /// Rep, `viewer` holds their own unranked row. Answers 404 while the
 /// company's leaderboard is switched off (see `GET /v1/company/features`).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/points-leaderboard",
     operation_id = "get_points_leaderboard",

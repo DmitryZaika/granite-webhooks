@@ -20,8 +20,8 @@ mod sources;
 
 use crate::auth::session::SessionUser;
 use crate::error::ApiError;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// `positions.id` of the marketing team.
 const MARKETING_POSITION: i32 = 7;

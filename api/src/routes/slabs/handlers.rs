@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 /// Sets the length and width (inches, both positive, sent together) and/or
 /// the bundle label of one slab or remnant of the caller's company. Returns
 /// no body; reload the stone's slabs (`GET /v1/stones/{id}/slabs`) to see it.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/slabs/{id}",
     operation_id = "update_slab",
@@ -72,7 +72,7 @@ pub async fn update(
 ///
 /// Removes a slab of the caller's company from the yard (soft delete: it
 /// disappears from every list).
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/slabs/{id}",
     operation_id = "delete_slab",
@@ -104,7 +104,7 @@ pub async fn delete(
 /// Returns the slabs of the caller's company among the given ids (others are
 /// left out), each with its bundle label and its stone (id, name, type).
 /// Use it to label slabs already chosen on a sale.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/slabs",
     operation_id = "list_slabs_by_id",

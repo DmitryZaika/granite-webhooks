@@ -16,6 +16,7 @@
 
 use super::numbers::{is_nanp, to_e164};
 use super::wire_enum;
+use crate::openapi::ToSchema;
 use crate::telnyx::porting::mask_numbers;
 use chrono::{DateTime, Utc};
 use regex::Regex;
@@ -23,7 +24,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{FromRow, MySqlExecutor, MySqlPool};
 use std::sync::LazyLock;
-use utoipa::ToSchema;
 
 /// Longest names, address parts, email and website (Telnyx's limit).
 pub const NAME_CHARS: usize = 100;

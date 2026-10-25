@@ -8,6 +8,7 @@ use super::{
 };
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::IntoParams;
 use crate::phone::call_log::{self, Answer, CallFacts, End};
 use crate::phone::calls::{CallDirection, CallStatus};
 use crate::phone::numbers::{last10, to_e164};
@@ -22,7 +23,6 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
-use utoipa::IntoParams;
 
 /// Query of `dial-result`.
 #[derive(Debug, Deserialize, IntoParams)]
@@ -67,7 +67,7 @@ pub struct CellParams {
 /// forward. Entering the no-answer action logs the call as `missed` (or
 /// `declined`) and pushes `missed_call` to the users it rang. Any internal
 /// error answers the company's fallback TeXML (`<Redirect>`).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/dial-result",
     operation_id = "continue_telnyx_dial_result",
@@ -264,7 +264,7 @@ async fn end_answered(state: &AppState, hook: &Hook, call: &CallFacts) -> ApiRes
 /// calling and "Press 1 to answer"; anything else (or nothing) hangs the
 /// cell up, so its voicemail cannot take the call. The answer goes to
 /// `cell-screen-result`. A call answered meanwhile hangs the cell up.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/cell-screen",
     operation_id = "screen_telnyx_fallback_cell",
@@ -333,7 +333,7 @@ async fn screen(state: &AppState, hook: &Hook, params: &CellParams) -> ApiResult
 /// this cell (the call is logged as answered by the cell's user, when no one
 /// answered first); anything else hangs the cell up, as does a leg whose
 /// `To` is not that user's verified cell.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/cell-screen-result",
     operation_id = "answer_telnyx_fallback_cell",
@@ -436,7 +436,7 @@ async fn take_on_cell(state: &AppState, hook: &Hook, params: &CellParams) -> Api
 /// instead (the number's greeting, then `<Record>`). Otherwise the call is
 /// logged as `ai_message`, the users it rang get an `ai_message` push, and
 /// the TeXML hangs up. Any internal error answers the fallback TeXML.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/after-ai",
     operation_id = "continue_telnyx_after_ai",
@@ -528,7 +528,7 @@ async fn after_assistant(state: &AppState, hook: &Hook, call_id: i64) -> ApiResu
 /// (unless nothing was recorded) and ends, the users it rang get a
 /// `voicemail` push, and the TeXML hangs up. The recording itself arrives
 /// at `recording?kind=voicemail`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/voicemail-done",
     operation_id = "finish_telnyx_voicemail",

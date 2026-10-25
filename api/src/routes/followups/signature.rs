@@ -7,12 +7,12 @@
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
-use utoipa::ToSchema;
 
 /// Longest signature, in characters, after trimming.
 pub const MAX_CHARS: usize = 200;
@@ -78,7 +78,7 @@ pub fn with_text_signature(body: &str, signature: &str) -> String {
 ///
 /// The caller's sign-off, added under every text the AI writes for them.
 /// Empty when none is saved.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/followups/signature",
     operation_id = "get_followup_signature",
@@ -105,7 +105,7 @@ pub async fn get(
 /// blank edge lines dropped). An empty signature removes it. Texts already
 /// scheduled keep the sign-off they were written with. Answers the saved
 /// signature.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/followups/signature",
     operation_id = "save_followup_signature",

@@ -16,6 +16,7 @@ use crate::chat::markers::{SpecialOrderOffer, price_as_per_sqft};
 use crate::chat::{self, Event};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::http::HeaderValue;
@@ -26,7 +27,6 @@ use std::convert::Infallible;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
-use utoipa::ToSchema;
 
 /// A special order the user is pricing (from the previous answer).
 #[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
@@ -107,7 +107,7 @@ fn sse_event(event: Event) -> sse::Event {
 /// assistant mode (the company's records, employees only), streamed as
 /// server-sent events. The conversation is kept per user; `isNew` starts it
 /// over.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/ai/chat",
     operation_id = "ask_chat",

@@ -10,6 +10,8 @@
 use crate::auth::{CurrentUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::uploads::{self, schemas::UploadFolder};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
@@ -22,8 +24,6 @@ use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// Who hears about every bug report.
 const NOTIFY: &str = "dema@granitedepotindy.com";
@@ -143,7 +143,7 @@ fn email_html(
 /// Saves the report with its files and emails it to the team (replies go to
 /// the reporter). When the email fails the report is still saved and
 /// `notified` is false.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/bug-reports",
     operation_id = "create_bug_report",
@@ -259,7 +259,7 @@ pub async fn create(
 ///
 /// Every company's reports, newest first, with the reporter, the company
 /// and the files. Super admins only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/bug-reports",
     operation_id = "list_bug_reports",

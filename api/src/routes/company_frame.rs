@@ -5,12 +5,12 @@
 //! show the same.
 
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use serde::Serialize;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(company_frame))
@@ -70,7 +70,7 @@ async fn suppliers(state: &AppState, company_id: i32, join: &str) -> ApiResult<V
 /// Its name and logo, and its catalog's stone and sink types and the
 /// suppliers of its stones, sinks and faucets. Unknown companies get an
 /// empty frame.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/companies/{company_id}/frame",
     operation_id = "get_company_frame",

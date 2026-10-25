@@ -22,7 +22,7 @@ pub struct Transcriber {
 }
 
 /// One speaker's turn.
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, serde::Serialize, crate::openapi::ToSchema)]
 pub struct Utterance {
     /// `A`, `B`, ...
     pub speaker: String,

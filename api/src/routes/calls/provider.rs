@@ -1,8 +1,8 @@
 //! Who carries a company's calls. Separate from `SmsProvider`: a company
 //! may call through one provider and text through another.
 
+use crate::openapi::ToSchema;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// A telephony provider of the call routes: `cloudtalk`, `ringcentral`, or
 /// `telnyx` (Granite Phone, whose calls are in our own call log).

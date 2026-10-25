@@ -21,6 +21,8 @@
 use crate::auth::AdminUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::phone::company::{self, CompanyConfig};
 use crate::phone::numbers::{is_nanp, to_e164};
 use crate::phone::porting::{
@@ -42,8 +44,6 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::LazyLock;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// The largest document (once decoded).
 const MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
@@ -498,7 +498,7 @@ pub struct PortabilityResults {
 /// numbers; 503 when Telnyx is not set up on the server; 502 when Telnyx
 /// fails. Next: `POST /v1/phone/admin/ports` with the portable ones.
 /// Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/admin/ports/portability",
     operation_id = "check_phone_port_portability",
@@ -585,7 +585,7 @@ pub struct PortCreateInput {
 /// refuses (its reason in the message); 400 too when Telnyx is not set up
 /// for the company. Audited. Company admins (and super admins, superusers)
 /// only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/admin/ports",
     operation_id = "create_phone_port_order",
@@ -703,7 +703,7 @@ pub async fn create_port_order(
 /// call): numbers, status, port dates, who started it and what the admin
 /// may do. Open one with `GET /v1/phone/admin/ports/{id}` to read it again
 /// from Telnyx. Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/ports",
     operation_id = "list_phone_port_orders",
@@ -736,7 +736,7 @@ pub async fn list_port_orders(
 /// the saved copy comes back with `details` null and `refreshError` saying
 /// why. 404 when it is not the company's. Company admins (and super admins,
 /// superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/ports/{id}",
     operation_id = "get_phone_port_order",
@@ -1146,7 +1146,7 @@ async fn send_changes(
 /// Returns the order with Telnyx's details. 400 with what is wrong, or
 /// Telnyx's reason when it refuses. Audited (section names only). Company
 /// admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/phone/admin/ports/{id}",
     operation_id = "update_phone_port_order",
@@ -1241,7 +1241,7 @@ pub async fn update_port_order(
 /// Only drafts (409 otherwise: cancel a submitted port with `POST
 /// .../cancel`). Returns the order. Audited. Company admins (and super
 /// admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/phone/admin/ports/{id}",
     operation_id = "delete_phone_port_order",
@@ -1297,7 +1297,7 @@ pub async fn delete_port_order(
 /// business details, the signed LOA, the bill and the date are there and
 /// refuses otherwise (400, its reason in the message). Returns the order.
 /// Audited. Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/admin/ports/{id}/submit",
     operation_id = "submit_phone_port_order",
@@ -1370,7 +1370,7 @@ pub async fn submit_port_order(
 /// Not within 48 hours of the confirmed port date (400: Telnyx support must
 /// cancel then); a draft is deleted instead (409). Returns the order.
 /// Audited. Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/admin/ports/{id}/cancel",
     operation_id = "cancel_phone_port_order",
@@ -1485,7 +1485,7 @@ pub struct PortRequirements {
 /// status. Fulfil a textual one with `PATCH` (`requirements`), a document
 /// with `POST .../documents` (kind `requirement`). 404 when it is not the
 /// company's. Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/ports/{id}/requirements",
     operation_id = "list_phone_port_requirements",
@@ -1561,7 +1561,7 @@ pub struct PortFocWindows {
 /// first. Ask for one with `PATCH` (`focDatetimeRequested`); the current
 /// carrier confirms the actual date later (`focAt`). 404 when it is not the
 /// company's. Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/ports/{id}/foc-windows",
     operation_id = "list_phone_port_foc_windows",
@@ -1607,7 +1607,7 @@ pub async fn list_port_foc_windows(
 /// business details first): print or e-sign it, then upload it with `POST
 /// .../documents` (kind `loa`). 404 when it is not the company's. Company
 /// admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/ports/{id}/loa-template",
     operation_id = "download_phone_port_loa_template",
@@ -1725,7 +1725,7 @@ fn document_name(typed: &str, extension: &str) -> String {
 /// attached. We keep no copy. Only while the order takes changes (409
 /// otherwise). Returns the order with Telnyx's details. Audited (the kind
 /// only). Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/admin/ports/{id}/documents",
     operation_id = "upload_phone_port_document",
@@ -1865,7 +1865,7 @@ pub struct PortTimeline {
 /// date moves, comments from Telnyx, splits, cancellation, and the ported
 /// numbers added. From our copy (no Telnyx call). 404 when it is not the
 /// company's. Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/ports/{id}/timeline",
     operation_id = "list_phone_port_timeline",
@@ -1944,7 +1944,7 @@ fn comment_of(comment: crate::telnyx::porting::PortingComment) -> PortComment {
 /// Telnyx has them now (they ask for documents or fixes here; the admins
 /// are told when one comes). Reply with `POST .../comments`. 404 when it is
 /// not the company's. Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/admin/ports/{id}/comments",
     operation_id = "list_phone_port_comments",
@@ -1990,7 +1990,7 @@ pub struct PortCommentInput {
 /// Adds a comment to the order (answer their questions, say a fix is
 /// done). Returns it. Not on a deleted draft (409). Audited (not the text).
 /// Company admins (and super admins, superusers) only.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/admin/ports/{id}/comments",
     operation_id = "add_phone_port_comment",

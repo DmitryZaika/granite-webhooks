@@ -14,6 +14,7 @@ use super::devices::push_to_users;
 use super::lines::{self, CallerId};
 use super::numbers::last10;
 use super::wire_enum;
+use crate::openapi::ToSchema;
 use crate::serde_helpers::js_date_required;
 use crate::state::AppState;
 use chrono::{DateTime, Utc};
@@ -21,7 +22,6 @@ use lambda_http::tracing;
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool, QueryBuilder};
 use std::collections::{BTreeMap, HashMap};
-use utoipa::ToSchema;
 
 /// The read marker a CRM "mark unread" leaves (see `routes::sms::rollup`).
 const MANUAL_UNREAD_BEFORE: &str = "1971-01-01 00:00:00";

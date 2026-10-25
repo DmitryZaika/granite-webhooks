@@ -1,8 +1,8 @@
+use crate::openapi::{IntoParams, ToSchema};
 use crate::serde_helpers::js_date;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::{IntoParams, ToSchema};
 
 /// A mailbox folder.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

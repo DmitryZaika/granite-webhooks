@@ -1,6 +1,6 @@
+use crate::openapi::{IntoParams, ToSchema};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::{IntoParams, ToSchema};
 
 /// Which points count.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

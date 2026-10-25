@@ -23,6 +23,8 @@
 
 use crate::auth::cookie::{cookie_value, decode_session_map, encode_session_map};
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::quickbooks::{CustomerInvoices, customer_invoice_pdf_of, invoices_of_customer};
 use crate::state::AppState;
 use crate::webhooks_client::OutgoingEmail;
@@ -35,8 +37,6 @@ use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::Sha256;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -519,7 +519,7 @@ pub struct ViewGate {
 ///
 /// Whether the visitor already entered a code for it, else where a code
 /// would go. Unknown pages are 404.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/customer-view/{company_id}/{view_id}",
     operation_id = "get_customer_view",
@@ -564,7 +564,7 @@ pub async fn view_gate(
 /// Sends a one-time code (10 minutes) to the customer's email. An address
 /// gets at most one code every 45 seconds and 5 an hour; a new code
 /// replaces the previous one.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/public/customer-view/{company_id}/{view_id}/code",
     operation_id = "send_customer_view_code",
@@ -613,7 +613,7 @@ pub struct EnteredCode {
 ///
 /// Unlocks the page for this browser for 7 days. A code takes 8 attempts at
 /// most.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/public/customer-view/{company_id}/{view_id}/verify",
     operation_id = "verify_customer_view_code",
@@ -699,7 +699,7 @@ struct ProjectRow {
 ///
 /// Newest first, with the stone, sink and how far the work is. Needs a
 /// verified visitor.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/customer-view/{company_id}/{view_id}/projects",
     operation_id = "list_customer_view_projects",
@@ -773,7 +773,7 @@ pub async fn projects(
 /// The quotes the customer made with the online quote, newest first: each
 /// with its drawing and each color's total (no price breakdown). Only for a
 /// verified visitor.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/customer-view/{company_id}/{view_id}/quotes",
     operation_id = "list_customer_view_quotes",
@@ -814,7 +814,7 @@ fn no_store(response: impl IntoResponse) -> Response {
 ///
 /// Their `QuickBooks` invoices, newest first; `status` says why there are
 /// none. Needs a verified visitor.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/customer-view/{company_id}/{view_id}/invoices",
     operation_id = "list_customer_view_invoices",
@@ -844,7 +844,7 @@ pub async fn invoices(
 ///
 /// Only an invoice of this customer's `QuickBooks` customer. Needs a
 /// verified visitor.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/customer-view/{company_id}/{view_id}/invoices/{invoice_id}/pdf",
     operation_id = "get_customer_view_invoice_pdf",
@@ -886,7 +886,7 @@ pub struct PendingLogin {
 ///
 /// Whether a code was asked for on the company's account page
 /// (`pendingAccountLoginChallenge`).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/customer-view/{company_id}/login",
     operation_id = "get_customer_view_login",
@@ -930,7 +930,7 @@ pub struct LoginEmail {
 /// Sends a code when a customer of the company has that email. The answer
 /// is the same either way, so it does not reveal who is a customer. Same
 /// limits as `send_customer_view_code`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/public/customer-view/{company_id}/login/code",
     operation_id = "send_customer_view_login_code",
@@ -989,7 +989,7 @@ pub struct OpenedView {
 ///
 /// Verifies the code sent to the account's address (8 attempts at most);
 /// answers the page it unlocks.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/public/customer-view/{company_id}/login/verify",
     operation_id = "verify_customer_view_login_code",
@@ -1017,7 +1017,7 @@ pub async fn verify_login_code(
 /// Drop a pending code
 ///
 /// So the visitor can sign in with another email.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/public/customer-view/login",
     operation_id = "cancel_customer_view_code",

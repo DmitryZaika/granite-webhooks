@@ -6,6 +6,7 @@ use super::dial::inbound_call;
 use super::{Hook, TexmlRequest, failed, hang_up, other_party, texml};
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::IntoParams;
 use crate::phone::{routing, settings};
 use crate::state::AppState;
 use crate::telnyx::{Response as Texml, Verb};
@@ -14,7 +15,6 @@ use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-use utoipa::IntoParams;
 
 /// Query of `whisper`.
 #[derive(Debug, Deserialize, IntoParams)]
@@ -36,7 +36,7 @@ pub struct WhisperParams {
 /// chose it; the caller is the CRM customer's name, else the number read
 /// out), then the call connects; a key press connects at once. A call that
 /// ended, or that someone else answered meanwhile, hangs this phone up.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/whisper",
     operation_id = "announce_telnyx_incoming_call",

@@ -5,12 +5,12 @@
 //! comments explain each rule.
 
 use super::manifest::{self, price_for};
+use crate::openapi::ToSchema;
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sqlx::{MySql, MySqlConnection, MySqlPool, QueryBuilder};
 use std::collections::{BTreeMap, HashMap};
-use utoipa::ToSchema;
 
 /// A client clock more than this far ahead of the server is treated as "now".
 const FUTURE_TOLERANCE_MINUTES: i64 = 5;

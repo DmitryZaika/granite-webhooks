@@ -14,6 +14,8 @@ use crate::auth::session::SessionUser;
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -21,8 +23,6 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
 use std::collections::{HashMap, HashSet};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// Positions an instruction can be limited to (all but check-in and super
 /// admin: `INSTRUCTION_ACCESS_POSITION_IDS`).
@@ -65,7 +65,7 @@ pub struct InstructionOrder {
 ///
 /// Saves the order of one parent's children; the list must hold each of
 /// them exactly once.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/instructions/order",
     operation_id = "order_instructions",
@@ -220,7 +220,7 @@ async fn access_map(pool: &MySqlPool, ids: &[i32]) -> Result<HashMap<i32, Vec<i3
 /// builds the tree from `parent_id` and `after_id`. An instruction limited to
 /// some positions is left out unless the caller holds one of them, except
 /// with `manage` (admins), which returns every row with its positions.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/instructions",
     operation_id = "list_instructions",
@@ -362,7 +362,7 @@ pub struct CreateQuery {
 /// Puts it in the caller's company tree (a super admin's `scope=general`:
 /// the general one) under `parent_id`, right after `after_id` (the sibling
 /// that followed `after_id` now follows it).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/instructions",
     operation_id = "create_instruction",
@@ -425,7 +425,7 @@ pub async fn create(
 ///
 /// Saves its title, place (`parent_id`, `after_id`), text and the positions
 /// that may read it.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/instructions/{id}",
     operation_id = "update_instruction",
@@ -491,7 +491,7 @@ fn chain_order(rows: &[(i32, Option<i32>)]) -> Vec<i32> {
 ///
 /// Removes it and its access rows. Its children take its place among its
 /// siblings, in their order; every other instruction keeps its place.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/instructions/{id}",
     operation_id = "delete_instruction",

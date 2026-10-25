@@ -5,6 +5,8 @@
 
 use crate::auth::AdminUser;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
 use axum::Json;
@@ -12,8 +14,6 @@ use axum::extract::{Query, State};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{MySql, QueryBuilder};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(cut_slabs))
@@ -63,7 +63,7 @@ pub struct CutSlab {
 /// Whole slabs (not remnants) of the caller's company that were cut, with
 /// their stone, the stone's supplier and the sale, newest cut first. Slabs
 /// of stones without a supplier are left out.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/reports/cut-slabs",
     operation_id = "get_cut_slabs_report",

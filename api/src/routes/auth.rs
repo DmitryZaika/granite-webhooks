@@ -34,6 +34,8 @@ use crate::auth::cookie::{
 use crate::auth::session::{SUPER_ADMIN_POSITION, SessionUser, find_session_user, user_positions};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use crate::webhooks_client::OutgoingEmail;
 use axum::Json;
@@ -46,8 +48,6 @@ use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -362,7 +362,7 @@ pub(crate) async fn record_failed_login(
 /// production) and says where the user starts. Too many failed attempts
 /// for the email answer 429 until the 15-minute window passes. A wrong
 /// email and a wrong password answer the same 401.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/auth/login",
     operation_id = "sign_in",
@@ -443,7 +443,7 @@ async fn start_session(state: &AppState, user_id: i32) -> ApiResult<Response> {
 /// cookie is replayed) and clears the cookie. The browser phone of the
 /// session (Granite Phone in the CRM) is signed out too: its Telnyx
 /// credential is deleted. Always answers 204.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/auth/logout",
     operation_id = "sign_out",
@@ -477,7 +477,7 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
 /// The signed-in user (for a super admin, in the company they act in), the
 /// path they start at, the acting company's subdomain and the companies a
 /// super admin can switch to. 401 when signed out.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/auth/session",
     operation_id = "get_auth_session",
@@ -512,7 +512,7 @@ pub struct ActiveCompany {
 ///
 /// A super admin picks which of their companies requests act in; the
 /// choice is kept in the session cookie (its other contents stay).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/auth/active-company",
     operation_id = "set_active_company",
@@ -597,7 +597,7 @@ pub fn app_origin(app_url: &str, subdomain: Option<&str>) -> String {
 /// minute), stores a new one-hour link (older ones stop working) and emails
 /// it. Always answers 202 the same way, so it does not tell which emails
 /// have accounts.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/auth/password-reset",
     operation_id = "request_password_reset",
@@ -724,7 +724,7 @@ async fn reset_user(pool: &sqlx::MySqlPool, token: &str) -> sqlx::Result<Option<
 ///
 /// 204 while the link can still set a password, 404 when it is unknown,
 /// used or expired.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/auth/password-reset/{token}",
     operation_id = "check_password_reset",
@@ -763,7 +763,7 @@ impl std::fmt::Debug for NewPassword {
 ///
 /// Uses a reset link once: sets the password (bcrypt), spends the link and
 /// ends every session of the user, Granite Phone sign-ins included.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/auth/password-reset/{token}",
     operation_id = "reset_password",
@@ -953,7 +953,7 @@ pub struct InviteDetails {
 ///
 /// Whose invite it is while the link can still set up the account; 404 when
 /// it is unknown, used or expired, or the account already has a password.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/auth/invite/{token}",
     operation_id = "check_invite",
@@ -1001,7 +1001,7 @@ impl std::fmt::Debug for JoinInput {
 ///
 /// Uses an invite link once: saves the user's name, phone and password
 /// (bcrypt), spends the link and signs in as `POST /v1/auth/login` does.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/auth/invite/{token}",
     operation_id = "accept_invite",

@@ -13,13 +13,13 @@
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// A to-do.
 #[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
@@ -69,7 +69,7 @@ fn checked(text: &str) -> ApiResult<&str> {
 /// List my to-dos
 ///
 /// The caller's to-dos, open ones first unless reordered by hand.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/todos",
     operation_id = "list_todos",
@@ -99,7 +99,7 @@ pub async fn list(
 /// Add a to-do
 ///
 /// It goes to the top of the list.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/me/todos",
     operation_id = "create_todo",
@@ -152,7 +152,7 @@ async fn own(pool: &sqlx::MySqlPool, user_id: i32, id: i32) -> ApiResult<()> {
 /// Change a to-do's text
 ///
 /// Only the caller's own to-dos.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/me/todos/{id}",
     operation_id = "update_todo",
@@ -190,7 +190,7 @@ pub async fn update(
 ///
 /// A ticked to-do moves to the bottom; an unticked one goes back above the
 /// ticked ones.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/me/todos/{id}/done",
     operation_id = "set_todo_done",
@@ -254,7 +254,7 @@ pub async fn set_done(
 /// Delete a to-do
 ///
 /// Someone else's to-do is left alone.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/me/todos/{id}",
     operation_id = "delete_todo",
@@ -284,7 +284,7 @@ pub async fn delete(
 /// Delete ticked to-dos
 ///
 /// Clears every to-do the caller ticked off.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/me/todos/done",
     operation_id = "delete_done_todos",
@@ -311,7 +311,7 @@ pub async fn delete_done(
 /// Order my to-dos
 ///
 /// The caller's to-dos in the order given (others keep their place).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/me/todo-order",
     operation_id = "order_todos",

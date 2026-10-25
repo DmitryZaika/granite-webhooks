@@ -10,6 +10,8 @@
 
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::quote_editor::{StoneImage, stone_images};
 use crate::state::AppState;
 use axum::Json;
@@ -17,8 +19,6 @@ use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -96,7 +96,7 @@ struct DrawingRow {
 /// case and spaces around them), with how many quotes used it and the values
 /// of the latest one; most used first, then most recent. Default area names
 /// (`Area #1`, `Area #2`, ...) are left out. At most 60 names and 150 items.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quotes/suggestions",
     operation_id = "list_quote_suggestions",
@@ -284,7 +284,7 @@ pub struct StoneImageLookup {
 /// one with free slabs first). Returns `{"image": null}` when no stone of
 /// that name is in stock or `color` is empty. The editor uses
 /// it to paint the area's pieces in the Color & Edge preview.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/quotes/stone-image",
     operation_id = "get_quote_stone_image",

@@ -79,7 +79,7 @@ pub async fn sync_from_stripe(
 }
 
 /// A saved card.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, crate::openapi::ToSchema)]
 pub struct Card {
     /// Stripe payment method id (`pm_...`).
     pub id: String,

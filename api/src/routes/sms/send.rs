@@ -15,6 +15,7 @@ use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::lines::CallerId;
 use crate::routes::company::queries::company_features;
 use crate::state::AppState;
@@ -29,7 +30,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
 use std::collections::VecDeque;
 use std::time::Instant;
-use utoipa::ToSchema;
 
 /// Longest text the composer allows.
 const MAX_TEXT: usize = 1600;
@@ -487,7 +487,7 @@ pub async fn deliver_now(
 /// Canadian numbers only, never to a phone that texted STOP (`opted_out`).
 /// Opening the conversation counts as read. Errors come back as a token in
 /// `error`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sms/{provider}/messages",
     operation_id = "send_sms",

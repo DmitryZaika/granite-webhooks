@@ -12,6 +12,8 @@
 use crate::auth::ShopOrEmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::stones::queries::escape_like;
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
@@ -22,8 +24,6 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{MySql, QueryBuilder};
 use std::collections::HashMap;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -155,7 +155,7 @@ const ROOM_SQUARE_FEET: &str = "(SELECT SUM(room_sqft) FROM (
 /// cut progress and a status. `employee` and `shop` views filter by
 /// `status`, `sales_rep` and `search`; the `admin` view lists every sale of
 /// live sellers.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/transactions",
     operation_id = "list_transactions",
@@ -272,7 +272,7 @@ pub async fn list(
 /// List the sellers to filter by
 ///
 /// Names of everyone who sold something in the company.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/transactions/sales-reps",
     operation_id = "list_transaction_sellers",
@@ -327,7 +327,7 @@ fn installed_at(raw: Option<&str>) -> ApiResult<NaiveDateTime> {
 ///
 /// Sets the installed date (and, when `paid`, the paid date) of a sale of
 /// the company whose slabs are all cut.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/transactions/{id}/installed",
     operation_id = "mark_sale_installed",

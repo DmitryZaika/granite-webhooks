@@ -4,9 +4,9 @@
 //! workflow, so its `as_str` spelling is the column's ENUM value and its serde
 //! name; changing one means a migration and a workflow change.
 
+use crate::openapi::ToSchema;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// Where a run is in its life. See the migration for the state diagram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

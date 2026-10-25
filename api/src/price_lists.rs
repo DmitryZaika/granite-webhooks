@@ -12,12 +12,12 @@
 //! ([`build_color_context`]) reads only that supplier's files and scores
 //! by the color's words.
 
+use crate::openapi::ToSchema;
 use regex::Regex;
 use serde::Serialize;
 use sqlx::{FromRow, MySql, MySqlPool, QueryBuilder};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
-use utoipa::ToSchema;
 
 /// Characters of excerpts given to the model.
 const CONTEXT_CHUNK_BUDGET: usize = 9000;

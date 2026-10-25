@@ -21,6 +21,7 @@ use crate::auth::device::{encoded_call_key, new_token, token_hash};
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::availability::Availability;
 use crate::phone::company::{self, CompanyConfig, RecordingMode};
 use crate::phone::devices::{self, CREDENTIAL_DAYS, LIVE_DEVICE};
@@ -39,7 +40,6 @@ use chrono::{DateTime, Duration, Utc};
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
-use utoipa::ToSchema;
 
 /// A browser phone rings this long after its tab last said it is connected
 /// (the dock says so every minute).
@@ -194,7 +194,7 @@ async fn seen(pool: &MySqlPool, session_id: i64) -> sqlx::Result<()> {
 /// phone settings (a verified cell enables Call via my cell) and
 /// availability, and our clock (calls are signed with it). Session cookie
 /// (employees, admins, superusers). Next: `POST /v1/phone/web/devices`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/phone/web/bootstrap",
     operation_id = "get_web_phone_bootstrap",
@@ -345,7 +345,7 @@ async fn find_or_make(
 /// 403 `calling_disabled` while the company's calling is off; 502 when
 /// Telnyx did not make the credential (try again); 503 when Telnyx is not
 /// set up on the server. Next: `POST /v1/phone/web/devices/{id}/token`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/web/devices",
     operation_id = "register_web_phone",
@@ -410,7 +410,7 @@ pub async fn register_web_phone(
 /// minting one per page. 404 when `id` is not this web session's browser
 /// phone, 401 `device_revoked` once it was signed out, 403
 /// `calling_disabled` while the company's calling is off.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/web/devices/{id}/token",
     operation_id = "mint_web_phone_token",
@@ -492,7 +492,7 @@ pub async fn mint_web_phone_token(
 /// the phone turned off on this computer) stops it ringing at once. 404 when
 /// `id` is not this web session's browser phone, 401 `device_revoked` once
 /// it was signed out.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/phone/web/devices/{id}/presence",
     operation_id = "set_web_phone_presence",
@@ -542,7 +542,7 @@ pub async fn set_web_phone_presence(
 /// `POST /v1/phone/calls/decline`). On a shared line that also rings
 /// others, only this browser stops. Nothing ringing: nothing to do (204).
 /// 404 when `id` is not this web session's browser phone.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/phone/web/devices/{id}/decline",
     operation_id = "decline_web_phone_call",

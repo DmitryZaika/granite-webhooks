@@ -1,8 +1,8 @@
+use crate::openapi::{IntoParams, ToSchema};
 use crate::serde_helpers::js_date;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::{IntoParams, ToSchema};
 
 /// Query string of `GET /v1/stones`. Every filter is optional; list filters
 /// take the parameter repeated (`?type=granite&type=quartz`) and match any of

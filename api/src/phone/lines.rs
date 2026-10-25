@@ -5,9 +5,9 @@
 //! (`JOIN users u ON u.company_id = n.company_id`), whatever the table says.
 
 use super::wire_enum;
+use crate::openapi::ToSchema;
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
-use utoipa::ToSchema;
 
 wire_enum! {
     /// What a company number is for: `direct` (one person's line), `shared`

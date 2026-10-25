@@ -1,6 +1,6 @@
+use crate::openapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::ToSchema;
 
 /// A sale as the sell / edit form shows it: who bought, who sold, and the
 /// rooms with their slabs, sinks and faucets.

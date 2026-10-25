@@ -9,6 +9,8 @@
 use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::customers::signatures::{RefreshScope, refresh};
 use crate::signwell::SignWell;
 use crate::state::AppState;
@@ -21,8 +23,6 @@ use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -88,7 +88,7 @@ struct Row {
 /// Newest first, with the customer and sender names. `mine` (default):
 /// what the caller sent; `company` (admins): the whole company. Open
 /// `SignWell` requests are checked with `SignWell` first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/signature-requests",
     operation_id = "list_signature_requests",
@@ -177,7 +177,7 @@ pub async fn list_requests(
 /// With `notify_customer`, the signer is emailed that it was cancelled (from
 /// the sender, in the invitation's thread when there is one) and the answer
 /// says whether that email went out.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/signature-requests/{id}/cancel",
     operation_id = "cancel_signature_request",

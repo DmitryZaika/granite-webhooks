@@ -6,13 +6,13 @@
 use crate::auth::AdminUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::{IntoParams, ToSchema};
 
 /// Query of `GET /v1/qbo/class-sales`.
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -60,7 +60,7 @@ fn day(value: &str) -> Option<&str> {
 /// The company's `QuickBooks` "Sales by Class" report (accrual basis) for the
 /// days, and its classes so the page can nest them. `not_connected` when
 /// `QuickBooks` is off or disconnected, `error` when the report failed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/qbo/class-sales",
     operation_id = "get_qbo_class_sales",

@@ -1,6 +1,6 @@
+use crate::openapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 /// A supplier the company buys from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]

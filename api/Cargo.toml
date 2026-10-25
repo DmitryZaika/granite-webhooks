@@ -31,6 +31,13 @@ path = "tests/it.rs"
 name = "server_errors"
 path = "tests/server_errors.rs"
 
+[features]
+# Generates the OpenAPI document from the route annotations with utoipa, for
+# `make api-openapi` and the spec tests (`--features openapi`). utoipa is a
+# large share of the crate's compile time, so builds without it register the
+# routes straight with axum and serve the checked-in api/openapi.json.
+openapi = ["dep:utoipa", "dep:utoipa-axum", "api-macros/openapi"]
+
 [dependencies]
 ammonia = "4.1"
 bcrypt = "0.17"
@@ -59,8 +66,11 @@ thiserror = "2.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = "0.1"
 tower-http = { version = "0.6", features = ["catch-panic", "cors"] }
-utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "preserve_order", "preserve_path_order"] }
-utoipa-axum = "0.3.0"
+api-macros = { path = "macros" }
+utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "preserve_order", "preserve_path_order"], optional = true }
+utoipa-axum = { version = "0.3.0", optional = true }
+tower-layer = "0.3"
+tower-service = "0.3"
 serde_html_form = "0.4.1"
 # S3 and the SSM parameter are signed requests over reqwest (`sigv4`), not
 # SDK crates. aws-sigv4 is in the graph anyway, through common's SES client.

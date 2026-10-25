@@ -1,7 +1,7 @@
+use crate::openapi::ToSchema;
 use crate::serde_helpers::js_date;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// A question with the deal's answer.
 #[derive(Debug, Clone, Serialize, ToSchema)]

@@ -3,12 +3,12 @@
 
 use crate::auth::AdminUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use utoipa::ToSchema;
 
 /// Long threads are rare; cap them so one click cannot pull hundreds of bodies.
 const MAX_MESSAGES: usize = 50;
@@ -91,7 +91,7 @@ pub struct Conversation {
 ///
 /// The email and the other messages of its thread (the latest 50), with
 /// their files, for an email of the caller's company.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/emails/{id}/conversation",
     operation_id = "get_email_conversation",

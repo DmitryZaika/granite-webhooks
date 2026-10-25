@@ -4,6 +4,7 @@
 use super::{Hook, TexmlRequest, taken, texml};
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::IntoParams;
 use crate::phone::call_log::{self, Answer, CallFacts, End};
 use crate::phone::calls::{CallDirection, CallStatus};
 use crate::phone::events;
@@ -17,7 +18,6 @@ use axum::response::Response;
 use chrono::Duration;
 use lambda_http::tracing;
 use serde::Deserialize;
-use utoipa::IntoParams;
 
 /// Query of `leg-status`.
 #[derive(Debug, Deserialize, IntoParams)]
@@ -56,7 +56,7 @@ const FINAL: [&str; 5] = ["completed", "busy", "no-answer", "canceled", "failed"
 /// customer's leg `completed` means answered, then ended; one who does not
 /// answer logs the call as `busy`, `no_answer`, `canceled` or `failed`.
 /// Unknown calls are ignored.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/leg-status",
     operation_id = "record_telnyx_leg_status",
@@ -292,7 +292,7 @@ async fn status_call(
 /// customer, the deal leaves its first stage after a talk of 90 seconds or
 /// more and the customer's SMS flows stop. Other statuses and unknown calls
 /// are only stored.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/telnyx/{token}/call-status",
     operation_id = "record_telnyx_call_status",

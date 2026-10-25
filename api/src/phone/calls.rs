@@ -19,11 +19,11 @@
 
 use super::wire_enum;
 use crate::auth::session::SessionUser;
+use crate::openapi::ToSchema;
 use crate::serde_helpers::{js_date, js_date_required};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{FromRow, MySql, MySqlPool, QueryBuilder};
-use utoipa::ToSchema;
 
 /// `positions.id` of a sales manager (hears the company's calls).
 pub const SALES_MANAGER_POSITION: i32 = 2;

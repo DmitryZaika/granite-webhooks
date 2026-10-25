@@ -4,6 +4,7 @@
 
 use super::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -11,7 +12,6 @@ use chrono::{NaiveDate, Timelike, Utc};
 use chrono_tz::America::Indiana::Indianapolis;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use utoipa::ToSchema;
 
 const REMINDER_HOUR: u32 = 9;
 /// `positions.id` of a shop manager.
@@ -84,7 +84,7 @@ async fn due_items(
 /// At 9 AM store time, sends each shop worker and shop manager with Telegram
 /// notifications a list of their company's equipment checks due today, once a
 /// day.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/maintenance-reminders",
     operation_id = "run_maintenance_reminders",

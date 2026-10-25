@@ -10,6 +10,8 @@
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::customers::service::BUILTIN_SOURCES;
 use crate::state::AppState;
 use axum::Json;
@@ -17,8 +19,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -92,7 +92,7 @@ async fn label_taken(
 /// List customer sources
 ///
 /// The company's live sources, built-in ones first, then by label.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customer-sources",
     operation_id = "list_customer_sources",
@@ -123,7 +123,7 @@ pub async fn list(
 /// Add a customer source
 ///
 /// Its key and label are the name.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/customer-sources",
     operation_id = "create_customer_source",
@@ -179,7 +179,7 @@ async fn find(pool: &MySqlPool, company_id: i32, id: i32) -> ApiResult<(String, 
 ///
 /// A built-in source only changes its label; a custom one also changes its
 /// key, and its customers move to the new name.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/customer-sources/{id}",
     operation_id = "rename_customer_source",
@@ -239,7 +239,7 @@ pub async fn rename(
 /// Delete a customer source
 ///
 /// Hides a custom source from the dropdown; its customers keep it.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/customer-sources/{id}",
     operation_id = "delete_customer_source",

@@ -21,14 +21,14 @@ use crate::auth::ShopOrEmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use store::{Actor, Applied, OnboardingEvent, OnboardingRecord, OnboardingState};
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -59,7 +59,7 @@ async fn home_actor(state: &AppState, user_id: i32) -> ApiResult<Actor> {
 ///
 /// The first-run journey, feature tours and points saved for the signed-in
 /// user (their home company's journey). `has_row` is false before any.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/onboarding",
     operation_id = "get_my_onboarding",
@@ -113,7 +113,7 @@ pub struct AppliedProgress {
 /// the home company's guided tours are off, for retired tours, and for setup
 /// tasks only the server may complete. Points come from the tour registry,
 /// never from the request.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/me/onboarding/events",
     operation_id = "save_my_onboarding_events",
@@ -158,7 +158,7 @@ pub async fn events(
 ///
 /// Clears the old tours' modules and position; feature tours and points
 /// stay. Events the device still holds from before are dropped.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/me/onboarding/reset",
     operation_id = "reset_my_onboarding",
@@ -448,7 +448,7 @@ pub async fn credit_done(
 /// credit for setup work already done (the email name, signature and
 /// Telegram tasks complete with their points, once). `credit` is null unless
 /// something was credited just now.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/onboarding/setup",
     operation_id = "get_my_onboarding_setup",
@@ -535,7 +535,7 @@ pub struct ClaimResult {
 ///
 /// Completes a setup task, with its points, when the user's own setup shows
 /// its work is done; a second claim pays nothing more.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/me/onboarding/claim",
     operation_id = "claim_my_onboarding_task",

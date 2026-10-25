@@ -2,10 +2,10 @@
 //! `parseQboInvoice`, `parseQboInvoiceEditable` and
 //! `updateQboInvoiceFromEditable` of `quickbooks.server.ts`.
 
+use crate::openapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
-use utoipa::ToSchema;
 
 /// A string or number field as text; `None` when empty.
 pub fn text(value: &Value) -> Option<String> {

@@ -8,6 +8,7 @@
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::routes::jobs::JobCaller;
 use crate::state::AppState;
 use axum::Json;
@@ -16,7 +17,6 @@ use common::telephony::ringcentral;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
-use utoipa::ToSchema;
 
 /// One file of the message, still on `RingCentral`.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -84,7 +84,7 @@ fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 /// downloaded with the company's `RingCentral` login, stored under
 /// `sms-attachments/<company id>/` and shown with the text in the conversation.
 /// Returns how many were stored; 404 when the text is not the company's.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sms/ringcentral/inbound-media",
     operation_id = "store_ringcentral_inbound_media",

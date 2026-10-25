@@ -15,6 +15,8 @@ use crate::billing::stripe::{latest_event, normalize_event, verify_signature};
 use crate::billing::{self, PaymentStatus};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
 use axum::Json;
 use axum::body::Bytes;
@@ -23,8 +25,6 @@ use axum::http::HeaderMap;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -88,7 +88,7 @@ const PAID: ReactivationStarted = ReactivationStarted {
 /// to pay (the company is not restricted, or Stripe already has it paid),
 /// otherwise the payment for the browser to confirm. Stripe's refusals
 /// ("Your card was declined.") are 400s with Stripe's message.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/billing/reactivation",
     operation_id = "start_billing_reactivation",
@@ -168,7 +168,7 @@ pub struct ReactivationFinished {
 ///
 /// After the browser confirmed the payment: waits a few seconds for Stripe
 /// to mark the subscription paid and applies it.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/billing/reactivation/finish",
     operation_id = "finish_billing_reactivation",
@@ -221,7 +221,7 @@ pub struct WebhookReceived {
 /// Stripe's webhook endpoint: checkout, subscription, invoice and payment
 /// method events update the company's billing (each event once). Needs a
 /// valid `Stripe-Signature` for `STRIPE_WEBHOOK_SECRET`; no session.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/webhooks/stripe",
     operation_id = "receive_stripe_webhook",

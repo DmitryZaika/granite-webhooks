@@ -7,6 +7,7 @@ use super::audit;
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::phone::availability::WorkingHours;
 use crate::phone::company::{self, CompanyConfig, RecordingMode};
 use crate::state::AppState;
@@ -15,7 +16,6 @@ use axum::extract::{Path, State};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use utoipa::ToSchema;
 
 /// Most holidays a company may list.
 const MAX_HOLIDAYS: usize = 366;
@@ -329,7 +329,7 @@ pub(super) fn new_webhook_token() -> ApiResult<String> {
 /// `webhookBase`, the root of the company's Telnyx webhooks to paste into
 /// the Telnyx portal. 404 when the company has no setup yet (save one with
 /// `PUT`) or does not exist. Superusers only.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/superuser/companies/{id}/telnyx",
     operation_id = "get_company_telnyx_config",
@@ -372,7 +372,7 @@ pub async fn company_telnyx_config(
 /// a version like `1.4.0`,
 /// a daily limit of 0 to 1,000,000; 400 with a message otherwise. Written
 /// to the phone audit log. Superusers only.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/superuser/companies/{id}/telnyx",
     operation_id = "save_company_telnyx_config",

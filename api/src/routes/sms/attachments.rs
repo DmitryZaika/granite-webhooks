@@ -11,12 +11,12 @@ use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::images::{self, ImageError};
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// Most files in one text.
 const MAX_FILES: usize = 10;
@@ -204,7 +204,7 @@ async fn prepare(
 /// photos become JPEG; PNGs that fit or are see-through, and GIF, stay),
 /// documents (PDF, Word, Excel, text, CSV) as they are. The uploads are
 /// removed. Each file succeeds or fails on its own.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sms/attachments",
     operation_id = "prepare_sms_attachments",

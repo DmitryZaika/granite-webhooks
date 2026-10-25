@@ -5,12 +5,12 @@
 use super::queries::deal_in_company;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
-use utoipa::ToSchema;
 
 /// What happened to the document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
@@ -249,7 +249,7 @@ fn is_missing_table(error: &sqlx::Error) -> bool {
 /// signing (tied to the deal, or named after one of its quotes:
 /// `<contract form> - <quote name>.pdf`) and signed. Views are left out.
 /// Unsorted: the deal page merges them into its history by `at`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/deals/{id}/document-events",
     operation_id = "list_deal_document_events",

@@ -47,6 +47,8 @@ mod via_cell;
 mod whisper;
 
 use crate::error::{ApiError, ApiResult};
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::phone::PhoneConfig;
 use crate::phone::call_log::MAX_TALK_SECS;
 use crate::phone::company::{self, CompanyConfig, RecordingMode};
@@ -61,8 +63,6 @@ use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use lambda_http::tracing;
 use serde::Deserialize;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()

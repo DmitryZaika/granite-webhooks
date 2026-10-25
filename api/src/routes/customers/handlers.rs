@@ -22,7 +22,7 @@ use chrono::Utc;
 /// With `view=companies` it returns only customers that have a company name,
 /// each with revenue and project totals. Rows carry the primary email only;
 /// use `POST /v1/customers/emails/batch` for all addresses.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers",
     operation_id = "list_customers",
@@ -61,7 +61,7 @@ pub async fn list(
 /// sources; the onboarding sample customer is left out. Each page carries
 /// every email of its customers, and `month_rows` the rows behind the
 /// "this month" counts per sales rep.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/page",
     operation_id = "list_customers_page",
@@ -91,7 +91,7 @@ pub async fn page(
 /// Returns every email address of the given customers, primary address
 /// first, keyed by customer id. Customers without emails, and ids belonging
 /// to another company, are absent from the result.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/customers/emails/batch",
     operation_id = "get_customer_emails",
@@ -126,7 +126,7 @@ pub async fn emails_batch(
 /// email address (primary first), the assigned sales rep and the lead form
 /// answers. 404 for other companies' customers, and for deleted ones unless
 /// `include_deleted=true` (a deal page still shows its deleted customer).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/{id}",
     operation_id = "get_customer",
@@ -162,7 +162,7 @@ pub async fn get(
 /// the caller's own customers, then the best text matches. Each row carries
 /// every email and the customer's latest deal. Fetch one in full with
 /// `GET /v1/customers/{id}`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/customers/search",
     operation_id = "search_customers",

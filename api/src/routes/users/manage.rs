@@ -17,6 +17,7 @@ use crate::auth::UserManager;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::auth::{SentInvite, send_invite};
 use crate::routes::company::queries::company_features;
 use crate::routes::sms::provider::phone10;
@@ -31,7 +32,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::MySqlPool;
 use std::collections::HashSet;
-use utoipa::{IntoParams, ToSchema};
 
 pub const SALES_REP: i32 = 1;
 pub const SHOP_WORKER: i32 = 4;
@@ -164,7 +164,7 @@ async fn companies(pool: &MySqlPool, user: &SessionUser) -> Result<Vec<CompanyNa
 /// of every company), which of them only a superuser may change, the
 /// companies the caller may pick with their user counts and limits, and
 /// whether the listed company has `CloudTalk` or `RingCentral`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/admin/users",
     operation_id = "list_managed_users",
@@ -315,7 +315,7 @@ pub struct CreatedUser {
 /// set their own name, phone and password; they cannot sign in before. The
 /// email must be unused, even by a deleted user. When the email fails the
 /// user is still added: share the returned link instead.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/admin/users",
     operation_id = "create_managed_user",
@@ -510,7 +510,7 @@ async fn position_companies(
 /// The user with their positions, marketing and Super Admin companies, the
 /// companies the caller may pick (non-superusers: the user's own and the
 /// ones a superuser granted marketing for) and their company's telephony.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/admin/users/{id}",
     operation_id = "get_managed_user",
@@ -751,7 +751,7 @@ struct PositionRow {
 /// always admins. The `RingCentral` extension follows the number. A user
 /// who is no longer an employee or admin of their company (or moved to
 /// another one) is signed out of Granite Phone.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/admin/users/{id}",
     operation_id = "update_managed_user",
@@ -938,7 +938,7 @@ pub async fn update(
 ///
 /// Soft-deletes a live user of the caller's company (superusers: any) and
 /// signs out their Granite Phone apps.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/admin/users/{id}",
     operation_id = "delete_managed_user",
@@ -977,7 +977,7 @@ pub async fn delete(
 /// Emails a user who has not set up their account a new invite link (7
 /// days); older links stop working. When the email fails the link is still
 /// answered, to share another way.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/admin/users/{id}/invite",
     operation_id = "resend_user_invite",

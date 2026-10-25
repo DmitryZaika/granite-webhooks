@@ -6,6 +6,7 @@ use super::schemas::StoneRef;
 use crate::auth::{AdminUser, EmployeeUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::uploads::{self, schemas::UploadFolder};
 use crate::state::AppState;
 use axum::Json;
@@ -15,7 +16,6 @@ use axum::response::IntoResponse;
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlConnection, MySqlPool};
-use utoipa::{IntoParams, ToSchema};
 
 /// Most photos one request may add.
 pub const MAX_IMAGES_PER_REQUEST: usize = 50;
@@ -170,7 +170,7 @@ async fn stone_refs(
 /// Returns the stone's own installed (project) photos, by id, then those of
 /// the stones it links photos from, by stone name (marked with
 /// `source_stone`).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/stones/{id}/images",
     operation_id = "list_stone_images",
@@ -224,7 +224,7 @@ pub async fn images(
 ///
 /// Saves uploads (`POST /v1/uploads`, folder `stones`) as installed photos
 /// of the stone and stores their thumbnails. Returns the new photos.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/stones/{id}/images",
     operation_id = "add_stone_images",
@@ -277,7 +277,7 @@ pub async fn add_images(
 /// Delete an installed photo
 ///
 /// Deletes one of the stone's own photos and its stored file.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/stones/{id}/images/{image_id}",
     operation_id = "delete_stone_image",
@@ -325,7 +325,7 @@ pub async fn delete_image(
 /// Links the installed photos of `source_stone_id` (same company) to the
 /// stone: they appear in `GET /v1/stones/{id}/images`. Linking twice is a
 /// no-op.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/stones/{id}/image-links",
     operation_id = "link_stone_images",
@@ -362,7 +362,7 @@ pub async fn link_images(
 ///
 /// Removes the photo link from `source_stone_id`; its photos stay on that
 /// stone.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/stones/{id}/image-links/{source_stone_id}",
     operation_id = "unlink_stone_images",
@@ -400,7 +400,7 @@ pub async fn unlink_images(
 /// Links `source_stone_id` (same company): its slabs count as this stone's
 /// (lists, slabs dialog, sales). A stone cannot draw from itself or from a
 /// stone that already draws from it. Linking twice is a no-op.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/stones/{id}/slab-links",
     operation_id = "link_stone_slabs",
@@ -450,7 +450,7 @@ pub async fn link_slabs(
 ///
 /// Removes the slab link: the source stone's slabs no longer count as this
 /// stone's. Sales already made are not touched.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/stones/{id}/slab-links/{source_stone_id}",
     operation_id = "unlink_stone_slabs",
@@ -529,7 +529,7 @@ async fn unlink(
 ///
 /// Returns the stones this one draws slabs from, the stones that draw slabs
 /// from it, and the stones whose photos it shows, each by name.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/stones/{id}/links",
     operation_id = "get_stone_links",
@@ -585,7 +585,7 @@ pub async fn links(
 /// Returns the live stones of the caller's company that have installed
 /// photos (`has=images`) or slabs in the yard (`has=slabs`), by name: the
 /// choices for linking photos or slabs.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/stones/names",
     operation_id = "list_stone_names",
@@ -632,7 +632,7 @@ pub async fn names(
 /// Adds a slab in the yard with a bundle label, a size (the stone's size
 /// when length and width are 0 or missing) and an optional photo (an upload
 /// to the `stones` folder).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/stones/{id}/slabs",
     operation_id = "add_stone_slab",
@@ -724,7 +724,7 @@ pub struct ImageProxyQuery {
 /// Returns the bytes of an image in the storage bucket so the browser can
 /// draw it on a canvas (the bucket sends no CORS headers). Other URLs and
 /// files that are not images (or are SVG) are refused.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/stones/image-proxy",
     operation_id = "proxy_stone_image",

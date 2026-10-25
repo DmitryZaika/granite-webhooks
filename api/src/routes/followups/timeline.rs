@@ -5,11 +5,11 @@ use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::followups::gather::{FollowupRequest, gather_followup_context};
 use crate::followups::send_window::FollowupChannel;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
 
 /// Whose conversation.
 #[derive(Debug, Deserialize, IntoParams)]
@@ -52,7 +52,7 @@ fn positive_id(raw: Option<&str>) -> Option<i32> {
 ///
 /// The texts and emails with the customer (by id or phone) the AI
 /// follow-up writer reads, oldest first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/followups/timeline",
     operation_id = "get_followup_timeline",

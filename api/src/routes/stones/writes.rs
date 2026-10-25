@@ -8,6 +8,7 @@
 use crate::auth::{AdminUser, ShopOrEmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::uploads::{self, schemas::UploadFolder};
 use crate::sql::push_in;
 use crate::state::AppState;
@@ -16,7 +17,6 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::{MySql, MySqlConnection, QueryBuilder};
-use utoipa::{IntoParams, ToSchema};
 
 /// Image of a stone added without one (served by the web app).
 const STONE_PLACEHOLDER: &str = "/placeholders/stone-placeholder.svg";
@@ -197,7 +197,7 @@ async fn set_colors(
 /// Creates a stone of the caller's company with its image (an upload to the
 /// `stones` folder, thumbnail made here) and colors. Add its slabs with
 /// `POST /v1/stones/{id}/slabs`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/stones",
     operation_id = "create_stone",
@@ -261,7 +261,7 @@ pub async fn create(
 /// Saves every field of the body on a stone of the caller's company and
 /// replaces its colors. With a new `image_url` the image is replaced and the
 /// old file deleted; without one the image is kept.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/stones/{id}",
     operation_id = "update_stone",
@@ -352,7 +352,7 @@ pub async fn update(
 /// Hides a stone of the caller's company from every list (soft delete;
 /// nothing is erased). A stone that still has slabs in the yard needs
 /// `include_slabs=true`, which hides those slabs too.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/stones/{id}",
     operation_id = "delete_stone",
@@ -422,7 +422,7 @@ pub struct SamplesInput {
 ///
 /// Saves the samples on hand and/or how many to keep for a stone of the
 /// caller's company.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/stones/{id}/samples",
     operation_id = "update_stone_samples",

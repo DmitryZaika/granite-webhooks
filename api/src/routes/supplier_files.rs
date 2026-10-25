@@ -12,6 +12,8 @@
 use crate::ai::{Caller, Chat, MINI_MODEL};
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::price_lists::{self, FileReadiness, PriceListSource};
 use crate::state::AppState;
 use axum::Json;
@@ -20,8 +22,6 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -51,7 +51,7 @@ pub struct ReadinessReply {
 ///
 /// How many of the named supplier's price files are processed, still being
 /// processed or failed, so a price answer can say it may be incomplete.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/suppliers/file-readiness",
     operation_id = "get_supplier_file_readiness",
@@ -95,7 +95,7 @@ pub async fn file_readiness(
 ///
 /// Puts a failed price file of the company back in the processing queue
 /// (attempts reset). The processor picks it up within a minute.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/supplier-files/{id}/retry",
     operation_id = "retry_supplier_file",
@@ -367,7 +367,7 @@ fn parse_offers(reply: &str, sources: &[PriceListSource]) -> Vec<SupplierOffer> 
 /// (`file_id`, `url`) when the AI cited one of the searched files. Also
 /// answers the company's sales tax, which the quote builder adds to a
 /// supplier price.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/suppliers/price-offers",
     operation_id = "find_supplier_price_offers",

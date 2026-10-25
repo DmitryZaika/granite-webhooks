@@ -1,6 +1,6 @@
+use crate::openapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 /// The signed-in user's deals this month so far, from the 1st through today
 /// (UTC). Only deals assigned to the user, of live customers of the company,

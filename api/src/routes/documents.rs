@@ -12,6 +12,8 @@ use super::attachable::LibraryFile;
 use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::uploads::schemas::UploadFolder;
 use crate::state::AppState;
 use crate::storage::Storage;
@@ -19,8 +21,6 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -92,7 +92,7 @@ async fn find(state: &AppState, company_id: i32, id: i32) -> ApiResult<LibraryFi
 ///
 /// Puts a file uploaded to the `documents` folder (`POST /v1/uploads`) in the
 /// company's library under `name`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/documents",
     operation_id = "create_document",
@@ -135,7 +135,7 @@ pub async fn create(
 ///
 /// Renames it; with `url`, its file is replaced by a new upload and the old
 /// file (and its page preview) is deleted from storage.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/documents/{id}",
     operation_id = "update_document",
@@ -184,7 +184,7 @@ pub async fn update(
 ///
 /// Takes it out of the library. The file stays in storage: emails may
 /// already carry it.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/documents/{id}",
     operation_id = "delete_document",
@@ -296,7 +296,7 @@ pub async fn ensure_pdf_preview(storage: &Storage, pdf_url: &str) -> ApiResult<O
 ///
 /// Redirects to a picture (WebP, 400 px wide) of the first page of a PDF in
 /// the company's document library, drawing it on first use. For an `<img>`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/documents/{id}/preview",
     operation_id = "preview_document",

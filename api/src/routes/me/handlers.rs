@@ -19,7 +19,7 @@ const MAX_SALES_GOAL: f64 = 10_000_000_000.0;
 ///
 /// Returns the user behind the session, including their permission flags and
 /// the company every other request acts in.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me",
     operation_id = "get_current_user",
@@ -39,7 +39,7 @@ pub async fn me(CurrentUser(user): CurrentUser) -> Json<SessionUser> {
 ///
 /// Returns the position ids (job roles such as sales rep) the user holds in
 /// the company the request acts in.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/positions",
     operation_id = "list_current_user_positions",
@@ -63,7 +63,7 @@ pub async fn positions(
 ///
 /// Returns the amount the signed-in user aims to sell each month, or null
 /// when they have not set one. Set it with `PUT /v1/me/sales-goal`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/sales-goal",
     operation_id = "get_my_sales_goal",
@@ -87,7 +87,7 @@ pub async fn sales_goal(
 ///
 /// Saves the amount the signed-in user aims to sell each month (USD, above 0,
 /// rounded to cents) and returns it as saved.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/me/sales-goal",
     operation_id = "set_my_sales_goal",
@@ -125,7 +125,7 @@ pub async fn set_sales_goal(
 /// widget. When a bot is configured, the saved link is checked with Telegram
 /// first; a link Telegram rejects (bot blocked, chat gone) is removed and
 /// reported as not linked, so the user is asked to connect again.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/telegram",
     operation_id = "get_my_telegram_status",
@@ -180,7 +180,7 @@ pub async fn telegram_status(
 }
 
 /// Body of `PUT /v1/me/sidebar-pin`.
-#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Deserialize, crate::openapi::ToSchema)]
 pub struct SidebarPin {
     /// Keep the desktop sidebar open instead of expanding on hover.
     pub pinned: bool,
@@ -189,7 +189,7 @@ pub struct SidebarPin {
 /// Pin or unpin my sidebar
 ///
 /// Saves whether the desktop sidebar stays open (`pined_bar` on `GET /v1/me`).
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/me/sidebar-pin",
     operation_id = "set_sidebar_pin",
@@ -220,7 +220,7 @@ pub async fn set_sidebar_pin(
 const EXTERNAL_MARKETING_POSITION: i32 = 7;
 
 /// A company the user does marketing for.
-#[derive(Debug, serde::Serialize, sqlx::FromRow, utoipa::ToSchema)]
+#[derive(Debug, serde::Serialize, sqlx::FromRow, crate::openapi::ToSchema)]
 pub struct MarketingCompany {
     /// The company.
     pub id: i32,
@@ -232,7 +232,7 @@ pub struct MarketingCompany {
 ///
 /// Live companies where the signed-in user holds the External Marketing
 /// position, for the marketing portal's company switcher.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/marketing-companies",
     operation_id = "list_marketing_companies",
@@ -262,7 +262,7 @@ pub async fn marketing_companies(
 }
 
 /// Which Telegram alerts the user wants from the notifications bot.
-#[derive(Debug, serde::Serialize, sqlx::FromRow, utoipa::ToSchema)]
+#[derive(Debug, serde::Serialize, sqlx::FromRow, crate::openapi::ToSchema)]
 pub struct NotificationPreferences {
     /// The notifications bot is linked.
     pub notifications_telegram_connected: bool,
@@ -275,7 +275,7 @@ pub struct NotificationPreferences {
 }
 
 /// Body of `PUT /v1/me/notification-preferences`.
-#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Deserialize, crate::openapi::ToSchema)]
 pub struct NotificationPreferencesInput {
     /// New texts.
     pub telegram_sms_notifications: bool,
@@ -305,7 +305,7 @@ async fn load_preferences(
 /// Get my notification settings
 ///
 /// Which alerts the notifications Telegram bot sends the signed-in user.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/notification-preferences",
     operation_id = "get_notification_preferences",
@@ -328,7 +328,7 @@ pub async fn notification_preferences(
 /// Save my notification settings
 ///
 /// Turns each kind of Telegram alert on or off; returns the saved settings.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/me/notification-preferences",
     operation_id = "set_notification_preferences",
@@ -362,7 +362,7 @@ pub async fn set_notification_preferences(
 }
 
 /// A Telegram id the widget sends as a number or a string.
-#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Deserialize, crate::openapi::ToSchema)]
 #[serde(untagged)]
 pub enum TelegramNumber {
     Number(i64),
@@ -379,7 +379,7 @@ impl TelegramNumber {
 }
 
 /// Body of `POST /v1/me/telegram/{bot}`: what the Telegram login widget returned.
-#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Deserialize, crate::openapi::ToSchema)]
 pub struct TelegramLink {
     /// The CRM user the page linked for; must be the caller.
     pub crm_user_id: i32,
@@ -467,7 +467,7 @@ async fn link_telegram(
 ///
 /// Checks the Telegram login widget's signature (made in the last day) and
 /// saves the Telegram id for lead alerts.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/me/telegram/leads",
     operation_id = "link_leads_telegram",
@@ -494,7 +494,7 @@ pub async fn link_leads_telegram(
 ///
 /// Like the lead alerts link, for the CRM notifications bot; shop staff may
 /// link it too.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/me/telegram/notifications",
     operation_id = "link_notifications_telegram",
@@ -518,7 +518,7 @@ pub async fn link_notifications_telegram(
 }
 
 /// Body of `POST /v1/me/onboarding-feedback`.
-#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Deserialize, crate::openapi::ToSchema)]
 pub struct OnboardingFeedback {
     /// 1 to 5 stars.
     pub rating: i32,
@@ -530,7 +530,7 @@ pub struct OnboardingFeedback {
 /// Rate the onboarding
 ///
 /// Saves the signed-in user's rating of the guided tours; once per user.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/me/onboarding-feedback",
     operation_id = "send_onboarding_feedback",

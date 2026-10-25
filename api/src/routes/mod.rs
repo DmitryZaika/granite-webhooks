@@ -2,7 +2,7 @@
 //!
 //! Each module exposes `router()`, registering every handler with `routes!`
 //! so it lands in the OpenAPI spec too. The full path
-//! (`/v1/<domain>/...`) lives in the handler's `#[utoipa::path]`, so every
+//! (`/v1/<domain>/...`) lives in the handler's `#[crate::openapi::path]`, so every
 //! route is still greppable from its URL.
 
 pub mod ai;
@@ -90,8 +90,8 @@ pub mod transactions;
 pub mod uploads;
 pub mod users;
 
+use crate::openapi::OpenApiRouter;
 use crate::state::AppState;
-use utoipa_axum::router::OpenApiRouter;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()

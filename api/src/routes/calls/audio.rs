@@ -13,6 +13,7 @@ use super::recording::{CallTranscriptError, MediaToken, fetch_audio};
 use super::telnyx;
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -21,7 +22,6 @@ use lambda_http::tracing;
 use serde::Serialize;
 use sha2::Sha256;
 use std::fmt::Write as _;
-use utoipa::ToSchema;
 
 /// Where to load a call's audio.
 #[derive(Debug, Serialize, ToSchema)]
@@ -60,7 +60,7 @@ fn cache_key(secret: &str, company_id: i32, provider: CallProvider, media_id: &s
 /// when the caller may not hear it (only the call's user, the users of its
 /// direct line, for an unanswered incoming call the users its line rings,
 /// its deal's owner, admins and sales managers may).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/calls/{provider}/{media_id}/recording",
     operation_id = "get_call_recording",

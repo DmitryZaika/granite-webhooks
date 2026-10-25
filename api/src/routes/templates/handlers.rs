@@ -283,7 +283,7 @@ fn clean(input: &EmailTemplateInput) -> ApiResult<CleanInput> {
 /// The company's templates and the caller's own, sorted by the caller's
 /// picker order (most used first unless they saved a custom order; then
 /// company templates first, newest first), with their attachments.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/email-templates",
     operation_id = "list_email_templates",
@@ -339,7 +339,7 @@ pub async fn list(
 /// `scope: company` (admins only) makes it the whole company's; otherwise
 /// it is the caller's own. A company template may send automatically:
 /// `lead_list_id` + `hour_delay` schedule it for deals entering that list.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/email-templates",
     operation_id = "create_email_template",
@@ -401,7 +401,7 @@ pub async fn create(
 /// The caller's own templates, and (admins) the company's, whose automation
 /// (`lead_list_id`, `hour_delay`) it sets too; removing the automation calls
 /// off the template's pending sends.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/email-templates/{id}",
     operation_id = "update_email_template",
@@ -461,7 +461,7 @@ pub async fn update(
 ///
 /// Soft-deletes one of the caller's own templates or (admins) a company
 /// template, with its attachments; its pending automatic sends are called off.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/email-templates/{id}",
     operation_id = "delete_email_template",
@@ -511,7 +511,7 @@ pub async fn delete(
 /// Adds a file uploaded to the `email-templates` folder (`POST /v1/uploads`)
 /// after the template's other attachments. Emails made from the template
 /// carry it.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/email-templates/{id}/attachments",
     operation_id = "add_email_template_attachment",
@@ -591,7 +591,7 @@ pub async fn add_attachment(
 /// Remove a file from an email template
 ///
 /// Emails made from the template no longer carry it.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/email-templates/{id}/attachments/{attachment_id}",
     operation_id = "delete_email_template_attachment",
@@ -634,7 +634,7 @@ pub async fn delete_attachment(
 ///
 /// Whether the caller's picker of this type sorts automatically (most used
 /// first) or in their saved order.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/template-order/{type}",
     operation_id = "get_template_order",
@@ -661,7 +661,7 @@ pub async fn get_order(
 ///
 /// Saves the dragged order (every template the picker shows, first to
 /// last) and switches the picker to it.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/me/template-order/{type}",
     operation_id = "save_template_order",
@@ -693,7 +693,7 @@ pub async fn save_order(
 /// Reset a template picker's order
 ///
 /// Forgets the saved order: the picker sorts by use again.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/me/template-order/{type}",
     operation_id = "reset_template_order",
@@ -730,7 +730,7 @@ pub async fn reset_order(
 /// (e.g. `$4,500.00`, only with `deal_id`). `{{quote.*}}` are filled only
 /// when a quote is emailed (`POST /v1/quotes/{id}/emails`). Variables
 /// without a value, and unknown ones, are left as they are.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/templates/fill",
     operation_id = "fill_template",

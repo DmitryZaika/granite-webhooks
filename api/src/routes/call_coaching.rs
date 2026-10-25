@@ -14,6 +14,8 @@ use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::phone::calls::{CallDirection, CallStatus};
 use crate::routes::calls::recording::transcribe_call;
 use crate::routes::calls::telnyx;
@@ -29,8 +31,6 @@ use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use utoipa::ToSchema;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 const LOOKBACK_DAYS: i64 = 30;
 const DISPLAY_CALLS: usize = 3;
@@ -415,7 +415,7 @@ const fn not_eligible() -> Coaching {
 /// The caller's last three real calls with their scores: `CloudTalk` and
 /// `RingCentral` calls when they have either line, and Granite Phone calls
 /// they placed or answered (`tx_<id>`) when they have a Granite Phone number.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/call-coaching",
     operation_id = "get_my_call_coaching",
@@ -631,7 +631,7 @@ async fn analyze(
 /// Transcribes and scores one of the calls `GET` lists (once; a failed one
 /// is tried again), then returns the list. Scoring takes a while; a page
 /// that stops waiting sees the result on its next `GET`.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/me/call-coaching",
     operation_id = "evaluate_my_call",

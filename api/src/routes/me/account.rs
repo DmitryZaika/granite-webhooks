@@ -8,6 +8,7 @@ use crate::auth::ShopOrEmployeeUser;
 use crate::email_signature;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::routes::auth::request_session_id;
 use crate::routes::company::queries::company_features;
 use crate::routes::onboarding::{self, Credit, CreditOutcome, store};
@@ -20,7 +21,6 @@ use common::telephony::ringcentral;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
-use utoipa::ToSchema;
 
 const SHOP_MANAGER: i32 = 3;
 const SHOP_WORKER: i32 = 4;
@@ -144,7 +144,7 @@ async fn home_actor(pool: &MySqlPool, user_id: i32) -> ApiResult<store::Actor> {
 ///
 /// The user's details in their home company, and what the page shows: the
 /// texting providers, the signature, and the guided tours rating.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/me/account",
     operation_id = "get_my_account",
@@ -750,7 +750,7 @@ async fn finished_setup_credit(
 /// `RingCentral` extension is looked up from the number), and a number moved
 /// from `CloudTalk` to `RingCentral` brings its texting history along. A newly
 /// filled email name or signature completes its setup task, with its points.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/me/account",
     operation_id = "update_my_account",

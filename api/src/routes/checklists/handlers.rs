@@ -12,7 +12,7 @@ use axum::extract::State;
 /// id, highest first), with the installer's name and the result of each
 /// check. The customer's signature is not included; the signed PDF of a
 /// checklist is at `GET /v1/checklists/{id}/pdf`.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/checklists",
     operation_id = "list_checklists",
@@ -33,7 +33,7 @@ pub async fn list(
 }
 
 /// Body of `POST /v1/checklists`: the customer's post-installation sign-off.
-#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Deserialize, crate::openapi::ToSchema)]
 pub struct NewChecklist {
     /// The customer, when known.
     #[serde(default)]
@@ -74,7 +74,7 @@ pub struct NewChecklist {
 }
 
 /// `POST /v1/checklists`.
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Serialize, crate::openapi::ToSchema)]
 pub struct CreatedChecklist {
     /// The new checklist.
     pub id: u64,
@@ -84,7 +84,7 @@ pub struct CreatedChecklist {
 ///
 /// An installer records the customer's sign-off. Offline installers queue
 /// these and send them when back online.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/checklists",
     operation_id = "create_checklist",
@@ -158,7 +158,7 @@ pub async fn create(
 }
 
 /// What the installer portal shows around the checklist form.
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Serialize, crate::openapi::ToSchema)]
 pub struct InstallerContext {
     /// The company the installer works for.
     pub company_id: i32,
@@ -173,7 +173,7 @@ pub struct InstallerContext {
 /// Returns the caller's company, its logo and whether its QuickBooks data
 /// is usable. Only installers may call it (403 otherwise: an employee
 /// belongs in the employee pages).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/installer/context",
     operation_id = "get_installer_context",

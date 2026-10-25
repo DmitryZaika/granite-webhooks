@@ -577,7 +577,7 @@ fn file_name(name: &str) -> String {
 /// The homeowner contract (or the commercial one when the customer has a
 /// company name) filled in with the sale: customer, rooms (at most three),
 /// stone, sinks, faucets, edges, extras and the price with its deposit.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sales/{id}/contract",
     operation_id = "get_sale_contract",

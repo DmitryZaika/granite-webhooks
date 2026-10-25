@@ -5,13 +5,13 @@ use super::require_marketer;
 use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::ToSchema;
 
 /// A referral source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow, ToSchema)]
@@ -78,7 +78,7 @@ const DUPLICATE: &str = "This referral source already exists.";
 /// List referral sources
 ///
 /// The company's referral sources, by name: the choices for a new lead.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/marketing/{company_id}/referral-sources",
     operation_id = "list_marketing_referral_sources",
@@ -104,7 +104,7 @@ pub async fn list(
 /// Add a referral source
 ///
 /// Adds a source the company's leads can come from.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/marketing/{company_id}/referral-sources",
     operation_id = "create_marketing_referral_source",
@@ -164,7 +164,7 @@ async fn existing(state: &AppState, company_id: i32, id: i64) -> Result<(), ApiE
 /// Rename a referral source
 ///
 /// Renames a source; leads keep the name they were saved with.
-#[utoipa::path(
+#[crate::openapi::path(
     patch,
     path = "/v1/marketing/{company_id}/referral-sources/{id}",
     operation_id = "rename_marketing_referral_source",
@@ -212,7 +212,7 @@ pub async fn rename(
 /// Delete a referral source
 ///
 /// Hides a source from the add-lead form; leads keep it.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/marketing/{company_id}/referral-sources/{id}",
     operation_id = "delete_marketing_referral_source",

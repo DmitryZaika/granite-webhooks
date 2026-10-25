@@ -1,6 +1,6 @@
+use crate::openapi::ToSchema;
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
-use utoipa::ToSchema;
 
 /// `positions.id` of the sales rep position (`Positions.SalesRep` in Remix).
 pub const SALES_REP_POSITION_ID: i32 = 1;

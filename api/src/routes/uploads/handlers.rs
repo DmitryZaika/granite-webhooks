@@ -3,6 +3,7 @@ use super::schemas::{Upload, UploadRequest};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::IntoParams;
 use crate::routes::emails::attachment_token;
 use crate::state::AppState;
 use crate::thumbnails::IMAGE_CONTENT_TYPES;
@@ -12,7 +13,6 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
-use utoipa::IntoParams;
 
 /// Start an upload
 ///
@@ -25,7 +25,7 @@ use utoipa::IntoParams;
 /// `template-images` any employee, images only; `emails` for any employee, any
 /// file, and the response has the `token` `POST /v1/emails` asks for. Types a
 /// browser runs script in (HTML, SVG, XML, JavaScript) are refused everywhere.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/uploads",
     operation_id = "create_upload",
@@ -241,7 +241,7 @@ pub struct FileQuery {
 /// browser to attach it to an email (the bucket sends no CORS headers).
 /// Other URLs and other file types (SVG included) are refused. The file is
 /// sent as a download that never renders as a page.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/uploads/file",
     operation_id = "fetch_uploaded_file",

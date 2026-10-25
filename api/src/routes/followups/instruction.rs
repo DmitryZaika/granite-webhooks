@@ -7,6 +7,7 @@
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
@@ -14,7 +15,6 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
 use std::sync::LazyLock;
-use utoipa::ToSchema;
 
 /// Reserved `instructions.title` of the rule.
 pub const TITLE: &str = "AI follow-up instruction";
@@ -49,7 +49,7 @@ pub async fn load(pool: &MySqlPool, company_id: i32) -> Result<String, sqlx::Err
 ///
 /// The company's rule for AI-written follow-ups (cadence, tone, what to
 /// mention), as plain text. Empty when none is saved.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/followups/instruction",
     operation_id = "get_followup_instruction",
@@ -74,7 +74,7 @@ pub async fn get(
 ///
 /// Replaces the company's rule with `instruction`, trimmed. An empty (or
 /// blank) instruction deletes it. Answers the saved text.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/followups/instruction",
     operation_id = "save_followup_instruction",

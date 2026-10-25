@@ -8,13 +8,13 @@
 //! `api.aiSummarize.callActivity` route; `tests/call_activity_rules.rs`
 //! compares it with the TypeScript on a corpus of cases.
 
+use crate::openapi::ToSchema;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
 use chrono_tz::America::Indiana::Indianapolis;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use utoipa::ToSchema;
 
 macro_rules! re {
     ($pattern:expr) => {{

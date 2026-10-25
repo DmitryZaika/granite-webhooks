@@ -14,6 +14,7 @@ use crate::auth::session::SessionUser;
 use crate::automation_notice::{self, Snapshot};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::{JsonBody, MultiQuery};
+use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::company::queries::company_features;
 use crate::state::AppState;
 use axum::Json;
@@ -22,7 +23,6 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, MySqlPool};
-use utoipa::{IntoParams, ToSchema};
 
 /// Longest text a template may hold (one SMS body).
 const MAX_BODY: usize = 1600;
@@ -360,7 +360,7 @@ async fn cancel_scheduled(pool: &MySqlPool, template_id: i32, reason: &str) -> A
 /// order (most used first unless they saved a custom order; then company
 /// templates first, by position, newest first). With `scope=company`
 /// (admins): only the company's, with the deal lists drips can start from.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/sms-templates",
     operation_id = "list_sms_templates",
@@ -446,7 +446,7 @@ pub async fn list(
 /// `scope: company` (admins only) makes it the company's, and only a
 /// company template can drip; otherwise it is the caller's own. It goes
 /// last.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/sms-templates",
     operation_id = "create_sms_template",
@@ -518,7 +518,7 @@ pub async fn create(
 /// The caller's own template, or (admins) a company one. Leaving out
 /// `lead_list_id` / `hour_delay` keeps the drip; a template that stops
 /// dripping cancels its pending drip texts.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/sms-templates/{id}",
     operation_id = "update_sms_template",
@@ -583,7 +583,7 @@ pub async fn update(
 ///
 /// The caller's own template, or (admins) a company one; its pending drip
 /// texts are cancelled.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/sms-templates/{id}",
     operation_id = "delete_sms_template",

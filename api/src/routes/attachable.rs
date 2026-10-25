@@ -10,14 +10,14 @@
 use crate::auth::EmployeeUser;
 use crate::error::{ApiResult, ErrorBody};
 use crate::extract::MultiQuery;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::routes::stones::queries::escape_like;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use sqlx::{MySql, QueryBuilder};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -104,7 +104,7 @@ fn push_list(sql: &mut QueryBuilder<MySql>, column: &str, values: &[String]) {
 /// Displayed stones of the company with an image that are regular stock or
 /// have a free slab, by name (at most 200), with their installed photos'
 /// count.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/stones/attachable",
     operation_id = "list_attachable_stones",
@@ -195,7 +195,7 @@ async fn library(
 ///
 /// The company's images by name (at most 200 matching `name`, else the
 /// whole library).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/images",
     operation_id = "list_images",
@@ -223,7 +223,7 @@ pub async fn images(
 ///
 /// The company's documents by name (at most 200 matching `name`, else the
 /// whole library).
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/documents",
     operation_id = "list_documents",

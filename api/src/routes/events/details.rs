@@ -9,6 +9,7 @@ use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::stones::queries::escape_like;
 use crate::routes::uploads::{self, schemas::UploadFolder};
 use crate::state::AppState;
@@ -18,7 +19,6 @@ use axum::http::StatusCode;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::MySqlPool;
-use utoipa::{IntoParams, ToSchema};
 
 const DOCUMENT_EXTENSIONS: [&str; 7] = ["pdf", "doc", "docx", "xls", "xlsx", "csv", "txt"];
 const IMAGE_EXTENSIONS: [&str; 7] = ["jpg", "jpeg", "png", "gif", "webp", "heic", "heif"];
@@ -154,7 +154,7 @@ fn last_segment(url: &str) -> &str {
 /// Get an event's comments, files and history
 ///
 /// Everything the event panel shows besides the event itself, oldest first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/events/{id}/details",
     operation_id = "get_event_details",
@@ -276,7 +276,7 @@ fn viewer(user: &SessionUser) -> &str {
 /// Comment on an event
 ///
 /// Adds a comment signed with the caller's name.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/events/{id}/comments",
     operation_id = "add_event_comment",
@@ -316,7 +316,7 @@ pub async fn add_comment(
 /// Edit my comment
 ///
 /// Only the author can edit a comment.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/events/{id}/comments/{comment_id}",
     operation_id = "edit_event_comment",
@@ -366,7 +366,7 @@ pub async fn edit_comment(
 /// Delete my comment
 ///
 /// Only the author can delete a comment.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/events/{id}/comments/{comment_id}",
     operation_id = "delete_event_comment",
@@ -417,7 +417,7 @@ pub struct PhotosInput {
 /// Post files in an event's comments
 ///
 /// Files already uploaded with `POST /v1/uploads` (folder `events`).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/events/{id}/photos",
     operation_id = "add_event_photos",
@@ -482,7 +482,7 @@ async fn remove_if_unused(state: &AppState, company_id: i32, url: &str) -> Resul
 /// Delete my comment file
 ///
 /// Only the poster can delete it; the stored file goes once nothing uses it.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/events/{id}/photos/{photo_id}",
     operation_id = "delete_event_photo",
@@ -557,7 +557,7 @@ fn attachment_kind(name: &str) -> Option<&'static str> {
 ///
 /// Files already uploaded with `POST /v1/uploads` (folder `events`); the
 /// kind comes from the extension.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/events/{id}/attachments",
     operation_id = "add_event_attachments",
@@ -637,7 +637,7 @@ pub async fn add_attachments(
 /// Remove an attachment
 ///
 /// Any employee may remove one; the stored file goes once nothing uses it.
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/events/{id}/attachments/{attachment_id}",
     operation_id = "delete_event_attachment",
@@ -768,7 +768,7 @@ pub struct FoundEvent {
 ///
 /// The company's events whose title, customer's name, location, description
 /// or notes contain `q`, newest first.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/events/search",
     operation_id = "search_events",

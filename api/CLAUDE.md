@@ -9,7 +9,9 @@ served at `GET /openapi.json`). An endpoint without good descriptions is
 unusable to them. Whenever you add or change an endpoint, a parameter, or a
 response field, in the same change:
 
-1. Annotate the handler with `#[utoipa::path(...)]`: method, full `path`,
+1. Annotate the handler with `#[crate::openapi::path(...)]` (utoipa's
+   `#[utoipa::path]` arguments; utoipa only runs with the `openapi` feature,
+   `make api-openapi`): method, full `path`,
    explicit verb_noun `operation_id`, `tag`, `params`/`request_body`, every
    response status with a description (`body = ErrorBody` for errors), and
    `security(("session_cookie" = []))`. Copy the shape from
@@ -18,14 +20,15 @@ response field, in the same change:
    a one-line imperative summary, a blank line, then what it returns, which
    filters and defaults apply, what is hidden, limits, and which route to
    call next.
-3. Derive `ToSchema` (bodies) / `IntoParams` (query structs) and put a doc
+3. Derive `ToSchema` (bodies) / `IntoParams` (query structs), imported from
+   `crate::openapi`, and put a doc
    comment on every type and field: business meaning, format/units, allowed
    values, when it is null. Don't describe the SQL.
 4. Register the handler with `.routes(routes!(handlers::name))`, never
    `.route(...)`.
 5. Run `make api-openapi` to regenerate `api/openapi.json`, then
-   `cargo test -p api --test it openapi::` (no database needed). Commit the
-   regenerated `openapi.json` with the change.
+   `cargo test -p api --features openapi --test it openapi::` (no database
+   needed). Commit the regenerated `openapi.json` with the change.
 
 If a doc comment you are editing is now wrong because the behavior changed,
 fix it; stale descriptions mislead agents worse than missing ones.

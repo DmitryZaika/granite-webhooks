@@ -166,7 +166,7 @@ async fn check_attachments(
 /// Get a draft
 ///
 /// One of the caller's drafts, to reopen in the compose page.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/emails/drafts/{id}",
     operation_id = "get_email_draft",
@@ -251,7 +251,7 @@ pub async fn get_draft(
 /// Save a new draft
 ///
 /// Stores an unsent email in the caller's Drafts folder.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/emails/drafts",
     operation_id = "create_email_draft",
@@ -303,7 +303,7 @@ pub async fn create_draft(
 ///
 /// Replaces the content, recipients and files of one of the caller's drafts
 /// and moves it to the top of Drafts.
-#[utoipa::path(
+#[crate::openapi::path(
     put,
     path = "/v1/emails/drafts/{id}",
     operation_id = "update_email_draft",
@@ -351,7 +351,7 @@ pub async fn update_draft(
 /// Delete a draft
 ///
 /// Discards one of the caller's drafts (after it was sent, or emptied).
-#[utoipa::path(
+#[crate::openapi::path(
     delete,
     path = "/v1/emails/drafts/{id}",
     operation_id = "delete_email_draft",
