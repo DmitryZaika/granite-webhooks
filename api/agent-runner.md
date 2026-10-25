@@ -45,11 +45,9 @@ question was asked in:
 6. `payload.requester_is_admin` no longer decides anything: the API applies
    the asker's own permissions.
 
-`AGENT_RUNNER_KEY` on the runner is the API's key: the Lambda's own
-`AGENT_RUNNER_KEY` if it has one (32+ characters), otherwise the key the API
-derives from its `SESSION_SECRET` (hex HMAC-SHA256 of `agent-runner-key-v1`;
-the prod Lambda has no room for another setting). Rotating `SESSION_SECRET`
-changes it.
+`AGENT_RUNNER_KEY` is a random string of 32+ characters, set to the same value
+on the API Lambda (dev and prod) and on the runner. While it is unset the API
+issues no tokens.
 
 ## Workspace `CLAUDE.md` for the agent
 
