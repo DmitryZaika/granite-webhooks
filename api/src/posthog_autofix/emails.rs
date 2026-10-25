@@ -75,11 +75,13 @@ pub fn storm_digest(
     top: &[(String, usize)],
     config: &Config,
 ) -> Email {
-    let _ = config;
+    let max_per_day = config.max_per_day;
     let mut html = format!(
         "<h2>PostHog error storm</h2>\
-         <p>{new_issues} new issues in {window_minutes} minutes. None were started; \
-         they stay in the ledger.</p><p><strong>Most frequent:</strong></p><ol>"
+         <p>{new_issues} new issues in {window_minutes} minutes. The storm itself starts \
+         nothing: each issue is still judged on its own once it settles. Noise is \
+         skipped, repeats fold into one run, and at most {max_per_day} runs start a \
+         day.</p><p><strong>Most frequent:</strong></p><ol>"
     );
     for (text, count) in top {
         let _ = write!(
@@ -460,6 +462,15 @@ mod tests {
                 .subject
                 .starts_with("[AI fix] Failed: ")
         );
+    }
+
+    #[test]
+    fn the_storm_digest_says_issues_are_still_judged() {
+        let config = Config::default();
+        let html = storm_digest(25, 30, &[("TypeError: a".into(), 9)], &config).html;
+        assert!(html.contains("each issue is still judged on its own"));
+        assert!(html.contains(&format!("at most {} runs start a day", config.max_per_day)));
+        assert!(!html.contains("None were started"));
     }
 
     #[test]

@@ -172,7 +172,7 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         self.watchdog().await?;
         // PostHog is read once per poll window, however many ticks overlap.
         let poll = policy::window_start(self.now, config.poll_minutes);
-        if ledger::claim_notice(&mut *self.conn, "poll", poll).await? {
+        if ledger::claim_notice(&mut *self.conn, "poll", poll, self.now).await? {
             self.discover().await?;
             self.storm().await?;
             if self.out_of_time() {
@@ -274,7 +274,8 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         Ok(inserted == 0 && issues.len() >= DISCOVER_LIMIT as usize)
     }
 
-    /// One digest email per storm window with more new issues than the threshold.
+    /// One digest email when more new issues than the threshold arrived in
+    /// the last storm window, and none sooner than a window after the last.
     async fn storm(&mut self) -> Result<(), sqlx::Error> {
         let config = self.deps.config;
         let since = self.now - Duration::minutes(config.storm_window_minutes);
@@ -282,8 +283,13 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         if new_issues <= config.storm_threshold {
             return Ok(());
         }
+        // The count slides, so the digest must too: a storm across an aligned
+        // window boundary is still one storm.
+        if ledger::notice_since(&mut *self.conn, "storm", since).await? {
+            return Ok(());
+        }
         let window = policy::window_start(self.now, config.storm_window_minutes);
-        if !ledger::claim_notice(&mut *self.conn, "storm", window).await? {
+        if !ledger::claim_notice(&mut *self.conn, "storm", window, self.now).await? {
             return Ok(());
         }
         let top: Vec<(String, usize)> = ledger::top_groups(&mut *self.conn, since, STORM_TOP)
