@@ -1,6 +1,7 @@
 // Refreshes the manual text in api/src/chat/crm_manual.json from the CRM
 // repo's docs/manual/*.md. The topic table (which keywords pick which
-// sections) lives in the JSON itself; edit it there.
+// sections) lives in the JSON itself; edit it there. Also copies the CRM
+// repo's test cases of the how-to detector (both repos run the same ones).
 // Usage: node scripts/sync-crm-manual.mjs ../general_datebase
 import fs from 'node:fs'
 import path from 'node:path'
@@ -31,3 +32,7 @@ const manual = {
   sections,
 }
 fs.writeFileSync(target, `${JSON.stringify(manual, null, 1)}\n`)
+fs.copyFileSync(
+  path.join(crm, 'app/utils/crmManualHowToCases.json'),
+  new URL('../api/src/chat/crm_manual_how_to_cases.json', import.meta.url),
+)

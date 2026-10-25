@@ -458,6 +458,131 @@ async fn a_non_employees_record_question_gets_no_assistant(pool: MySqlPool) {
     }
 }
 
+const SPECIAL_ORDERS: &str = "
+INSERT INTO instructions (id, title, rich_text, company_id) VALUES
+  (9110, 'Special Orders', '<p>Take a 50% deposit, then order the slabs from the supplier.</p>', 100);
+";
+
+const CLARIFY_QUESTION: &str =
+    "Do you mean how to do this in Granite Manager, or your company's own process?";
+
+/// The model's messages' contents.
+fn contents(request: &Value) -> Vec<String> {
+    request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// "How do I make a special order?" is the app's Other color or the
+/// company's own process: the chat asks instead of guessing.
+async fn asked_back(server: &TestServer, pool: &MySqlPool, ai: &OpenAi) {
+    let events = ask(
+        server,
+        json!({ "query": "how do I make a special order?", "isNew": true }),
+    )
+    .await;
+    assert_eq!(answer(&events), CLARIFY_QUESTION);
+    let choices: Value = serde_json::from_str(named(&events, "clarify")[0]).unwrap();
+    assert_eq!(
+        choices,
+        json!([
+            { "label": "In Granite Manager", "source": "manual" },
+            { "label": "Our company's process", "source": "company" },
+        ])
+    );
+    assert!(ai.requests.lock().unwrap().is_empty());
+    let saved = history(pool).await;
+    assert_eq!(
+        saved.last().unwrap()["content"],
+        format!("{CLARIFY_QUESTION}\n\n[[CLARIFY:how do I make a special order?]]")
+    );
+}
+
+#[test_db::test(seed)]
+async fn picking_granite_manager_answers_the_question_from_the_manual(pool: MySqlPool) {
+    sqlx::raw_sql(SPECIAL_ORDERS).execute(&pool).await.unwrap();
+    let reply = "Open the quote, click **Edit drawing** and type the color. [[INSTRUCTION:none]]";
+    let (server, ai) = setup(&pool, vec![Reply::Text(reply.into())]).await;
+    asked_back(&server, &pool, &ai).await;
+
+    let events = ask(
+        &server,
+        json!({ "query": "In Granite Manager", "isNew": false }),
+    )
+    .await;
+
+    assert_eq!(answer(&events), reply);
+    assert!(named(&events, "clarify").is_empty());
+    assert!(named(&events, "instructions").is_empty());
+    let request = ai.requests.lock().unwrap()[0].clone();
+    let sent = contents(&request);
+    assert!(sent.iter().any(|c| c.contains("CRM USER MANUAL:")
+        && c.contains("#### Other color (a color not in the price list)")));
+    assert!(
+        sent.iter()
+            .all(|c| !c.contains("Here are the instructions you can use"))
+    );
+    assert!(sent.iter().all(|c| !c.contains("[[CLARIFY:")));
+    assert!(sent.last().unwrap().contains(
+        "Question: how do I make a special order? (I mean how to do this in Granite Manager.)"
+    ));
+}
+
+#[test_db::test(seed)]
+async fn picking_the_company_s_process_answers_it_from_the_instructions(pool: MySqlPool) {
+    sqlx::raw_sql(SPECIAL_ORDERS).execute(&pool).await.unwrap();
+    let reply = "Take a **50%** deposit, then order the slabs. [[INSTRUCTION:1]]";
+    let (server, ai) = setup(&pool, vec![Reply::Text(reply.into())]).await;
+    asked_back(&server, &pool, &ai).await;
+
+    let events = ask(&server, json!({ "query": "company", "isNew": false })).await;
+
+    assert_eq!(answer(&events), reply);
+    let used: Value = serde_json::from_str(named(&events, "instructions")[0]).unwrap();
+    assert_eq!(used, json!([{ "id": 9110, "title": "Special Orders" }]));
+    let request = ai.requests.lock().unwrap()[0].clone();
+    let sent = contents(&request);
+    assert!(sent.iter().any(|c| c.contains("TITLE: Special Orders")));
+    assert!(sent.iter().all(|c| !c.contains("CRM USER MANUAL:")));
+    assert!(sent.last().unwrap().contains(
+        "Question: how do I make a special order? (I mean our company's own process, not how to use Granite Manager.)"
+    ));
+    // The clarification gave way to the question in the saved conversation.
+    let saved = history(&pool).await;
+    assert!(
+        saved
+            .iter()
+            .all(|m| !m["content"].as_str().unwrap().contains("[[CLARIFY:"))
+    );
+}
+
+#[test_db::test(seed)]
+async fn a_special_order_in_a_quote_goes_to_the_manual_without_asking(pool: MySqlPool) {
+    sqlx::raw_sql(SPECIAL_ORDERS).execute(&pool).await.unwrap();
+    let reply =
+        "Open the quote, click **Edit drawing**, go to **Color & Edge**. [[INSTRUCTION:none]]";
+    let (server, ai) = setup(&pool, vec![Reply::Text(reply.into())]).await;
+
+    let events = ask(
+        &server,
+        json!({ "query": "how to make a special order in quote", "isNew": true }),
+    )
+    .await;
+
+    assert_eq!(answer(&events), reply);
+    assert!(named(&events, "clarify").is_empty());
+    assert!(named(&events, "instructions").is_empty());
+    let request = ai.requests.lock().unwrap()[0].clone();
+    assert!(
+        contents(&request)
+            .iter()
+            .any(|c| c.contains("#### Other color (a color not in the price list)"))
+    );
+}
+
 /// Admins and super admins who are not marked employees keep the assistant.
 #[test_db::test(seed)]
 async fn admins_keep_the_assistant(pool: MySqlPool) {

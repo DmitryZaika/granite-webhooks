@@ -724,10 +724,33 @@ fn source_marker() -> &'static regex::Regex {
     re!(r"\[+\s*SOURCE\s*[:#-]?\s*([^\]]*?)\s*\]+", "i")
 }
 
+fn clarify_marker() -> &'static regex::Regex {
+    re!(r"\[\[CLARIFY:([^\]]*)\]\]", "i")
+}
+
+/// A clarifying question as saved in the history: `[[CLARIFY:…]]` keeps the
+/// question it asks about, for the reply that picks a source.
+pub fn with_clarify_marker(text: &str, question: &str) -> String {
+    let question = question.replace(['[', ']'], " ");
+    format!("{text}\n\n[[CLARIFY:{}]]", trim(&question))
+}
+
+/// The question a saved clarifying question asks about.
+pub fn parse_clarify_marker(text: &str) -> Option<String> {
+    first_capture(clarify_marker(), text)
+        .map(|question| trim(&question).to_string())
+        .filter(|question| !question.is_empty())
+}
+
+pub fn strip_clarify_marker(text: &str) -> String {
+    trim(&clarify_marker().replace_all(text, "")).to_string()
+}
+
 /// `stripChatResponseMarkersTrimmed`: the answer as the user reads it.
 pub fn strip_markers(text: &str) -> String {
     let text = re!(r"\[+\s*SOURCE\s*[:#-]?\s*[^\]]*?\s*\]+", "gi").replace_all(text, "");
     let text = re!(r"\[\[INSTRUCTION:[^\]]*\]\]", "gi").replace_all(&text, "");
+    let text = strip_clarify_marker(&text);
     let text = strip_special_order_marker(&text);
     let text = strip_thickness_options_marker(&text);
     let text = strip_slab_size_options_marker(&text);

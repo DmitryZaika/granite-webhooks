@@ -5,7 +5,8 @@
 //! unnamed `message` pieces of the answer ending with `[DONE]`, `replace`
 //! (drop the answer so far), and JSON events `instructions`, `sources`,
 //! `images`, `actions`, `trace`, `thicknessOptions`, `slabSizeOptions`,
-//! `priceListOptions`, `specialOrderOffer`.
+//! `priceListOptions`, `specialOrderOffer`, `clarify` (the choices of a
+//! question back: the app or the company's own process).
 //!
 //! An answer can take longer than API Gateway allows: the browser calls this
 //! on the streaming Function URL (`LAMBDA_RESPONSE_STREAMING=1`).
