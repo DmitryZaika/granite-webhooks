@@ -1,7 +1,7 @@
 //! `POST /v1/ai/crm-manual-feedback`: corrections of CRM manual answers and
 //! the feedback saved for the super admins.
 
-mod common;
+use crate::common;
 
 use api::ai::Ai;
 use api::app;

@@ -1,7 +1,7 @@
 //! Agent tokens: the claude-job-runner's agent reads the API as the person who
 //! asked, read-only, in the one company the question was asked in.
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::auth::agent::{Claims, issue};

@@ -2,8 +2,6 @@
 //! `fixtures/followups/gather.sql`. Expected values are the CRM's
 //! `gatherFollowupContext` on the same data (server in UTC).
 
-mod common;
-
 use api::followups::dates::parse_iso;
 use api::followups::gather::{FollowupRequest, gather_followup_context};
 use api::followups::send_window::FollowupChannel;

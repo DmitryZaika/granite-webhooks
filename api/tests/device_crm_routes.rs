@@ -6,8 +6,8 @@
 //!
 //! Fixture phones use n = 301..=310; events 9750+.
 
-mod common;
-mod phone_common;
+use crate::common;
+use crate::phone_common;
 
 use axum::http::StatusCode;
 use common::{WithSession, sessions};

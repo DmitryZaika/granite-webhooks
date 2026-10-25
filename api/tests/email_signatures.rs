@@ -2,7 +2,7 @@
 //! `signature_requests`), against stand-ins for `SignWell` and the
 //! `webhooks` Lambda.
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::routes::emails::attachment_token;

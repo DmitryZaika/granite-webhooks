@@ -70,7 +70,7 @@
           "items": { "type": "string", "maxLength": 300 }
         },
         "command": {
-          "description": "Exactly `bunx vitest run <test files>` or `cargo test -p <crate> [--test <file>] <filter>`. null without a test.",
+          "description": "Exactly `bunx vitest run <test files>` or `cargo test -p <crate> [--test <target>] <filter>` (an `api/tests/<file>.rs` test: `cargo test -p api --test it <file>::<test name>`). null without a test.",
           "type": ["string", "null"],
           "maxLength": 500
         },

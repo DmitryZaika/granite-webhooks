@@ -5,8 +5,7 @@
 //!
 //! Fixture phones use n = 61..=80; numbers 9861+; calls 980950+.
 
-mod common;
-mod phone_common;
+use crate::phone_common;
 
 use phone_common::{
     HEADER, add_call, add_number, add_phone, assign, enable_calling, phone_server, post_texml,

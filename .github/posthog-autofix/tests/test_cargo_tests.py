@@ -110,6 +110,7 @@ class TargetTest(unittest.TestCase):
             "     Running unittests src/main.rs (target/debug/deps/api-2)": BINS,
             "     Running unittests src/bin/tool.rs (target/debug/deps/tool-3)": BINS,
             "     Running tests/openapi.rs (target/debug/deps/openapi-4)": OPENAPI,
+            "     Running tests/it.rs (target/debug/deps/it-7)": Target(("--test", "it")),
             "     Running tests/flows/main.rs (target/debug/deps/flows-5)": Target(
                 ("--test", "flows")
             ),

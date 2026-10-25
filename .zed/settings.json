@@ -1,0 +1,15 @@
+// Zed settings for this repository (merged over the user's settings).
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        // rust-analyzer builds in target/rust-analyzer: a check on save never
+        // holds the cargo lock or rebuilds artifacts of the terminal's cargo.
+        "cargo": { "targetDir": true },
+        // Check on save only the libraries and binaries, not the test targets
+        // (their rustc errors show up in `cargo test`).
+        "check": { "allTargets": false }
+      }
+    }
+  }
+}

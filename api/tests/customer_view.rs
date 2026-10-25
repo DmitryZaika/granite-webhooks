@@ -1,7 +1,7 @@
 //! A customer's own page: unlocked by an emailed one-time code (by page or
 //! by the account's email), then their projects and invoices.
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::auth::cookie::{cookie_value, decode_session_map, encode_plain, encode_session_map};

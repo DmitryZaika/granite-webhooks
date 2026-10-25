@@ -24,7 +24,7 @@ response field, in the same change:
 4. Register the handler with `.routes(routes!(handlers::name))`, never
    `.route(...)`.
 5. Run `make api-openapi` to regenerate `api/openapi.json`, then
-   `cargo test -p api --test openapi` (no database needed). Commit the
+   `cargo test -p api --test it openapi::` (no database needed). Commit the
    regenerated `openapi.json` with the change.
 
 If a doc comment you are editing is now wrong because the behavior changed,

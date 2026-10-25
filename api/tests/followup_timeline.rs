@@ -1,7 +1,7 @@
 //! `GET /v1/followups/timeline`: the conversation the AI follow-up writer
 //! reads (seed plus `fixtures/followups/gather.sql`).
 
-mod common;
+use crate::common;
 
 use axum::http::StatusCode;
 use common::{WithSession, server, sessions};

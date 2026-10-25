@@ -10,8 +10,8 @@
 //! of Acme without the Manager position. Number `...0199` is one Telnyx
 //! refuses to assign.
 
-mod common;
-mod phone_common;
+use crate::common;
+use crate::phone_common;
 
 use api::app;
 use api::auth::cookie::SessionData;

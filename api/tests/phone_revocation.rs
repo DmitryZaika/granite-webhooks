@@ -5,8 +5,8 @@
 //!
 //! Fixture phones use n = 151..=170.
 
-mod common;
-mod phone_common;
+use crate::common;
+use crate::phone_common;
 
 use api::auth::device::token_hash;
 use axum::http::StatusCode;

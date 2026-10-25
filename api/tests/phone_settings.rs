@@ -4,8 +4,8 @@
 //!
 //! Fixture phones use n = 21..=40; numbers 9710+.
 
-mod common;
-mod phone_common;
+use crate::common;
+use crate::phone_common;
 
 use api::phone::clock::time_zone;
 use axum::http::{Method, StatusCode};

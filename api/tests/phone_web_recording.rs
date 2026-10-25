@@ -4,8 +4,8 @@
 //! TeXML app answered, and when it is refused. Telnyx is a stand-in that
 //! keeps every request, form bodies included.
 
-mod common;
-mod phone_common;
+use crate::common;
+use crate::phone_common;
 
 use api::app;
 use api::telnyx::Telnyx;

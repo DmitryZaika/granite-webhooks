@@ -1,7 +1,7 @@
 //! `POST /v1/ai/chat`: answers streamed as server-sent events, against an
 //! `OpenAI` stand-in that streams (`stream: true`) or calls tools.
 
-mod common;
+use crate::common;
 
 use api::ai::Ai;
 use api::app;

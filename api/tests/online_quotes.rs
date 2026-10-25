@@ -1,7 +1,7 @@
 //! The online quote builder: what it offers, its prices, and a sent quote
 //! (the quote, the lead, the email and the team's Telegram or email).
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::state::AppState;

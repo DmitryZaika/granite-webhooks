@@ -1,6 +1,6 @@
 //! Quote price lists and the extras catalog (Admin > Quotes).
 
-mod common;
+use crate::common;
 
 use axum::http::StatusCode;
 use common::{WithSession, server, sessions};

@@ -131,7 +131,7 @@ Test discipline:
 - Reproduce the behaviour the issue reports, not a nearby mechanism you happened to notice.
 - Follow the repository's existing test style and helpers. Rust:
   - unit tests sit in `#[cfg(test)] mod tests` beside the code;
-  - `api` integration tests live in `api/tests/<domain>.rs`, using `#[test_db::test]` or `#[test_db::test(seed)]` (fresh database, seed data from `api/seed/local_seed.sql`) and the helpers in `api/tests/common/mod.rs`;
+  - `api` integration tests live in `api/tests/<domain>.rs`, each a module of the one test binary `it` (list a new file in `api/tests/it.rs`), using `#[test_db::test]` or `#[test_db::test(seed)]` (fresh database, seed data from `api/seed/local_seed.sql`) and the helpers in `api/tests/common/mod.rs`;
   - `webhooks` test helpers live in `webhooks/src/tests/`.
 
   TypeScript:
@@ -171,7 +171,7 @@ End with the structured result that the schema describes. That result is your en
 - `root_cause`: why it happens, with file paths and line references, and the evidence from the events that supports it.
 - `fix_summary` and `risk`: what changed and what it could affect. Use empty strings when there is no fix.
 - `test`:
-  - `files` and `command` when you wrote a test. The command must be exactly `bunx vitest run <test files>`, or `cargo test -p <crate> <filter>` (add `--test <file>` for an `api/tests/<file>.rs` test). Run it from the target repository's root.
+  - `files` and `command` when you wrote a test. The command must be exactly `bunx vitest run <test files>`, or `cargo test -p <crate> <filter>` (for an `api/tests/<file>.rs` test: `cargo test -p api --test it <file>::<test name>`). Run it from the target repository's root.
   - `manual_test_steps` for every fix: numbered steps a reviewer follows to see the fix in the app.
   - `why_not_possible` for `fixed_without_test`.
   - `status: not_applicable` with nulls when there is no fix.

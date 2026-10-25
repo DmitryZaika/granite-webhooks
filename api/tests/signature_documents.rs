@@ -1,7 +1,7 @@
 //! Signed documents opened in a browser tab: native documents from the
 //! private signature bucket, and `SignWell` signed PDFs.
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::state::AppState;

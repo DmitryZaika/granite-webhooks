@@ -1,6 +1,6 @@
 //! `POST /v1/ai/first-contact-email` against an `OpenAI` stand-in.
 
-mod common;
+use crate::common;
 
 use api::ai::Ai;
 use api::app;

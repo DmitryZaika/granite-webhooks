@@ -4,7 +4,7 @@
 //! Fixture device sessions use ids 900100+ and phone devices 900200+; their
 //! tokens are 43 digits (`token(n)`), stored as their SHA-256 like real ones.
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::auth::device::token_hash;

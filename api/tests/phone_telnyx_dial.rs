@@ -6,8 +6,7 @@
 //!
 //! Fixture phones use n = 21..=40; numbers 9821+; customers 930001+.
 
-mod common;
-mod phone_common;
+use crate::phone_common;
 
 use api::phone::PhoneConfig;
 use axum::http::StatusCode;

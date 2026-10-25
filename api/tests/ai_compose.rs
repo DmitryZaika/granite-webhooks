@@ -1,7 +1,7 @@
 //! The composer's inline autocomplete (`/v1/ai/compose/*`) against an
 //! `OpenAI` stand-in.
 
-mod common;
+use crate::common;
 
 use api::ai::Ai;
 use api::app;

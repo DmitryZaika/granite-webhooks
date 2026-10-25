@@ -1,7 +1,7 @@
 //! Documents sent for signature: the sender's list, the company's list for
 //! admins, and cancelling (deleted at `SignWell`, revoked when native).
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::state::AppState;

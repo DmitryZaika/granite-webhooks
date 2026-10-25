@@ -1,6 +1,6 @@
 //! Commissions on signed quotes: rules, settings, the sync and payroll.
 
-mod common;
+use crate::common;
 
 use axum::http::StatusCode;
 use common::{WithSession, server, sessions};

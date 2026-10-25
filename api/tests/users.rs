@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use api::auth::cookie::SessionData;
 use common::{WithSession, cookie_for, ids, server, sessions};

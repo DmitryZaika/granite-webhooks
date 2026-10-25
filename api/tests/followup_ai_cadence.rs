@@ -2,7 +2,7 @@
 //! or switch to it (`/v1/followups/ai-cadence*`), against an `OpenAI`
 //! stand-in.
 
-mod common;
+use crate::common;
 
 use api::ai::Ai;
 use api::app;

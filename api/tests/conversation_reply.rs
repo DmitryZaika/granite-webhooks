@@ -2,7 +2,7 @@
 //! conversation the follow-up writer reads (seed plus
 //! `fixtures/followups/gather.sql`).
 
-mod common;
+use crate::common;
 
 use api::ai::Ai;
 use api::app;

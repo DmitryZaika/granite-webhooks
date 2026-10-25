@@ -76,3 +76,25 @@ pub fn ids(rows: &serde_json::Value) -> Vec<i64> {
         .map(|row| row["id"].as_i64().expect("row id"))
         .collect()
 }
+
+/// Native signing verified for company 100
+/// (`SIGNATURE_VERIFIED_COMPANY_SETTINGS`), for the signing tests. No test
+/// needs it unset, so it stays set for the rest of the process.
+pub fn verified_signature_settings() {
+    static SETTINGS: std::sync::Once = std::sync::Once::new();
+    SETTINGS.call_once(|| {
+        let settings = serde_json::json!({ "100": {
+            "verifiedAt": "2026-10-01T00:00:00Z",
+            "evidenceReference": "ticket-1",
+            "settings": {
+                "parityVerified": true, "timezone": "America/Indiana/Indianapolis", "signatureMethods": ["type", "draw"],
+                "allowDecline": true, "allowReassign": false, "authentication": "invitation", "reminders": false,
+                "expiresInDays": 30, "notifications": { "viewed": false, "completed": false, "declined": false },
+                "auditPage": true
+            }
+        }});
+        // SAFETY: set once per process, to the same value whichever test gets
+        // here first; the API reads it only through `std::env::var`.
+        unsafe { std::env::set_var("SIGNATURE_VERIFIED_COMPANY_SETTINGS", settings.to_string()) };
+    });
+}

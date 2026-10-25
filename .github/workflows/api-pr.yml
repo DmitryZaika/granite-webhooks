@@ -9,7 +9,10 @@ name: API tests
 #
 # On demand from any branch, with optional cargo test arguments in place of the
 # fixed suites below:
-#   gh workflow run "API tests" --ref <branch> [-f cargo_args="-p api --test sms_flows"]
+#   gh workflow run "API tests" --ref <branch> [-f cargo_args="-p api --test it sms_flows::"]
+#
+# Every integration test file of api is a module of one test binary, `it`
+# (api/tests/it.rs); a filter `<file>::` selects one file's tests.
 on:
   pull_request:
     branches: [main]
@@ -66,46 +69,49 @@ jobs:
 
       - name: OpenAPI checks
         if: inputs.cargo_args == ''
-        run: cargo test -p api --test openapi
+        run: cargo test -p api --test it -- openapi::
 
       - name: Granite Phone tests
         if: inputs.cargo_args == ''
         run: >-
-          cargo test -p api
-          --test phone_admin
-          --test phone_auth
-          --test phone_bootstrap
-          --test phone_calls
-          --test phone_contacts
-          --test phone_devices
-          --test phone_email_push
-          --test phone_jobs
-          --test phone_revocation
-          --test phone_settings
-          --test phone_telnyx_dial
-          --test phone_telnyx_inbound
-          --test phone_telnyx_outbound
-          --test phone_telnyx_recording
-          --test phone_telnyx_via_cell
-          --test telnyx_10dlc
-          --test phone_porting
-          --test telnyx_sms
-          --test phone_texts
-          --test phone_web
-          --test phone_web_recording
-          --test telnyx_calls
-          --test server_errors
+          cargo test -p api --test it --
+          phone_admin::
+          phone_auth::
+          phone_bootstrap::
+          phone_calls::
+          phone_contacts::
+          phone_devices::
+          phone_email_push::
+          phone_jobs::
+          phone_revocation::
+          phone_settings::
+          phone_telnyx_dial::
+          phone_telnyx_inbound::
+          phone_telnyx_outbound::
+          phone_telnyx_recording::
+          phone_telnyx_via_cell::
+          telnyx_10dlc::
+          phone_porting::
+          telnyx_sms::
+          phone_texts::
+          phone_web::
+          phone_web_recording::
+          telnyx_calls::
+
+      - name: Server error reports
+        if: inputs.cargo_args == ''
+        run: cargo test -p api --test server_errors
 
       - name: Follow-up tests
         if: inputs.cargo_args == ''
         run: >-
-          cargo test -p api
-          --test followup_flows
-          --test followup_ai_cadence
-          --test followup_generation
-          --test followup_instruction
-          --test followup_settings
-          --test sms_flows
+          cargo test -p api --test it --
+          followup_flows::
+          followup_ai_cadence::
+          followup_generation::
+          followup_instruction::
+          followup_settings::
+          sms_flows::
 
       - name: Requested tests
         if: inputs.cargo_args != ''

@@ -146,10 +146,12 @@ api-test: api-db-up
 # Regenerates api/openapi.json from the route annotations (no database needed).
 .PHONY: api-openapi
 api-openapi:
-	UPDATE_OPENAPI=1 cargo test -p api --test openapi spec_file_is_current
+	UPDATE_OPENAPI=1 cargo test -p api --test it openapi::spec_file_is_current
 
 # Serves http://localhost:9100/lambda-url/api/... through the Lambda runtime emulator.
+# A dev build, not --release: an edit rebuilds in seconds, not minutes (the
+# image and PDF crates are optimized in the dev profile too, see Cargo.toml).
 .PHONY: api-local
 api-local:
 	test -f api/.env.local || cp api/.env.local.example api/.env.local
-	$(WATCH_BASE) -p api --bin api -P 9100 --env-file api/.env.local
+	$(CARGO_LAMBDA) lambda watch -p api --bin api -P 9100 --env-file api/.env.local

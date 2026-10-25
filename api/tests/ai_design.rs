@@ -1,7 +1,7 @@
 //! `GET /v1/ai/design/pictures` and `GET /v1/ai/design/deals`: what the
 //! chat's AI design tool picks from.
 
-mod common;
+use crate::common;
 
 use axum::http::StatusCode;
 use common::{WithSession, server, sessions};

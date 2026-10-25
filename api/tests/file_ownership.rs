@@ -4,7 +4,7 @@
 //! file, and every route that deletes or overwrites a file must leave other
 //! companies' files (and older keys that name no company) alone.
 
-mod common;
+use crate::common;
 
 use api::auth::cookie::SessionData;
 use api::routes::emails::attachment_token;

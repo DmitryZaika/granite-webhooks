@@ -9,8 +9,8 @@
 //! (102). Alice (1000) is 317-555-0100; Bob (1001) is 317-555-0102 with deal
 //! 8001 on the first list ("New").
 
-mod common;
-mod phone_common;
+use crate::common;
+use crate::phone_common;
 
 use api::app;
 use api::state::AppState;

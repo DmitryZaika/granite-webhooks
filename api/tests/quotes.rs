@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::{WithSession, server, sessions};
 use serde_json::{Value, json};

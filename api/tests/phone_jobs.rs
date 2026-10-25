@@ -5,8 +5,7 @@
 //!
 //! Fixture phones use n = 131..=150; calls 981000+; customers 931000+.
 
-mod common;
-mod phone_common;
+use crate::phone_common;
 
 use api::ai::Ai;
 use api::app;

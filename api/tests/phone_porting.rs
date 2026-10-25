@@ -9,8 +9,8 @@
 //! `...0102` split into its own order, `...0999` not portable, `...0998`
 //! refused by Telnyx at creation.
 
-mod common;
-mod phone_common;
+use crate::common;
+use crate::phone_common;
 
 use api::app;
 use api::phone::PhoneConfig;

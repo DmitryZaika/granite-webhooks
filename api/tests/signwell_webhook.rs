@@ -1,7 +1,7 @@
 //! `SignWell`'s webhook: the request's status moves forward, the sender is
 //! told, and a signed contract sells its quote at the option's price.
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::routes::signwell_webhook::event_hash;

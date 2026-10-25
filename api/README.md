@@ -584,7 +584,7 @@ deploy the API, then `time-triggered` (it calls the job).
 Tests: `api/tests/phone_*.rs`, one area per file, with shared fixtures and one
 stand-in for Telnyx, FCM, AssemblyAI and OpenAI in `tests/phone_common/`. With
 the local MySQL up (`make api-db-up`), run a file at a time, e.g.
-`cargo test -p api --test phone_jobs`. `.github/workflows/api-pr.yml` runs
+`cargo test -p api --test it phone_jobs::`. `.github/workflows/api-pr.yml` runs
 them all and the OpenAPI checks on every pull request to main.
 
 ## Dev environment

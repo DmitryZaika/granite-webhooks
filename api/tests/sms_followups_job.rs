@@ -1,7 +1,7 @@
 //! `POST /v1/jobs/sms-followups`: lead-list drip texts and everyone's
 //! scheduled messages (the flow steps it also sends: `followup_flows.rs`).
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::state::AppState;

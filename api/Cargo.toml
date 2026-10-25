@@ -2,13 +2,34 @@
 name = "api"
 version = "0.1.0"
 edition = "2024"
+# The integration tests are modules of one binary (tests/it.rs): after a change
+# in src/, cargo links it once instead of one binary per test file.
+autotests = false
 
 [lib]
 path = "src/lib.rs"
+# No doc tests; rustdoc would still compile the whole crate looking for them.
+doctest = false
 
 [[bin]]
 name = "api"
 path = "src/main.rs"
+test = false
+
+[[example]]
+name = "sign_session"
+path = "examples/sign_session.rs"
+test = false
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+# Sets the PostHog variables for its whole process, so it gets a process of
+# its own: every other test's server errors would reach its stand-in.
+[[test]]
+name = "server_errors"
+path = "tests/server_errors.rs"
 
 [dependencies]
 ammonia = "4.1"

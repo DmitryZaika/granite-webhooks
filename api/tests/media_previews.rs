@@ -1,7 +1,7 @@
 //! Pictures made for the browser: PDF first pages, email attachments (HEIC
 //! too) and files picked for a text.
 
-mod common;
+use crate::common;
 
 use api::storage::{MEMORY_PUBLIC_BASE, Storage};
 use axum::http::StatusCode;

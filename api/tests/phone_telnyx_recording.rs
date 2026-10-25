@@ -5,8 +5,7 @@
 //!
 //! Fixture calls use ids 980900+.
 
-mod common;
-mod phone_common;
+use crate::phone_common;
 
 use api::phone::PhoneConfig;
 use api::phone::recordings::{self, CopyOutcome, RecordingKind};

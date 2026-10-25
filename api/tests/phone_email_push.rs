@@ -5,8 +5,7 @@
 //! phone 1) has unread customer mail 8802 in thread T1. Rita (100, phone 2)
 //! is of Acme (100), which has no inbound email.
 
-mod common;
-mod phone_common;
+use crate::phone_common;
 
 use axum::http::StatusCode;
 use axum_test::TestServer;

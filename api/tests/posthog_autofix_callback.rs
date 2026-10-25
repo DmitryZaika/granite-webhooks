@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use api::app;
 use api::posthog_autofix::{Autofix, Config};

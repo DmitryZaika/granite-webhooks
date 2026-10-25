@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use api::storage;
 use axum::http::StatusCode;

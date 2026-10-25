@@ -3,8 +3,7 @@
 //!
 //! Fixture phones use n = 61..=80; numbers 9730+; calls 980200+.
 
-mod common;
-mod phone_common;
+use crate::phone_common;
 
 use api::phone::PhoneConfig;
 use axum::http::Method;

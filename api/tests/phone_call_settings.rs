@@ -7,8 +7,7 @@
 //!
 //! Fixture phones use n = 41..=60; numbers 9851+.
 
-mod common;
-mod phone_common;
+use crate::phone_common;
 
 use api::storage::MEMORY_PUBLIC_BASE;
 use axum::http::{Method, StatusCode};

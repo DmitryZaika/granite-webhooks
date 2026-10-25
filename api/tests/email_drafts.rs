@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use api::routes::emails::attachment_token;
 use axum::http::StatusCode;

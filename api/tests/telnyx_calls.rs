@@ -7,8 +7,8 @@
 //!
 //! Fixture numbers 9761+; calls 982000+; customers 932000+, deals 932100+.
 
-mod common;
-mod phone_common;
+use crate::common;
+use crate::phone_common;
 
 use api::app;
 use api::phone::call_log::{self, Ended};

@@ -1,7 +1,7 @@
 //! One quote: creating it, the page and the editor, selling, emailing, and
 //! the customer's link.
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::state::AppState;

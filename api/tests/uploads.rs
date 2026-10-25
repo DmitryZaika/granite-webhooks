@@ -3,7 +3,7 @@
 //! `GET /v1/uploads/file` or `GET /v1/stones/image-proxy`, and whatever is
 //! handed back cannot render as a page of the API's origin.
 
-mod common;
+use crate::common;
 
 use api::storage::MEMORY_PUBLIC_BASE;
 use axum::http::StatusCode;

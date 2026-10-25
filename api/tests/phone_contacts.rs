@@ -5,8 +5,7 @@
 //! Fixture phones use n = 41..=60; numbers 9720+; customers 930000+; calls
 //! 980100+.
 
-mod common;
-mod phone_common;
+use crate::phone_common;
 
 use axum::http::{Method, StatusCode};
 use chrono::Utc;

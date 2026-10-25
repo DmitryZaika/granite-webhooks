@@ -17,6 +17,11 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# Proc macros (serde, sqlx, utoipa) and build scripts, optimized: they run on
+# every rebuild of the crates that use them.
+[profile.dev.build-override]
+opt-level = 3
+
 # Image and PDF decoding are many times slower unoptimized; keep tests fast.
 [profile.dev.package.zune-heic]
 opt-level = 3

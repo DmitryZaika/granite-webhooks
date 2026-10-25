@@ -7,8 +7,8 @@
 //! (9703) is Ada's (102, phone 3). Alice (1000) is 317-555-0100, Bob (1001)
 //! 317-555-0102, Carol (1002) 317-555-0103.
 
-mod common;
-mod phone_common;
+use crate::common;
+use crate::phone_common;
 
 use api::telnyx::Telnyx;
 use axum::Json;

@@ -1,7 +1,7 @@
 //! `POST /v1/jobs/signature-reminders`: native e-signature expiry, reminders
 //! and notifications (the CRM's `nativeSignatureReminders.mysql.test.ts`).
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::native_signing::{MailReceipt, MailSnapshot, NativeSigning, sha256_hex};

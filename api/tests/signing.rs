@@ -2,7 +2,7 @@
 //! reviewed, signed (the signed copy stored privately and mailed to the
 //! signer) or declined; `SignWell` documents get their embedded link.
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::native_signing::NativeSigning;
@@ -20,7 +20,7 @@ use base64::engine::general_purpose::STANDARD;
 use common::{ALLOWED_ORIGIN, SECRET, WithSession, sessions};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 
 const FIXTURE: &str = "
 UPDATE users SET is_signature_available = 1 WHERE id = 100;
@@ -31,25 +31,6 @@ const INVITATION_SECRET: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ";
 const SESSION_SECRET: &str = "session-secret-session-secret-0123456789";
 const ORIGIN: &str = "https://sign.acme.test";
 const SIGNWELL_DOC: &str = "5f0e7a8b-1c2d-4e3f-9a0b-1c2d3e4f5a6b";
-
-static SETTINGS: Once = Once::new();
-
-fn verified_settings() {
-    SETTINGS.call_once(|| {
-        let settings = json!({ "100": {
-            "verifiedAt": "2026-10-01T00:00:00Z",
-            "evidenceReference": "ticket-1",
-            "settings": {
-                "parityVerified": true, "timezone": "America/Indiana/Indianapolis", "signatureMethods": ["type", "draw"],
-                "allowDecline": true, "allowReassign": false, "authentication": "invitation", "reminders": false,
-                "expiresInDays": 30, "notifications": { "viewed": false, "completed": false, "declined": false },
-                "auditPage": true
-            }
-        }});
-        // SAFETY: set once, before any test of this binary reads it.
-        unsafe { std::env::set_var("SIGNATURE_VERIFIED_COMPANY_SETTINGS", settings.to_string()) };
-    });
-}
 
 #[derive(Clone, Default)]
 struct Fakes {
@@ -78,7 +59,7 @@ struct Setup {
 }
 
 async fn setup(pool: &MySqlPool) -> Setup {
-    verified_settings();
+    common::verified_signature_settings();
     sqlx::raw_sql(FIXTURE).execute(pool).await.unwrap();
     let fakes = Fakes::default();
     let router = Router::new()

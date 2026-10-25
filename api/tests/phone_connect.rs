@@ -4,8 +4,8 @@
 //!
 //! Fixture numbers 9951+.
 
-mod common;
-mod phone_common;
+use crate::common;
+use crate::phone_common;
 
 use axum::http::StatusCode;
 use common::{WithSession, sessions};

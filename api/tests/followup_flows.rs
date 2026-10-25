@@ -2,7 +2,7 @@
 //! customer and thread flow routes, against stand-ins for the `webhooks`
 //! Lambda (texts and mail), `CloudTalk` (calls) and `OpenAI`.
 
-mod common;
+use crate::common;
 
 use api::ai::Ai;
 use api::app;

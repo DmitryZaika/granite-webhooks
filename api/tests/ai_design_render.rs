@@ -2,7 +2,7 @@
 //! /v1/ai/design`, against `OpenAI` stand-ins for the slab description and
 //! the image edit.
 
-mod common;
+use crate::common;
 
 use api::ai::Ai;
 use api::app;

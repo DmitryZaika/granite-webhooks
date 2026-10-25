@@ -1,6 +1,6 @@
 //! Printed quote and contract forms (Admin > Quotes > Forms).
 
-mod common;
+use crate::common;
 
 use axum::http::StatusCode;
 use common::{WithSession, server, server_with_storage, sessions};

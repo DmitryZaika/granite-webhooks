@@ -3,8 +3,7 @@
 //!
 //! Fixture phones use n = 1..=20 (sessions 950001+, devices 960001+).
 
-mod common;
-mod phone_common;
+use crate::phone_common;
 
 use axum::http::{Method, StatusCode};
 use chrono::{DateTime, Duration, Utc};

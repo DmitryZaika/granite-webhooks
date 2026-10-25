@@ -1,7 +1,7 @@
 //! `POST /v1/followups/call-check`: after a rep's outbound call, whether the
 //! customer talked back (and their running flows stop).
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::state::AppState;

@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use api::auth::cookie::{SessionData, encode_session};
 use axum::http::StatusCode;

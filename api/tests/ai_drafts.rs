@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use api::ai::Ai;
 use api::app;

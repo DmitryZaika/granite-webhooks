@@ -1,7 +1,7 @@
 //! `POST /v1/ai/agentic-questions` and `GET /v1/ai/agentic-questions/{id}`:
 //! questions queued for the claude-job-runner agent.
 
-mod common;
+use crate::common;
 
 use axum::http::StatusCode;
 use common::{WithSession, server, sessions};

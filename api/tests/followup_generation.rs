@@ -2,8 +2,6 @@
 //! OpenAI stand-in: the prompts sent, the repair of copy that fails the
 //! checks, and rewriting one message.
 
-mod common;
-
 use api::ai::Ai;
 use api::followups::cadence::schedule::plan_ai_followup_cadence;
 use api::followups::cadence::types::{PlanAiFollowupCadenceOptions, PlannedAiCadenceStep};

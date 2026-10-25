@@ -1,7 +1,7 @@
 //! The company's current offer (`/v1/followups/offer`) and the rep's text
 //! sign-off (`/v1/followups/signature`) for AI follow-ups.
 
-mod common;
+use crate::common;
 
 use axum::http::StatusCode;
 use common::{WithSession, server, sessions};

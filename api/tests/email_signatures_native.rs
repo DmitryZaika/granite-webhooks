@@ -2,7 +2,7 @@
 //! prepared and stored privately, the invitation claimed, sent once and
 //! recorded with the email.
 
-mod common;
+use crate::common;
 
 use api::app;
 use api::native_signing::NativeSigning;
@@ -18,7 +18,7 @@ use axum_test::TestServer;
 use common::{ALLOWED_ORIGIN, SECRET, WithSession, sessions};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 
 const FIXTURE: &str = "
 UPDATE users SET is_signature_available = 1 WHERE id = 100;
@@ -27,25 +27,6 @@ UPDATE company SET signature_enabled = 1 WHERE id = 100;
 const KEY: &str = "emails/100/f1/contract.pdf";
 const SEND_KEY: &str = "6f1d2c3b-1a2b-4c5d-8e9f-0a1b2c3d4e5f";
 const INVITATION_SECRET: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ";
-
-static SETTINGS: Once = Once::new();
-
-fn verified_settings() {
-    SETTINGS.call_once(|| {
-        let settings = json!({ "100": {
-            "verifiedAt": "2026-10-01T00:00:00Z",
-            "evidenceReference": "ticket-1",
-            "settings": {
-                "parityVerified": true, "timezone": "America/Indiana/Indianapolis", "signatureMethods": ["type", "draw"],
-                "allowDecline": true, "allowReassign": false, "authentication": "invitation", "reminders": false,
-                "expiresInDays": 30, "notifications": { "viewed": false, "completed": false, "declined": false },
-                "auditPage": true
-            }
-        }});
-        // SAFETY: set once, before any test of this binary reads it.
-        unsafe { std::env::set_var("SIGNATURE_VERIFIED_COMPANY_SETTINGS", settings.to_string()) };
-    });
-}
 
 #[derive(Clone, Default)]
 struct Fakes {
@@ -79,7 +60,7 @@ struct Setup {
 }
 
 async fn setup(pool: &MySqlPool) -> Setup {
-    verified_settings();
+    common::verified_signature_settings();
     sqlx::raw_sql(FIXTURE).execute(pool).await.unwrap();
     let fakes = Fakes::default();
     let router = Router::new()

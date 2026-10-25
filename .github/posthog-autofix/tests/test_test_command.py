@@ -16,6 +16,7 @@ class TestCommandTest(unittest.TestCase):
                 None,
             ),
             "cargo test -p api --test sms tts_reply": ("cargo", "api"),
+            "cargo test -p api --test it sms::tts_reply": ("cargo", "api"),
             "cargo test -p webhooks cloudtalk::receive::tests::parses": ("cargo", "webhooks"),
             "cargo test -p time-triggered digest": ("cargo", "time-triggered"),
         }
