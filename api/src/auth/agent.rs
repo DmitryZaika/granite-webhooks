@@ -44,6 +44,8 @@ const SIGNED_PREFIX: &str = "agent-token-v1.";
 pub const TOKEN_TTL_SECS: i64 = 30 * 60;
 /// Questions older than this get no token: nobody is waiting any more.
 pub const MAX_QUESTION_AGE_DAYS: i32 = 7;
+/// What [`derived_runner_key`] signs; never a prefix of anything else signed.
+const RUNNER_KEY_LABEL: &str = "agent-runner-key-v1";
 /// The only routes, besides reads, an agent may call.
 pub const WRITABLE_ROUTES: [&str; 1] = ["/v1/call-transcripts"];
 
@@ -65,6 +67,20 @@ fn signature(secret: &str, claims: &str) -> Option<HmacSha256> {
     mac.update(SIGNED_PREFIX.as_bytes());
     mac.update(claims.as_bytes());
     Some(mac)
+}
+
+/// The runner key when `AGENT_RUNNER_KEY` is unset (the prod Lambda's 4 KB of
+/// settings are full): hex HMAC-SHA256 of [`RUNNER_KEY_LABEL`] under
+/// `SESSION_SECRET`. Only someone holding that secret can work it out.
+pub fn derived_runner_key(session_secret: &str) -> String {
+    let mut mac =
+        HmacSha256::new_from_slice(session_secret.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(RUNNER_KEY_LABEL.as_bytes());
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// A token for `claims`, signed under `secret`.
@@ -272,6 +288,15 @@ mod tests {
         assert!(!allowed(&Method::PUT, "/v1/call-transcripts"));
         assert!(!allowed(&Method::DELETE, "/v1/customers/{id}"));
         assert!(!allowed(&Method::PATCH, "/v1/deals/{id}"));
+    }
+
+    #[test]
+    fn the_derived_runner_key_is_long_and_tied_to_the_secret() {
+        let key = derived_runner_key("secret");
+        assert_eq!(key.len(), 64);
+        assert!(key.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(key, derived_runner_key("secret"));
+        assert_ne!(key, derived_runner_key("other secret"));
     }
 
     #[test]

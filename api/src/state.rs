@@ -62,7 +62,8 @@ pub struct AppState {
     /// must send. Jobs are refused when unset.
     pub job_key: Option<Arc<str>>,
     /// `AGENT_RUNNER_KEY` (32+ characters): what the claude-job-runner sends
-    /// for an agent token. No tokens are issued when unset.
+    /// for an agent token. Unset, it is derived from `SESSION_SECRET`
+    /// ([`crate::auth::agent::derived_runner_key`]).
     pub agent_runner_key: Option<Arc<str>>,
     /// Where the contract templates are read from (a stub in tests).
     pub contract_templates_base: Arc<str>,
@@ -400,7 +401,12 @@ impl AppState {
             .with_transcriber(Transcriber::from_env())
             .with_qbo(Qbo::from_env())
             .with_job_key(&std::env::var("LAMBDA_KEY").unwrap_or_default())
-            .with_agent_runner_key(&std::env::var("AGENT_RUNNER_KEY").unwrap_or_default())
+            .with_agent_runner_key(
+                &std::env::var("AGENT_RUNNER_KEY")
+                    .ok()
+                    .filter(|key| !key.trim().is_empty())
+                    .unwrap_or_else(|| crate::auth::agent::derived_runner_key(&secret)),
+            )
             .with_cookie(cookie_config_from_env())
             .with_stripe(Stripe::from_env())
             .with_stripe_webhook_secret(&std::env::var("STRIPE_WEBHOOK_SECRET").unwrap_or_default())
