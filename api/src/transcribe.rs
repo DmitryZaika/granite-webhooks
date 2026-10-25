@@ -115,7 +115,7 @@ impl Transcriber {
                 .map(Arc::from),
             base: Arc::from(base.trim_end_matches('/')),
             poll_every,
-            http: reqwest::Client::new(),
+            http: common::http::client(),
         }
     }
 

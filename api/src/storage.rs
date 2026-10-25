@@ -12,9 +12,9 @@
 //! requests) and `STORAGE_PUBLIC_URL` is the base of public file URLs
 //! (default `https://<bucket>.s3.<region>.amazonaws.com`).
 
-use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
-use aws_sdk_s3::presigning::PresigningConfig;
-use aws_sdk_s3::primitives::ByteStream;
+use crate::sigv4::{AWS_PATH, AWS_QUERY, Signer};
+use aws_credential_types::Credentials;
+use percent_encoding::utf8_percent_encode;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -50,7 +50,10 @@ pub enum Storage {
 
 #[derive(Clone)]
 pub struct S3Storage {
-    client: aws_sdk_s3::Client,
+    http: reqwest::Client,
+    signer: Signer,
+    /// `STORAGE_ENDPOINT`: path-style URLs on this server instead of AWS.
+    endpoint: Option<String>,
     bucket: String,
     public_base: String,
     /// Buckets that stored URLs never reach (the private signatures bucket):
@@ -74,27 +77,22 @@ impl Storage {
             return Self::Disabled;
         };
         let region = var("STORAGE_REGION").unwrap_or_else(|| "us-east-2".to_string());
-        let mut config = aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .region(Region::new(region.clone()))
-            .credentials_provider(Credentials::new(
-                var("STORAGE_ACCESS_KEY").unwrap_or_default(),
-                var("STORAGE_SECRET").unwrap_or_default(),
-                None,
-                None,
-                "granite-api-env",
-            ));
-        if let Some(endpoint) = var("STORAGE_ENDPOINT") {
-            config = config.endpoint_url(endpoint).force_path_style(true);
-        }
+        let credentials = Credentials::new(
+            var("STORAGE_ACCESS_KEY").unwrap_or_default(),
+            var("STORAGE_SECRET").unwrap_or_default(),
+            None,
+            None,
+            "granite-api-env",
+        );
         let public_base = var("STORAGE_PUBLIC_URL")
             .unwrap_or_else(|| format!("https://{bucket}.s3.{region}.amazonaws.com"));
-        Self::S3(S3Storage {
-            client: aws_sdk_s3::Client::from_conf(config.build()),
+        Self::S3(S3Storage::new(
+            credentials,
+            &region,
+            var("STORAGE_ENDPOINT"),
             bucket,
-            public_base: public_base.trim_end_matches('/').to_string(),
-            private_buckets: Vec::new(),
-        })
+            &public_base,
+        ))
     }
 
     /// This storage, with `bucket` out of reach of stored URLs (empty:
@@ -139,20 +137,15 @@ impl Storage {
     /// `Content-Type` header.
     pub async fn presign_put(&self, key: &str, content_type: &str) -> Result<String, StorageError> {
         match self {
-            Self::S3(s3) => {
-                let config = PresigningConfig::expires_in(UPLOAD_URL_TTL)
-                    .map_err(|err| StorageError::Backend(err.to_string()))?;
-                let request = s3
-                    .client
-                    .put_object()
-                    .bucket(&s3.bucket)
-                    .key(key)
-                    .content_type(content_type)
-                    .presigned(config)
-                    .await
-                    .map_err(|err| StorageError::Backend(err.to_string()))?;
-                Ok(request.uri().to_string())
-            }
+            Self::S3(s3) => s3
+                .signer
+                .presign(
+                    "PUT",
+                    &s3.object_url(&s3.bucket, key),
+                    &[("content-type", content_type)],
+                    UPLOAD_URL_TTL,
+                )
+                .map_err(StorageError::Backend),
             Self::Memory(_) => Ok(format!("{MEMORY_PUBLIC_BASE}/{key}?upload")),
             Self::Disabled => Err(StorageError::Disabled),
         }
@@ -174,60 +167,13 @@ impl Storage {
         else {
             return url.to_string();
         };
-        let Ok(config) = PresigningConfig::expires_in(DOWNLOAD_URL_TTL) else {
-            return url.to_string();
-        };
-        let request = s3
-            .client
-            .get_object()
-            .bucket(bucket)
-            .key(key)
-            .response_content_disposition("inline")
-            .set_response_content_type(content_type.map(str::to_string))
-            .presigned(config)
-            .await;
-        request.map_or_else(|_| url.to_string(), |request| request.uri().to_string())
+        s3.presign_get(bucket, key, "inline", content_type, DOWNLOAD_URL_TTL)
+            .unwrap_or_else(|_| url.to_string())
     }
 
     pub async fn get(&self, key: &str) -> Result<Option<StoredObject>, StorageError> {
         match self {
-            Self::S3(s3) => {
-                let result = s3
-                    .client
-                    .get_object()
-                    .bucket(&s3.bucket)
-                    .key(key)
-                    .send()
-                    .await;
-                match result {
-                    Ok(output) => {
-                        let content_type = output
-                            .content_type()
-                            .unwrap_or("application/octet-stream")
-                            .to_string();
-                        let bytes = output
-                            .body
-                            .collect()
-                            .await
-                            .map_err(|err| StorageError::Backend(err.to_string()))?
-                            .into_bytes()
-                            .to_vec();
-                        Ok(Some(StoredObject {
-                            bytes,
-                            content_type,
-                        }))
-                    }
-                    Err(err) => {
-                        if err.as_service_error().is_some_and(
-                            aws_sdk_s3::operation::get_object::GetObjectError::is_no_such_key,
-                        ) {
-                            Ok(None)
-                        } else {
-                            Err(StorageError::Backend(err.to_string()))
-                        }
-                    }
-                }
-            }
+            Self::S3(s3) => s3.get_object(&s3.bucket, key).await,
             Self::Memory(memory) => Ok(memory.objects.lock().expect("lock").get(key).cloned()),
             Self::Disabled => Err(StorageError::Disabled),
         }
@@ -241,16 +187,15 @@ impl Storage {
     ) -> Result<(), StorageError> {
         match self {
             Self::S3(s3) => {
-                s3.client
-                    .put_object()
-                    .bucket(&s3.bucket)
-                    .key(key)
-                    .content_type(content_type)
-                    .content_disposition("inline")
-                    .body(ByteStream::from(bytes))
-                    .send()
-                    .await
-                    .map_err(|err| StorageError::Backend(err.to_string()))?;
+                let url = s3.object_url(&s3.bucket, key);
+                let headers = [
+                    ("content-type", content_type),
+                    ("content-disposition", "inline"),
+                ];
+                s3.send("PUT", &url, &headers, bytes.into())
+                    .await?
+                    .s3_result()
+                    .await?;
                 Ok(())
             }
             Self::Memory(memory) => {
@@ -280,29 +225,28 @@ impl Storage {
     ) -> Result<(), StorageError> {
         match self {
             Self::S3(s3) => {
-                use aws_sdk_s3::error::ProvideErrorMetadata;
                 use base64::Engine as _;
                 use sha2::Digest as _;
                 let checksum =
                     base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(&bytes));
                 // Shared, not copied: the body and the check below read the same buffer.
                 let bytes = axum::body::Bytes::from(bytes);
+                let url = s3.object_url(bucket, key);
+                let headers = [
+                    ("content-type", content_type),
+                    ("cache-control", "private, no-store"),
+                    ("x-amz-server-side-encryption", "AES256"),
+                    ("if-none-match", "*"),
+                    ("x-amz-checksum-sha256", checksum.as_str()),
+                ];
                 let result = s3
-                    .client
-                    .put_object()
-                    .bucket(bucket)
-                    .key(key)
-                    .content_type(content_type)
-                    .cache_control("private, no-store")
-                    .server_side_encryption(aws_sdk_s3::types::ServerSideEncryption::Aes256)
-                    .if_none_match("*")
-                    .checksum_sha256(checksum)
-                    .body(ByteStream::from(bytes.clone()))
-                    .send()
+                    .send("PUT", &url, &headers, bytes.clone())
+                    .await?
+                    .s3_result()
                     .await;
                 match result {
                     Ok(_) => Ok(()),
-                    Err(err) if err.code() == Some("PreconditionFailed") => {
+                    Err(err) if err.code == "PreconditionFailed" => {
                         let existing = self.get_in(bucket, key).await?;
                         if existing.is_some_and(|object| object.bytes == bytes) {
                             Ok(())
@@ -312,7 +256,7 @@ impl Storage {
                             ))
                         }
                     }
-                    Err(err) => Err(StorageError::Backend(err.to_string())),
+                    Err(err) => Err(err.into()),
                 }
             }
             Self::Memory(memory) => {
@@ -353,44 +297,46 @@ impl Storage {
             )
         };
         let block = s3
-            .client
-            .get_public_access_block()
-            .bucket(bucket)
-            .send()
-            .await
-            .map_err(|err| StorageError::Backend(err.to_string()))?;
-        let config = block
-            .public_access_block_configuration()
-            .ok_or_else(public)?;
-        if !(config.block_public_acls() == Some(true)
-            && config.ignore_public_acls() == Some(true)
-            && config.block_public_policy() == Some(true)
-            && config.restrict_public_buckets() == Some(true))
+            .send(
+                "GET",
+                &s3.bucket_url(bucket, "publicAccessBlock"),
+                &[],
+                Default::default(),
+            )
+            .await?
+            .s3_result()
+            .await?
+            .text()
+            .await?;
+        if [
+            "BlockPublicAcls",
+            "IgnorePublicAcls",
+            "BlockPublicPolicy",
+            "RestrictPublicBuckets",
+        ]
+        .iter()
+        .any(|setting| xml_text(&block, setting) != Some("true"))
         {
             return Err(public());
         }
-        match s3
-            .client
-            .get_bucket_policy_status()
-            .bucket(bucket)
-            .send()
-            .await
-        {
+        let status = s3
+            .send(
+                "GET",
+                &s3.bucket_url(bucket, "policyStatus"),
+                &[],
+                Default::default(),
+            )
+            .await?
+            .s3_result()
+            .await;
+        match status {
             Ok(status) => {
-                if status
-                    .policy_status()
-                    .and_then(aws_sdk_s3::types::PolicyStatus::is_public)
-                    != Some(false)
-                {
+                if xml_text(&status.text().await?, "IsPublic") != Some("false") {
                     return Err(public());
                 }
             }
-            Err(err) => {
-                use aws_sdk_s3::error::ProvideErrorMetadata;
-                if err.code() != Some("NoSuchBucketPolicy") {
-                    return Err(StorageError::Backend(err.to_string()));
-                }
-            }
+            Err(err) if err.code == "NoSuchBucketPolicy" => {}
+            Err(err) => return Err(err.into()),
         }
         Ok(())
     }
@@ -455,21 +401,15 @@ impl Storage {
             },
         );
         match self {
-            Self::S3(s3) => {
-                let config = PresigningConfig::expires_in(ttl)
-                    .map_err(|err| StorageError::Backend(err.to_string()))?;
-                let request = s3
-                    .client
-                    .get_object()
-                    .bucket(bucket.unwrap_or(&s3.bucket))
-                    .key(key)
-                    .response_content_disposition(disposition)
-                    .response_content_type(content_type)
-                    .presigned(config)
-                    .await
-                    .map_err(|err| StorageError::Backend(err.to_string()))?;
-                Ok(request.uri().to_string())
-            }
+            Self::S3(s3) => s3
+                .presign_get(
+                    bucket.unwrap_or(&s3.bucket),
+                    key,
+                    &disposition,
+                    Some(content_type),
+                    ttl,
+                )
+                .map_err(StorageError::Backend),
             Self::Memory(_) => Ok(format!("{MEMORY_PUBLIC_BASE}/{key}")),
             Self::Disabled => Err(StorageError::Disabled),
         }
@@ -478,31 +418,10 @@ impl Storage {
     /// The content type of a stored object; `None` when it is missing.
     pub async fn head(&self, key: &str) -> Result<Option<String>, StorageError> {
         match self {
-            Self::S3(s3) => {
-                match s3
-                    .client
-                    .head_object()
-                    .bucket(&s3.bucket)
-                    .key(key)
-                    .send()
-                    .await
-                {
-                    Ok(output) => Ok(Some(
-                        output
-                            .content_type()
-                            .unwrap_or("application/octet-stream")
-                            .to_string(),
-                    )),
-                    Err(err)
-                        if err.as_service_error().is_some_and(
-                            aws_sdk_s3::operation::head_object::HeadObjectError::is_not_found,
-                        ) =>
-                    {
-                        Ok(None)
-                    }
-                    Err(err) => Err(StorageError::Backend(err.to_string())),
-                }
-            }
+            Self::S3(s3) => Ok(s3
+                .head_object(&s3.bucket, key)
+                .await?
+                .map(|response| content_type_of(&response))),
             Self::Memory(memory) => Ok(memory
                 .objects
                 .lock()
@@ -526,31 +445,16 @@ impl Storage {
         key: &str,
     ) -> Result<Option<u64>, StorageError> {
         match self {
-            Self::S3(s3) => {
-                match s3
-                    .client
-                    .head_object()
-                    .bucket(bucket.unwrap_or(&s3.bucket))
-                    .key(key)
-                    .send()
-                    .await
-                {
-                    Ok(output) => Ok(Some(
-                        output
-                            .content_length()
-                            .and_then(|length| u64::try_from(length).ok())
-                            .unwrap_or_default(),
-                    )),
-                    Err(err)
-                        if err.as_service_error().is_some_and(
-                            aws_sdk_s3::operation::head_object::HeadObjectError::is_not_found,
-                        ) =>
-                    {
-                        Ok(None)
-                    }
-                    Err(err) => Err(StorageError::Backend(err.to_string())),
-                }
-            }
+            Self::S3(s3) => Ok(s3
+                .head_object(bucket.unwrap_or(&s3.bucket), key)
+                .await?
+                .map(|response| {
+                    response
+                        .headers()
+                        .get(reqwest::header::CONTENT_LENGTH)
+                        .and_then(|length| length.to_str().ok()?.parse().ok())
+                        .unwrap_or_default()
+                })),
             Self::Memory(memory) => Ok(memory
                 .objects
                 .lock()
@@ -628,34 +532,7 @@ impl Storage {
     ) -> Result<Option<StoredObject>, StorageError> {
         match (self, bucket) {
             (Self::S3(s3), Some(bucket)) if bucket != s3.bucket => {
-                let result = s3.client.get_object().bucket(bucket).key(key).send().await;
-                match result {
-                    Ok(output) => {
-                        let content_type = output
-                            .content_type()
-                            .unwrap_or("application/octet-stream")
-                            .to_string();
-                        let bytes = output
-                            .body
-                            .collect()
-                            .await
-                            .map_err(|err| StorageError::Backend(err.to_string()))?
-                            .into_bytes()
-                            .to_vec();
-                        Ok(Some(StoredObject {
-                            bytes,
-                            content_type,
-                        }))
-                    }
-                    Err(err)
-                        if err.as_service_error().is_some_and(
-                            aws_sdk_s3::operation::get_object::GetObjectError::is_no_such_key,
-                        ) =>
-                    {
-                        Ok(None)
-                    }
-                    Err(err) => Err(StorageError::Backend(err.to_string())),
-                }
+                s3.get_object(&bucket, key).await
             }
             _ => self.get(key).await,
         }
@@ -665,13 +542,11 @@ impl Storage {
     pub async fn delete(&self, key: &str) -> Result<(), StorageError> {
         match self {
             Self::S3(s3) => {
-                s3.client
-                    .delete_object()
-                    .bucket(&s3.bucket)
-                    .key(key)
-                    .send()
-                    .await
-                    .map_err(|err| StorageError::Backend(err.to_string()))?;
+                let url = s3.object_url(&s3.bucket, key);
+                s3.send("DELETE", &url, &[], Default::default())
+                    .await?
+                    .s3_result()
+                    .await?;
                 Ok(())
             }
             Self::Memory(memory) => {
@@ -701,6 +576,191 @@ impl Storage {
     }
 }
 
+/// An S3 error response: the HTTP status and S3's error `Code`.
+#[derive(Debug)]
+struct S3Error {
+    status: reqwest::StatusCode,
+    code: String,
+    message: String,
+}
+
+impl From<S3Error> for StorageError {
+    fn from(err: S3Error) -> Self {
+        Self::Backend(format!("S3 {}: {} {}", err.status, err.code, err.message))
+    }
+}
+
+impl From<reqwest::Error> for StorageError {
+    fn from(err: reqwest::Error) -> Self {
+        Self::Backend(err.to_string())
+    }
+}
+
+trait S3Response: Sized {
+    /// The response, or its status and S3 error code when it is not 2xx.
+    async fn s3_result(self) -> Result<Self, S3Error>;
+}
+
+impl S3Response for reqwest::Response {
+    async fn s3_result(self) -> Result<Self, S3Error> {
+        let status = self.status();
+        if status.is_success() {
+            return Ok(self);
+        }
+        let body = self.text().await.unwrap_or_default();
+        Err(S3Error {
+            status,
+            code: xml_text(&body, "Code").unwrap_or_default().to_string(),
+            message: xml_text(&body, "Message").unwrap_or_default().to_string(),
+        })
+    }
+}
+
+/// The text of the first `<tag>` in an S3 XML document.
+fn xml_text<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
+    let start = xml.find(&format!("<{tag}>"))? + tag.len() + 2;
+    let end = start + xml[start..].find(&format!("</{tag}>"))?;
+    Some(xml[start..end].trim())
+}
+
+fn content_type_of(response: &reqwest::Response) -> String {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string()
+}
+
+impl S3Storage {
+    fn new(
+        credentials: Credentials,
+        region: &str,
+        endpoint: Option<String>,
+        bucket: String,
+        public_base: &str,
+    ) -> Self {
+        Self {
+            http: common::http::client(),
+            signer: Signer::new(credentials, region, "s3"),
+            endpoint: endpoint.map(|endpoint| endpoint.trim_end_matches('/').to_string()),
+            bucket,
+            public_base: public_base.trim_end_matches('/').to_string(),
+            private_buckets: Vec::new(),
+        }
+    }
+
+    /// Virtual-hosted style on AWS, path style on `STORAGE_ENDPOINT`.
+    fn bucket_base(&self, bucket: &str) -> String {
+        match &self.endpoint {
+            Some(endpoint) => format!("{endpoint}/{bucket}"),
+            None => format!("https://{bucket}.s3.{}.amazonaws.com", self.signer.region()),
+        }
+    }
+
+    fn object_url(&self, bucket: &str, key: &str) -> String {
+        format!(
+            "{}/{}",
+            self.bucket_base(bucket),
+            utf8_percent_encode(key, AWS_PATH)
+        )
+    }
+
+    /// A bucket subresource such as `?policyStatus`.
+    fn bucket_url(&self, bucket: &str, subresource: &str) -> String {
+        format!("{}/?{subresource}", self.bucket_base(bucket))
+    }
+
+    /// Sends a request signed with `UNSIGNED-PAYLOAD` (HTTPS protects the body).
+    async fn send(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: axum::body::Bytes,
+    ) -> Result<reqwest::Response, StorageError> {
+        let signed = self
+            .signer
+            .sign_headers(method, url, headers, None)
+            .map_err(StorageError::Backend)?;
+        let method = reqwest::Method::from_bytes(method.as_bytes()).expect("an HTTP method name");
+        let mut request = self.http.request(method, url);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        for (name, value) in signed {
+            request = request.header(name, value);
+        }
+        Ok(request.body(body).send().await?)
+    }
+
+    /// `None` when the key is missing (`NoSuchKey`).
+    async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Option<StoredObject>, StorageError> {
+        let response = self
+            .send(
+                "GET",
+                &self.object_url(bucket, key),
+                &[],
+                Default::default(),
+            )
+            .await?;
+        match response.s3_result().await {
+            Ok(response) => Ok(Some(StoredObject {
+                content_type: content_type_of(&response),
+                bytes: response.bytes().await?.to_vec(),
+            })),
+            Err(err) if err.code == "NoSuchKey" => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// `None` when the object is missing (HEAD answers a bodiless 404).
+    async fn head_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Option<reqwest::Response>, StorageError> {
+        let response = self
+            .send(
+                "HEAD",
+                &self.object_url(bucket, key),
+                &[],
+                Default::default(),
+            )
+            .await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Ok(Some(response.s3_result().await?))
+    }
+
+    /// A presigned `GET` that answers with these `Content-Disposition` and
+    /// `Content-Type` headers.
+    fn presign_get(
+        &self,
+        bucket: &str,
+        key: &str,
+        disposition: &str,
+        content_type: Option<&str>,
+        ttl: Duration,
+    ) -> Result<String, String> {
+        let mut url = format!(
+            "{}?response-content-disposition={}",
+            self.object_url(bucket, key),
+            utf8_percent_encode(disposition, AWS_QUERY)
+        );
+        if let Some(content_type) = content_type {
+            url.push_str("&response-content-type=");
+            url.extend(utf8_percent_encode(content_type, AWS_QUERY));
+        }
+        self.signer.presign("GET", &url, &[], ttl)
+    }
+}
+
 /// `stones/abc.jpg` -> `stones/abc-icon.jpg` (Remix `withIconSuffix`).
 pub fn icon_key(key: &str) -> String {
     match key.rfind('.') {
@@ -722,17 +782,13 @@ mod tests {
 
     #[tokio::test]
     async fn stored_urls_never_reach_the_private_bucket() {
-        let config = aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .region(Region::new("us-east-2"))
-            .credentials_provider(Credentials::new("key", "secret", None, None, "test"))
-            .build();
-        let storage = Storage::S3(S3Storage {
-            client: aws_sdk_s3::Client::from_conf(config),
-            bucket: "files".into(),
-            public_base: "https://files.s3.us-east-2.amazonaws.com".into(),
-            private_buckets: Vec::new(),
-        })
+        let storage = Storage::S3(S3Storage::new(
+            Credentials::new("key", "secret", None, None, "test"),
+            "us-east-2",
+            None,
+            "files".into(),
+            "https://files.s3.us-east-2.amazonaws.com",
+        ))
         .keeping_private(" signatures ");
         let private = "s3://signatures/signatures/9/completed-x.pdf";
         assert_eq!(storage.readable_url(private, None).await, private);

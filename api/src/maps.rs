@@ -103,7 +103,7 @@ impl Maps {
             api_base: Arc::from(api_base.trim_end_matches('/')),
             places_base: Arc::from(PLACES_API_URL),
             routes_url: Arc::from(ROUTES_URL),
-            http: reqwest::Client::builder()
+            http: common::http::client_builder()
                 .timeout(Duration::from_secs(10))
                 .build()
                 .expect("HTTP client builds"),

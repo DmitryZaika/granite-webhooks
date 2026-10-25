@@ -407,7 +407,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let token = oauth_token(&pool, &reqwest::Client::new(), 77, &key)
+        let token = oauth_token(&pool, &crate::http::client(), 77, &key)
             .await
             .unwrap()
             .unwrap();
@@ -428,7 +428,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let token = oauth_token(&pool, &reqwest::Client::new(), 78, &key)
+        let token = oauth_token(&pool, &crate::http::client(), 78, &key)
             .await
             .unwrap();
         assert!(token.is_none());

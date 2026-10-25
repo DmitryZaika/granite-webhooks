@@ -5,8 +5,8 @@
 //! tokens and recipients are `NAME=value` lines in one SecureString
 //! parameter, read once at cold start; a variable set in the environment wins.
 
-use aws_config::Region;
-use aws_config::meta::region::RegionProviderChain;
+use crate::sigv4::Signer;
+use aws_credential_types::provider::ProvideCredentials;
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
@@ -36,20 +36,52 @@ pub fn lookup<S: BuildHasher>(
     }
 }
 
-/// The decrypted value of the SecureString parameter `name`.
+/// The decrypted value of the SecureString parameter `name` (SSM
+/// `GetParameter`, in the Lambda's region).
 pub async fn fetch(name: &str) -> Result<String, String> {
-    let region = RegionProviderChain::default_provider().or_else(Region::new("us-east-2"));
-    let config = aws_config::from_env().region(region).load().await;
-    let output = aws_sdk_ssm::Client::new(&config)
-        .get_parameter()
-        .name(name)
-        .with_decryption(true)
-        .send()
+    let region = ["AWS_REGION", "AWS_DEFAULT_REGION"]
+        .into_iter()
+        .find_map(|name| std::env::var(name).ok().filter(|v| !v.trim().is_empty()))
+        .unwrap_or_else(|| "us-east-2".to_string());
+    let config = common::http::aws_config(region.clone()).await;
+    let credentials = config
+        .credentials_provider()
+        .ok_or("no AWS credentials")?
+        .provide_credentials()
         .await
-        .map_err(|error| aws_sdk_ssm::error::DisplayErrorContext(&error).to_string())?;
-    output
-        .parameter()
-        .and_then(|parameter| parameter.value())
+        .map_err(|error| error.to_string())?;
+    let url = format!("https://ssm.{region}.amazonaws.com/");
+    let body = serde_json::json!({ "Name": name, "WithDecryption": true }).to_string();
+    let headers = [
+        ("content-type", "application/x-amz-json-1.1"),
+        ("x-amz-target", "AmazonSSM.GetParameter"),
+    ];
+    let signed = Signer::new(credentials, region, "ssm").sign_headers(
+        "POST",
+        &url,
+        &headers,
+        Some(body.as_bytes()),
+    )?;
+    let mut request = common::http::client().post(&url).body(body);
+    for (header, value) in headers {
+        request = request.header(header, value);
+    }
+    for (header, value) in signed {
+        request = request.header(header, value);
+    }
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    let status = response.status();
+    let reply: serde_json::Value = response.json().await.map_err(|error| error.to_string())?;
+    if !status.is_success() {
+        let kind = reply["__type"].as_str().unwrap_or_default();
+        let message = reply["message"]
+            .as_str()
+            .or_else(|| reply["Message"].as_str())
+            .unwrap_or_default();
+        return Err(format!("SSM GetParameter {status}: {kind} {message}"));
+    }
+    reply["Parameter"]["Value"]
+        .as_str()
         .map(str::to_string)
         .ok_or_else(|| "the parameter has no value".into())
 }

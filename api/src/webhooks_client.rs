@@ -37,7 +37,7 @@ impl WebhooksClient {
         };
         Self {
             target,
-            http: reqwest::Client::builder()
+            http: common::http::client_builder()
                 .timeout(Duration::from_secs(10))
                 .build()
                 .expect("HTTP client builds"),

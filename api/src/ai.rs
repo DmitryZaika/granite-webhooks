@@ -190,7 +190,7 @@ impl Ai {
                 .map(Arc::from),
             url: Arc::from(url),
             images_url: Arc::from(IMAGE_EDITS_URL),
-            http: reqwest::Client::new(),
+            http: common::http::client(),
         }
     }
 

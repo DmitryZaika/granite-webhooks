@@ -58,7 +58,7 @@ impl Stripe {
                 .filter(|key| !key.is_empty())
                 .map(Arc::from),
             base: Arc::from(base.trim_end_matches('/')),
-            http: reqwest::Client::new(),
+            http: common::http::client(),
             poll_delay: Duration::from_millis(1500),
         }
     }

@@ -59,7 +59,7 @@ impl TelegramBots {
             leads_token: token(leads_token),
             notifications_token: token(notifications_token),
             api_base: Arc::from(api_base.trim_end_matches('/')),
-            http: reqwest::Client::builder()
+            http: common::http::client_builder()
                 .timeout(TIMEOUT)
                 .build()
                 .expect("HTTP client builds"),

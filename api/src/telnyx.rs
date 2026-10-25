@@ -219,7 +219,7 @@ impl Telnyx {
                 .filter(|key| !key.is_empty())
                 .map(Arc::from),
             base: Arc::from(base.trim_end_matches('/')),
-            http: reqwest::Client::builder()
+            http: common::http::client_builder()
                 .timeout(TIMEOUT)
                 .build()
                 .expect("HTTP client builds"),

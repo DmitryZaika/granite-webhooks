@@ -117,9 +117,9 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "ammonia",
- "aws-config",
- "aws-sdk-s3",
- "aws-sdk-ssm",
+ "aws-credential-types",
+ "aws-sigv4",
+ "aws-smithy-runtime-api",
  "axum",
  "axum-test",
  "base64",
@@ -390,32 +390,6 @@ name = "aws-sdk-sesv2"
 version = "1.133.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff3764ca0e000175b6a755d54aaa1873587c2026af02416d4602a4c5f4ce907a"
-dependencies = [
- "arc-swap",
- "aws-credential-types",
- "aws-runtime",
- "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
- "aws-smithy-observability",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
- "aws-smithy-schema",
- "aws-smithy-types",
- "aws-types",
- "bytes",
- "fastrand",
- "http 0.2.12",
- "http 1.5.0",
- "regex-lite",
- "tracing",
-]
-
-[[package]]
-name = "aws-sdk-ssm"
-version = "1.122.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "400e5cea358fbcf6f971babbca13bd992a7077e527ac4f961c728c6a5a19ab9f"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -1247,12 +1221,15 @@ dependencies = [
  "ammonia",
  "aws-config",
  "aws-sdk-sesv2",
+ "aws-smithy-http-client",
+ "aws-smithy-runtime-api",
  "base64",
  "chrono",
  "chrono-tz",
  "rand 0.10.2",
  "regex",
  "reqwest",
+ "rustls 0.23.43",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -4419,7 +4396,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
+ "ring",
  "rustls-pki-types",
  "rustls-webpki 0.103.15",
  "subtle",

@@ -145,7 +145,7 @@ impl Push {
             inner: Some(Arc::new(Inner {
                 source,
                 fcm_base: fcm_base.trim_end_matches('/').to_string(),
-                http: reqwest::Client::builder()
+                http: common::http::client_builder()
                     .timeout(TIMEOUT)
                     .build()
                     .expect("HTTP client builds"),

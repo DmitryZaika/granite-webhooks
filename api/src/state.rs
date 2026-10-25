@@ -164,7 +164,7 @@ impl AppState {
             compose_contexts: Arc::default(),
             maps: Maps::disabled(),
             call_starts: Arc::default(),
-            telephony_http: reqwest::Client::new(),
+            telephony_http: common::http::client(),
             cloudtalk_base: Arc::from(common::telephony::cloudtalk::BASE_URL),
             ai: Ai::disabled(),
             signwell_base: Arc::from("https://www.signwell.com/api/v1"),

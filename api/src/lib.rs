@@ -53,6 +53,7 @@ pub mod serde_helpers;
 pub mod setup_checklist;
 pub mod signing_pdf;
 pub mod signwell;
+pub mod sigv4;
 pub mod sql;
 pub mod state;
 pub mod storage;

@@ -141,7 +141,7 @@ impl Qbo {
             production,
             aes_key,
             shared_app,
-            http: reqwest::Client::new(),
+            http: common::http::client(),
         }
     }
 

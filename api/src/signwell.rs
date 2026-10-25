@@ -136,7 +136,7 @@ impl SignWell {
     pub fn new(base: &str) -> Self {
         Self {
             base: base.trim_end_matches('/').to_string(),
-            http: reqwest::Client::new(),
+            http: common::http::client(),
         }
     }
 

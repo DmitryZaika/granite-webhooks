@@ -65,7 +65,7 @@ impl Autofix {
     }
 
     fn with_settings(settings: OnceCell<Arc<Config>>) -> Self {
-        let http = reqwest::Client::builder()
+        let http = common::http::client_builder()
             .timeout(Duration::from_secs(10))
             .user_agent("granite-manager-posthog-autofix")
             .build()

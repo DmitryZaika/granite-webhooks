@@ -121,7 +121,7 @@ async fn canceled_companies_pay_to_restore_access_in_stripe_test_mode(pool: MySq
     };
     let raw = Raw {
         key: key.clone(),
-        http: reqwest::Client::new(),
+        http: common::http::client(),
     };
     let stripe = Stripe::new(Some(&key), BASE);
     let store = MySqlBillingStore(&pool);
