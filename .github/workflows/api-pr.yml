@@ -77,6 +77,7 @@ jobs:
           --test phone_bootstrap
           --test phone_calls
           --test phone_contacts
+          --test phone_crm_push
           --test phone_devices
           --test phone_email_push
           --test phone_jobs

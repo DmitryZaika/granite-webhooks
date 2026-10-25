@@ -1,15 +1,16 @@
 //! `POST /v1/jobs/appointment-reminders`: sends the due appointment
 //! reminders. Customers get a text (else an email) 24 hours and 1 hour
-//! before; reps get a CRM notification and a Telegram message the day
-//! before at 5 PM and 1 hour before. Then the company's own notification
-//! rules (Admin > Schedule), which replace the customer reminders of their
-//! calendars.
+//! before; reps get a CRM notification (pushed to their phones) and a
+//! Telegram message the day before at 5 PM and 1 hour before. Then the
+//! company's own notification rules (Admin > Schedule), which replace the
+//! customer reminders of their calendars.
 //!
 //! Port of `processDueAppointmentReminders` and
 //! `processDueAppointmentRepReminders`.
 
 use super::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::phone::crm_push::push_notification_logged;
 use crate::routes::events::notify::{Booking, NotifyKind, appointment_when, notify_booking};
 use crate::routes::schedule::notifications;
 use crate::state::AppState;
@@ -266,7 +267,7 @@ async fn rep_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(), sq
         .take(255)
         .collect();
         let (_, notification_type) = calendar(&reminder.calendar_slug);
-        sqlx::query(
+        let notification_id = sqlx::query(
             "INSERT INTO notifications (user_id, deal_id, message, notification_type, actor_name, due_at)
              VALUES (?, ?, ?, ?, NULL, NOW())",
         )
@@ -275,7 +276,9 @@ async fn rep_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(), sq
         .bind(&message)
         .bind(notification_type)
         .execute(&state.pool)
-        .await?;
+        .await?
+        .last_insert_id();
+        push_notification_logged(state, i64::try_from(notification_id).unwrap_or_default()).await;
         state
             .webhooks
             .notify_telegram_crm(&TelegramCrmNotify {

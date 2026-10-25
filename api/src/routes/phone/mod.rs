@@ -39,6 +39,12 @@
 //! - `GET  /v1/phone/texts/messages/{id}/thread` → the thread of a text (the `text` push's `textId`)
 //! - `GET  /v1/phone/texts/media/{id}`         → a 5-minute link to a text's picture or file
 //! - `POST /v1/phone/texts`                    → text from one of my lines
+//! - `POST /v1/phone/pushes/test`              → send me a test push (temporary)
+//!
+//! The other Lambdas (job key), for what they also send to Telegram:
+//!
+//! - `POST /v1/phone/pushes/notification`      → push a CRM notification to its user's phones
+//! - `POST /v1/phone/pushes/lead`              → push a lead alert to the rep's or managers' phones
 //!
 //! Admin pages (session cookie):
 //!
@@ -78,11 +84,13 @@ mod contacts;
 mod devices;
 mod hold;
 mod porting;
+mod pushes;
 mod recording;
 mod settings;
 mod superuser;
 mod support;
 mod tendlc;
+mod test_pushes;
 mod texts;
 mod web;
 
@@ -153,6 +161,9 @@ pub fn router() -> OpenApiRouter<AppState> {
             superuser::save_company_telnyx_config
         ))
         .merge(porting::router())
+        .routes(routes!(pushes::push_notification_route))
+        .routes(routes!(pushes::push_lead_route))
+        .routes(routes!(test_pushes::send_test_push))
         .routes(routes!(web::web_bootstrap))
         .routes(routes!(web::register_web_phone))
         .routes(routes!(web::mint_web_phone_token))
