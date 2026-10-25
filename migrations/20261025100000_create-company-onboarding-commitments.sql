@@ -6,15 +6,23 @@
 --                          notice_sent | fee_invoiced | fee_paid | fee_failed |
 --                          fee_skipped | void
 --                          suspended:   a cancellation request is scheduled
---                                       (withdrawing it resumes the process)
---                          fee_skipped: the deadline passed while
---                                       ONBOARDING_FEE_CHARGING was off (never
---                                       charged later)
+--                                       (withdrawing it resumes the process;
+--                                       a notice sent within 30 days keeps
+--                                       its charge date)
+--                          fee_skipped: the deadline or charge date passed
+--                                       while ONBOARDING_FEE_CHARGING was off
+--                                       or without consent (a fee draft is
+--                                       deleted; never charged later)
 --                          void:        the subscription actually ended
 --   deadline_at:           the deadline as moved (tolling, extension, a call
---                          Granite cancelled); original_deadline_at: signup + 30 days
+--                          Granite cancelled or moved), in whole local days
+--   original_deadline_at:  the end (23:59:59 America/Indiana/Indianapolis) of
+--                          the day the consent named: signup day + 30
 --   fee_cents:             2 x (base + add-ons) at signup, before tax, fixed
 --   calendly_*, booked_*:  the booked call (booked_at: when we recorded it)
+--   no_show_at:            when the latest no-show was recorded;
+--                          no_show_call_start_at is that call's start (it and
+--                          older calls never count again)
 --   availability_checked_on: the last UTC day tolling was decided for
 --   notice_cycle_at:       when the current fee notice fell due; the notice
 --                          emails are deduped per cycle, so a notice withdrawn
@@ -51,6 +59,7 @@ CREATE TABLE IF NOT EXISTS company_onboarding_commitments (
   completed_at DATETIME NULL,
   completed_by INT NULL,
   no_show_at DATETIME NULL,
+  no_show_call_start_at DATETIME NULL,
   suspended_at DATETIME NULL,
   notice_sent_at DATETIME NULL,
   notice_cycle_at DATETIME NULL,

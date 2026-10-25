@@ -57,7 +57,8 @@ pub enum OnboardingCallStatus {
     FeeInvoiced,
     /// The fee was paid.
     FeePaid,
-    /// The fee payment failed (Stripe retries).
+    /// The fee payment failed. Stripe does not retry it: Granite staff
+    /// follow up by hand.
     FeeFailed,
     /// The deadline passed while fee charging was off: never charged.
     FeeSkipped,

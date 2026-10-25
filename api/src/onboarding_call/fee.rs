@@ -6,31 +6,37 @@
 //! halfway finds its invoice again by `metadata[kind]=onboarding_fee` and
 //! `metadata[deadline]`, and the commitment records the invoice before it is
 //! finalized, so it is never charged twice. Nothing reaches Stripe unless
-//! charging is on, the consent is on file and the notice's charge date has
-//! come ([`hold_reason`]). Fee invoice events never reach subscription
-//! billing.
+//! charging is on, the consent is on file, the subscription runs, no
+//! cancellation was requested before the charge date and that date has come
+//! ([`hold_reason`], [`withdrawal`]); all of it is read again right before
+//! the invoice is finalized and right before it is paid. A recorded invoice
+//! that may not be charged is withdrawn: a draft deleted, an open one never
+//! attempted voided ([`invoice_withdrawn`]). Fee invoice events never reach
+//! subscription billing.
 //!
 //! The invoice is created with `auto_advance=false`, so Stripe never retries
 //! a declined payment: `fee_failed` stays until staff follow up by hand (a
 //! payment ends it `fee_paid`, a void `waived`), and staff are told when it
-//! fails.
+//! fails. Any other Stripe failure is retried by the next daily run.
 
 use super::commitment::{
-    Commitment, EventKind, InvoiceEvent, Outcome, Status, invoice_created, invoice_event,
+    ChargeFacts, Commitment, EventKind, InvoiceEvent, Outcome, Status, Withdrawal, invoice_created,
+    invoice_event, invoice_withdrawn, withdrawal,
 };
 use super::store::{self, SaveError, Stored};
 use crate::billing;
+use crate::billing::catalog::SIGNUP_TZ;
 use crate::billing::reminder_emails::{escape_html, format_money};
 use crate::billing::store::{BillingStore, MySqlBillingStore};
 use crate::billing::stripe::{FeeInvoice, StripeError, positive_int};
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingEmail, SendFailure};
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, TimeZone};
 use lambda_http::tracing;
 use serde_json::Value;
 use sqlx::MySqlPool;
 
-const NOTIFY_FROM_ADDRESS: &str = "noreply@granite-manager.com";
+const DEFAULT_FROM_ADDRESS: &str = "noreply@granite-manager.com";
 
 /// `metadata[kind]` of the fee invoice.
 pub const FEE_KIND: &str = "onboarding_fee";
@@ -40,11 +46,12 @@ pub enum FeeError {
     /// No Stripe customer to invoice: reported, tried again the next day.
     #[error("the company has no Stripe customer")]
     NoCustomer,
-    /// Stripe refused or failed; the code only.
+    /// Stripe refused or failed (not a card decline); the code only. Tried
+    /// again the next day.
     #[error("Stripe failed: {0}")]
     Stripe(String),
-    /// The fee may not be charged now ([`hold_reason`]): nothing was sent to
-    /// Stripe. Reported, and looked at again the next day.
+    /// The fee may not be charged now ([`hold_reason`], [`withdrawal`]):
+    /// nothing was sent to Stripe. Reported, and looked at again the next day.
     #[error("the onboarding fee is held: {0}")]
     Held(&'static str),
     #[error(transparent)]
@@ -70,6 +77,13 @@ fn stripe_error(err: &StripeError) -> FeeError {
     FeeError::Stripe(err.code().to_string())
 }
 
+/// A card decline: HTTP 402 or Stripe's `card_error`. Only this is
+/// `fee_failed`; any other failure is retried.
+fn is_decline(err: &StripeError) -> bool {
+    matches!(err, StripeError::Api(failure)
+        if failure.status == 402 || failure.kind.as_deref() == Some("card_error"))
+}
+
 /// Where the fee stands after a charge attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Charged {
@@ -80,11 +94,38 @@ pub enum Charged {
     /// The payment is on its way (a bank debit), or Stripe was not asked
     /// again: stays `fee_invoiced`.
     Processing,
+    /// The invoice was deleted or voided before any charge
+    /// ([`invoice_withdrawn`]): nothing is owed.
+    Withdrawn,
 }
 
-/// `YYYY-MM-DD` of the deadline: `metadata[deadline]` and the idempotency keys.
+/// `YYYY-MM-DD` of the deadline, its day in `SIGNUP_TZ` (the day the
+/// consent named): `metadata[deadline]` and the creation idempotency key.
 pub fn deadline_key(deadline_at: NaiveDateTime) -> String {
-    deadline_at.format("%Y-%m-%d").to_string()
+    SIGNUP_TZ
+        .from_utc_datetime(&deadline_at)
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+/// The idempotency key of the fee invoice's creation; after `recorded`
+/// withdrawn invoices it carries their count, so Stripe creates a new one.
+fn create_key(company_id: i32, deadline: &str, recorded: i64) -> String {
+    if recorded > 0 {
+        format!("onboarding-fee:{company_id}:{deadline}:{recorded}")
+    } else {
+        format!("onboarding-fee:{company_id}:{deadline}")
+    }
+}
+
+/// `From:` of the staff alert: `BILLING_EMAIL_FROM_ADDRESS`, as the other
+/// onboarding emails.
+pub(super) fn from_address() -> String {
+    std::env::var("BILLING_EMAIL_FROM_ADDRESS")
+        .ok()
+        .map(|address| address.trim().to_string())
+        .filter(|address| !address.is_empty())
+        .unwrap_or_else(|| DEFAULT_FROM_ADDRESS.to_string())
 }
 
 fn is_fee_invoice(invoice: &Value, company_id: i32, deadline: &str) -> bool {
@@ -125,20 +166,29 @@ pub fn hold_reason(
     }
 }
 
-/// Records a fee invoice event on the commitment (read again on a conflict);
+async fn charge_facts(state: &AppState, company_id: i32) -> Result<ChargeFacts, FeeError> {
+    let pool = &state.pool;
+    Ok(ChargeFacts {
+        charging_enabled: state.onboarding_call.fee_charging,
+        consent_on_file: store::consent_on_file(pool, company_id).await?,
+        subscription_ended: store::subscription_ended(pool, company_id).await?,
+        cancellation_requested_at: store::cancellation_requested_at(pool, company_id).await?,
+    })
+}
+
+/// Applies `change` to the commitment as stored (read again on a conflict);
 /// the outcome saved, `None` when it changed nothing.
-async fn record_event(
+async fn apply(
     pool: &MySqlPool,
     company_id: i32,
-    invoice_id: &str,
-    event: InvoiceEvent,
     now: NaiveDateTime,
+    change: impl Fn(&Commitment) -> Outcome,
 ) -> Result<Option<Outcome>, FeeError> {
     for _ in 0..2 {
         let Some(stored) = store::load(pool, company_id).await? else {
             return Ok(None);
         };
-        let outcome = invoice_event(&stored.commitment, invoice_id, event, now);
+        let outcome = change(&stored.commitment);
         if !store::changes(&stored, &outcome) {
             return Ok(None);
         }
@@ -149,6 +199,126 @@ async fn record_event(
         }
     }
     Err(SaveError::Conflict.into())
+}
+
+/// Records a fee invoice event on the commitment.
+async fn record_event(
+    pool: &MySqlPool,
+    company_id: i32,
+    invoice_id: &str,
+    event: InvoiceEvent,
+    now: NaiveDateTime,
+) -> Result<Option<Outcome>, FeeError> {
+    apply(pool, company_id, now, |c| {
+        invoice_event(c, invoice_id, event, now)
+    })
+    .await
+}
+
+/// Withdraws the recorded fee invoice `invoice_id` before any charge: a
+/// draft is deleted, an open invoice never attempted voided, then the
+/// commitment moves on ([`invoice_withdrawn`]). A paid invoice is recorded
+/// as paid; one with a payment under way is left alone ([`FeeError::Held`]).
+async fn withdraw(
+    state: &AppState,
+    company_id: i32,
+    invoice_id: &str,
+    reason: Withdrawal,
+    now: NaiveDateTime,
+) -> Result<Charged, FeeError> {
+    let stripe = &state.stripe;
+    let invoice = match stripe.invoice(invoice_id).await {
+        Ok(invoice) => Some(invoice),
+        Err(StripeError::Missing(_)) => None,
+        Err(err) => return Err(stripe_error(&err)),
+    };
+    let state_of = invoice
+        .as_ref()
+        .map(|invoice| (invoice["status"].as_str(), invoice["attempted"] == true));
+    match state_of {
+        None | Some((Some("void"), _)) => {}
+        Some((Some("draft"), _)) => match stripe.delete_invoice(invoice_id).await {
+            Ok(_) | Err(StripeError::Missing(_)) => {}
+            Err(err) => return Err(stripe_error(&err)),
+        },
+        Some((Some("open"), false)) => {
+            stripe
+                .void_invoice(invoice_id, &format!("onboarding-fee:{invoice_id}:void"))
+                .await
+                .map_err(|e| stripe_error(&e))?;
+        }
+        Some((Some("paid"), _)) => {
+            record_event(&state.pool, company_id, invoice_id, InvoiceEvent::Paid, now).await?;
+            return Ok(Charged::Paid);
+        }
+        Some(_) => return Err(FeeError::Held(reason.as_str())),
+    }
+    apply(&state.pool, company_id, now, |c| {
+        if c.stripe_invoice_id.as_deref() == Some(invoice_id) {
+            invoice_withdrawn(c, reason, now)
+        } else {
+            Outcome {
+                commitment: c.clone(),
+                events: Vec::new(),
+            }
+        }
+    })
+    .await?;
+    tracing::info!(
+        company_id,
+        reason = reason.as_str(),
+        "onboarding fee invoice withdrawn"
+    );
+    Ok(Charged::Withdrawn)
+}
+
+/// What the run may do next with the recorded invoice `invoice_id`.
+enum Recheck {
+    Go,
+    Withdraw(Withdrawal),
+    Stop(&'static str),
+}
+
+/// Reads the commitment and the facts again right before Stripe finalizes
+/// or charges: the invoice must still be the recorded `fee_invoiced` one and
+/// the fee chargeable.
+async fn recheck(
+    state: &AppState,
+    company_id: i32,
+    invoice_id: &str,
+    now: NaiveDateTime,
+) -> Result<Recheck, FeeError> {
+    let Some(stored) = store::load(&state.pool, company_id).await? else {
+        return Ok(Recheck::Stop("status"));
+    };
+    let c = &stored.commitment;
+    if c.status != Status::FeeInvoiced || c.stripe_invoice_id.as_deref() != Some(invoice_id) {
+        return Ok(Recheck::Stop("status"));
+    }
+    let facts = charge_facts(state, company_id).await?;
+    if let Some(reason) = withdrawal(c, &facts) {
+        return Ok(Recheck::Withdraw(reason));
+    }
+    Ok(
+        hold_reason(c, facts.charging_enabled, facts.consent_on_file, now)
+            .map_or(Recheck::Go, Recheck::Stop),
+    )
+}
+
+/// [`recheck`]: `Some` result when the run stops here (withdrawn or held).
+async fn stop_unless_chargeable(
+    state: &AppState,
+    company_id: i32,
+    invoice_id: &str,
+    now: NaiveDateTime,
+) -> Result<Option<Charged>, FeeError> {
+    match recheck(state, company_id, invoice_id, now).await? {
+        Recheck::Go => Ok(None),
+        Recheck::Withdraw(reason) => withdraw(state, company_id, invoice_id, reason, now)
+            .await
+            .map(Some),
+        Recheck::Stop(reason) => Err(FeeError::Held(reason)),
+    }
 }
 
 /// The failure without its text, which can quote the recipient's address.
@@ -187,7 +357,7 @@ async fn notify_failed(state: &AppState, commitment: &Commitment) {
         );
         let email = OutgoingEmail {
             from_name: Some("Granite Manager".into()),
-            from_address: NOTIFY_FROM_ADDRESS.into(),
+            from_address: from_address(),
             to: vec![to.to_string()],
             cc: Vec::new(),
             bcc: Vec::new(),
@@ -223,10 +393,96 @@ async fn after_event(state: &AppState, saved: Option<&Outcome>) {
     }
 }
 
+/// The fee invoice to charge: the recorded one, or for `notice_sent` the one
+/// a stopped run left (found by metadata) or a new draft.
+async fn fee_invoice(
+    state: &AppState,
+    commitment: &Commitment,
+    customer: &str,
+    payment_method: Option<&str>,
+) -> Result<Value, FeeError> {
+    let company_id = commitment.company_id;
+    let stripe = &state.stripe;
+    let deadline = deadline_key(commitment.deadline_at);
+    match (commitment.status, commitment.stripe_invoice_id.as_deref()) {
+        (Status::FeeInvoiced, Some(id)) => stripe.invoice(id).await.map_err(|e| stripe_error(&e)),
+        (Status::NoticeSent, _) => {
+            let existing = stripe
+                .customer_invoices(customer)
+                .await
+                .map_err(|e| stripe_error(&e))?
+                .into_iter()
+                .find(|invoice| is_fee_invoice(invoice, company_id, &deadline));
+            if let Some(invoice) = existing {
+                return Ok(invoice);
+            }
+            let recorded = store::fee_invoices_recorded(&state.pool, company_id).await?;
+            let description = format!(
+                "Granite Manager onboarding fee: onboarding not completed by {} (Terms of Service, Section 11)",
+                crate::billing::reminder_emails::format_local_date(commitment.deadline_at)
+            );
+            stripe
+                .create_fee_invoice(&FeeInvoice {
+                    customer,
+                    company_id,
+                    deadline: &deadline,
+                    payment_method,
+                    description: &description,
+                    automatic_tax: state.signup.automatic_tax,
+                    idempotency_key: &create_key(company_id, &deadline, recorded),
+                })
+                .await
+                .map_err(|e| stripe_error(&e))
+        }
+        _ => Err(FeeError::Held("no_invoice")),
+    }
+}
+
+/// Pays the open fee invoice; the invoice as Stripe has it after. A card
+/// decline is `fee_failed` (staff are told) and gives `None`. Any other
+/// failure is an error the next daily run retries, unless Stripe has the
+/// invoice paid ("already paid", a lost answer).
+async fn pay(
+    state: &AppState,
+    company_id: i32,
+    invoice_id: &str,
+    key: &str,
+    now: NaiveDateTime,
+) -> Result<Option<Value>, FeeError> {
+    let stripe = &state.stripe;
+    match stripe.pay_invoice(invoice_id, &format!("{key}:pay")).await {
+        Ok(invoice) => Ok(Some(invoice)),
+        Err(err) if is_decline(&err) => {
+            let saved = record_event(
+                &state.pool,
+                company_id,
+                invoice_id,
+                InvoiceEvent::Failed,
+                now,
+            )
+            .await?;
+            after_event(state, saved.as_ref()).await;
+            Ok(None)
+        }
+        Err(err) => {
+            let fresh = stripe
+                .invoice(invoice_id)
+                .await
+                .map_err(|_| stripe_error(&err))?;
+            if fresh["status"] == "paid" {
+                Ok(Some(fresh))
+            } else {
+                Err(stripe_error(&err))
+            }
+        }
+    }
+}
+
 /// Creates (or finds) the fee invoice, records it, then finalizes and pays
 /// it. Also finishes an invoice a crash left behind (`fee_invoiced` with a
-/// draft, or an open one never attempted). [`FeeError::Held`] without
-/// asking Stripe anything when [`hold_reason`] gives a reason.
+/// draft, or an open one never attempted), or withdraws it when the fee may
+/// no longer be charged ([`withdrawal`]). [`FeeError::Held`] without asking
+/// Stripe anything when a `notice_sent` fee may not be charged now.
 pub async fn charge(
     state: &AppState,
     stored: &Stored,
@@ -236,9 +492,24 @@ pub async fn charge(
     let company_id = commitment.company_id;
     let pool = &state.pool;
     let stripe = &state.stripe;
-    let consent = store::consent_on_file(pool, company_id).await?;
-    if let Some(reason) = hold_reason(commitment, state.onboarding_call.fee_charging, consent, now)
-    {
+    let facts = charge_facts(state, company_id).await?;
+    let blocked = withdrawal(commitment, &facts);
+    if let (Status::FeeInvoiced, Some(id), Some(reason)) = (
+        commitment.status,
+        commitment.stripe_invoice_id.as_deref(),
+        blocked,
+    ) {
+        return withdraw(state, company_id, id, reason, now).await;
+    }
+    let held = blocked.map(Withdrawal::as_str).or_else(|| {
+        hold_reason(
+            commitment,
+            facts.charging_enabled,
+            facts.consent_on_file,
+            now,
+        )
+    });
+    if let Some(reason) = held {
         return Err(FeeError::Held(reason));
     }
     let record = MySqlBillingStore(pool).by_company(company_id).await?;
@@ -248,48 +519,14 @@ pub async fn charge(
     if !stripe.is_enabled() {
         return Err(FeeError::Stripe("not_configured".into()));
     }
-    let deadline = deadline_key(commitment.deadline_at);
-    let key = format!("onboarding-fee:{company_id}:{deadline}");
-    let mut invoice = match (commitment.status, commitment.stripe_invoice_id.as_deref()) {
-        (Status::FeeInvoiced, Some(id)) => {
-            stripe.invoice(id).await.map_err(|e| stripe_error(&e))?
-        }
-        (Status::NoticeSent, _) => {
-            let existing = stripe
-                .customer_invoices(&customer)
-                .await
-                .map_err(|e| stripe_error(&e))?
-                .into_iter()
-                .find(|invoice| is_fee_invoice(invoice, company_id, &deadline));
-            match existing {
-                Some(invoice) => invoice,
-                None => {
-                    let description = format!(
-                        "Granite Manager onboarding fee: onboarding not completed by {} (Terms of Service, Section 11)",
-                        crate::billing::reminder_emails::format_local_date(commitment.deadline_at)
-                    );
-                    stripe
-                        .create_fee_invoice(&FeeInvoice {
-                            customer: &customer,
-                            company_id,
-                            deadline: &deadline,
-                            payment_method: record
-                                .as_ref()
-                                .and_then(|r| r.stripe_payment_method_id.as_deref()),
-                            description: &description,
-                            automatic_tax: state.signup.automatic_tax,
-                            idempotency_key: &key,
-                        })
-                        .await
-                        .map_err(|e| stripe_error(&e))?
-                }
-            }
-        }
-        _ => return Err(FeeError::Held("no_invoice")),
-    };
+    let payment_method = record
+        .as_ref()
+        .and_then(|r| r.stripe_payment_method_id.as_deref());
+    let mut invoice = fee_invoice(state, commitment, &customer, payment_method).await?;
     let Some(invoice_id) = invoice["id"].as_str().map(str::to_string) else {
         return Err(FeeError::Stripe("invalid_response".into()));
     };
+    let key = format!("onboarding-fee:{invoice_id}");
     if invoice["status"] == "draft" && !has_lines(&invoice) {
         stripe
             .create_invoice_item(
@@ -307,22 +544,22 @@ pub async fn charge(
         store::save(pool, stored.version, &outcome, now).await?;
     }
     if invoice["status"] == "draft" {
+        if let Some(stopped) = stop_unless_chargeable(state, company_id, &invoice_id, now).await? {
+            return Ok(stopped);
+        }
         invoice = stripe
             .finalize_invoice(&invoice_id, &format!("{key}:finalize"))
             .await
             .map_err(|e| stripe_error(&e))?;
     }
     if invoice["status"] == "open" && invoice["attempted"] != true {
-        invoice = match stripe.pay_invoice(&invoice_id, &format!("{key}:pay")).await {
-            Ok(invoice) => invoice,
-            Err(StripeError::Api(_)) => {
-                let saved =
-                    record_event(pool, company_id, &invoice_id, InvoiceEvent::Failed, now).await?;
-                after_event(state, saved.as_ref()).await;
-                return Ok(Charged::Failed);
-            }
-            Err(err) => return Err(stripe_error(&err)),
+        if let Some(stopped) = stop_unless_chargeable(state, company_id, &invoice_id, now).await? {
+            return Ok(stopped);
+        }
+        let Some(answered) = pay(state, company_id, &invoice_id, &key, now).await? else {
+            return Ok(Charged::Failed);
         };
+        invoice = answered;
     }
     if invoice["status"] == "paid" {
         record_event(pool, company_id, &invoice_id, InvoiceEvent::Paid, now).await?;
@@ -371,8 +608,73 @@ pub async fn apply_webhook(state: &AppState, event: &Value) -> Result<(), FeeErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::billing::stripe::StripeFailure;
     use crate::onboarding_call::commitment::{new_commitment, notice_sent};
     use serde_json::json;
+
+    fn failure(status: u16, kind: Option<&str>, code: &str) -> StripeFailure {
+        StripeFailure {
+            message: "Stripe said no".into(),
+            code: code.into(),
+            status,
+            kind: kind.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn only_a_card_decline_fails_the_fee() {
+        let declines = [
+            StripeError::Api(failure(402, Some("card_error"), "card_declined")),
+            StripeError::Api(failure(402, None, "http_402")),
+            StripeError::Api(failure(400, Some("card_error"), "expired_card")),
+        ];
+        assert!(declines.iter().all(is_decline));
+        let retried = [
+            StripeError::Api(failure(
+                400,
+                Some("idempotency_error"),
+                "idempotency_key_in_use",
+            )),
+            StripeError::Api(failure(
+                400,
+                Some("invalid_request_error"),
+                "invoice_already_paid",
+            )),
+            StripeError::Server(failure(500, Some("api_error"), "http_500")),
+            StripeError::Server(failure(429, None, "rate_limit")),
+            StripeError::Missing(failure(
+                404,
+                Some("invalid_request_error"),
+                "resource_missing",
+            )),
+            StripeError::Request("timed out".into()),
+            StripeError::NotConfigured,
+        ];
+        assert!(!retried.iter().any(is_decline));
+    }
+
+    #[test]
+    fn the_deadline_key_is_the_local_day_the_consent_named() {
+        let end_of_nov_22 =
+            NaiveDateTime::parse_from_str("2026-11-23 04:59:59", "%Y-%m-%d %H:%M:%S").unwrap();
+        assert_eq!(deadline_key(end_of_nov_22), "2026-11-22");
+    }
+
+    #[test]
+    fn a_new_invoice_after_a_withdrawn_one_gets_a_new_creation_key() {
+        assert_eq!(
+            create_key(7, "2026-11-22", 0),
+            "onboarding-fee:7:2026-11-22"
+        );
+        assert_eq!(
+            create_key(7, "2026-11-22", 1),
+            "onboarding-fee:7:2026-11-22:1"
+        );
+        assert_ne!(
+            create_key(7, "2026-11-22", 2),
+            create_key(7, "2026-11-22", 1)
+        );
+    }
 
     fn at(text: &str) -> NaiveDateTime {
         NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M").unwrap()

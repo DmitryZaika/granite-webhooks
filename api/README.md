@@ -193,7 +193,10 @@ changes in Dima's Calendly. Env: `CALENDLY_API_TOKEN` (the existing token,
 reused), `CALENDLY_BASE_URL` (default `https://api.calendly.com`), optional
 `CALENDLY_ONBOARDING_URL` (else the account's own page) and
 `ONBOARDING_FEE_CHARGING=1` (off: a passed deadline ends as `fee_skipped`,
-never charged later).
+never charged later). The onboarding emails are sent from
+`BILLING_EMAIL_FROM_ADDRESS`. Stripe does not retry a failed fee invoice
+(`fee_failed`): `SIGNUP_NOTIFY_USER_ID` (Telegram) and `SIGNUP_NOTIFY_EMAIL`
+also get that alert, and staff follow up by hand.
 
 ### Uploads and storage
 

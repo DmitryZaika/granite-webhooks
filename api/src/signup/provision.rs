@@ -378,8 +378,8 @@ async fn create_company_locked(state: &AppState, signup_id: &str) -> ApiResult<C
         refuse(state, &intent).await?;
         return Ok(Created::Done(RunOutcome::Refused));
     }
-    let (Some(trial_end_at), Some(fee_cents), Some(deadline_at)) =
-        (intent.trial_end_at, intent.fee_cents, intent.deadline_at)
+    let (Some(trial_end_at), Some(fee_cents), Some(accepted_at)) =
+        (intent.trial_end_at, intent.fee_cents, intent.accepted_at)
     else {
         return Err(ApiError::Internal(
             "The signup's terms were not frozen.".into(),
@@ -418,7 +418,7 @@ async fn create_company_locked(state: &AppState, signup_id: &str) -> ApiResult<C
     .bind(signup_id)
     .execute(&mut *tx)
     .await?;
-    create_onboarding_commitment(&mut tx, company_id, fee_cents, deadline_at).await?;
+    create_onboarding_commitment(&mut tx, company_id, fee_cents, accepted_at).await?;
     let linked = sqlx::query(
         "UPDATE signup_intents SET company_id = ?, user_id = ?, updated_at = ?
           WHERE id = ? AND status = 'provisioning' AND company_id IS NULL",
@@ -609,17 +609,18 @@ async fn apply(pool: &MySqlPool, company_id: i32, subscription: &Value) -> ApiRe
     applied.map_err(ApiError::from)
 }
 
-/// The company's onboarding commitment (`fee_cents` until `deadline_at`),
-/// inside the provisioning transaction.
+/// The company's onboarding commitment, inside the provisioning
+/// transaction: `fee_cents` unless onboarding is done by the day the consent
+/// accepted at `accepted_at` named (until its end in `SIGNUP_TZ`).
 pub async fn create_onboarding_commitment(
     conn: &mut MySqlConnection,
     company_id: i32,
     fee_cents: i64,
-    deadline_at: NaiveDateTime,
+    accepted_at: NaiveDateTime,
 ) -> sqlx::Result<()> {
+    use crate::onboarding_call::commitment::{new_commitment, signup_deadline_at};
     let now = billing::now();
-    let outcome =
-        crate::onboarding_call::commitment::new_commitment(company_id, now, deadline_at, fee_cents);
+    let outcome = new_commitment(company_id, now, signup_deadline_at(accepted_at), fee_cents);
     crate::onboarding_call::store::insert(conn, &outcome, now).await?;
     Ok(())
 }

@@ -298,8 +298,9 @@ async fn run_subscription_maintenance() {
     }
 }
 
-/// The onboarding job stops starting companies after 40 s.
-const ONBOARDING_COMMITMENTS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(55);
+/// The onboarding job starts no Calendly, Stripe or mail work after 20 s;
+/// 10 s more cover the call in flight.
+const ONBOARDING_COMMITMENTS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Onboarding call reminders, tolling, the fee notice and invoice; a failure
 /// never aborts the tick.

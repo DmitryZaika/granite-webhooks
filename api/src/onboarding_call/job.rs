@@ -38,13 +38,12 @@ pub const COMPANIES_PER_RUN: u32 = 25;
 /// Each company's run is due this long after its last start.
 pub const COMPANY_EVERY_HOURS: i64 = 23;
 /// No Calendly, Stripe or mail work is started after this.
-pub const RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(40);
+pub const RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 /// Calendly requests one company's run may make.
 pub const CALENDLY_CALLS_PER_COMPANY: u32 = 10;
 /// Calendly takes at most 7 days of slots per request.
 const MAX_SLOT_RANGE_DAYS: i64 = 7;
 const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-const DEFAULT_FROM_ADDRESS: &str = "noreply@granite-manager.com";
 
 /// What one run did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, ToSchema)]
@@ -357,10 +356,10 @@ async fn refresh_booking(
 }
 
 /// Where the search for an outside booking starts: signup, or just after
-/// the missed call's no-show.
+/// the start of the call marked as missed.
 fn search_from(commitment: &Commitment) -> NaiveDateTime {
     commitment
-        .no_show_at
+        .no_show_call_start_at
         .map_or(commitment.created_at, |missed| {
             missed.max(commitment.created_at) + Duration::seconds(1)
         })
@@ -368,7 +367,9 @@ fn search_from(commitment: &Commitment) -> NaiveDateTime {
 
 /// A call starting at `start` is not the missed one (nor older).
 fn after_missed_call(commitment: &Commitment, start: NaiveDateTime) -> bool {
-    commitment.no_show_at.is_none_or(|missed| start > missed)
+    commitment
+        .no_show_call_start_at
+        .is_none_or(|missed| start > missed)
 }
 
 /// A booking carrying the company's tag made outside the widget (a
@@ -496,18 +497,10 @@ async fn gather_facts(
     })
 }
 
-fn from_address() -> String {
-    std::env::var("BILLING_EMAIL_FROM_ADDRESS")
-        .ok()
-        .map(|address| address.trim().to_string())
-        .filter(|address| !address.is_empty())
-        .unwrap_or_else(|| DEFAULT_FROM_ADDRESS.to_string())
-}
-
 async fn send(state: &AppState, to: &str, email: &RenderedEmail) -> ReminderSendResult {
     let message = OutgoingEmail {
         from_name: Some("Granite Manager".into()),
-        from_address: from_address(),
+        from_address: fee::from_address(),
         to: vec![to.to_string()],
         cc: Vec::new(),
         bcc: Vec::new(),
@@ -650,6 +643,12 @@ async fn first_notice_at(
     .await
 }
 
+/// A booked call ends at or before the charge: like the rules, it holds the
+/// fee and completes the commitment.
+fn booked_before_charge(booking: Option<&Booking>, charge_at: NaiveDateTime) -> bool {
+    booking.is_some_and(|booking| booking.end_at <= charge_at)
+}
+
 /// The fee notice of the cycle starting at `cycle` to each Manager, once
 /// each, all naming the charge date of its first email. When the first went
 /// out (now or in an earlier run), if one did.
@@ -686,10 +685,7 @@ async fn send_notice(
             deadline_at: commitment.deadline_at,
             charge_at,
             payment_method: method.as_deref(),
-            booked_before_charge: commitment
-                .booking
-                .as_ref()
-                .is_some_and(|booking| booking.start_at < charge_at),
+            booked_before_charge: booked_before_charge(commitment.booking.as_ref(), charge_at),
             app_url: &state.app_url,
         });
         sent |= send_claimed(state, company_id, claim_id, &manager.email, &email, now).await?;
@@ -734,7 +730,10 @@ async fn company(
     if stored.commitment.status == Status::FeeInvoiced {
         // An invoice a crash left unfinished (draft, or never attempted).
         budget.check()?;
-        if fee::charge(state, &stored, now).await? != fee::Charged::Processing {
+        if matches!(
+            fee::charge(state, &stored, now).await?,
+            fee::Charged::Paid | fee::Charged::Failed
+        ) {
             run.invoices += 1;
         }
         return Ok(());
@@ -775,8 +774,12 @@ async fn company(
             }
             Due::Invoice => {
                 budget.check()?;
-                fee::charge(state, &stored, now).await?;
-                run.invoices += 1;
+                if !matches!(
+                    fee::charge(state, &stored, now).await?,
+                    fee::Charged::Withdrawn
+                ) {
+                    run.invoices += 1;
+                }
             }
         }
     }
@@ -917,17 +920,47 @@ mod tests {
                 .commitment;
         assert_eq!(search_from(&base), at("2026-10-01 12:00"));
         assert!(after_missed_call(&base, at("2026-10-02 09:00")));
+        // Called at 15:00, marked missed at 16:30: a call at 15:30 is new.
         let missed = Commitment {
-            no_show_at: Some(at("2026-10-10 16:00")),
+            no_show_at: Some(at("2026-10-10 16:30")),
+            no_show_call_start_at: Some(at("2026-10-10 15:00")),
             ..base
         };
         assert_eq!(
             search_from(&missed),
-            at("2026-10-10 16:00") + Duration::seconds(1)
+            at("2026-10-10 15:00") + Duration::seconds(1)
         );
+        assert!(!after_missed_call(&missed, at("2026-10-10 14:00")));
         assert!(!after_missed_call(&missed, at("2026-10-10 15:00")));
-        assert!(!after_missed_call(&missed, at("2026-10-10 16:00")));
+        assert!(after_missed_call(&missed, at("2026-10-10 15:30")));
         assert!(after_missed_call(&missed, at("2026-10-12 15:00")));
+    }
+
+    #[test]
+    fn a_call_ending_by_the_charge_counts_as_booked_before_it() {
+        let charge_at = at("2026-11-27 15:00");
+        let call = |start: &str| Booking {
+            event_uri: "https://api.calendly.com/scheduled_events/1".into(),
+            invitee_uri: "https://api.calendly.com/scheduled_events/1/invitees/1".into(),
+            start_at: at(start),
+            end_at: at(start) + Duration::minutes(30),
+            reschedule_url: None,
+            cancel_url: None,
+            booked_at: at("2026-11-01 12:00"),
+        };
+        assert!(!booked_before_charge(None, charge_at));
+        assert!(booked_before_charge(
+            Some(&call("2026-11-27 14:30")),
+            charge_at
+        ));
+        assert!(!booked_before_charge(
+            Some(&call("2026-11-27 14:31")),
+            charge_at
+        ));
+        assert!(!booked_before_charge(
+            Some(&call("2026-11-27 15:00")),
+            charge_at
+        ));
     }
 
     #[test]

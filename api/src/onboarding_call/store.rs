@@ -57,6 +57,7 @@ struct CommitmentRow {
     completed_at: Option<NaiveDateTime>,
     completed_by: Option<i32>,
     no_show_at: Option<NaiveDateTime>,
+    no_show_call_start_at: Option<NaiveDateTime>,
     suspended_at: Option<NaiveDateTime>,
     notice_sent_at: Option<NaiveDateTime>,
     notice_cycle_at: Option<NaiveDateTime>,
@@ -105,6 +106,7 @@ impl CommitmentRow {
                 completed_at: self.completed_at,
                 completed_by: self.completed_by,
                 no_show_at: self.no_show_at,
+                no_show_call_start_at: self.no_show_call_start_at,
                 suspended_at: self.suspended_at,
                 notice_sent_at: self.notice_sent_at,
                 notice_cycle_at: self.notice_cycle_at,
@@ -120,8 +122,8 @@ impl CommitmentRow {
 const COMMITMENT_SELECT: &str = "SELECT company_id, CAST(status AS CHAR) AS status, deadline_at,
         original_deadline_at, tolled_days, extension_used, fee_cents, calendly_invitee_uri,
         calendly_event_uri, calendly_reschedule_url, calendly_cancel_url, booked_start_at,
-        booked_end_at, booked_at, completed_at, completed_by, no_show_at, suspended_at,
-        notice_sent_at, notice_cycle_at, charge_after, stripe_invoice_id,
+        booked_end_at, booked_at, completed_at, completed_by, no_show_at, no_show_call_start_at,
+        suspended_at, notice_sent_at, notice_cycle_at, charge_after, stripe_invoice_id,
         availability_checked_on, version, created_at
    FROM company_onboarding_commitments";
 
@@ -218,7 +220,8 @@ pub async fn save(
                 extension_used = ?, fee_cents = ?, calendly_invitee_uri = ?,
                 calendly_event_uri = ?, calendly_reschedule_url = ?, calendly_cancel_url = ?,
                 booked_start_at = ?, booked_end_at = ?, booked_at = ?, completed_at = ?,
-                completed_by = ?, no_show_at = ?, suspended_at = ?, notice_sent_at = ?,
+                completed_by = ?, no_show_at = ?, no_show_call_start_at = ?, suspended_at = ?,
+                notice_sent_at = ?,
                 notice_cycle_at = ?, charge_after = ?, stripe_invoice_id = ?,
                 availability_checked_on = ?, updated_at = ?, version = version + 1
           WHERE company_id = ? AND version = ?",
@@ -239,6 +242,7 @@ pub async fn save(
     .bind(c.completed_at)
     .bind(c.completed_by)
     .bind(c.no_show_at)
+    .bind(c.no_show_call_start_at)
     .bind(c.suspended_at)
     .bind(c.notice_sent_at)
     .bind(c.notice_cycle_at)
@@ -257,6 +261,18 @@ pub async fn save(
     insert_events(&mut *tx, c.company_id, &outcome.events, now).await?;
     tx.commit().await?;
     Ok(version + 1)
+}
+
+/// Fee invoices recorded for the company so far (`invoiced` events): a new
+/// invoice after a withdrawn one gets a new idempotency key.
+pub async fn fee_invoices_recorded(pool: &MySqlPool, company_id: i32) -> sqlx::Result<i64> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM company_onboarding_commitment_events
+          WHERE company_id = ? AND kind = 'invoiced'",
+    )
+    .bind(company_id)
+    .fetch_one(pool)
+    .await
 }
 
 /// The outcome changes something worth a write.

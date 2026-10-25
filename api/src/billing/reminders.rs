@@ -21,6 +21,7 @@ use super::store::StoreResult;
 use super::{PaymentStatus, add_grace_days, first_payment_deadline, is_awaiting_first_payment};
 use crate::webhooks_client::SendFailure;
 use chrono::{Duration, NaiveDateTime};
+use lambda_http::tracing;
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -983,7 +984,18 @@ async fn first_charge_company<S: ReminderStore, E: ReminderEffects>(
         open_contacts(contacts, &stored_rows, due.step, now)
     };
     let company_name = store.company_name(company_id).await?;
-    let onboarding = store.onboarding_line(company_id).await?;
+    // Best effort: the email goes out without the line rather than not at all.
+    let onboarding = store
+        .onboarding_line(company_id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                %error,
+                company_id,
+                "onboarding line for the first-charge email not read"
+            );
+            None
+        });
     for contact in open {
         if limit_reached(effects, limits, result) {
             return Ok(());
@@ -1204,6 +1216,7 @@ mod tests {
         /// moment the lock is released, before the next email.
         pay_on_unlock: Cell<Option<NaiveDateTime>>,
         onboarding: Cell<Option<OnboardingLine>>,
+        onboarding_fails: Cell<bool>,
     }
 
     fn contact(user_id: i32, name: &str, email: &str) -> ReminderContact {
@@ -1252,6 +1265,7 @@ mod tests {
             send_cost: Cell::new(std::time::Duration::ZERO),
             pay_on_unlock: Cell::new(None),
             onboarding: Cell::new(None),
+            onboarding_fails: Cell::new(false),
         }
     }
 
@@ -1312,6 +1326,9 @@ mod tests {
             Ok("Granite Co".into())
         }
         async fn onboarding_line(&self, _: i32) -> StoreResult<Option<OnboardingLine>> {
+            if self.onboarding_fails.get() {
+                return Err(db_down());
+            }
             Ok(self.onboarding.get())
         }
         async fn reminders(
@@ -2246,6 +2263,29 @@ mod tests {
                 .text
                 .contains("Your onboarding call is booked for Fri, Oct 16 at 10:00 AM EDT.")
         }));
+    }
+
+    #[tokio::test]
+    async fn first_charge_goes_without_the_onboarding_line_when_it_cannot_be_read() {
+        let fake = fake();
+        with_trial(&fake);
+        fake.onboarding.set(Some(OnboardingLine::Complete));
+        fake.onboarding_fails.set(true);
+
+        let result = fake.tick(trial_ends() - Duration::days(7)).await;
+
+        assert_eq!(result.sent, 2);
+        assert_eq!(result.company_errors, 0);
+        assert_eq!(
+            fake.subjects(),
+            first_charge_subjects(&["October 20, 2026"])
+        );
+        assert!(
+            fake.sent
+                .borrow()
+                .iter()
+                .all(|email| !email.text.contains("Onboarding"))
+        );
     }
 
     #[tokio::test]

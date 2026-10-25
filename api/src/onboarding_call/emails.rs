@@ -153,7 +153,8 @@ pub struct NoticeInput<'a> {
     pub charge_at: NaiveDateTime,
     /// `Visa ending in 4242`, when known.
     pub payment_method: Option<&'a str>,
-    /// A call is booked to start before `charge_at`.
+    /// A booked call ends at or before `charge_at` (the rules then hold the
+    /// fee and complete the commitment).
     pub booked_before_charge: bool,
     pub app_url: &'a str,
 }
@@ -189,7 +190,7 @@ pub fn render_notice(input: &NoticeInput<'_>) -> RenderedEmail {
             ];
             if input.booked_before_charge {
                 paragraphs.push(format!(
-                    "You have a call booked before {charge_date}. Once it has taken place, the fee is not charged."
+                    "You have an onboarding call booked. If your call has taken place before {charge_date}, the fee is not charged."
                 ));
             }
             paragraphs.push(format!(
@@ -367,7 +368,7 @@ mod tests {
                 .text
                 .contains("Read the Terms, Section 11: https://app.example.com/terms")
         );
-        assert!(!email.text.contains("You have a call booked"));
+        assert!(!email.text.contains("You have an onboarding call booked"));
         assert_clean(&email);
     }
 
@@ -438,6 +439,27 @@ mod tests {
     }
 
     #[test]
+    fn the_booked_call_line_names_the_local_charge_date() {
+        let email = render_notice(&NoticeInput {
+            company_name: "Granite Co",
+            user_name: None,
+            fee_cents: 60_000,
+            deadline_at: at("2026-11-21 03:00:00"),
+            charge_at: at("2026-11-28 02:00:00"),
+            payment_method: None,
+            booked_before_charge: true,
+            app_url: APP_URL,
+        });
+        assert!(email.text.contains(
+            "If your call has taken place before November 27, 2026, the fee is not charged."
+        ));
+        assert!(email.html.contains(
+            "If your call has taken place before November 27, 2026, the fee is not charged."
+        ));
+        assert!(!all(&email).contains("November 28"));
+    }
+
+    #[test]
     fn the_notice_names_a_booked_call_and_falls_back_to_the_method_on_file() {
         let email = notice(None, true);
         assert!(
@@ -446,7 +468,7 @@ mod tests {
                 .contains("will be charged to the payment method on file.")
         );
         assert!(email.text.contains(
-            "You have a call booked before November 27, 2026. Once it has taken place, the fee is not charged."
+            "You have an onboarding call booked. If your call has taken place before November 27, 2026, the fee is not charged."
         ));
         assert_clean(&email);
         let escaped = notice(Some("<i>Card</i>"), false);

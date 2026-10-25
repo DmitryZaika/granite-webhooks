@@ -47,6 +47,10 @@ pub struct StripeFailure {
     pub message: String,
     /// Stripe's `error.code`, else `error.type`, else `http_<status>`.
     pub code: String,
+    /// The HTTP status; 0 when Stripe was not asked.
+    pub status: u16,
+    /// Stripe's `error.type` (`card_error`, `invalid_request_error`), if any.
+    pub kind: Option<String>,
 }
 
 impl std::fmt::Display for StripeFailure {
@@ -60,6 +64,8 @@ impl StripeFailure {
         Self {
             message: message.into(),
             code: code.into(),
+            status: 0,
+            kind: None,
         }
     }
 }
@@ -169,10 +175,10 @@ impl Stripe {
         let body: Value = match response.json().await {
             Ok(body) => body,
             Err(_) if status.is_server_error() => {
-                return Err(StripeError::Server(StripeFailure::new(
-                    status.to_string(),
-                    format!("http_{}", status.as_u16()),
-                )));
+                return Err(StripeError::Server(StripeFailure {
+                    status: status.as_u16(),
+                    ..StripeFailure::new(status.to_string(), format!("http_{}", status.as_u16()))
+                }));
             }
             Err(err) => return Err(StripeError::Request(err.without_url().to_string())),
         };
@@ -185,10 +191,14 @@ impl Stripe {
             .or_else(|| error["type"].as_str())
             .filter(|code| !code.is_empty())
             .map_or_else(|| format!("http_{}", status.as_u16()), str::to_string);
-        let message = StripeFailure::new(
-            error["message"].as_str().unwrap_or("Stripe request failed"),
-            code,
-        );
+        let message = StripeFailure {
+            status: status.as_u16(),
+            kind: error["type"].as_str().map(str::to_string),
+            ..StripeFailure::new(
+                error["message"].as_str().unwrap_or("Stripe request failed"),
+                code,
+            )
+        };
         Err(
             if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 StripeError::Server(message)
@@ -1228,6 +1238,30 @@ impl Stripe {
     pub async fn pay_invoice(&self, id: &str, idempotency_key: &str) -> Result<Value, StripeError> {
         self.post_keyed(
             &format!("/v1/invoices/{}/pay", path_part(id)),
+            &[],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Deletes a draft invoice; `Missing` when already gone.
+    pub async fn delete_invoice(&self, id: &str) -> Result<Value, StripeError> {
+        self.send(
+            reqwest::Method::DELETE,
+            &format!("/v1/invoices/{}", path_part(id)),
+            &[],
+        )
+        .await
+    }
+
+    /// Voids an open invoice (a draft is deleted instead).
+    pub async fn void_invoice(
+        &self,
+        id: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/invoices/{}/void", path_part(id)),
             &[],
             idempotency_key,
         )
