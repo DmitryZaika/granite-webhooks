@@ -6,12 +6,22 @@ name: API tests
 # .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local, where
 # common's query! macros check their SQL at compile time, so every migration
 # is applied there first, as in deploy-lambda.yml.
+#
+# On demand from any branch, with optional cargo test arguments in place of the
+# fixed suites below:
+#   gh workflow run "API tests" --ref <branch> [-f cargo_args="-p api --test sms_flows"]
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      cargo_args:
+        description: cargo test arguments (empty runs the PR suites)
+        required: false
+        default: ''
 
 concurrency:
-  group: api-pr-${{ github.event.pull_request.number }}
+  group: api-pr-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -55,9 +65,11 @@ jobs:
           done
 
       - name: OpenAPI checks
+        if: inputs.cargo_args == ''
         run: cargo test -p api --test openapi
 
       - name: Granite Phone tests
+        if: inputs.cargo_args == ''
         run: >-
           cargo test -p api
           --test phone_admin
@@ -85,6 +97,7 @@ jobs:
           --test server_errors
 
       - name: Follow-up tests
+        if: inputs.cargo_args == ''
         run: >-
           cargo test -p api
           --test followup_flows
@@ -93,3 +106,7 @@ jobs:
           --test followup_instruction
           --test followup_settings
           --test sms_flows
+
+      - name: Requested tests
+        if: inputs.cargo_args != ''
+        run: cargo test ${{ inputs.cargo_args }}
