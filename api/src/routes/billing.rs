@@ -230,8 +230,10 @@ pub struct WebhookReceived {
 /// Receive a Stripe event
 ///
 /// Stripe's webhook endpoint: checkout, subscription, invoice and payment
-/// method events update the company's billing (each event once). Needs a
-/// valid `Stripe-Signature` for `STRIPE_WEBHOOK_SECRET`; no session.
+/// method events update the company's billing (each event once). Events of
+/// the onboarding fee invoice (`metadata.kind = onboarding_fee`) only move
+/// the company's onboarding commitment. Needs a valid `Stripe-Signature` for
+/// `STRIPE_WEBHOOK_SECRET`; no session.
 #[utoipa::path(
     post,
     path = "/v1/webhooks/stripe",
@@ -263,6 +265,14 @@ pub async fn stripe_webhook(
     }
     let event: Value = serde_json::from_slice(&body)
         .map_err(|_| ApiError::BadRequest("Invalid webhook payload".into()))?;
+    if crate::onboarding_call::fee::is_fee_event(&event) {
+        // The onboarding fee invoice: never subscription billing.
+        if let Err(err) = crate::onboarding_call::fee::apply_webhook(&state, &event).await {
+            tracing::error!(code = %err.code(), "onboarding fee webhook failed");
+            return Err(ApiError::Internal("Webhook processing failed".into()));
+        }
+        return Ok(Json(WebhookReceived { received: true }));
+    }
     let Some(normalized) = normalize_event(&event) else {
         return Ok(Json(WebhookReceived { received: true }));
     };

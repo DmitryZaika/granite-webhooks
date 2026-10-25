@@ -1133,6 +1133,108 @@ pub async fn latest_event(
     }
 }
 
+/// The onboarding fee invoice (03-stripe.md section 3.5).
+#[derive(Debug, Clone)]
+pub struct FeeInvoice<'a> {
+    pub customer: &'a str,
+    pub company_id: i32,
+    /// `YYYY-MM-DD` of the deadline the fee is for.
+    pub deadline: &'a str,
+    /// The company's stored payment method, charged instead of the
+    /// customer's default when set.
+    pub payment_method: Option<&'a str>,
+    pub description: &'a str,
+    pub automatic_tax: bool,
+    /// `onboarding-fee:<company_id>:<deadline>`.
+    pub idempotency_key: &'a str,
+}
+
+/// The onboarding fee: a standalone invoice created first, its one item
+/// attached with `invoice=` (so no other pending item is swept in), then
+/// finalized and paid. Every POST carries an idempotency key.
+impl Stripe {
+    /// The customer's invoices, any status, newest first (up to 100).
+    pub async fn customer_invoices(&self, customer: &str) -> Result<Vec<Value>, StripeError> {
+        let list = self
+            .get(
+                "/v1/invoices",
+                &[("customer", customer.into()), ("limit", "100".into())],
+            )
+            .await?;
+        Ok(data(list))
+    }
+
+    /// A draft invoice that collects automatically and picks up no pending
+    /// items, tagged `metadata[kind]=onboarding_fee`.
+    pub async fn create_fee_invoice(&self, fee: &FeeInvoice<'_>) -> Result<Value, StripeError> {
+        let mut form: Vec<(&str, String)> = vec![
+            ("customer", fee.customer.into()),
+            ("collection_method", "charge_automatically".into()),
+            ("auto_advance", "false".into()),
+            ("pending_invoice_items_behavior", "exclude".into()),
+            ("description", fee.description.into()),
+            ("metadata[kind]", "onboarding_fee".into()),
+            ("metadata[company_id]", fee.company_id.to_string()),
+            ("metadata[deadline]", fee.deadline.into()),
+        ];
+        if let Some(method) = fee.payment_method {
+            form.push(("default_payment_method", method.into()));
+        }
+        if fee.automatic_tax {
+            form.push(("automatic_tax[enabled]", "true".into()));
+        }
+        self.post_keyed("/v1/invoices", &form, fee.idempotency_key)
+            .await
+    }
+
+    /// One USD line on a draft invoice.
+    pub async fn create_invoice_item(
+        &self,
+        customer: &str,
+        invoice: &str,
+        amount_cents: i64,
+        description: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            "/v1/invoiceitems",
+            &[
+                ("customer", customer.into()),
+                ("invoice", invoice.into()),
+                ("amount", amount_cents.to_string()),
+                ("currency", "usd".into()),
+                ("description", description.into()),
+            ],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Finalizes a draft invoice without automatic advancement.
+    pub async fn finalize_invoice(
+        &self,
+        id: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/invoices/{}/finalize", path_part(id)),
+            &[("auto_advance", "false".into())],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// Charges an open invoice now; a decline is `StripeError::Api`.
+    pub async fn pay_invoice(&self, id: &str, idempotency_key: &str) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/invoices/{}/pay", path_part(id)),
+            &[],
+            idempotency_key,
+        )
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

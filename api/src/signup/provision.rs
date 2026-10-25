@@ -609,15 +609,17 @@ async fn apply(pool: &MySqlPool, company_id: i32, subscription: &Value) -> ApiRe
     applied.map_err(ApiError::from)
 }
 
-/// Step 09 hook: the company's onboarding commitment (`fee_cents` until
-/// `deadline_at`), inside the provisioning transaction. Nothing yet.
-#[allow(clippy::unused_async)]
+/// The company's onboarding commitment (`fee_cents` until `deadline_at`),
+/// inside the provisioning transaction.
 pub async fn create_onboarding_commitment(
     conn: &mut MySqlConnection,
     company_id: i32,
     fee_cents: i64,
     deadline_at: NaiveDateTime,
 ) -> sqlx::Result<()> {
-    let _ = (conn, company_id, fee_cents, deadline_at);
+    let now = billing::now();
+    let outcome =
+        crate::onboarding_call::commitment::new_commitment(company_id, now, deadline_at, fee_cents);
+    crate::onboarding_call::store::insert(conn, &outcome, now).await?;
     Ok(())
 }

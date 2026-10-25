@@ -48,6 +48,7 @@ pub mod marketing;
 pub mod me;
 pub mod notifications;
 pub mod onboarding;
+pub mod onboarding_call;
 pub mod online_quotes;
 pub mod phone;
 pub mod places;
@@ -159,6 +160,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(auth::router())
         .merge(app_shell::router())
         .merge(onboarding::router())
+        .merge(onboarding_call::router())
         .merge(ai::router())
         .merge(notifications::router())
         .merge(quickbooks::router())

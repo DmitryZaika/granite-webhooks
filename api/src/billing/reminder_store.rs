@@ -1,5 +1,6 @@
 //! `billing_reminder_emails` and the billing facts the reminders read, on MySQL.
 
+use super::reminder_emails::OnboardingLine;
 use super::reminders::{
     ClaimedReminder, CompanyBillingSnapshot, DunningCycle, DunningKind, FIRST_CHARGE_NOTICE_DAYS,
     FIRST_CHARGE_RECHECK_HOURS, NO_USER, RECOVERED_NOTICE_WINDOW_DAYS, REMINDER_CYCLE_MAX_AGE_DAYS,
@@ -201,6 +202,12 @@ impl ReminderStore for MySqlReminderStore<'_> {
                 .fetch_optional(self.0)
                 .await?;
         Ok(name.flatten().unwrap_or_default())
+    }
+
+    async fn onboarding_line(&self, company_id: i32) -> StoreResult<Option<OnboardingLine>> {
+        Ok(crate::onboarding_call::store::load(self.0, company_id)
+            .await?
+            .and_then(|stored| OnboardingLine::of(&stored.commitment)))
     }
 
     async fn reminders(
