@@ -49360,7 +49360,7 @@
           "phone"
         ],
         "summary": "Create a contact",
-        "description": "Creates a customer with this name, phone and company, with the caller as\nthe sales rep (source `call-in`) and an open deal, and returns them as an\nindex contact; calls from the number match them at once. 400\n`invalid_phone` unless a US or Canada number; 400 for an empty or too\nlong name. Device token only.",
+        "description": "Creates a customer with this name, phone, company, email and address,\nwith the caller as the sales rep (source `call-in`) and an open deal, and\nreturns them as an index contact; calls from the number match them at\nonce. 400 `invalid_phone` unless a US or Canada number; 400 for an empty\nor too long name or an invalid email; 409 when another customer of the\ncompany has the email. Device token only.",
         "operationId": "create_phone_contact",
         "requestBody": {
           "content": {
@@ -49384,7 +49384,7 @@
             }
           },
           "400": {
-            "description": "`invalid_phone`, or the name is empty or too long",
+            "description": "`invalid_phone`, the name is empty or too long, or the email is invalid",
             "content": {
               "application/json": {
                 "schema": {
@@ -49395,6 +49395,16 @@
           },
           "401": {
             "description": "No valid device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another customer of the company has this email",
             "content": {
               "application/json": {
                 "schema": {
@@ -73972,6 +73982,20 @@
               "null"
             ],
             "description": "Their company name; null or empty for none."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their email (becomes the customer's primary address); null or empty\nfor none."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their street address, as typed; null or empty for none."
           }
         }
       },
