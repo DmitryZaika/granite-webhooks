@@ -4,7 +4,11 @@
 //! memory, answers a repeated `Idempotency-Key` with the first response (and a
 //! changed request under a used key with Stripe's 400 `idempotency_error`), and
 //! can fail the next matching requests: before doing anything (an outage), or
-//! after doing the work (the answer was lost). Include it with
+//! after doing the work (the answer was lost). Also: subscription updates
+//! (`cancel_at_period_end`, `default_payment_method`), invoice previews
+//! (`POST /v1/invoices/create_preview`: the items' monthly sum, or 404 when the
+//! subscription ends at its period end), `GET /v1/invoices` from `invoices`,
+//! and `payment_methods`, which a customer's default expands into. Include it with
 //! `#[path = "support/fake_stripe.rs"] mod fake_stripe;`.
 #![allow(dead_code)]
 
@@ -69,6 +73,14 @@ pub struct FakeStripe {
     pub customers: HashMap<String, Value>,
     pub setup_intents: HashMap<String, Value>,
     pub subscriptions: HashMap<String, Value>,
+    /// Invoice objects, answered by `GET /v1/invoices` (any customer).
+    pub invoices: Vec<Value>,
+    /// Payment method objects by id, expanded into a customer's
+    /// `invoice_settings.default_payment_method` and a subscription's
+    /// `default_payment_method`.
+    pub payment_methods: HashMap<String, Value>,
+    /// Tax added to each invoice preview, in cents.
+    pub preview_tax: i64,
     pub requests: Vec<Seen>,
     idempotent: HashMap<String, (String, String, StatusCode, Value)>,
     failures: Vec<Failure>,
@@ -89,6 +101,22 @@ pub fn catalog_prices() -> Vec<Value> {
     .into_iter()
     .map(|(id, key, cents)| price(id, key, cents))
     .collect()
+}
+
+/// A card payment method.
+pub fn card(id: &str, brand: &str, last4: &str) -> Value {
+    json!({
+        "id": id, "object": "payment_method", "type": "card",
+        "card": { "brand": brand, "last4": last4, "exp_month": 12, "exp_year": 2030 },
+    })
+}
+
+/// A US bank account payment method.
+pub fn bank_account(id: &str, bank_name: &str, last4: &str) -> Value {
+    json!({
+        "id": id, "object": "payment_method", "type": "us_bank_account",
+        "us_bank_account": { "bank_name": bank_name, "last4": last4, "account_type": "checking" },
+    })
 }
 
 /// An active monthly USD per-unit price.
@@ -158,7 +186,8 @@ impl FakeStripe {
             .unwrap_or_else(|| price(id, "", 0))
     }
 
-    fn item(&mut self, price_id: &str, quantity: i64, subscription: &str) -> Value {
+    /// Adds a subscription item to the fake (tests seeding a subscription).
+    pub fn item(&mut self, price_id: &str, quantity: i64, subscription: &str) -> Value {
         let id = self.id("si");
         json!({
             "id": id, "object": "subscription_item", "subscription": subscription,
@@ -206,7 +235,16 @@ impl FakeStripe {
                 ok(customer)
             }
             ("GET", ["v1", "customers", id]) => match self.customers.get(*id) {
-                Some(customer) => ok(customer.clone()),
+                Some(customer) => {
+                    let mut customer = customer.clone();
+                    let default = &customer["invoice_settings"]["default_payment_method"];
+                    if let Some(method) =
+                        default.as_str().and_then(|id| self.payment_methods.get(id))
+                    {
+                        customer["invoice_settings"]["default_payment_method"] = method.clone();
+                    }
+                    ok(customer)
+                }
                 None => missing(),
             },
             ("POST", ["v1", "customers", id]) => {
@@ -285,7 +323,99 @@ impl FakeStripe {
                 ok(json!({ "object": "list", "data": data }))
             }
             ("GET", ["v1", "subscriptions", id]) => match self.subscriptions.get(*id) {
-                Some(subscription) => ok(subscription.clone()),
+                Some(subscription) => {
+                    let mut subscription = subscription.clone();
+                    let default = &subscription["default_payment_method"];
+                    if let Some(method) =
+                        default.as_str().and_then(|id| self.payment_methods.get(id))
+                    {
+                        subscription["default_payment_method"] = method.clone();
+                    }
+                    ok(subscription)
+                }
+                None => missing(),
+            },
+            ("POST", ["v1", "subscriptions", id]) => {
+                let Some(subscription) = self.subscriptions.get_mut(*id) else {
+                    return missing();
+                };
+                if let Some(cancel) = one("cancel_at_period_end") {
+                    let cancel = cancel == "true";
+                    subscription["cancel_at_period_end"] = json!(cancel);
+                    let end = if subscription["status"] == "trialing" {
+                        subscription["trial_end"].clone()
+                    } else {
+                        subscription["items"]["data"][0]["current_period_end"].clone()
+                    };
+                    subscription["cancel_at"] = if cancel { end } else { Value::Null };
+                    subscription["cancellation_details"]["comment"] =
+                        one("cancellation_details[comment]").map_or(Value::Null, |c| json!(c));
+                }
+                if let Some(method) = one("default_payment_method") {
+                    subscription["default_payment_method"] = json!(method);
+                }
+                ok(subscription.clone())
+            }
+            ("POST", ["v1", "invoices", "create_preview"]) => {
+                let id = one("subscription").unwrap_or_default();
+                let Some(subscription) = self.subscriptions.get(&id) else {
+                    return missing();
+                };
+                if subscription["cancel_at_period_end"] == true {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        json!({ "error": { "type": "invalid_request_error",
+                            "code": "invoice_upcoming_none",
+                            "message": "No upcoming invoices for customer" } }),
+                    );
+                }
+                let items = subscription["items"]["data"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                let lines: Vec<Value> = items
+                    .iter()
+                    .map(|item| {
+                        let quantity = item["quantity"].as_i64().unwrap_or(1);
+                        let amount = item["price"]["unit_amount"].as_i64().unwrap_or(0) * quantity;
+                        json!({ "object": "line_item", "amount": amount, "quantity": quantity,
+                            "description": format!("{quantity} x {}", item["price"]["lookup_key"].as_str().unwrap_or("item")),
+                            "pricing": { "price_details": { "price": item["price"]["id"] } } })
+                    })
+                    .collect();
+                let subtotal: i64 = lines
+                    .iter()
+                    .filter_map(|line| line["amount"].as_i64())
+                    .sum();
+                let total = subtotal + self.preview_tax;
+                let date = if subscription["status"] == "trialing" {
+                    subscription["trial_end"].clone()
+                } else {
+                    items
+                        .first()
+                        .map_or(Value::Null, |item| item["current_period_end"].clone())
+                };
+                ok(json!({
+                    "object": "invoice", "customer": subscription["customer"], "subscription": id,
+                    "subtotal": subtotal, "total": total, "amount_due": total,
+                    "total_excluding_tax": subtotal,
+                    "total_taxes": [{ "amount": self.preview_tax }],
+                    "period_end": date, "next_payment_attempt": date, "currency": "usd",
+                    "lines": { "object": "list", "data": lines },
+                }))
+            }
+            ("GET", ["v1", "invoices"]) => {
+                let customer = one("customer");
+                let data: Vec<Value> = self
+                    .invoices
+                    .iter()
+                    .filter(|invoice| customer.as_deref().is_none_or(|c| invoice["customer"] == c))
+                    .cloned()
+                    .collect();
+                ok(json!({ "object": "list", "data": data, "has_more": false }))
+            }
+            ("GET", ["v1", "payment_methods", id]) => match self.payment_methods.get(*id) {
+                Some(method) => ok(method.clone()),
                 None => missing(),
             },
             ("POST", ["v1", "subscription_items"]) => {

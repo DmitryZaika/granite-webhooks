@@ -10,6 +10,7 @@
 use super::JobCaller;
 use crate::billing::CompanyBilling;
 use crate::billing::account::{default_card, reconcile_batch};
+use crate::billing::amount_notice::process_amount_notices;
 use crate::billing::gate::settle_company_locked;
 use crate::billing::lock::{CompanyLock, LockError};
 use crate::billing::reminder_store::MySqlReminderStore;
@@ -45,6 +46,8 @@ const DEFAULT_FROM_ADDRESS: &str = "noreply@granite-manager.com";
 /// Companies re-read from Stripe per run, and the time they may take.
 const RECONCILE_BATCH: u32 = 50;
 const RECONCILE_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+/// No amount-change notice is started after this much of the run.
+const AMOUNT_NOTICE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(45);
 
 /// What this run's batch of the Stripe reconciliation did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
@@ -77,9 +80,17 @@ pub struct BillingRemindersRun {
     /// pass starts every 6 hours and continues over the next runs), or null
     /// when no pass is running or Stripe is not configured.
     pub reconciled: Option<ReconcileRun>,
+    /// Self-serve companies whose Managers were emailed this run that their
+    /// monthly total changed (at most one notice per company a day; up to 50
+    /// companies looked at per run).
+    pub amount_notices: usize,
 }
 
-const fn run_of(tick: ReminderTickResult, reconciled: Option<ReconcileRun>) -> BillingRemindersRun {
+const fn run_of(
+    tick: ReminderTickResult,
+    reconciled: Option<ReconcileRun>,
+    amount_notices: usize,
+) -> BillingRemindersRun {
     BillingRemindersRun {
         processed: tick.processed,
         sent: tick.sent,
@@ -88,6 +99,7 @@ const fn run_of(tick: ReminderTickResult, reconciled: Option<ReconcileRun>) -> B
         stuck: tick.stuck,
         company_errors: tick.company_errors,
         reconciled,
+        amount_notices,
     }
 }
 
@@ -340,8 +352,11 @@ async fn reconcile(state: &AppState, now: NaiveDateTime) -> Option<ReconcileRun>
 /// subscription is set to cancel by then). Each recipient gets each reminder
 /// once; a refused email is retried up to 3 times, 5 minutes apart; an email
 /// whose outcome is unknown is never resent. A run sends at most 20 emails
-/// and starts no new company after 40 seconds. Reminders are skipped while the mail service is not
-/// configured.
+/// and starts no new company after 40 seconds. Then the amount-change
+/// notices: when a self-serve company's monthly total changed (users or
+/// add-ons), its Managers get one email a day with the old and new totals and
+/// the charge the new total first applies to (`amount_notices`). Reminders and
+/// notices are skipped while the mail service is not configured.
 #[utoipa::path(
     post,
     path = "/v1/jobs/billing-reminders",
@@ -364,7 +379,7 @@ pub async fn run(
     if !state.webhooks.is_enabled() {
         // A send could never succeed and would turn every claim into unknown.
         tracing::warn!("billing reminders skipped: the mail service is not configured");
-        return Ok(Json(run_of(ReminderTickResult::default(), reconciled)));
+        return Ok(Json(run_of(ReminderTickResult::default(), reconciled, 0)));
     }
     let effects = LiveReminders {
         state: &state,
@@ -382,5 +397,7 @@ pub async fn run(
         ReminderLimits::default(),
     )
     .await;
-    Ok(Json(run_of(tick, reconciled)))
+    let amount_notices =
+        process_amount_notices(&state, now, started + AMOUNT_NOTICE_DEADLINE).await;
+    Ok(Json(run_of(tick, reconciled, amount_notices)))
 }

@@ -54,7 +54,7 @@ const SUBSCRIBE: &str = "Subscribe";
 const VIEW_BILLING: &str = "View billing";
 const PAUSED_SUBJECT: &str = "Access to Granite Manager is paused";
 const TOMORROW_SUBJECT: &str = "Access to Granite Manager will be paused tomorrow";
-const SUPPORT_EMAIL: &str = "support@granite-manager.com";
+pub(crate) const SUPPORT_EMAIL: &str = "support@granite-manager.com";
 
 fn payment_failed_copy(step: ReminderStep, company: &str, date: &str) -> Option<Copy> {
     let (subject, paragraphs, action) = match step {
@@ -193,14 +193,14 @@ fn billing_link(app_url: &str) -> String {
     format!("{}{BILLING_PATH}", app_url.trim_end_matches('/'))
 }
 
-fn greeting(user_name: Option<&str>) -> String {
+pub(crate) fn greeting(user_name: Option<&str>) -> String {
     user_name
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map_or_else(|| "Hello,".to_string(), |name| format!("Hi {name},"))
 }
 
-fn company_or_default(name: &str) -> &str {
+pub(crate) fn company_or_default(name: &str) -> &str {
     let name = name.trim();
     if name.is_empty() {
         "your company"
@@ -209,17 +209,17 @@ fn company_or_default(name: &str) -> &str {
     }
 }
 
-fn footer(company: &str) -> String {
+pub(crate) fn footer(company: &str) -> String {
     format!(
         "Sign in with your usual account to open the billing page. This email was sent to managers of {company}."
     )
 }
 
-fn html_paragraph(body: &str) -> String {
+pub(crate) fn html_paragraph(body: &str) -> String {
     format!("<p style=\"margin:0 0 16px;font-size:15px;line-height:22px;color:#1f2937\">{body}</p>")
 }
 
-fn html_button(link: &str, action: &str) -> String {
+pub(crate) fn html_button(link: &str, action: &str) -> String {
     format!(
         "<p style=\"margin:24px 0\"><a href=\"{}\" style=\"background:#111827;color:#ffffff;padding:12px 20px;border-radius:6px;text-decoration:none;font-size:15px;display:inline-block\">{}</a></p>",
         escape_html(link),
@@ -227,14 +227,14 @@ fn html_button(link: &str, action: &str) -> String {
     )
 }
 
-fn html_footer(company_html: &str) -> String {
+pub(crate) fn html_footer(company_html: &str) -> String {
     format!(
         "<p style=\"margin:0;font-size:13px;line-height:20px;color:#6b7280\">{}</p>",
         footer(company_html)
     )
 }
 
-fn wrap_html(parts: Vec<String>) -> String {
+pub(crate) fn wrap_html(parts: Vec<String>) -> String {
     let mut all =
         vec!["<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:560px\">".to_string()];
     all.extend(parts);
@@ -288,6 +288,9 @@ pub struct FirstChargeEmailInput<'a> {
     pub user_name: Option<&'a str>,
     pub quote: &'a FirstChargeQuote,
     pub app_url: &'a str,
+    /// The payments app's account page (`payments_account_url()`), where a
+    /// Manager can use "Request cancellation".
+    pub account_url: &'a str,
 }
 
 /// The notice 7 days before the first charge of a self-serve subscription.
@@ -307,7 +310,15 @@ pub fn render_first_charge_email(input: &FirstChargeEmailInput<'_>) -> RenderedE
         )
     };
     let per_user = "Each active user above 10 adds $30.00 per month, counted on the charge date.";
-    let cancel = format!("To cancel before {date} and pay nothing, email {SUPPORT_EMAIL}.");
+    let cancel = format!(
+        "To cancel before {date} and pay nothing, use Request cancellation on your account page ({}), or email {SUPPORT_EMAIL}.",
+        input.account_url
+    );
+    let cancel_html = format!(
+        "To cancel before {} and pay nothing, use <a href=\"{}\" style=\"color:#111827\">Request cancellation</a> on your account page, or email {SUPPORT_EMAIL}.",
+        escape_html(&date),
+        escape_html(input.account_url)
+    );
     let change = "To change your payment method, open the billing page.";
     let hello = greeting(input.user_name);
     let company_html = escape_html(company);
@@ -335,7 +346,7 @@ pub fn render_first_charge_email(input: &FirstChargeEmailInput<'_>) -> RenderedE
         html_paragraph("This includes:"),
         list_html,
         html_paragraph(per_user),
-        html_paragraph(&escape_html(&cancel)),
+        html_paragraph(&cancel_html),
         html_paragraph(change),
         html_button(&link, VIEW_BILLING),
         html_footer(&company_html),
@@ -364,6 +375,7 @@ mod tests {
     use crate::billing::test_store::at;
 
     const APP_URL: &str = "https://app.example.com";
+    const ACCOUNT_URL: &str = "https://payments.example.com/account";
 
     fn pauses_at() -> NaiveDateTime {
         at("2026-10-08 15:00:00")
@@ -497,6 +509,7 @@ mod tests {
             user_name: Some("Ann"),
             quote: &quote,
             app_url: "https://app.example.com/",
+            account_url: ACCOUNT_URL,
         });
 
         assert_eq!(
@@ -514,7 +527,10 @@ mod tests {
             "Each active user above 10 adds $30.00 per month, counted on the charge date."
         ));
         assert!(email.text.contains(
-            "To cancel before October 8, 2026 and pay nothing, email support@granite-manager.com."
+            "To cancel before October 8, 2026 and pay nothing, use Request cancellation on your account page (https://payments.example.com/account), or email support@granite-manager.com."
+        ));
+        assert!(email.html.contains(
+            "use <a href=\"https://payments.example.com/account\" style=\"color:#111827\">Request cancellation</a> on your account page, or email support@granite-manager.com."
         ));
         assert!(
             email
@@ -531,7 +547,8 @@ mod tests {
             "<li style=\"margin:0 0 4px\">&lt;b&gt;Quotes add-on&lt;/b&gt;: $34.50</li>"
         ));
         assert!(!email.html.contains("<b>"));
-        assert_eq!(email.html.matches("href=").count(), 1);
+        // The billing page and the account page.
+        assert_eq!(email.html.matches("href=").count(), 2);
         let all = format!("{}\n{}\n{}", email.subject, email.html, email.text);
         assert!(!all.contains('\u{2014}') && !all.contains('\u{2013}'));
     }
@@ -547,6 +564,7 @@ mod tests {
             user_name: None,
             quote: &quote,
             app_url: APP_URL,
+            account_url: ACCOUNT_URL,
         });
         assert!(email.text.starts_with("Hello,"));
         assert!(

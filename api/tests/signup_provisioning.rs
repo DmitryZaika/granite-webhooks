@@ -726,7 +726,8 @@ async fn the_job_expires_abandoned_signups_and_reconciles_seats_daily(pool: MySq
     assert_eq!(first["expired"], 2);
     assert_eq!(first["processed"], 2);
     assert_eq!(first["errors"], 0);
-    assert_eq!(first["seat_companies"], 1);
+    // This signup plus the seeded subscription company 20500 (needs no extra-user item).
+    assert_eq!(first["seat_companies"], 2);
     assert_eq!(first["seat_errors"], 0);
 
     let gone = env.intent(&abandoned).await;

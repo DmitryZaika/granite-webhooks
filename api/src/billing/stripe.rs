@@ -96,8 +96,16 @@ impl Stripe {
         Self::new(None, API_BASE)
     }
 
+    /// `STRIPE_API_BASE` replaces `https://api.stripe.com` for local e2e runs
+    /// against a fake Stripe.
     pub fn from_env() -> Self {
-        Self::new(std::env::var("STRIPE_SECRET_KEY").ok().as_deref(), API_BASE)
+        let base = std::env::var("STRIPE_API_BASE")
+            .ok()
+            .filter(|base| !base.trim().is_empty());
+        Self::new(
+            std::env::var("STRIPE_SECRET_KEY").ok().as_deref(),
+            base.as_deref().unwrap_or(API_BASE),
+        )
     }
 
     /// `base` is `https://api.stripe.com` (a stub in tests).
@@ -797,6 +805,46 @@ impl Stripe {
                 ("quantity", quantity.to_string()),
                 ("proration_behavior", "create_prorations".into()),
             ],
+            idempotency_key,
+        )
+        .await
+    }
+
+    /// The next invoice of the subscription as Stripe would draft it now.
+    /// Read only: the key is unique per call, so a stale preview is never
+    /// replayed.
+    pub async fn preview_invoice(
+        &self,
+        customer: &str,
+        subscription: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            "/v1/invoices/create_preview",
+            &[
+                ("customer", customer.into()),
+                ("subscription", subscription.into()),
+            ],
+            &format!("preview:{subscription}:{}", uuid::Uuid::new_v4()),
+        )
+        .await
+    }
+
+    /// Schedules the subscription to end at its period end (`true`), or
+    /// withdraws that (`false`). `comment`: the customer's reason.
+    pub async fn set_cancel_at_period_end(
+        &self,
+        subscription: &str,
+        cancel: bool,
+        comment: Option<&str>,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        let mut form = vec![("cancel_at_period_end", cancel.to_string())];
+        if let Some(comment) = comment {
+            form.push(("cancellation_details[comment]", comment.into()));
+        }
+        self.post_keyed(
+            &format!("/v1/subscriptions/{}", path_part(subscription)),
+            &form,
             idempotency_key,
         )
         .await

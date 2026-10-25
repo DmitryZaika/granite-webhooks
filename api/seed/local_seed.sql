@@ -561,3 +561,39 @@ INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VA
   ('aaaaaaaa-0000-4000-8000-000000020101', 20101, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
   ('aaaaaaaa-0000-4000-8000-000000020102', 20102, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
   ('aaaaaaaa-0000-4000-8000-000000020103', 20103, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);
+
+-- Self-serve account page (ids 20500-20599), for the payments app's e2e
+-- against a fake Stripe that knows customer cus_sb10 and subscription
+-- sub_sb10 (base + Quotes items).
+-- 20500 Sb10 Stone: subscription plan, in its free period until 2037-01-21,
+--   Quotes bought through the subscription.
+-- 20501 Sb10 Other Stone: another subscription company without a Stripe
+--   subscription (tenant isolation).
+-- Users: 20500 manager + 20501 rep of 20500; 20502 manager of 20501.
+-- Sessions aaaaaaaa-0000-4000-8000-0000000<user id>.
+INSERT INTO company (id, name, plan_source) VALUES
+  (20500, 'Sb10 Stone', 'subscription'),
+  (20501, 'Sb10 Other Stone', 'subscription');
+
+INSERT INTO company_billing
+  (company_id, stripe_customer_id, stripe_subscription_id, subscription_status, payment_status,
+   trial_end_at, monthly_price_cents) VALUES
+  (20500, 'cus_sb10', 'sub_sb10', 'trialing', 'active', '2037-01-21 05:00:00', 37500);
+
+INSERT INTO company_addons (company_id, addon_key, source, stripe_subscription_item_id, granted_by, started_at, ended_at) VALUES
+  (20500, 'quotes', 'subscription', 'si_sb10_quotes', NULL, '2026-10-01 00:00:00', NULL);
+
+INSERT INTO users (id, email, password, name, is_employee, is_admin, is_superuser, is_deleted, company_id) VALUES
+  (20500, 'manager@sb10.test',       '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Dana Manager',  1, 1, 0, 0, 20500),
+  (20501, 'rep@sb10.test',           '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Remy Rep',      1, 0, 0, 0, 20500),
+  (20502, 'manager@sb10-other.test', '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Otto Manager',  1, 1, 0, 0, 20501);
+
+INSERT INTO users_positions (user_id, position_id, company_id) VALUES
+  (20500, 5, 20500),
+  (20501, 1, 20500),
+  (20502, 5, 20501);
+
+INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VALUES
+  ('aaaaaaaa-0000-4000-8000-000000020500', 20500, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020501', 20501, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020502', 20502, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);

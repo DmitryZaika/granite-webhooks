@@ -133,15 +133,10 @@ pub struct AppShell {
 impl ShellPlan {
     /// `PAYMENTS_APP_URL` is read per request, like `SMS_IMAGES_ENABLED`.
     fn of(plan: &Entitlements) -> Self {
-        let base = std::env::var("PAYMENTS_APP_URL")
-            .ok()
-            .map(|url| url.trim().trim_end_matches('/').to_string())
-            .filter(|url| !url.is_empty())
-            .unwrap_or_else(|| "https://payments.granite-manager.com".into());
         Self {
             source: plan.source(),
             addons: plan.entitled(),
-            manage_url: format!("{base}/account"),
+            manage_url: crate::billing::payments_account_url(),
         }
     }
 }

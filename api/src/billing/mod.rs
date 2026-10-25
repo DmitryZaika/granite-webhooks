@@ -11,6 +11,10 @@
 //! the CRM's `billing*.ts` on `fix/stripe-billing`.
 
 pub mod account;
+pub mod addons;
+pub mod amount_notice;
+pub mod cancellation;
+pub mod cancellation_emails;
 pub mod catalog;
 pub mod gate;
 pub mod items;
@@ -429,6 +433,17 @@ pub fn outstanding_balance_cents(invoices: &[BillingInvoice]) -> i64 {
         .filter(|invoice| invoice.status == "open")
         .map(|invoice| invoice.amount_due_cents)
         .sum()
+}
+
+/// The payments app's account page: `PAYMENTS_APP_URL` (read per call,
+/// default `https://payments.granite-manager.com`) + `/account`.
+pub fn payments_account_url() -> String {
+    let base = std::env::var("PAYMENTS_APP_URL")
+        .ok()
+        .map(|url| url.trim().trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| "https://payments.granite-manager.com".into());
+    format!("{base}/account")
 }
 
 /// The current time, whole seconds (what a DATETIME column keeps).

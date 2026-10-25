@@ -979,6 +979,7 @@ async fn first_charge_company<S: ReminderStore, E: ReminderEffects>(
         open_contacts(contacts, &stored_rows, due.step, now)
     };
     let company_name = store.company_name(company_id).await?;
+    let account_url = super::payments_account_url();
     for contact in open {
         if limit_reached(effects, limits, result) {
             return Ok(());
@@ -999,6 +1000,7 @@ async fn first_charge_company<S: ReminderStore, E: ReminderEffects>(
             user_name: contact.name.as_deref(),
             quote: &quote,
             app_url: effects.app_url(),
+            account_url: &account_url,
         });
         let email = ReminderEmail {
             to: contact.email,
@@ -2216,6 +2218,11 @@ mod tests {
         let sent = fake.sent.borrow();
         assert!(sent[0].text.contains("$300.00 plus applicable sales tax"));
         assert!(sent[0].text.contains("Visa ending in 4242"));
+        let cancel = format!(
+            "use Request cancellation on your account page ({}), or email support@granite-manager.com.",
+            crate::billing::payments_account_url()
+        );
+        assert!(sent[0].text.contains(&cancel));
     }
 
     #[tokio::test]
