@@ -50881,7 +50881,7 @@
           "phone"
         ],
         "summary": "Text from one of my lines",
-        "description": "Sends an SMS from `ourNumberId` (a number I may call from) to `to`\n(US and Canada only) and returns it (`queued`; Telnyx's delivery events\nupdate it), with the thread marked read for me. 400 `invalid_phone` or\na bad text (1 to 1600 characters), 403 `texting_disabled` /\n`not_my_line`, 409 `opted_out` (the person texted STOP), 429\n`rate_limited` (ten texts a minute, shared with the CRM) with\n`retryAfterSecs`, 502 when Telnyx failed.",
+        "description": "Sends an SMS from `ourNumberId` (a number I may call from) to `to`\n(US and Canada only) and returns it (`queued`; Telnyx's delivery events\nupdate it), with the thread marked read for me. Files from\n`POST /v1/sms/attachments` go with it (pictures as MMS, other files as\nlinks). 400 `invalid_phone`, a bad text (up to 1600 characters, a text or\na file), or a bad file (`invalid_attachment`, `too_many_images`,\n`images_disabled`), 403 `texting_disabled` /\n`not_my_line`, 409 `opted_out` (the person texted STOP), 429\n`rate_limited` (ten texts a minute, shared with the CRM) with\n`retryAfterSecs`, 502 when Telnyx failed.",
         "operationId": "send_phone_text",
         "requestBody": {
           "content": {
@@ -50905,7 +50905,7 @@
             }
           },
           "400": {
-            "description": "`invalid_phone`, `empty_message` or `text_too_long`",
+            "description": "`invalid_phone`, `empty_message`, `text_too_long`, `invalid_attachment`, `too_many_images` or `images_disabled`",
             "content": {
               "application/json": {
                 "schema": {
@@ -84001,8 +84001,7 @@
         "description": "Body of `POST /v1/phone/texts`.",
         "required": [
           "ourNumberId",
-          "to",
-          "text"
+          "to"
         ],
         "properties": {
           "ourNumberId": {
@@ -84016,7 +84015,14 @@
           },
           "text": {
             "type": "string",
-            "description": "The text, 1 to 1600 characters."
+            "description": "The text, up to 1600 characters; may be empty with files."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SmsFile"
+            },
+            "description": "Up to ten files made ready by `POST /v1/sms/attachments` (pictures go\nas MMS, other files as links), as for the CRM's texts."
           }
         }
       },

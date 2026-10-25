@@ -76,10 +76,12 @@ pub const DEVICE_READ_ROUTES: [&str; 6] = [
 ];
 
 /// CRM actions the app's composer calls with its device token: exactly these
-/// paths, `POST` only (an email attachment's upload URL, Improve message, AI
-/// reply, and a template's `{{variables}}` filled for Use Template).
-pub const DEVICE_ACTIONS: [&str; 4] = [
+/// paths, `POST` only (an attachment's upload URL, a text's files made ready
+/// to send, Improve message, AI reply, and a template's `{{variables}}`
+/// filled for Use Template).
+pub const DEVICE_ACTIONS: [&str; 5] = [
     "/v1/uploads",
+    "/v1/sms/attachments",
     "/v1/ai/improve",
     "/v1/ai/conversation-reply",
     "/v1/templates/fill",
@@ -341,6 +343,7 @@ mod tests {
     fn the_composer_actions_are_exact_posts() {
         for path in [
             "/v1/uploads",
+            "/v1/sms/attachments",
             "/v1/ai/improve",
             "/v1/ai/conversation-reply",
             "/v1/templates/fill",
@@ -354,6 +357,7 @@ mod tests {
             "/v1/ai/email-template",
             "/v1/ai/agentic-questions",
             "/v1/templates",
+            "/v1/sms/ringcentral/messages",
         ] {
             assert!(!device_route(&Method::POST, path), "{path}");
         }

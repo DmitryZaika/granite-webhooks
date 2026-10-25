@@ -12,7 +12,8 @@ use crate::phone::texting;
 use crate::phone::texts::{self, TextMessage, TextThread, ThreadFilter, ThreadKey};
 use crate::serde_helpers::js_date_required;
 use crate::state::AppState;
-use crate::webhooks_client::OutgoingSms;
+use crate::routes::sms::send::{SendSmsRequest, SmsFile, check};
+use crate::webhooks_client::{OutgoingSms, OutgoingSmsFile};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -26,8 +27,6 @@ const DEFAULT_THREADS: i64 = 30;
 /// Texts per page by default.
 const DEFAULT_MESSAGES: i64 = 50;
 const MAX_PAGE: i64 = 100;
-/// Longest text.
-const MAX_TEXT: usize = 1600;
 /// How long a media link works.
 const MEDIA_LINK_SECS: i64 = 300;
 
@@ -97,8 +96,13 @@ pub struct SendText {
     pub our_number_id: i32,
     /// The other number: E.164 or 10 digits (US and Canada only).
     pub to: String,
-    /// The text, 1 to 1600 characters.
+    /// The text, up to 1600 characters; may be empty with files.
+    #[serde(default)]
     pub text: String,
+    /// Up to ten files made ready by `POST /v1/sms/attachments` (pictures go
+    /// as MMS, other files as links), as for the CRM's texts.
+    #[serde(default)]
+    pub attachments: Vec<SmsFile>,
 }
 
 /// 403 `texting_disabled` unless the company texts through Telnyx.
@@ -350,8 +354,11 @@ pub async fn text_media(
 ///
 /// Sends an SMS from `ourNumberId` (a number I may call from) to `to`
 /// (US and Canada only) and returns it (`queued`; Telnyx's delivery events
-/// update it), with the thread marked read for me. 400 `invalid_phone` or
-/// a bad text (1 to 1600 characters), 403 `texting_disabled` /
+/// update it), with the thread marked read for me. Files from
+/// `POST /v1/sms/attachments` go with it (pictures as MMS, other files as
+/// links). 400 `invalid_phone`, a bad text (up to 1600 characters, a text or
+/// a file), or a bad file (`invalid_attachment`, `too_many_images`,
+/// `images_disabled`), 403 `texting_disabled` /
 /// `not_my_line`, 409 `opted_out` (the person texted STOP), 429
 /// `rate_limited` (ten texts a minute, shared with the CRM) with
 /// `retryAfterSecs`, 502 when Telnyx failed.
@@ -363,7 +370,7 @@ pub async fn text_media(
     request_body = SendText,
     responses(
         (status = 201, description = "Sent", body = TextMessage),
-        (status = 400, description = "`invalid_phone`, `empty_message` or `text_too_long`", body = ErrorBody),
+        (status = 400, description = "`invalid_phone`, `empty_message`, `text_too_long`, `invalid_attachment`, `too_many_images` or `images_disabled`", body = ErrorBody),
         (status = 401, description = "No valid device token", body = ErrorBody),
         (status = 403, description = "`texting_disabled` or `not_my_line`", body = ErrorBody),
         (status = 409, description = "`opted_out`: the person texted STOP", body = ErrorBody),
@@ -391,11 +398,43 @@ pub async fn send_text(
         .ok_or_else(|| bad_request("invalid_phone"))?;
     let other10 = last10(&to).ok_or_else(|| bad_request("invalid_phone"))?;
     let text = body.text.trim();
-    if text.is_empty() {
-        return Err(bad_request("empty_message"));
+    // The CRM's own checks of a text: files under the company's prefix and of
+    // a type that can go, at most ten, a text or a file, at most 1600 characters.
+    let request = SendSmsRequest {
+        phone_digits: other10.clone(),
+        text: text.to_string(),
+        attachments: body.attachments.clone(),
+        template_id: None,
+        customer_id: None,
+        send_at: None,
+        cancel_if_customer_messages: false,
+    };
+    if let Err(token) = check(user, &request) {
+        return Err(bad_request(token));
     }
-    if text.chars().count() > MAX_TEXT {
-        return Err(bad_request("text_too_long"));
+    let mut attachments = Vec::with_capacity(body.attachments.len());
+    for file in &body.attachments {
+        let filename: String = file.filename.chars().take(255).collect();
+        let fallback = if file.content_type.starts_with("image/") {
+            "image"
+        } else {
+            "file"
+        };
+        attachments.push(OutgoingSmsFile {
+            url: state
+                .storage
+                .public_url(&file.s3_key)
+                .map_err(|err| -> ApiError { err.into() })?,
+            s3_key: file.s3_key.clone(),
+            content_type: file.content_type.clone(),
+            filename: if filename.is_empty() {
+                fallback.to_string()
+            } else {
+                filename
+            },
+            width: file.width,
+            height: file.height,
+        });
     }
     if texting::is_opted_out(pool, user.company_id, &to).await? {
         return Err(ApiError::Conflict("opted_out".into()));
@@ -410,7 +449,7 @@ pub async fn send_text(
         agent_id: user.id.to_string(),
         phone_digits: other10.clone(),
         text: text.to_string(),
-        attachments: Vec::new(),
+        attachments,
         is_automated: false,
         idempotency_key: None,
     };
