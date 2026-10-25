@@ -133,8 +133,27 @@ def _failure_text(output: dict[str, Any] | None, stderr: str) -> str:
         errors = output.get("errors")
         if isinstance(errors, list):
             parts.extend(str(item) for item in errors)
-    parts.append(stderr.strip())
+    parts.append(_readable(stderr))
     return "\n".join(part for part in parts if part)
+
+
+_CODE_FRAME = re.compile(r"^\s*\d+ \| ")
+_LONGEST_LINE = 400
+
+
+def _readable(stderr: str) -> str:
+    """stderr without the CLI's own source: when it crashes, Bun prints the
+    minified bundle around the throw and a stack into it, which would bury
+    the one `error:` line in the email."""
+    lines = (line.rstrip() for line in stderr.splitlines())
+    kept = (
+        line
+        for line in lines
+        if "$bunfs" not in line
+        and not _CODE_FRAME.match(line)
+        and len(line) <= _LONGEST_LINE
+    )
+    return "\n".join(kept).strip()
 
 
 def validate_result(value: object) -> dict[str, Any]:

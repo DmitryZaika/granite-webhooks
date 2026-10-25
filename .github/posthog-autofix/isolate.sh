@@ -17,6 +17,20 @@ for pin in "$@"; do
   [[ $pin =~ ^[a-z0-9.-]+=[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || { echo "bad pin: $pin" >&2; exit 1; }
 done
 
+# --- The CLI's subprocess sandbox -----------------------------------------------
+# CLAUDE_CODE_SUBPROCESS_ENV_SCRUB runs each command of the agent in bubblewrap
+# (its own user and PID namespaces, the token variables unset). Ubuntu 24.04's
+# AppArmor blocks unprivileged user namespaces; the runner is thrown away
+# after the job. check-isolation proves the sandbox starts as the user.
+if ! command -v bwrap >/dev/null; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get -qq -o Acquire::Retries=3 update
+  apt-get -qq -o Acquire::Retries=3 install -y --no-install-recommends bubblewrap
+fi
+if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+  sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0
+fi
+
 # --- The user and its files ---------------------------------------------------
 useradd --create-home --shell /bin/bash --user-group "$user"
 # The runner's home holds the job's temp files, step scripts and outputs.
