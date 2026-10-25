@@ -7,7 +7,10 @@
 //! question narrow the scope, chunks score by matching words (with typo
 //! tolerance), group numbers and dollar signs, and a character budget is
 //! shared so every file gets its best chunk. Port of the CRM's
-//! `supplierChatContext.server.ts` and `fillDownSlabSizes`.
+//! `supplierChatContext.server.ts` and `fillDownSlabSizes`. The quote
+//! builder's search for one color of one supplier
+//! ([`build_color_context`]) reads only that supplier's files and scores
+//! by the color's words.
 
 use regex::Regex;
 use serde::Serialize;
@@ -19,6 +22,10 @@ use utoipa::ToSchema;
 /// Characters of excerpts given to the model.
 const CONTEXT_CHUNK_BUDGET: usize = 9000;
 const MIN_CHARS_PER_SOURCE_FILE: usize = 400;
+/// A color search's bonus for a chunk with every word of the color (typos
+/// allowed), and for one with the whole color name as written.
+const ALL_COLOR_WORDS_BONUS: usize = 6;
+const COLOR_PHRASE_BONUS: usize = 12;
 
 const STOP_WORDS: &[&str] = &[
     "a",
@@ -213,10 +220,21 @@ fn char_len(text: &str) -> usize {
     text.chars().count()
 }
 
-fn normalize_thickness(text: &str) -> String {
+/// Lowercase, with a thickness written as one word (`3 cm` → `3cm`).
+pub fn normalize_thickness(text: &str) -> String {
     THICKNESS
         .replace_all(&text.to_lowercase(), "${1}cm")
         .into_owned()
+}
+
+/// The words of a text, lowercase and single-spaced, to find a name in it
+/// as written.
+fn phrase_words(text: &str) -> String {
+    NON_ALNUM
+        .split(&normalize_thickness(text))
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn query_terms(query: &str) -> Vec<String> {
@@ -344,13 +362,45 @@ fn score_chunks(rows: Vec<ChunkRow>, query: &str) -> Vec<ScoredChunk> {
             ScoredChunk { row, score }
         })
         .collect();
+    best_first(&mut scored);
+    scored
+}
+
+/// Chunks scored for one color: its words only (not the supplier's), in
+/// the heading and text, with a bonus when all of them are there and a
+/// bigger one when the whole name is.
+fn score_color_chunks(rows: Vec<ChunkRow>, color: &str) -> Vec<ScoredChunk> {
+    let terms = query_terms(color);
+    let phrase = format!(" {} ", phrase_words(color));
+    let mut scored: Vec<ScoredChunk> = rows
+        .into_iter()
+        .map(|row| {
+            let text = format!("{} {}", row.heading, row.content);
+            let matched = count_matching_terms(&terms, &text);
+            let mut score = matched;
+            if matched > 0 && matched == terms.len() {
+                score += ALL_COLOR_WORDS_BONUS;
+            }
+            if phrase.trim().len() >= 2 && format!(" {} ", phrase_words(&text)).contains(&phrase) {
+                score += COLOR_PHRASE_BONUS;
+            }
+            if row.content.contains('$') {
+                score += 4;
+            }
+            ScoredChunk { row, score }
+        })
+        .collect();
+    best_first(&mut scored);
+    scored
+}
+
+fn best_first(scored: &mut [ScoredChunk]) {
     scored.sort_by(|a, b| {
         b.score
             .cmp(&a.score)
             .then(a.row.file_id.cmp(&b.row.file_id))
             .then(a.row.chunk_index.cmp(&b.row.chunk_index))
     });
-    scored
 }
 
 /// Every file's best chunk first (each capped to its share of the budget),
@@ -618,24 +668,34 @@ pub async fn readiness_for_suppliers(
     query.build_query_as().fetch_one(pool).await
 }
 
+async fn company_suppliers(
+    pool: &MySqlPool,
+    company_id: i32,
+) -> Result<Vec<SupplierRow>, sqlx::Error> {
+    sqlx::query_as("SELECT id, supplier_name FROM suppliers WHERE company_id = ? ORDER BY id")
+        .bind(company_id)
+        .fetch_all(pool)
+        .await
+}
+
+const fn no_suppliers() -> PriceListContext {
+    PriceListContext {
+        context: String::new(),
+        sources: Vec::new(),
+        readiness: None,
+        supplier_name: String::new(),
+    }
+}
+
 /// The price-list excerpts that answer `query`, for the company.
 pub async fn build_context(
     pool: &MySqlPool,
     company_id: i32,
     query: &str,
 ) -> Result<PriceListContext, sqlx::Error> {
-    let suppliers: Vec<SupplierRow> =
-        sqlx::query_as("SELECT id, supplier_name FROM suppliers WHERE company_id = ? ORDER BY id")
-            .bind(company_id)
-            .fetch_all(pool)
-            .await?;
+    let suppliers = company_suppliers(pool, company_id).await?;
     if suppliers.is_empty() {
-        return Ok(PriceListContext {
-            context: String::new(),
-            sources: Vec::new(),
-            readiness: None,
-            supplier_name: String::new(),
-        });
+        return Ok(no_suppliers());
     }
     let matched = matching_suppliers(&suppliers, query);
     let scope: Vec<i32> = if matched.is_empty() {
@@ -646,21 +706,79 @@ pub async fn build_context(
     .iter()
     .map(|supplier| supplier.id)
     .collect();
+    excerpts(pool, company_id, &scope, matched.first(), |rows| {
+        score_chunks(rows, query)
+    })
+    .await
+}
 
-    let mut chunk_query: QueryBuilder<MySql> = QueryBuilder::new(
-        "SELECT CAST(sf.id AS SIGNED) AS file_id, sf.name AS file_name, sf.url AS file_url,
-                s.supplier_name, c.heading, c.content, c.chunk_index
-           FROM supplier_file_chunks c
-           JOIN supplier_files sf ON sf.id = c.supplier_file_id
-           JOIN suppliers s ON s.id = sf.supplier_id
-          WHERE sf.status = 'ready' AND s.company_id = ",
-    );
-    chunk_query.push_bind(company_id);
-    crate::sql::push_in(&mut chunk_query, "sf.supplier_id", &scope);
-    chunk_query.push(" ORDER BY sf.id, c.chunk_index");
-    let rows: Vec<ChunkRow> = chunk_query.build_query_as().fetch_all(pool).await?;
+/// The price-list excerpts for one color of one supplier.
+///
+/// The supplier is the company's suppliers with that name (trimmed, any
+/// case), else the closest names; no other supplier's files are read, and
+/// none at all when no name is close. Chunks score by the color's words
+/// only.
+pub async fn build_color_context(
+    pool: &MySqlPool,
+    company_id: i32,
+    supplier: &str,
+    color: &str,
+) -> Result<PriceListContext, sqlx::Error> {
+    let suppliers = company_suppliers(pool, company_id).await?;
+    if suppliers.is_empty() {
+        return Ok(no_suppliers());
+    }
+    let name = supplier.trim().to_lowercase();
+    let exact: Vec<SupplierRow> = suppliers
+        .iter()
+        .filter(|s| {
+            s.supplier_name
+                .as_deref()
+                .is_some_and(|n| n.trim().to_lowercase() == name)
+        })
+        .cloned()
+        .collect();
+    let matched = if exact.is_empty() {
+        matching_suppliers(&suppliers, supplier)
+    } else {
+        exact
+    };
+    let scope: Vec<i32> = matched.iter().map(|supplier| supplier.id).collect();
+    excerpts(pool, company_id, &scope, matched.first(), |rows| {
+        score_color_chunks(rows, color)
+    })
+    .await
+}
 
-    let selected = select_chunks(&score_chunks(rows.clone(), query));
+/// The context from the ready files of the suppliers in `scope` (an empty
+/// scope reads none), and their readiness. `top` is the supplier the
+/// search named, for the note on files still processing; `rank` scores
+/// the chunks, best first.
+async fn excerpts(
+    pool: &MySqlPool,
+    company_id: i32,
+    scope: &[i32],
+    top: Option<&SupplierRow>,
+    rank: impl FnOnce(Vec<ChunkRow>) -> Vec<ScoredChunk>,
+) -> Result<PriceListContext, sqlx::Error> {
+    let rows: Vec<ChunkRow> = if scope.is_empty() {
+        Vec::new()
+    } else {
+        let mut chunk_query: QueryBuilder<MySql> = QueryBuilder::new(
+            "SELECT CAST(sf.id AS SIGNED) AS file_id, sf.name AS file_name, sf.url AS file_url,
+                    s.supplier_name, c.heading, c.content, c.chunk_index
+               FROM supplier_file_chunks c
+               JOIN supplier_files sf ON sf.id = c.supplier_file_id
+               JOIN suppliers s ON s.id = sf.supplier_id
+              WHERE sf.status = 'ready' AND s.company_id = ",
+        );
+        chunk_query.push_bind(company_id);
+        crate::sql::push_in(&mut chunk_query, "sf.supplier_id", scope);
+        chunk_query.push(" ORDER BY sf.id, c.chunk_index");
+        chunk_query.build_query_as().fetch_all(pool).await?
+    };
+
+    let selected = select_chunks(&rank(rows.clone()));
     let filled = fill_down_selected(&rows, selected);
 
     let (mut sections, sources) = render_sources(filled);
@@ -668,8 +786,7 @@ pub async fn build_context(
         sections.push("\nNo matching supplier price-list content was found.".into());
     }
 
-    let readiness = readiness_for_suppliers(pool, company_id, &scope).await?;
-    let top = matched.first();
+    let readiness = readiness_for_suppliers(pool, company_id, scope).await?;
     if let Some(top) = top
         && (readiness.processing > 0 || readiness.failed > 0)
     {
@@ -721,6 +838,50 @@ mod tests {
         assert!(term_matches("edeli", "Calacatta Edelia"));
         assert!(!term_matches("msx", "MSI"));
         assert!(term_matches("3cm", "| 3 cm |"));
+    }
+
+    fn chunk_row(file_id: i64, chunk_index: i32, heading: &str, content: &str) -> ChunkRow {
+        ChunkRow {
+            file_id,
+            file_name: "Stellar price list".into(),
+            file_url: String::new(),
+            supplier_name: Some("Cosentino".into()),
+            heading: heading.into(),
+            content: content.into(),
+            chunk_index,
+        }
+    }
+
+    #[test]
+    fn a_color_scores_by_its_own_words_most_for_the_whole_name() {
+        let rows = vec![
+            chunk_row(1, 0, "Silestone", "| Stellar Snow | 2cm | $2,042.23 |"),
+            chunk_row(1, 1, "Silestone", "| Night Stellar | 2cm | $1,990.00 |"),
+            chunk_row(1, 2, "Silestone", "| Stellar Night | 3cm | $2,609.33 |"),
+            chunk_row(1, 3, "Cosentino Stellar", "Terms and conditions"),
+        ];
+        let scored: Vec<(i32, usize)> = score_color_chunks(rows, "Stellar  Night")
+            .iter()
+            .map(|s| (s.row.chunk_index, s.score))
+            .collect();
+        // Both words + all-words bonus + the whole name + the dollar sign.
+        assert_eq!(scored, [(2, 24), (1, 12), (0, 5), (3, 1)]);
+    }
+
+    #[test]
+    fn a_color_name_matches_as_written_whatever_the_case_and_spacing() {
+        assert_eq!(phrase_words("Calacatta  LAZA, 3 cm"), "calacatta laza 3cm");
+        let rows = vec![chunk_row(1, 0, "", "| CALACATTA-LAZA | $28 |")];
+        assert_eq!(
+            score_color_chunks(rows, "calacatta laza")[0].score,
+            2 + 6 + 12 + 4
+        );
+        // A typo still counts the word, but is not the name as written.
+        let rows = vec![chunk_row(1, 0, "", "| Calacatta Laza | $28 |")];
+        assert_eq!(
+            score_color_chunks(rows, "calacata laza")[0].score,
+            2 + 6 + 4
+        );
     }
 
     #[test]

@@ -539,14 +539,18 @@ async fn offers_come_from_the_price_lists_through_the_ai(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .json::<Value>();
+    let url = format!("https://files.example/{list}.pdf");
     assert_eq!(
         body,
         json!({
             "offers": [
                 { "supplier": "MSI", "name": "Calacatta Laza", "thickness": "3cm", "price": 1500.0,
-                  "unit": "slab", "slab": [126.0, 63.0], "file": "MSI 2026.pdf" },
+                  "unit": "slab", "slab": [126.0, 63.0], "file": "MSI 2026.pdf",
+                  "file_id": list, "url": url },
+                // The list says per slab: no size to say otherwise.
                 { "supplier": "MSI", "name": "Laza", "thickness": "", "price": 28.5,
-                  "unit": "sqft", "slab": null, "file": "MSI 2026.pdf" },
+                  "unit": "slab", "slab": null, "file": "MSI 2026.pdf",
+                  "file_id": list, "url": url },
             ],
             "incomplete": true,
             "tax_pct": 7.25,
@@ -590,6 +594,107 @@ async fn no_ai_call_without_a_query_or_matching_files(pool: MySqlPool) {
         .get("/v1/suppliers/price-offers?q=Laza")
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[test_db::test(seed)]
+async fn a_color_search_reads_only_the_picked_suppliers_files(pool: MySqlPool) {
+    let msi = supplier(&pool, 100, "MSI").await;
+    let list = file(&pool, msi, "MSI 2026.pdf", "ready").await;
+    chunk(
+        &pool,
+        list,
+        0,
+        "Q Premium",
+        "| Calacatta Laza | 3cm | 126x63 | $28.50 |",
+    )
+    .await;
+    // Close names a fuzzy match would also take.
+    let surfaces = supplier(&pool, 100, "MSI Surfaces").await;
+    let other = file(&pool, surfaces, "Surfaces.pdf", "ready").await;
+    chunk(&pool, other, 0, "", "| Calacatta Laza | 3cm | $31.00 |").await;
+    let cosentino = supplier(&pool, 100, "Cosentino").await;
+    let theirs = file(&pool, cosentino, "Cosentino.pdf", "ready").await;
+    chunk(
+        &pool,
+        theirs,
+        0,
+        "",
+        "| Calacatta Laza Gold | 2cm | $40.00 |",
+    )
+    .await;
+    let (server, seen) = ai_server(
+        &pool,
+        r#"{"offers":[{"supplier":"MSI","name":"Calacatta Laza","thickness":"3cm","price":28.5,"unit":"sqft","slabLength":126,"slabWidth":63,"file":"MSI 2026.pdf"}]}"#,
+    )
+    .await;
+    let get = |query: &'static str| {
+        server
+            .get(&format!("/v1/suppliers/price-offers?{query}"))
+            .with_session(sessions::REP)
+    };
+
+    // The exact name (trimmed, any case), not every name like it.
+    let body = get("supplier=%20msi%20&color=Calacatta%20Laza&q=ignored")
+        .await
+        .json::<Value>();
+    assert_eq!(body["offers"][0]["file_id"], json!(list));
+    let request = |i: usize| {
+        seen.lock().unwrap()[i]["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let sent = request(0);
+    assert!(sent.starts_with("Request: Price for Calacatta Laza from msi\n\nSUPPLIER PRICE LISTS"));
+    assert!(sent.contains("| Calacatta Laza | 3cm | 126x63 | $28.50 |"));
+    assert!(!sent.contains("$31.00"));
+    assert!(!sent.contains("$40.00"));
+
+    // No supplier by that name: the closest one, and still only that one.
+    get("supplier=Cosentin&color=Calacatta%20Laza").await;
+    let sent = request(1);
+    assert!(sent.contains("$40.00"));
+    assert!(!sent.contains("$28.50"));
+
+    // No supplier is close: nothing is read and the AI is not asked.
+    let none = get("supplier=Nobody&color=Calacatta%20Laza")
+        .await
+        .json::<Value>();
+    assert_eq!(none["offers"], json!([]));
+    assert_eq!(none["incomplete"], json!(false));
+    let short = get("supplier=MSI&color=C").await.json::<Value>();
+    assert_eq!(short["offers"], json!([]));
+    assert_eq!(seen.lock().unwrap().len(), 2);
+}
+
+#[test_db::test(seed)]
+async fn a_color_search_puts_the_named_color_first(pool: MySqlPool) {
+    let cosentino = supplier(&pool, 100, "Cosentino").await;
+    let list = file(&pool, cosentino, "Silestone 2026", "ready").await;
+    // Too big to both fit. The first has both words, the second the name.
+    for (index, rows) in [
+        "| Stellar Snow | 2cm | $2,042.23 |\n| Night Sky | 2cm | $1,990.00 |",
+        "| Stellar Night | 2cm | $2,609.33 |",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        chunk(
+            &pool,
+            list,
+            i32::try_from(index).unwrap(),
+            "Silestone",
+            &format!("{rows}\n{}", "s".repeat(5000)),
+        )
+        .await;
+    }
+    let found = api::price_lists::build_color_context(&pool, 100, "Cosentino", "stellar night")
+        .await
+        .unwrap();
+    assert_eq!(names(&found.sources), ["Silestone 2026"]);
+    assert!(found.context.contains("| Stellar Night |"));
+    assert!(!found.context.contains("| Night Sky |"));
+    assert_eq!(found.supplier_name, "Cosentino");
 }
 
 #[test_db::test(seed)]
