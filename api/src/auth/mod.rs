@@ -18,11 +18,12 @@
 //!
 //! On [`DEVICE_ROUTES`] (the app's Emails and Schedule screens, and the
 //! installers' and template makers' own schedule), on [`DEVICE_READ_ROUTES`]
-//! with `GET` (what the phone's email composer and schedule list: calendars,
-//! stones, images, documents, email and text templates, my texts over every
-//! provider), on `/v1/sms/{provider}/messages` with `POST` (sending them) and on [`DEVICE_ACTIONS`] with `POST`
-//! (an attachment upload, Improve message, AI reply, filling a template) the cookie
-//! extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
+//! with `GET` (what the phone's composers, schedule and Text tab list:
+//! calendars, stones, images, documents, email and text templates, my texts
+//! over every provider), on `/v1/sms/{provider}/messages` with `POST`
+//! (sending those texts) and on [`DEVICE_ACTIONS`] with `POST` (an
+//! attachment upload, Improve message, AI reply, filling a template) the
+//! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
 //! app's `X-Granite-Device` token in place of the cookie: the phone's user, in
 //! the device session's company, with the same rights as their CRM session.
 //! There the header decides alone (a bad token is 401 even with a cookie); on
