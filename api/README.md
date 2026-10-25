@@ -269,8 +269,10 @@ Changing an existing row breaks assertions in both repos; add a new row.
 
 The spec is generated from the code with `utoipa` and checked in as
 `api/openapi.json`, which `GET /openapi.json` serves unauthenticated. utoipa
-only runs with the `openapi` cargo feature (`make api-openapi`, and CI's
-OpenAPI checks): it is a large share of the crate's compile time. Without it
+only runs with the `openapi` cargo feature (`make api-openapi`, and
+`cargo test -p api --features openapi --test it openapi::` for the checks
+that every route is documented; CI skips them for now): it is a large share
+of the crate's compile time. Without it
 `#[crate::openapi::path]` reads only the method and the path, `routes!`
 registers handlers straight with axum, and `ToSchema`/`IntoParams` derive
 nothing (`api/macros`); `every_documented_operation_is_routed` checks that

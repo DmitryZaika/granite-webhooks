@@ -1,7 +1,7 @@
 name: API tests
 
-# Pull requests to main: the api crate's OpenAPI checks (every route
-# documented, api/openapi.json current), the Granite Phone integration
+# Pull requests to main: the api crate's OpenAPI checks (every documented
+# route served), the Granite Phone integration
 # tests and the follow-up tests. The tests make their own databases (test-db) on the MySQL below;
 # .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local, where
 # common's query! macros check their SQL at compile time, so every migration
@@ -69,7 +69,9 @@ jobs:
 
       - name: OpenAPI checks
         if: inputs.cargo_args == ''
-        run: cargo test -p api --features openapi --test it -- openapi::
+        # Same build as the other steps: no `--features openapi`, so the
+        # generated-spec checks (`openapi::generated`) run locally only.
+        run: cargo test -p api --test it -- openapi::
 
       - name: Granite Phone tests
         if: inputs.cargo_args == ''

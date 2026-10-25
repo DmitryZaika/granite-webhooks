@@ -8,7 +8,7 @@
 //! spec tests): it is a large share of the crate's compile time. Without it
 //! the annotations expand to nothing but each route's method and path,
 //! [`OpenApiRouter`] registers routes straight with axum, and
-//! `/openapi.json` serves the checked-in file, which CI keeps current.
+//! `/openapi.json` serves the checked-in file (`make api-openapi`).
 
 use crate::routes;
 use crate::state::AppState;

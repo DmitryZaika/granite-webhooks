@@ -1,5 +1,5 @@
 //! Checks of the spec generated from the annotations (`--features openapi`;
-//! CI runs them).
+//! run them locally, CI does not).
 
 use super::manifest_dir;
 use serde_json::Value;
