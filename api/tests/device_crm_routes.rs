@@ -218,8 +218,9 @@ async fn the_composer_reads_its_lists_but_cannot_change_them(pool: MySqlPool) {
     let (server, _) = phone_server(pool.clone()).await;
 
     // From Stones, From Images, From Documents, Use Template, the email
-    // recipient suggestions and the schedule's calendars read with the
-    // device token, as with her cookie.
+    // recipient suggestions, the schedule's calendars and the More screens
+    // (deals, customers, stones, suppliers, sales) read with the device
+    // token, as with her cookie.
     for path in [
         "/v1/stones/attachable",
         "/v1/images",
@@ -228,6 +229,15 @@ async fn the_composer_reads_its_lists_but_cannot_change_them(pool: MySqlPool) {
         "/v1/sms-templates",
         "/v1/calendars",
         "/v1/customers/email-recipients?term=a&include_users=true",
+        // The More screens.
+        "/v1/deal-groups",
+        "/v1/deal-lists?group_id=100",
+        "/v1/deals?group_id=100",
+        "/v1/customers/page?tab=all",
+        "/v1/customers/1000",
+        "/v1/stones",
+        "/v1/suppliers/directory",
+        "/v1/transactions",
     ] {
         let by_phone = server.get(path).add_header(HEADER, token(305)).await;
         by_phone.assert_status_ok();
@@ -249,6 +259,11 @@ async fn the_composer_reads_its_lists_but_cannot_change_them(pool: MySqlPool) {
         .assert_status(StatusCode::UNAUTHORIZED);
     server
         .delete("/v1/calendars/1")
+        .add_header(HEADER, token(305))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    server
+        .delete("/v1/customers/1000")
         .add_header(HEADER, token(305))
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
