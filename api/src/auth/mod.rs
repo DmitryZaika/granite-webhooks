@@ -73,14 +73,16 @@ pub const DEVICE_ROUTES: [&str; 4] = [
 /// email and text composers' From Stones, From Images, From Documents and
 /// Use Template lists, the suggestions under an email's To, Cc and Bcc, the
 /// schedule's calendars, and the More screens: Deals, Customers, Stones,
-/// Suppliers, Images and Transactions; and the CRM notification a push names).
+/// Suppliers, Images (with its folders) and Transactions; and the CRM
+/// notification a push names).
 /// These prefixes and everything under them; writes there still need the CRM
 /// session.
-pub const DEVICE_READ_ROUTES: [&str; 14] = [
+pub const DEVICE_READ_ROUTES: [&str; 15] = [
     "/v1/sms/mine",
     "/v1/calendars",
     "/v1/stones",
     "/v1/images",
+    "/v1/image-library",
     "/v1/documents",
     "/v1/email-templates",
     "/v1/sms-templates",
@@ -401,6 +403,7 @@ mod tests {
             "/v1/calendars",
             "/v1/stones/attachable",
             "/v1/images",
+            "/v1/image-library",
             "/v1/documents",
             "/v1/email-templates",
             "/v1/sms-templates",
