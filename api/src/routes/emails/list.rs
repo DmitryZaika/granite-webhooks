@@ -1,5 +1,6 @@
 //! The mailbox: thread list per folder and the folder counts.
 
+use super::handlers::unread_inbox;
 use super::names::fill_display_names;
 use super::schemas::{
     EmailFolder, FolderCounts, ListQuery, MailboxPage, MailboxRow, SuggestQuery, SuggestScope,
@@ -135,6 +136,25 @@ pub async fn list_page(
     };
     let mut thread_match_args = folder_args.clone();
     thread_match_args.extend(search_sql.args.clone());
+
+    // Only the threads the badge counts unread. Added after `alias`, which would rename the
+    // subquery's own `e`; the subquery stands alone, so its `e` shadows nothing it needs.
+    let (where_thread_match, subquery_where) = if is_inbox && query.unread == Some(true) {
+        let unread = unread_inbox(mailbox);
+        thread_match_args.extend(unread.args);
+        let only_unread = |outer: &str| {
+            format!(
+                " AND {outer}.thread_id IN (SELECT DISTINCT e.thread_id {})",
+                unread.sql
+            )
+        };
+        (
+            format!("{where_thread_match}{}", only_unread("e")),
+            format!("{subquery_where}{}", only_unread("e2")),
+        )
+    } else {
+        (where_thread_match, subquery_where)
+    };
 
     let offset = (page - 1) * PAGE_SIZE;
     let (thread_order, list_order) = if folder == EmailFolder::Trash {

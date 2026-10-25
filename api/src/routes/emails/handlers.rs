@@ -38,7 +38,9 @@ pub fn mailbox(user: &SessionUser) -> Mailbox {
 /// deletion) or `drafts`. Every message of each listed thread comes back,
 /// with names, attachment flags and the recipient's last open. `search`
 /// matches subject, text, addresses, and the addresses of customers whose
-/// name matches; in the inbox it matches any message of the thread. Open a
+/// name matches; in the inbox it matches any message of the thread.
+/// `unread=true` keeps only the inbox threads still unread for the caller
+/// (those `GET /v1/emails/folder-counts` counts as `inbox_unread`). Open a
 /// thread with `GET /v1/emails/threads/{thread_id}`.
 ///
 /// `scope=admin` (admins only) lists every employee's mail of the company
@@ -427,6 +429,54 @@ thread_write!(
     "deleted_at = NULL",
     |_: &SessionUser| None
 );
+
+/// Move one message to the trash
+///
+/// Soft-deletes the message `id` (a message `id` of
+/// `GET /v1/emails/threads/{thread_id}`) of one of the caller's own threads
+/// (threads they are on or of their deals); the rest of the conversation
+/// stays. Drafts are deleted with `DELETE /v1/emails/drafts/{id}`. Bring it
+/// back with `POST /v1/emails/threads/restore` (that restores the whole
+/// conversation).
+#[utoipa::path(
+    delete,
+    path = "/v1/emails/{id}",
+    operation_id = "delete_email_message",
+    tag = "emails",
+    params(("id" = i64, Path, description = "Message id")),
+    responses(
+        (status = 204, description = "Moved to the trash"),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 404, description = "No such live message in the caller's own threads", body = ErrorBody),
+        (status = 500, description = "Database error", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn delete_message(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
+    let owned = own_threads("thread_id", &mailbox(&user));
+    let mut args: Vec<Arg> = vec![id.into()];
+    args.extend(owned.args);
+    let done = Sql::new(
+        format!(
+            "UPDATE emails SET deleted_at = NOW()
+              WHERE id = ? AND deleted_at IS NULL AND is_draft = 0 AND {}",
+            owned.sql
+        ),
+        args,
+    )
+    .query()
+    .execute(&state.pool)
+    .await?;
+    if done.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
 
 /// Erase conversations from the trash
 ///
