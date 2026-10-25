@@ -18,9 +18,10 @@
 //!
 //! On [`DEVICE_ROUTES`] (the app's Emails and Schedule screens, and the
 //! installers' and template makers' own schedule), on [`DEVICE_READ_ROUTES`]
-//! with `GET` (what the phone's composers, schedule and Text tab list:
-//! calendars, stones, images, documents, email and text templates, email
-//! recipient suggestions, my texts over every provider), on `/v1/sms/{provider}/messages` with `POST`
+//! with `GET` (what the phone's composers, schedule, Text tab and More
+//! screens read: calendars, deals and their stages, customers, stones,
+//! suppliers, sales, images, documents, email and text templates, my texts
+//! over every provider), on `/v1/sms/{provider}/messages` with `POST`
 //! (sending those texts) and on [`DEVICE_ACTIONS`] with `POST` (an
 //! attachment upload, Improve message, AI reply, filling a template) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
@@ -67,17 +68,24 @@ pub const DEVICE_ROUTES: [&str; 4] = [
 /// CRM routes the app reads with its device token, `GET` only (my texts
 /// over every provider for the Text tab of a company without Telnyx, the
 /// email and text composers' From Stones, From Images, From Documents and
-/// Use Template lists, the suggestions under an email's To, Cc and Bcc, and
-/// the schedule's calendars). These prefixes and everything under them.
-pub const DEVICE_READ_ROUTES: [&str; 8] = [
+/// Use Template lists, the suggestions under an email's To, Cc and Bcc, the
+/// schedule's calendars, and the More screens: Deals, Customers, Stones,
+/// Suppliers, Images and Transactions). These prefixes and everything under
+/// them; writes there still need the CRM session.
+pub const DEVICE_READ_ROUTES: [&str; 13] = [
     "/v1/sms/mine",
     "/v1/calendars",
-    "/v1/stones/attachable",
+    "/v1/stones",
     "/v1/images",
     "/v1/documents",
     "/v1/email-templates",
     "/v1/sms-templates",
-    "/v1/customers/email-recipients",
+    "/v1/customers",
+    "/v1/deals",
+    "/v1/deal-groups",
+    "/v1/deal-lists",
+    "/v1/suppliers",
+    "/v1/transactions",
 ];
 
 /// CRM actions the app's composer calls with its device token: exactly these
@@ -320,7 +328,6 @@ mod tests {
         for path in [
             "/v1/emailsx",
             "/v1/eventsfoo/1",
-            "/v1/customers",
             "/v1/me/devices",
             "/v1/me",
             "/v1/me/schedulex",
@@ -342,6 +349,17 @@ mod tests {
             "/v1/email-templates",
             "/v1/sms-templates",
             "/v1/customers/email-recipients",
+            "/v1/customers/page",
+            "/v1/customers/7",
+            "/v1/deals",
+            "/v1/deals/7/notes",
+            "/v1/deal-groups",
+            "/v1/deal-lists",
+            "/v1/stones",
+            "/v1/stones/7",
+            "/v1/suppliers/directory",
+            "/v1/transactions",
+            "/v1/transactions/7",
         ] {
             assert!(device_route(&Method::GET, path), "{path}");
             for method in [Method::POST, Method::PUT, Method::DELETE] {
@@ -357,12 +375,11 @@ mod tests {
             assert!(!device_route(&Method::DELETE, path), "{path}");
         }
         for path in [
-            "/v1/stones",
-            "/v1/stones/7",
             "/v1/imagesx",
             "/v1/documentsx",
-            "/v1/customers",
-            "/v1/customers/7",
+            "/v1/customersx",
+            "/v1/dealsx",
+            "/v1/transactionsx/1",
         ] {
             assert!(!device_route(&Method::GET, path), "{path}");
         }
