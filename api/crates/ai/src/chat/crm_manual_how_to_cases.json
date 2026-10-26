@@ -23,6 +23,14 @@
   { "query": "how can I mark message as unread", "howTo": true },
   { "query": "can I send a picture in SMS", "howTo": true },
   { "query": "how do I save an email draft", "howTo": true },
+  { "query": "how to make a layout", "howTo": true },
+  { "query": "how to send a quote to a customer", "howTo": true },
+  { "query": "how can I connect Telnyx", "howTo": true },
+  { "query": "how to turn off notifications", "howTo": true },
+  { "query": "how do I add a special order slab to a quote", "howTo": true },
+  { "query": "how do I change the price on one line of the quote", "howTo": true },
+  { "query": "how do I print a quote", "howTo": true },
+  { "query": "how do I share the catalog with a customer", "howTo": true },
   { "query": "what is our special order deposit policy", "howTo": false },
   { "query": "how do I make a special order?", "howTo": false },
   { "query": "who approves special orders", "howTo": false },
@@ -31,6 +39,8 @@
   { "query": "what is the price of a special order quote", "howTo": false },
   { "query": "do we charge for delivery on special orders", "howTo": false },
   { "query": "what is the fabrication price for quartz", "howTo": false },
+  { "query": "what do we charge to add a sink cutout", "howTo": false },
+  { "query": "how much does a backsplash cost", "howTo": false },
   {
     "query": "what do I do if my customer needs a template but he doesnt have a signed contract yet",
     "howTo": false

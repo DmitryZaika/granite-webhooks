@@ -19,6 +19,7 @@ mod ai_usage;
 mod call_activity_rules;
 mod call_coaching;
 mod conversation_reply;
+mod crm_manual_eval;
 mod crm_manual_feedback;
 mod instructions;
 mod manual_feedback_reviews;

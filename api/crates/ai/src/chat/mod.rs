@@ -135,12 +135,18 @@ pub const fn may_use_assistant(user: &SessionUser) -> bool {
 
 /// The mode a question is answered in (`priceLists` and `assistant` are
 /// asked for; a question about the company's records goes to the assistant
-/// when `records` allows it, see [`may_use_assistant`]).
+/// when `records` allows it, see [`may_use_assistant`], unless it asks how
+/// to use the app: "can I delete a deal?" is the manual's).
 pub fn mode_for(mode: Option<&str>, query: &str, records: bool) -> Mode {
     match mode {
         Some("priceLists") => Mode::PriceLists,
         Some("assistant") if records => Mode::Assistant,
-        _ if records && prompts::looks_like_assistant_query(query) => Mode::Assistant,
+        _ if records
+            && prompts::looks_like_assistant_query(query)
+            && !crm_manual::asks_how_to(query) =>
+        {
+            Mode::Assistant
+        }
         _ => Mode::Instructions,
     }
 }
@@ -317,9 +323,18 @@ fn without_system(messages: Vec<Message>, is_old: impl Fn(&Message) -> bool) -> 
         .collect()
 }
 
-/// The question a clarification asked about and the source the user's reply
+/// What the reply to a question back picked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Clarified {
+    /// Granite Manager or the company's own process.
+    Source(crm_manual::Source),
+    /// One of the features offered, answered from its sections.
+    Feature(crm_manual::Feature),
+}
+
+/// The question a clarification asked about and what the user's reply
 /// picks, when `messages` ends with the clarifying question and that reply.
-fn picked_clarification(messages: &[Message]) -> Option<(String, crm_manual::Source)> {
+fn picked_clarification(messages: &[Message]) -> Option<(String, Clarified)> {
     let [.., asked, reply] = messages else {
         return None;
     };
@@ -327,27 +342,35 @@ fn picked_clarification(messages: &[Message]) -> Option<(String, crm_manual::Sou
         return None;
     }
     let question = markers::parse_clarify_marker(&asked.content)?;
-    let source = crm_manual::clarify_choice(&reply.content)?;
-    Some((question, source))
+    let offered: Vec<crm_manual::Feature> = markers::parse_clarify_choices(&asked.content)
+        .into_iter()
+        .map(|(label, sections)| crm_manual::feature(&label, sections))
+        .collect();
+    let picked = if offered.is_empty() {
+        Clarified::Source(crm_manual::clarify_choice(&reply.content)?)
+    } else {
+        Clarified::Feature(crm_manual::feature_choice(&reply.content, &offered)?.clone())
+    };
+    Some((question, picked))
 }
 
-/// `messages` for answering a clarified question from `source` only: the
-/// clarification and the reply give way to the question with what the user
-/// meant, and the other source's context goes.
-fn clarified(
-    mut messages: Vec<Message>,
-    question: &str,
-    source: crm_manual::Source,
-) -> Vec<Message> {
+/// `messages` for answering a clarified question from what was picked
+/// only: the clarification and the reply give way to the question with
+/// what the user meant, and the other source's context goes.
+fn clarified(mut messages: Vec<Message>, question: &str, picked: &Clarified) -> Vec<Message> {
     messages.truncate(messages.len().saturating_sub(2));
-    let (meant, other): (&str, &str) = match source {
-        crm_manual::Source::Manual => (
-            "I mean how to do this in Granite Manager.",
+    let (meant, other): (String, &str) = match picked {
+        Clarified::Source(crm_manual::Source::Manual) => (
+            "I mean how to do this in Granite Manager.".into(),
             "Here are the instructions you can use",
         ),
-        crm_manual::Source::Company => (
-            "I mean our company's own process, not how to use Granite Manager.",
+        Clarified::Source(crm_manual::Source::Company) => (
+            "I mean our company's own process, not how to use Granite Manager.".into(),
             "CRM USER MANUAL:",
+        ),
+        Clarified::Feature(feature) => (
+            format!("I mean {} in Granite Manager.", feature.label),
+            "Here are the instructions you can use",
         ),
     };
     let mut messages = without_system(messages, |m| m.content.contains(other));
@@ -375,13 +398,27 @@ fn request_messages(messages: &[Message]) -> Vec<Value> {
         .collect()
 }
 
+/// The user's questions before the last message, as they asked them: not
+/// the wording of `prompts::instruction_user_message` around them.
+fn earlier_questions(messages: &[Message]) -> Vec<String> {
+    let asked: Vec<&Message> = messages.iter().filter(|m| m.role == "user").collect();
+    asked[..asked.len().saturating_sub(1)]
+        .iter()
+        .map(|m| prompts::asked_question(&m.content).to_string())
+        .collect()
+}
+
 /// `completeChatAnswer`: the answer streamed as it is written, holding back
 /// the last 64 characters so a marker is never shown half-written.
+/// `manual`: a how-to answered from the CRM manual, where the model's own
+/// reasoning used up the 1024 tokens and left step lists cut off or empty
+/// (the manual eval, `api/tests/crm_manual_eval.rs`).
 async fn complete(
     state: &AppState,
     user: &SessionUser,
     messages: &[Message],
     out: &Sender,
+    manual: bool,
 ) -> Result<String, AiError> {
     const HOLDBACK: usize = 64;
     let caller = Caller {
@@ -407,9 +444,12 @@ async fn complete(
         }
     };
     let run = async {
-        let mut chat = Chat::new(MINI_MODEL).max_tokens(Some(1024));
+        let mut chat = Chat::new(MINI_MODEL).max_tokens(Some(if manual { 2000 } else { 1024 }));
         chat.messages = request_messages(messages);
         chat.timeout = Duration::from_secs(120);
+        if manual {
+            chat.reasoning_effort = Some("low");
+        }
         let first = state.ai.chat_stream(&state.pool, caller, &chat, |t| {
             let _ = tx.send(t.to_string());
         });
@@ -499,9 +539,11 @@ async fn run(
     let mut skip_rebuild = false;
     let mut loaded: Option<Vec<Instruction>> = None;
     // What is answered: the user's question, or the one a clarification asked
-    // about once the reply picks where its answer comes from (`source`).
+    // about once the reply picks where its answer comes from (`source`) or
+    // which feature it is about (`feature`, from the manual).
     let mut question = query.to_string();
     let mut source: Option<crm_manual::Source> = None;
+    let mut feature: Option<crm_manual::Feature> = None;
 
     if !request.is_new
         && mode == Mode::PriceLists
@@ -602,9 +644,15 @@ async fn run(
             Mode::Instructions => {
                 let all = instructions::load_visible(pool, company_id, user_id).await?;
                 if let Some((asked, picked)) = picked_clarification(&messages) {
-                    messages = clarified(messages, &asked, picked);
+                    messages = clarified(messages, &asked, &picked);
                     question = asked;
-                    source = Some(picked);
+                    source = Some(match picked {
+                        Clarified::Source(picked) => picked,
+                        Clarified::Feature(picked) => {
+                            feature = Some(picked);
+                            crm_manual::Source::Manual
+                        }
+                    });
                 }
                 if source != Some(crm_manual::Source::Manual) {
                     messages = with_instruction_context(messages, &all, &question);
@@ -648,18 +696,51 @@ async fn run(
         }
         if source != Some(crm_manual::Source::Company) {
             let access = crm_manual::access(pool, user).await?;
+            let earlier = earlier_questions(&messages);
             let search: String = std::iter::once(question.as_str())
-                .chain(
-                    messages
-                        .iter()
-                        .filter(|m| m.role == "user")
-                        .map(|m| m.content.as_str()),
-                )
+                .chain(earlier.iter().map(String::as_str))
                 .collect::<Vec<_>>()
                 .join(" ");
-            let manual = crm_manual::content_for(pool, &search).await;
+            let quick = crm_manual::quick_answer(&question, Some(&access));
+            let ids = if let Some(feature) = &feature {
+                feature.sections.clone()
+            } else if quick.is_none() && (how_to || crm_manual::asks_how_to(&question)) {
+                let caller = Caller {
+                    feature: "chat",
+                    user_id: Some(user_id),
+                    company_id: Some(company_id),
+                };
+                match crm_manual::sections_for(state, caller, &question, &earlier, &search).await {
+                    Ok(ids) => ids,
+                    Err(clarification) => {
+                        ask_which_feature(
+                            out,
+                            pool,
+                            user_id,
+                            history_id,
+                            messages,
+                            &question,
+                            &clarification,
+                        )
+                        .await;
+                        return Ok(());
+                    }
+                }
+            } else {
+                crm_manual::section_ids_for(&search)
+            };
+            let manual = crm_manual::content_with(pool, &ids).await;
             messages = with_crm_manual(messages, &manual, &crm_manual::access_block(&access));
-            if let Some(quick) = crm_manual::quick_answer(&question, Some(&access)) {
+            if how_to {
+                // The browser offers the manual's feedback on this answer.
+                out.json("crmManual", &true).await;
+                // Short steps from the manual, not the instructions' checklist.
+                if let Some(last) = messages.iter_mut().rev().find(|m| m.role == "user") {
+                    last.content =
+                        prompts::manual_user_message(prompts::asked_question(&last.content));
+                }
+            }
+            if let Some(quick) = quick {
                 finish_with(out, pool, user_id, history_id, messages, &quick).await;
                 return Ok(());
             }
@@ -716,7 +797,8 @@ async fn run(
         return Ok(());
     }
 
-    let mut answer = complete(state, user, &messages, out).await?;
+    let manual = mode == Mode::Instructions && how_to;
+    let mut answer = complete(state, user, &messages, out, manual).await?;
 
     if mode == Mode::Instructions
         && !how_to
@@ -736,7 +818,7 @@ async fn run(
             out.send(Event::Replace).await;
             messages = with_instruction_context(messages, &leftover, &question);
             selected = leftover;
-            answer = complete(state, user, &messages, out).await?;
+            answer = complete(state, user, &messages, out, false).await?;
         }
     }
 
@@ -911,6 +993,31 @@ async fn ask_to_clarify(
     save(pool, user_id, id, messages, &asked).await;
 }
 
+/// Asks which of several features the user means, like [`ask_to_clarify`]:
+/// the choices' labels are the `clarify` event (all answered from the
+/// manual), and the saved history keeps each one's sections.
+async fn ask_which_feature(
+    out: &Sender,
+    pool: &MySqlPool,
+    user_id: i32,
+    id: Option<i32>,
+    messages: Vec<Message>,
+    question: &str,
+    clarification: &crm_manual::Clarification,
+) {
+    out.send(Event::Status("answering")).await;
+    out.text_answer(&clarification.question).await;
+    out.json("clarify", &clarification.choices).await;
+    out.send(Event::Done).await;
+    let choices: Vec<(&str, &[String])> = clarification
+        .choices
+        .iter()
+        .map(|c| (c.label.as_str(), c.sections.as_slice()))
+        .collect();
+    let asked = markers::with_clarify_choices_marker(&clarification.question, question, &choices);
+    save(pool, user_id, id, messages, &asked).await;
+}
+
 const fn ctx(user: &SessionUser) -> assistant::Ctx {
     assistant::Ctx {
         company_id: user.company_id,
@@ -927,8 +1034,8 @@ pub fn short(query: &str) -> String {
 mod tests {
     use super::crm_manual::{CLARIFY_QUESTION, Source};
     use super::{
-        DONE, Message, Mode, clarified, markers, mode_for, picked_clarification, prompts,
-        request_messages,
+        Clarified, DONE, Message, Mode, clarified, earlier_questions, markers, mode_for,
+        picked_clarification, prompts, request_messages,
     };
 
     const ASKED: &str = "how do I make a special order?";
@@ -964,9 +1071,13 @@ mod tests {
         ] {
             let messages = asked_back(reply);
             let (question, picked) = picked_clarification(&messages).expect(reply);
-            assert_eq!((question.as_str(), picked), (ASKED, source), "{reply}");
+            assert_eq!(
+                (question.as_str(), &picked),
+                (ASKED, &Clarified::Source(source)),
+                "{reply}"
+            );
 
-            let next = clarified(messages, &question, picked);
+            let next = clarified(messages, &question, &picked);
             let last = next.last().expect("a question");
             assert_eq!(last.role, "user");
             assert!(
@@ -976,6 +1087,105 @@ mod tests {
             assert!(next.iter().all(|m| !m.content.contains("[[CLARIFY:")));
             assert!(next.iter().all(|m| !m.content.contains(gone)), "{reply}");
             assert_eq!(next.iter().filter(|m| m.role == "user").count(), 1);
+        }
+    }
+
+    /// "How to turn off notifications" was asked back with the kinds there are.
+    fn asked_which(reply: &str) -> Vec<Message> {
+        let asked = "How to turn off notifications";
+        let bell = vec!["notifications".to_string()];
+        let telegram = vec![
+            "notifications".to_string(),
+            "my-account-telegram".to_string(),
+        ];
+        vec![
+            Message::new(
+                "system",
+                "Here are the instructions you can use, each TITLE is linked to its own BODY:",
+            ),
+            Message::new("user", prompts::instruction_user_message(asked)),
+            Message::new(
+                "assistant",
+                markers::with_clarify_choices_marker(
+                    "Which notifications do you mean?",
+                    asked,
+                    &[
+                        ("Bell in the header", bell.as_slice()),
+                        ("Telegram alerts", telegram.as_slice()),
+                    ],
+                ),
+            ),
+            Message::new("user", reply),
+        ]
+    }
+
+    #[test]
+    fn picking_a_feature_answers_the_question_from_its_sections() {
+        for reply in ["Telegram alerts", "telegram", "2"] {
+            let messages = asked_which(reply);
+            let (question, picked) = picked_clarification(&messages).expect(reply);
+            assert_eq!(question, "How to turn off notifications");
+            let Clarified::Feature(feature) = &picked else {
+                panic!("{reply}: {picked:?}")
+            };
+            assert_eq!(feature.label, "Telegram alerts");
+            assert_eq!(feature.sections, ["notifications", "my-account-telegram"]);
+
+            let next = clarified(messages, &question, &picked);
+            assert!(next.last().unwrap().content.contains(
+                "Question: How to turn off notifications (I mean Telegram alerts in Granite Manager.)"
+            ));
+            assert!(next.iter().all(|m| !m.content.contains("[[CLARIFY:")));
+            assert!(
+                next.iter()
+                    .all(|m| !m.content.contains("Here are the instructions"))
+            );
+        }
+        // Not one of the choices: a new question.
+        assert!(picked_clarification(&asked_which("how do I add a customer?")).is_none());
+        assert!(picked_clarification(&asked_which("company")).is_none());
+    }
+
+    #[test]
+    fn earlier_questions_are_what_the_user_typed() {
+        let messages = vec![
+            Message::new("system", "Here are the instructions you can use"),
+            Message::new(
+                "user",
+                prompts::instruction_user_message("how do I add a stone"),
+            ),
+            Message::new("assistant", "Open Inventory > Stones."),
+            Message::new("user", "and delete one?"),
+        ];
+        assert_eq!(earlier_questions(&messages), ["how do I add a stone"]);
+        assert!(earlier_questions(&messages[..2]).is_empty());
+    }
+
+    #[test]
+    fn how_to_questions_about_records_still_go_to_the_manual() {
+        for query in [
+            "can i delete a deal?",
+            "is there a way to export customers to excel",
+            "turn off email notifications",
+            "where are call recordings",
+            "cant hear the customer on calls",
+            "can I send pictures by text",
+        ] {
+            assert_eq!(
+                mode_for(Some("instructions"), query, true),
+                Mode::Instructions,
+                "{query}"
+            );
+        }
+        for query in [
+            "how many deals did we win this month",
+            "find customer Alice Lead",
+        ] {
+            assert_eq!(
+                mode_for(Some("instructions"), query, true),
+                Mode::Assistant,
+                "{query}"
+            );
         }
     }
 
