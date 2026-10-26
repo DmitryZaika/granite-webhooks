@@ -16,7 +16,7 @@ const RITA: &str = sessions::REP;
 const DINA: &str = sessions::DEALER;
 
 fn customer(name: &str, source: &str) -> Value {
-    json!({ "name": name, "source": source, "emails": [], "phone": "317-555-0999" })
+    json!({ "name": name, "source": source, "emails": [] })
 }
 
 async fn open_deals(pool: &MySqlPool, customer_id: i64) -> Vec<(i64, Option<i32>, i32)> {
@@ -139,6 +139,41 @@ async fn invalid_customers_are_refused(pool: MySqlPool) {
         res.json::<Value>()["error"],
         "ALICE@example.com is already saved on Alice Lead"
     );
+}
+
+#[test_db::test(seed)]
+async fn a_phone_of_another_customer_is_refused(pool: MySqlPool) {
+    let server = server(pool);
+    let mut taken = customer("X", "leads");
+    taken["phone"] = json!("(317) 555-0100");
+    let res = create(&server, RITA, taken).await;
+    res.assert_status(StatusCode::CONFLICT);
+    assert_eq!(
+        res.json::<Value>()["error"],
+        "(317) 555-0100 is already saved on Alice Lead"
+    );
+    // Alice's phone 2 counts too.
+    let mut taken_2 = customer("X", "leads");
+    taken_2["phone_2"] = json!("3175550101");
+    create(&server, RITA, taken_2)
+        .await
+        .assert_status(StatusCode::CONFLICT);
+
+    // An edit can't take Alice's phone, but a customer keeps its own.
+    let bob =
+        |phone: &str| json!({ "name": "Bob", "source": "check-in", "emails": [], "phone": phone });
+    server
+        .put("/v1/customers/1001")
+        .with_session(RITA)
+        .json(&bob("317-555-0100"))
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    server
+        .put("/v1/customers/1001")
+        .with_session(RITA)
+        .json(&bob("317-555-0102"))
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 }
 
 #[test_db::test(seed)]

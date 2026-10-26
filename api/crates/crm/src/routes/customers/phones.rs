@@ -335,6 +335,7 @@ pub async fn link_phone(
         (status = 400, description = "`invalid_phone` or `empty_name`", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 409, description = "Another customer has the phone", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -349,13 +350,17 @@ pub async fn from_phone(
     if name.is_empty() {
         return Err(ApiError::BadRequest("empty_name".into()));
     }
+    let mut tx = state.pool.begin().await?;
+    super::service::refuse_taken_phones(&mut tx, user.company_id, 0, &[Some(phone.as_str())])
+        .await?;
     let id = sqlx::query("INSERT INTO customers (company_id, name, phone) VALUES (?, ?, ?)")
         .bind(user.company_id)
         .bind(&name)
         .bind(&phone)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?
         .last_insert_id();
+    tx.commit().await?;
     let id = i32::try_from(id).unwrap_or_default();
     state.webhooks.sync_contacts(user.company_id, id).await;
     Ok((

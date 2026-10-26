@@ -1476,7 +1476,7 @@
           "customers"
         ],
         "summary": "Create a customer",
-        "description": "Saves a customer with its addresses (an address of another customer is\nrefused). Without a sales rep, a sales rep creating a customer (other\nthan a walk-in) becomes its rep. An assigned customer gets an open deal\nand an audit line; the telephony address books are updated.",
+        "description": "Saves a customer with its addresses (a phone or address of another\ncustomer is refused). Without a sales rep, a sales rep creating a customer (other\nthan a walk-in) becomes its rep. An assigned customer gets an open deal\nand an audit line; the telephony address books are updated.",
         "operationId": "create_customer",
         "requestBody": {
           "content": {
@@ -1530,7 +1530,7 @@
             }
           },
           "409": {
-            "description": "An address belongs to another customer",
+            "description": "A phone or address belongs to another customer",
             "content": {
               "application/json": {
                 "schema": {
@@ -2250,7 +2250,7 @@
             }
           },
           "409": {
-            "description": "An address belongs to another customer",
+            "description": "A phone or address belongs to another customer",
             "content": {
               "application/json": {
                 "schema": {
@@ -3461,6 +3461,16 @@
           },
           "403": {
             "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another customer has the phone",
             "content": {
               "application/json": {
                 "schema": {
@@ -25041,7 +25051,7 @@
             }
           },
           "409": {
-            "description": "An email belongs to another customer",
+            "description": "A phone or email belongs to another customer",
             "content": {
               "application/json": {
                 "schema": {
@@ -25240,7 +25250,7 @@
             }
           },
           "409": {
-            "description": "An email belongs to another customer",
+            "description": "A phone or email belongs to another customer",
             "content": {
               "application/json": {
                 "schema": {
@@ -49538,7 +49548,7 @@
           "phone"
         ],
         "summary": "Create a contact",
-        "description": "Creates a customer with this name, phone, company, email and address,\nwith the caller as the sales rep (source `call-in`) and an open deal, and\nreturns them as an index contact; calls from the number match them at\nonce. 400 `invalid_phone` unless a US or Canada number; 400 for an empty\nor too long name or an invalid email; 409 when another customer of the\ncompany has the email. Device token only.",
+        "description": "Creates a customer with this name, phone, company, email and address,\nwith the caller as the sales rep (source `call-in`) and an open deal, and\nreturns them as an index contact; calls from the number match them at\nonce. 400 `invalid_phone` unless a US or Canada number; 400 for an empty\nor too long name or an invalid email; 409 when another customer of the\ncompany has the phone or email. Device token only.",
         "operationId": "create_phone_contact",
         "requestBody": {
           "content": {
@@ -49582,7 +49592,7 @@
             }
           },
           "409": {
-            "description": "Another customer of the company has this email",
+            "description": "Another customer of the company has this phone or email",
             "content": {
               "application/json": {
                 "schema": {

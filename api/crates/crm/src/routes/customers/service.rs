@@ -2,6 +2,7 @@
 //! reassignment audit trail and the open deal of an assigned customer.
 
 use crate::error::ApiError;
+use crate::phone::numbers::last10;
 use crate::routes::deals::service::{enter_stage, sync_drip};
 use chrono::{DateTime, Utc};
 use lambda_http::tracing;
@@ -41,6 +42,63 @@ pub async fn refuse_import_placeholder(pool: &MySqlPool, id: i32) -> Result<(), 
         return Err(ApiError::Conflict(
             "This is the shared Moraware import customer and can't be changed. Create a new customer for the quote instead.".into(),
         ));
+    }
+    Ok(())
+}
+
+/// Refuses (`Conflict`) a phone that another live customer of the company has
+/// as phone or phone 2 (last 10 digits compared). `customer_id` is the
+/// customer being saved, 0 for a new one: numbers it already has stay
+/// allowed, so an old duplicate can still be edited.
+pub async fn refuse_taken_phones(
+    conn: &mut MySqlConnection,
+    company_id: i32,
+    customer_id: i32,
+    phones: &[Option<&str>],
+) -> Result<(), ApiError> {
+    let (kept, kept_2): (Option<String>, Option<String>) = if customer_id == 0 {
+        (None, None)
+    } else {
+        sqlx::query_as("SELECT phone, phone_2 FROM customers WHERE id = ?")
+            .bind(customer_id)
+            .fetch_optional(&mut *conn)
+            .await?
+            .unwrap_or_default()
+    };
+    let kept: Vec<String> = [kept, kept_2]
+        .iter()
+        .filter_map(|phone| phone.as_deref().and_then(last10))
+        .collect();
+    for phone in phones.iter().flatten() {
+        let Some(digits) = last10(phone) else {
+            continue;
+        };
+        if kept.contains(&digits) {
+            continue;
+        }
+        let owner: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT name FROM customers
+              WHERE company_id = ? AND id <> ? AND deleted_at IS NULL
+                AND (RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', ''), 10) = ?
+                  OR RIGHT(REGEXP_REPLACE(COALESCE(phone_2, ''), '[^0-9]', ''), 10) = ?)
+              LIMIT 1",
+        )
+        .bind(company_id)
+        .bind(customer_id)
+        .bind(&digits)
+        .bind(&digits)
+        .fetch_optional(&mut *conn)
+        .await?;
+        if let Some(name) = owner {
+            let name = name
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| "another customer".to_string());
+            return Err(ApiError::Conflict(format!(
+                "{} is already saved on {name}",
+                phone.trim()
+            )));
+        }
     }
     Ok(())
 }

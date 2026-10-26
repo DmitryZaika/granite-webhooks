@@ -7,7 +7,7 @@ use crate::auth::CurrentUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::{IntoParams, ToSchema};
-use crate::routes::customers::service::sync_emails;
+use crate::routes::customers::service::{refuse_taken_phones, sync_emails};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
 use axum::Json;
@@ -374,7 +374,7 @@ pub struct CreatedLead {
         (status = 400, description = "No name, or an unknown referral source", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not on the company's marketing team", body = ErrorBody),
-        (status = 409, description = "An email belongs to another customer", body = ErrorBody),
+        (status = 409, description = "A phone or email belongs to another customer", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -401,6 +401,13 @@ pub async fn create(
         ));
     }
     let mut tx = state.pool.begin().await?;
+    refuse_taken_phones(
+        &mut tx,
+        company_id,
+        0,
+        &[text(input.phone.as_ref()), text(input.phone_2.as_ref())],
+    )
+    .await?;
     let id = sqlx::query(
         "INSERT INTO customers (name, phone, phone_2, address, your_message, referral_source,
             source, company_id, created_by)
@@ -523,7 +530,7 @@ pub async fn get(
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not on the company's marketing team", body = ErrorBody),
         (status = 404, description = "No such live lead in the company", body = ErrorBody),
-        (status = 409, description = "An email belongs to another customer", body = ErrorBody),
+        (status = 409, description = "A phone or email belongs to another customer", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -540,6 +547,13 @@ pub async fn update(
         return Err(ApiError::BadRequest("Name is required".into()));
     }
     let mut tx = state.pool.begin().await?;
+    refuse_taken_phones(
+        &mut tx,
+        company_id,
+        id,
+        &[text(input.phone.as_ref()), text(input.phone_2.as_ref())],
+    )
+    .await?;
     let updated = sqlx::query(
         "UPDATE customers SET name = ?, phone = ?, phone_2 = ?, address = ?, your_message = ?
           WHERE id = ? AND company_id = ? AND deleted_at IS NULL",

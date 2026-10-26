@@ -14,7 +14,7 @@ use crate::phone::customer_index;
 use crate::phone::numbers::{is_nanp, last10, to_e164};
 use crate::routes::customers::phones::storage_format;
 use crate::routes::customers::service::{
-    audit_name, open_deal_in, record_reassignment, start_drips, sync_emails,
+    audit_name, open_deal_in, record_reassignment, refuse_taken_phones, start_drips, sync_emails,
 };
 use crate::routes::me::account::valid_email;
 use crate::state::AppState;
@@ -416,7 +416,7 @@ fn optional_text(value: Option<&str>, max: usize) -> Option<String> {
 /// returns them as an index contact; calls from the number match them at
 /// once. 400 `invalid_phone` unless a US or Canada number; 400 for an empty
 /// or too long name or an invalid email; 409 when another customer of the
-/// company has the email. Device token only.
+/// company has the phone or email. Device token only.
 #[crate::openapi::path(
     post,
     path = "/v1/phone/contacts",
@@ -426,7 +426,7 @@ fn optional_text(value: Option<&str>, max: usize) -> Option<String> {
     responses(
         (status = 201, description = "Created", body = IndexContact),
         (status = 400, description = "`invalid_phone`, the name is empty or too long, or the email is invalid", body = ErrorBody),
-        (status = 409, description = "Another customer of the company has this email", body = ErrorBody),
+        (status = 409, description = "Another customer of the company has this phone or email", body = ErrorBody),
         (status = 401, description = "No valid device token", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
@@ -455,6 +455,7 @@ pub async fn create_contact(
     let created_by = audit_name(user.name.as_deref());
     // The customer, its audit line and its open deal together, or nothing.
     let mut tx = pool.begin().await?;
+    refuse_taken_phones(&mut tx, user.company_id, 0, &[Some(phone.as_str())]).await?;
     let id = sqlx::query(
         "INSERT INTO customers (name, phone, company_id, company_name, address, source,
                                 sales_rep, assigned_date, created_by)

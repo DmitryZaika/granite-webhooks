@@ -5,8 +5,8 @@
 
 use super::service::{
     SALES_REP_POSITION, audit_name, ensure_open_deal, record_lead_manager_assignment,
-    record_reassignment, refuse_import_placeholder, remind_new_rep, source_allowed, sync_emails,
-    user_name,
+    record_reassignment, refuse_import_placeholder, refuse_taken_phones, remind_new_rep,
+    source_allowed, sync_emails, user_name,
 };
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
@@ -170,8 +170,8 @@ async fn check_rep(state: &AppState, company_id: i32, rep: Option<i32>) -> ApiRe
 
 /// Create a customer
 ///
-/// Saves a customer with its addresses (an address of another customer is
-/// refused). Without a sales rep, a sales rep creating a customer (other
+/// Saves a customer with its addresses (a phone or address of another
+/// customer is refused). Without a sales rep, a sales rep creating a customer (other
 /// than a walk-in) becomes its rep. An assigned customer gets an open deal
 /// and an audit line; the telephony address books are updated.
 #[crate::openapi::path(
@@ -185,7 +185,7 @@ async fn check_rep(state: &AppState, company_id: i32, rep: Option<i32>) -> ApiRe
         (status = 400, description = "Missing name, unknown source or sales rep", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
-        (status = 409, description = "An address belongs to another customer", body = ErrorBody),
+        (status = 409, description = "A phone or address belongs to another customer", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -214,6 +214,13 @@ pub async fn create(
     }
     let created_by = audit_name(user.name.as_deref());
     let mut tx = pool.begin().await?;
+    refuse_taken_phones(
+        &mut tx,
+        user.company_id,
+        0,
+        &[input.phone.as_deref(), input.phone_2.as_deref()],
+    )
+    .await?;
     let id = sqlx::query(
         "INSERT INTO customers (name, phone, phone_2, address, your_message, referral_source, source,
                                 company_id, company_name, sales_rep, assigned_date, created_by)
@@ -269,7 +276,7 @@ pub async fn create(
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
         (status = 404, description = "No such live customer in the company", body = ErrorBody),
-        (status = 409, description = "An address belongs to another customer", body = ErrorBody),
+        (status = 409, description = "A phone or address belongs to another customer", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
@@ -312,6 +319,13 @@ pub async fn update(
         ""
     };
     let mut tx = pool.begin().await?;
+    refuse_taken_phones(
+        &mut tx,
+        user.company_id,
+        id,
+        &[input.phone.as_deref(), input.phone_2.as_deref()],
+    )
+    .await?;
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE customers SET name = ?, phone = ?, phone_2 = ?, address = ?, your_message = ?,
                 source = ?, company_name = ?, sales_rep = ?{stamp}

@@ -164,7 +164,7 @@ async fn a_lead_is_added_edited_listed_and_deleted(pool: MySqlPool) {
         .put(&format!("/v1/marketing/100/leads/{id}"))
         .with_session(sessions::REP)
         .json(
-            &json!({ "name": "Mia M.", "emails": ["mia2@example.test"], "phone": "317-555-0100" }),
+            &json!({ "name": "Mia M.", "emails": ["mia2@example.test"], "phone": "317-555-0197" }),
         )
         .await
         .assert_status(StatusCode::NO_CONTENT);
