@@ -69,7 +69,7 @@ async fn subscribed_row(pool: &MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn checkout_waits_while_stripe_already_has_a_live_subscription(pool: MySqlPool) {
+async fn checkout_is_refused_even_after_a_subscription_ended(pool: MySqlPool) {
     sqlx::query(
         "INSERT INTO users_positions (user_id, position_id, company_id) VALUES (101, 5, 100)",
     )
@@ -78,43 +78,16 @@ async fn checkout_waits_while_stripe_already_has_a_live_subscription(pool: MySql
     .unwrap();
     subscribed_row(&pool).await;
     let stripe = Shared::default();
-    // Checkout just finished; its webhook has not reached us yet.
-    stripe.lock().unwrap().subscriptions.insert(
-        "sub_live".into(),
-        json!({ "id": "sub_live", "object": "subscription", "status": "active", "customer": "cus_100",
-                "items": { "data": [] } }),
-    );
     let server = server(&pool, Some(&stripe)).await;
     let refused = server
         .post("/v1/billing/checkout")
         .with_session(sessions::MANAGER)
         .json(&json!({ "price_id": "price_flat" }))
         .await;
-    refused.assert_status(StatusCode::BAD_REQUEST);
-    assert_eq!(
-        refused.json::<Value>(),
-        json!({ "error": "This company already has a subscription. Update the plan instead." })
-    );
+    refused.assert_status(StatusCode::CONFLICT);
+    assert_eq!(refused.json::<Value>()["code"], "plan_invite_required");
     assert!(sent(&stripe, "POST", "/v1/checkout/sessions").is_empty());
-
-    // An abandoned first payment does not count.
-    stripe
-        .lock()
-        .unwrap()
-        .subscriptions
-        .get_mut("sub_live")
-        .unwrap()["status"] = json!("incomplete");
-    let link: Value = server
-        .post("/v1/billing/checkout")
-        .with_session(sessions::MANAGER)
-        .json(&json!({ "price_id": "price_flat" }))
-        .await
-        .json();
-    assert_eq!(link["url"], "https://checkout.stripe.com/c/cs_1");
-    assert_eq!(
-        sent(&stripe, "POST", "/v1/checkout/sessions")[0]["customer"],
-        "cus_100"
-    );
+    assert!(sent(&stripe, "POST", "/v1/customers").is_empty());
 }
 
 #[test_db::test(seed)]

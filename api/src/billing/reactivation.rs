@@ -190,8 +190,8 @@ fn refused(message: &str) -> ReactivationError {
     ReactivationError::Refused(message.into())
 }
 
-/// The subscription billing should follow: a paying one of the customer,
-/// else the one on record.
+/// The subscription billing should follow: a paying one of the customer
+/// (not one a plan move replaced), else the one on record.
 pub(super) async fn current_subscription(
     stripe: &Stripe,
     record: &CompanyBilling,
@@ -199,9 +199,13 @@ pub(super) async fn current_subscription(
     if let Some(customer) = &record.stripe_customer_id {
         let subscriptions = stripe.list_subscriptions(customer).await?;
         let paying = subscriptions.iter().position(|s| {
-            s["status"]
+            let replaced = s["metadata"]["replaced_by"]
                 .as_str()
-                .is_some_and(is_paying_subscription_status)
+                .is_some_and(|id| !id.is_empty());
+            !replaced
+                && s["status"]
+                    .as_str()
+                    .is_some_and(is_paying_subscription_status)
         });
         let known = subscriptions.iter().position(|s| {
             s["id"].as_str().is_some()

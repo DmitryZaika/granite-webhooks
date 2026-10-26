@@ -1,4 +1,5 @@
-//! A stand-in for the Stripe API for the signup, provisioning and seat tests.
+//! A stand-in for the Stripe API for the signup, provisioning, seat and plan
+//! invite tests.
 //!
 //! It keeps customers, SetupIntents and subscriptions (with their items) in
 //! memory, answers a repeated `Idempotency-Key` with the first response (and a
@@ -288,6 +289,21 @@ impl FakeStripe {
                 Some(subscription) => ok(subscription.clone()),
                 None => missing(),
             },
+            ("POST", ["v1", "subscriptions", id]) => {
+                let Some(subscription) = self.subscriptions.get_mut(*id) else {
+                    return missing();
+                };
+                for (key, value) in metadata(&params).as_object().into_iter().flatten() {
+                    subscription["metadata"][key] = value.clone();
+                }
+                if let Some(flag) = one("cancel_at_period_end") {
+                    subscription["cancel_at_period_end"] = json!(flag == "true");
+                }
+                if let Some(method) = one("default_payment_method") {
+                    subscription["default_payment_method"] = json!(method);
+                }
+                ok(subscription.clone())
+            }
             ("POST", ["v1", "subscription_items"]) => {
                 let subscription = one("subscription").unwrap_or_default();
                 if !self.subscriptions.contains_key(&subscription) {

@@ -17,8 +17,9 @@
 //! - `POST /v1/jobs/posthog-autofix` → new PostHog errors into fix runs
 //! - `POST /v1/jobs/billing-reminders` → Stripe upkeep (webhook event prune,
 //!   reconcile) and the billing reminder emails to managers
-//! - `POST /v1/jobs/subscription-maintenance` → stuck signups resumed,
-//!   abandoned ones expired, the daily seat reconcile
+//! - `POST /v1/jobs/subscription-maintenance` → stuck signups and plan
+//!   invite acceptances resumed, abandoned signups expired, the daily seat
+//!   reconcile
 //!
 //! Replaces the Remix `api.*.process` cron routes.
 

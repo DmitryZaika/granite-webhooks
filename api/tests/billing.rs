@@ -950,7 +950,8 @@ async fn without_a_record_or_stripe_the_page_is_empty(pool: MySqlPool) {
     assert_eq!(billing["subscription"], Value::Null);
     assert_eq!(billing["card"], Value::Null);
     assert_eq!(billing["invoices"], json!([]));
-    assert_eq!(billing["starts_checkout"], true);
+    assert_eq!(billing["starts_checkout"], false);
+    assert_eq!(billing["plan_invite"], Value::Null);
     assert_eq!(billing["billing_configured"], false);
 }
 
@@ -1050,48 +1051,21 @@ async fn a_paid_up_company_needs_no_reactivation(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
-async fn checkout_creates_the_customer_and_returns_to_the_callers_host(pool: MySqlPool) {
+async fn checkout_no_longer_starts_subscriptions(pool: MySqlPool) {
     manager_and_billing(&pool).await;
     let stripe = Shared::default();
     let server = server(&pool, Some(&stripe)).await;
-    server
-        .post("/v1/billing/checkout")
-        .with_session(sessions::MANAGER)
-        .json(&json!({ "price_id": "price_unknown" }))
-        .await
-        .assert_status(StatusCode::BAD_REQUEST);
-    let link: Value = server
+    let refused = server
         .post("/v1/billing/checkout")
         .with_session(sessions::MANAGER)
         .json(&json!({ "price_id": "price_flat" }))
-        .await
-        .json();
-    assert_eq!(link, json!({ "url": "https://checkout.stripe.com/c/cs_1" }));
-    let requests = stripe.lock().unwrap().requests.clone();
-    let customer = form(&requests.iter().find(|r| r.1 == "/v1/customers").unwrap().2);
-    assert_eq!(customer["name"], "Acme Stone");
-    assert_eq!(customer["metadata[company_id]"], "100");
-    let session = form(
-        &requests
-            .iter()
-            .find(|r| r.1 == "/v1/checkout/sessions")
-            .unwrap()
-            .2,
-    );
-    assert_eq!(session["customer"], "cus_created");
-    assert_eq!(session["line_items[0][price]"], "price_flat");
-    assert_eq!(session["line_items[0][quantity]"], "1");
+        .await;
+    refused.assert_status(StatusCode::CONFLICT);
     assert_eq!(
-        session["success_url"],
-        format!("{ALLOWED_ORIGIN}/admin/billing?checkout=success")
+        refused.json::<Value>(),
+        json!({ "error": "Contact Granite Manager to choose your plan.", "code": "plan_invite_required" })
     );
-    assert_eq!(session["subscription_data[metadata][company_id]"], "100");
-    let saved: Option<String> =
-        sqlx::query_scalar("SELECT stripe_customer_id FROM company_billing WHERE company_id = 100")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(saved.as_deref(), Some("cus_created"));
+    assert!(stripe.lock().unwrap().requests.is_empty());
 }
 
 #[test_db::test(seed)]
@@ -1104,7 +1078,7 @@ async fn a_subscribed_company_changes_its_plan_instead_of_checking_out(pool: MyS
         .with_session(sessions::MANAGER)
         .json(&json!({ "price_id": "price_plus" }))
         .await
-        .assert_status(StatusCode::BAD_REQUEST);
+        .assert_status(StatusCode::CONFLICT);
     server
         .put("/v1/billing/subscription")
         .with_session(sessions::MANAGER)

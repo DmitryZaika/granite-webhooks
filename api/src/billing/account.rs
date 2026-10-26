@@ -1,7 +1,7 @@
 //! The billing page's Stripe calls.
 //!
 //! The company's record refreshed from Stripe, its card and invoices, and
-//! starting Checkout, the billing portal or a plan change. Port of
+//! starting the billing portal or a plan change. Port of
 //! `billingSync.server.ts`, `billingCheckout.server.ts` and
 //! `billingPageData.server.ts`.
 #![allow(clippy::future_not_send)]
@@ -13,7 +13,7 @@ use super::reactivation::{
 use super::store::{BillingStore, MySqlBillingStore};
 use super::stripe::{Stripe, invoice_snapshot, subscription_snapshot};
 use super::{
-    BillingInvoice, BillingPlan, CompanyBilling, can_start_checkout, is_ended_subscription_status,
+    BillingInvoice, BillingPlan, CompanyBilling, is_ended_subscription_status,
     outstanding_balance_cents,
 };
 use chrono::{DateTime, NaiveDateTime};
@@ -415,77 +415,6 @@ fn check_plan(plans: &[BillingPlan], price_id: &str) -> Result<(), ReactivationE
     }
 }
 
-/// The company's record with a Stripe customer, created on first use.
-async fn ensure_customer<S: BillingStore>(
-    stripe: &Stripe,
-    store: &S,
-    company_id: i32,
-    company_name: &str,
-) -> Result<CompanyBilling, ReactivationError> {
-    let existing = store.by_company(company_id).await?;
-    if let Some(record) = existing.as_ref().filter(|r| r.stripe_customer_id.is_some()) {
-        return Ok(record.clone());
-    }
-    let customer = stripe.create_customer(company_name, company_id).await?;
-    let id = customer["id"]
-        .as_str()
-        .ok_or_else(|| refused(NOT_CONFIGURED))?;
-    let record = CompanyBilling {
-        stripe_customer_id: Some(id.to_string()),
-        ..existing.unwrap_or_else(|| CompanyBilling::empty(company_id))
-    };
-    store.save(&record).await?;
-    Ok(record)
-}
-
-/// Stripe lists a running subscription: a webhook for a just-finished
-/// Checkout may not have reached our row yet.
-fn has_live_subscription(subscriptions: &[Value]) -> bool {
-    subscriptions.iter().any(|subscription| {
-        let status = subscription["status"].as_str().unwrap_or_default();
-        !is_ended_subscription_status(status) && status != "incomplete"
-    })
-}
-
-/// A Checkout link for a company without a subscription, under the company's
-/// lock (a double submit cannot create two Stripe customers).
-pub async fn checkout_url<S: BillingStore + CompanyLocking>(
-    stripe: &Stripe,
-    store: &S,
-    plans: &[BillingPlan],
-    company_id: i32,
-    company_name: &str,
-    price_id: &str,
-    billing_url: &str,
-) -> Result<String, ReactivationError> {
-    check_plan(plans, price_id)?;
-    if !stripe.is_enabled() {
-        return Err(refused(NOT_CONFIGURED));
-    }
-    locked(store, company_id, async {
-        let record = ensure_customer(stripe, store, company_id, company_name).await?;
-        let customer = record
-            .stripe_customer_id
-            .as_deref()
-            .ok_or_else(|| refused(NOT_CONFIGURED))?;
-        if !can_start_checkout(Some(&record))
-            || has_live_subscription(&stripe.list_subscriptions(customer).await?)
-        {
-            return Err(refused(
-                "This company already has a subscription. Update the plan instead.",
-            ));
-        }
-        let session = stripe
-            .create_checkout_session(customer, company_id, price_id, FLAT_QUANTITY, billing_url)
-            .await?;
-        session["url"]
-            .as_str()
-            .map(str::to_string)
-            .ok_or_else(|| refused("Stripe did not return a checkout link"))
-    })
-    .await
-}
-
 /// The active portal configuration with the no-cancel tag.
 fn tagged_configuration(configurations: &[Value]) -> Option<String> {
     configurations
@@ -656,20 +585,6 @@ mod tests {
         assert!(!sync_due(Some(start), soon, false));
         assert!(sync_due(Some(start), soon, true));
         assert!(sync_due(Some(start), start + PAGE_SYNC_INTERVAL, false));
-    }
-
-    #[test]
-    fn checkout_waits_for_a_live_subscription_stripe_already_has() {
-        let with = |status: &str| json!({ "id": "sub_1", "status": status });
-        assert!(!has_live_subscription(&[]));
-        assert!(!has_live_subscription(&[
-            with("canceled"),
-            with("incomplete"),
-            with("incomplete_expired")
-        ]));
-        assert!(has_live_subscription(&[with("canceled"), with("active")]));
-        assert!(has_live_subscription(&[with("past_due")]));
-        assert!(has_live_subscription(&[with("trialing")]));
     }
 
     #[test]

@@ -98,16 +98,28 @@ pub struct RenderedConsent {
     pub document_sha256: Option<&'static str>,
 }
 
+/// Which checkboxes a flow shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsentContext {
+    /// Self-serve signup: terms, auto_renewal, per_user_pricing, onboarding_fee.
+    Signup,
+    /// A company moved onto a plan by Granite Manager (plan invite): terms,
+    /// auto_renewal, per_user_pricing. No onboarding commitment.
+    Invite,
+}
+
 /// What the texts and records state: computed by the server, never sent by
 /// the page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsentFacts {
     pub company_name: String,
+    /// For an invite: the real billable users, and `first_charge_on` is the
+    /// invite's first charge day.
     pub quote: Quote,
     /// When the free period ends (UTC).
     pub trial_end_at: NaiveDateTime,
-    /// When the onboarding deadline passes (UTC).
-    pub deadline_at: NaiveDateTime,
+    /// When the onboarding deadline passes (UTC); signups only.
+    pub deadline_at: Option<NaiveDateTime>,
     /// The price of each user above the included ones, in cents.
     pub extra_user_cents: i64,
 }
@@ -118,9 +130,11 @@ pub fn facts(catalog: &Catalog, intent: &Intent, now: DateTime<Utc>) -> ConsentF
         company_name: intent.company.name.clone(),
         quote: catalog.quote(&intent.plan, signup_day(now)),
         trial_end_at: intent.trial_end_at.unwrap_or_else(|| trial_end(now)),
-        deadline_at: intent
-            .deadline_at
-            .unwrap_or_else(|| onboarding_deadline(now)),
+        deadline_at: Some(
+            intent
+                .deadline_at
+                .unwrap_or_else(|| onboarding_deadline(now)),
+        ),
         extra_user_cents: catalog.extra_user.unit_cents,
     }
 }
@@ -203,6 +217,15 @@ pub fn long_date(day: NaiveDate) -> String {
 /// auto_renewal, per_user_pricing, onboarding_fee. `app_url` is the main
 /// app's origin, for the document links.
 pub fn render(facts: &ConsentFacts, app_url: &str) -> Vec<RenderedConsent> {
+    render_for(ConsentContext::Signup, facts, app_url)
+}
+
+/// The checkboxes of `context`, in order (an invite has no onboarding_fee).
+pub fn render_for(
+    context: ConsentContext,
+    facts: &ConsentFacts,
+    app_url: &str,
+) -> Vec<RenderedConsent> {
     let quote = &facts.quote;
     let company = &facts.company_name;
     let first_charge = long_date(quote.first_charge_on);
@@ -262,7 +285,7 @@ pub fn render(facts: &ConsentFacts, app_url: &str) -> Vec<RenderedConsent> {
         ],
     );
     terms.document_sha256 = Some(TERMS_SHA256);
-    vec![
+    let mut rendered = vec![
         terms,
         item(
             ConsentKind::AutoRenewal,
@@ -276,13 +299,16 @@ pub fn render(facts: &ConsentFacts, app_url: &str) -> Vec<RenderedConsent> {
             per_user,
             Vec::new(),
         ),
-        item(
+    ];
+    if context == ConsentContext::Signup {
+        rendered.push(item(
             ConsentKind::OnboardingFee,
             ONBOARDING_FEE_VERSION,
             onboarding,
             Vec::new(),
-        ),
-    ]
+        ));
+    }
+    rendered
 }
 
 /// Every rendered checkbox was accepted with its version and hash.
@@ -309,8 +335,61 @@ fn stamp(at: NaiveDateTime) -> String {
     at.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-/// The `amounts_and_dates` JSON, the same on every record of a signup.
-fn amounts_and_dates(facts: &ConsentFacts, payment: &PaymentFacts) -> serde_json::Value {
+/// Whose acceptance the records are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsentOrigin<'a> {
+    /// A self-serve signup (source `self_serve`); company and user come later.
+    Signup { signup_id: &'a str },
+    /// A plan invite accepted by a Manager (source `staff_move`).
+    Invite {
+        invite_id: &'a str,
+        company_id: i32,
+        /// The accepting Manager.
+        user_id: i32,
+        /// The superuser who made the invite.
+        invited_by: i32,
+        /// A legacy Stripe subscription ends where the new plan starts.
+        legacy_subscription_replaced: bool,
+    },
+}
+
+/// The `amounts_and_dates` JSON, the same on every record of an acceptance.
+fn amounts_and_dates(
+    origin: ConsentOrigin<'_>,
+    facts: &ConsentFacts,
+    payment: &PaymentFacts,
+) -> serde_json::Value {
+    let mut amounts = base_amounts(facts, payment);
+    let extra = match origin {
+        ConsentOrigin::Signup { .. } => {
+            let quote = &facts.quote;
+            json!({
+                "onboarding_fee_cents": quote.fee_cents,
+                "onboarding_deadline_on": quote.deadline_on,
+                "onboarding_deadline_at": facts.deadline_at.map(stamp),
+                "onboarding_fee_notice_days": ONBOARDING_FEE_NOTICE_DAYS,
+                "onboarding_fee_charge_on": quote.deadline_on + chrono::Days::new(ONBOARDING_FEE_NOTICE_DAYS),
+            })
+        }
+        ConsentOrigin::Invite {
+            invite_id,
+            invited_by,
+            legacy_subscription_replaced,
+            ..
+        } => json!({
+            "plan_invite_id": invite_id,
+            "invited_by": invited_by,
+            "legacy_subscription_replaced": legacy_subscription_replaced,
+        }),
+    };
+    if let (Some(target), serde_json::Value::Object(extra)) = (amounts.as_object_mut(), extra) {
+        target.extend(extra);
+    }
+    amounts
+}
+
+/// The fields every acceptance records.
+fn base_amounts(facts: &ConsentFacts, payment: &PaymentFacts) -> serde_json::Value {
     let quote = &facts.quote;
     let line_cents = |kind: QuoteLineKind| {
         quote
@@ -336,11 +415,6 @@ fn amounts_and_dates(facts: &ConsentFacts, payment: &PaymentFacts) -> serde_json
         "tax": "plus applicable sales tax",
         "first_charge_on": quote.first_charge_on,
         "trial_end_at": stamp(facts.trial_end_at),
-        "onboarding_fee_cents": quote.fee_cents,
-        "onboarding_deadline_on": quote.deadline_on,
-        "onboarding_deadline_at": stamp(facts.deadline_at),
-        "onboarding_fee_notice_days": ONBOARDING_FEE_NOTICE_DAYS,
-        "onboarding_fee_charge_on": quote.deadline_on + chrono::Days::new(ONBOARDING_FEE_NOTICE_DAYS),
         "grace_period_days": 7,
         "payment_method_type": payment.method_type,
         "payment_method_last4": payment.last4,
@@ -355,18 +429,35 @@ fn amounts_and_dates(facts: &ConsentFacts, payment: &PaymentFacts) -> serde_json
 /// Records the accepted consents, inside the caller's transaction.
 ///
 /// One `consent_records` row per rendered checkbox and document it accepts
-/// (the terms checkbox: terms, privacy and DPA), source `self_serve`,
-/// `signup_intent_id` set, company and user still null.
+/// (the terms checkbox: terms, privacy and DPA). A signup's: source
+/// `self_serve`, `signup_intent_id` set, company and user still null. An
+/// invite's: source `staff_move`, `plan_invite_id`, company and the accepting
+/// Manager set.
 pub async fn insert_records(
     conn: &mut MySqlConnection,
-    signup_id: &str,
+    origin: ConsentOrigin<'_>,
     rendered: &[RenderedConsent],
     facts: &ConsentFacts,
     payment: &PaymentFacts,
     meta: &RequestMeta,
     accepted_at: NaiveDateTime,
 ) -> sqlx::Result<()> {
-    let amounts = amounts_and_dates(facts, payment).to_string();
+    let amounts = amounts_and_dates(origin, facts, payment).to_string();
+    let (source, signup_id, invite_id, company_id, user_id) = match origin {
+        ConsentOrigin::Signup { signup_id } => ("self_serve", Some(signup_id), None, None, None),
+        ConsentOrigin::Invite {
+            invite_id,
+            company_id,
+            user_id,
+            ..
+        } => (
+            "staff_move",
+            None,
+            Some(invite_id),
+            Some(company_id),
+            Some(user_id),
+        ),
+    };
     let rows: Vec<(&RenderedConsent, (&str, Option<&str>))> = rendered
         .iter()
         .flat_map(|consent| {
@@ -378,12 +469,17 @@ pub async fn insert_records(
     for (consent, (document_version, document_sha256)) in rows {
         sqlx::query(
             "INSERT INTO consent_records
-               (signup_intent_id, source, kind, document_version, document_sha256,
-                checkbox_text, checkbox_sha256, amounts_and_dates, stripe_customer_id,
-                payment_method_id, ip, user_agent, locale, accepted_at)
-             VALUES (?, 'self_serve', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+               (signup_intent_id, plan_invite_id, company_id, user_id, source, kind,
+                document_version, document_sha256, checkbox_text, checkbox_sha256,
+                amounts_and_dates, stripe_customer_id, payment_method_id, ip, user_agent,
+                locale, accepted_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(signup_id)
+        .bind(invite_id)
+        .bind(company_id)
+        .bind(user_id)
+        .bind(source)
         .bind(consent.kind.as_str())
         .bind(document_version)
         .bind(document_sha256)
@@ -431,7 +527,7 @@ mod tests {
                 deadline_on: day(2026, 11, 22),
             },
             trial_end_at: day(2027, 1, 23).and_hms_opt(5, 0, 0).unwrap(),
-            deadline_at: day(2026, 11, 22).and_hms_opt(17, 0, 0).unwrap(),
+            deadline_at: day(2026, 11, 22).and_hms_opt(17, 0, 0),
             extra_user_cents: 3_000,
         }
     }
@@ -552,5 +648,77 @@ mod tests {
         let mut old = given;
         old[2].version = "per-user-pricing-2026-09-v1".into();
         assert!(!all_accepted(&rendered, &old));
+    }
+
+    /// An invite for 12 active users with Quotes, first charge Nov 23, 2026.
+    fn invite_facts() -> ConsentFacts {
+        let mut facts = facts(43_500, 37_500);
+        facts.quote.first_charge_on = NaiveDate::from_ymd_opt(2026, 11, 23).unwrap();
+        facts.trial_end_at = NaiveDate::from_ymd_opt(2026, 11, 23)
+            .unwrap()
+            .and_hms_opt(14, 0, 0)
+            .unwrap();
+        facts.deadline_at = None;
+        facts
+    }
+
+    #[test]
+    fn an_invite_renders_terms_auto_renewal_and_per_user_pricing_only() {
+        let rendered = render_for(
+            ConsentContext::Invite,
+            &invite_facts(),
+            "https://app.example",
+        );
+        let kinds: Vec<_> = rendered.iter().map(|c| c.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                ConsentKind::Terms,
+                ConsentKind::AutoRenewal,
+                ConsentKind::PerUserPricing
+            ]
+        );
+        assert_eq!(
+            text_of(&rendered, ConsentKind::AutoRenewal).text,
+            "I understand that my subscription starts with a free period. On November 23, 2026, and then every month, Acme Stone will be charged $375.00 per month plus $30 for each active user above 10 on the charge date, plus applicable sales tax, using the payment method I provide, until I cancel. With 12 users that is $435.00 per month. I can cancel any time with Request cancellation in the app or by emailing support@granite-manager.com. Cancelling before November 23, 2026 means no charge. I will get a reminder email 7 days before the first charge."
+        );
+        let signup = render(&invite_facts(), "https://app.example");
+        for kind in [
+            ConsentKind::Terms,
+            ConsentKind::AutoRenewal,
+            ConsentKind::PerUserPricing,
+        ] {
+            let (invite, signup) = (text_of(&rendered, kind), text_of(&signup, kind));
+            assert_eq!(
+                (invite.version, &invite.sha256),
+                (signup.version, &signup.sha256)
+            );
+        }
+    }
+
+    #[test]
+    fn invite_records_name_the_invite_and_no_onboarding() {
+        let origin = ConsentOrigin::Invite {
+            invite_id: "inv-1",
+            company_id: 7,
+            user_id: 9,
+            invited_by: 3,
+            legacy_subscription_replaced: true,
+        };
+        let amounts = amounts_and_dates(origin, &invite_facts(), &PaymentFacts::default());
+        assert_eq!(amounts["plan_invite_id"], "inv-1");
+        assert_eq!(amounts["invited_by"], 3);
+        assert_eq!(amounts["legacy_subscription_replaced"], true);
+        assert_eq!(amounts["first_charge_on"], "2026-11-23");
+        assert_eq!(amounts["monthly_cents"], 43_500);
+        assert!(amounts.get("onboarding_fee_cents").is_none());
+        let signup = amounts_and_dates(
+            ConsentOrigin::Signup { signup_id: "s-1" },
+            &facts(36_000, 30_000),
+            &PaymentFacts::default(),
+        );
+        assert_eq!(signup["onboarding_fee_cents"], 60_000);
+        assert_eq!(signup["onboarding_deadline_at"], "2026-11-22T17:00:00Z");
+        assert!(signup.get("plan_invite_id").is_none());
     }
 }

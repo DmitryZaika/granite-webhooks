@@ -174,6 +174,15 @@ prices from the Stripe lookup keys in `billing/catalog.rs` and also reads
 `SIGNUP_TEST_PAYMENT_METHOD`. `POST /v1/jobs/subscription-maintenance`
 resumes stuck provisioning, expires abandoned signups and reconciles seats.
 
+Move to plan (`src/billing/invites/`, `routes/superuser_plan_invites.rs`,
+`routes/plan_invites.rs`): a superuser invites a legacy company's Managers to
+a plan (`plan_invites`, links `PAYMENTS_APP_URL/upgrade/<token>`, only token
+hashes stored); a Manager's acceptance makes the subscription under
+`plan-invite:<id>:*` keys and only then sets `plan_source = 'subscription'`. A
+running legacy subscription forces the first charge to its period end and is
+cancelled there (`metadata.replaced_by`, which billing never follows back).
+The flat-price Checkout (`POST /v1/billing/checkout`) now answers 409.
+
 ### Uploads and storage
 
 Images go straight from the browser to the bucket with a presigned PUT

@@ -51,6 +51,7 @@ pub mod onboarding;
 pub mod online_quotes;
 pub mod phone;
 pub mod places;
+pub mod plan_invites;
 pub mod posthog_autofix;
 pub mod public;
 pub mod questionnaires;
@@ -79,6 +80,7 @@ pub mod stats;
 pub mod stones;
 pub mod superuser;
 pub mod superuser_companies;
+pub mod superuser_plan_invites;
 pub mod supplier_files;
 pub mod suppliers;
 pub mod supports;
@@ -171,6 +173,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(billing_account::router())
         .merge(integrations::router())
         .merge(superuser_companies::router())
+        .merge(superuser_plan_invites::router())
+        .merge(plan_invites::router())
         .merge(billing_setup::router())
         .merge(manual_feedback_reviews::router())
         .merge(signature_requests::router())

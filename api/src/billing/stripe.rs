@@ -341,47 +341,6 @@ impl Stripe {
         Ok(data(list))
     }
 
-    /// A customer for a company that never subscribed.
-    pub async fn create_customer(&self, name: &str, company_id: i32) -> Result<Value, StripeError> {
-        self.post(
-            "/v1/customers",
-            &[
-                ("name", name.into()),
-                ("metadata[company_id]", company_id.to_string()),
-            ],
-        )
-        .await
-    }
-
-    /// A Checkout page that starts a subscription to `price_id`.
-    pub async fn create_checkout_session(
-        &self,
-        customer: &str,
-        company_id: i32,
-        price_id: &str,
-        quantity: i64,
-        return_base: &str,
-    ) -> Result<Value, StripeError> {
-        self.post(
-            "/v1/checkout/sessions",
-            &[
-                ("mode", "subscription".into()),
-                ("customer", customer.into()),
-                ("client_reference_id", company_id.to_string()),
-                ("line_items[0][price]", price_id.into()),
-                ("line_items[0][quantity]", quantity.to_string()),
-                ("success_url", format!("{return_base}?checkout=success")),
-                ("cancel_url", format!("{return_base}?checkout=cancel")),
-                ("metadata[company_id]", company_id.to_string()),
-                (
-                    "subscription_data[metadata][company_id]",
-                    company_id.to_string(),
-                ),
-            ],
-        )
-        .await
-    }
-
     /// A billing portal page with `configuration`; `payment_method_update`
     /// opens the card form.
     pub async fn create_portal_session(
@@ -548,10 +507,35 @@ pub struct SignupCustomer<'a> {
     pub postal_code: &'a str,
 }
 
+/// What a self-serve subscription comes from: its idempotency key
+/// (`signup:<id>:subscription`, `plan-invite:<id>:subscription`) and its
+/// origin metadata (`metadata[signup_id]`, `metadata[plan_invite_id]`).
+#[derive(Debug, Clone, Copy)]
+pub enum SubscriptionOrigin<'a> {
+    Signup(&'a str),
+    PlanInvite(&'a str),
+}
+
+impl SubscriptionOrigin<'_> {
+    fn metadata(self) -> (&'static str, String) {
+        match self {
+            Self::Signup(id) => ("metadata[signup_id]", id.to_string()),
+            Self::PlanInvite(id) => ("metadata[plan_invite_id]", id.to_string()),
+        }
+    }
+
+    fn idempotency_key(self) -> String {
+        match self {
+            Self::Signup(id) => format!("signup:{id}:subscription"),
+            Self::PlanInvite(id) => format!("plan-invite:{id}:subscription"),
+        }
+    }
+}
+
 /// A self-serve subscription (03-stripe.md section 4.4).
 #[derive(Debug, Clone)]
 pub struct NewSubscription<'a> {
-    pub signup_id: &'a str,
+    pub origin: SubscriptionOrigin<'a>,
     pub company_id: i32,
     pub customer: &'a str,
     pub payment_method: &'a str,
@@ -675,8 +659,7 @@ impl Stripe {
     pub async fn create_confirmed_test_setup_intent(
         &self,
         customer: &str,
-        signup_id: &str,
-        attempt: u8,
+        purpose: SetupPurpose<'_>,
         payment_method: &str,
     ) -> Result<Value, StripeError> {
         if !self.is_test_mode() {
@@ -685,6 +668,20 @@ impl Stripe {
                 "test_mode_required",
             )));
         }
+        let (origin_key, origin_id, purpose_name, key) = match purpose {
+            SetupPurpose::Signup { signup_id, attempt } => (
+                "metadata[signup_id]",
+                signup_id,
+                "signup",
+                format!("signup:{signup_id}:si:{attempt}"),
+            ),
+            SetupPurpose::PlanInvite { invite_id } => (
+                "metadata[plan_invite_id]",
+                invite_id,
+                "plan_invite",
+                format!("plan-invite:{invite_id}:si"),
+            ),
+        };
         self.post_keyed(
             "/v1/setup_intents",
             &[
@@ -693,10 +690,10 @@ impl Stripe {
                 ("payment_method_types[]", "card".into()),
                 ("payment_method", payment_method.into()),
                 ("confirm", "true".into()),
-                ("metadata[signup_id]", signup_id.into()),
-                ("metadata[purpose]", "signup".into()),
+                (origin_key, origin_id.into()),
+                ("metadata[purpose]", purpose_name.into()),
             ],
-            &format!("signup:{signup_id}:si:{attempt}"),
+            &key,
         )
         .await
     }
@@ -710,11 +707,12 @@ impl Stripe {
     }
 
     /// The self-serve subscription, nothing charged until `trial_end`.
-    /// Idempotency key `signup:<id>:subscription`.
+    /// Idempotency key and origin metadata from [`SubscriptionOrigin`].
     pub async fn create_self_serve_subscription(
         &self,
         subscription: &NewSubscription<'_>,
     ) -> Result<Value, StripeError> {
+        let (origin_key, origin_id) = subscription.origin.metadata();
         let mut form: Vec<(String, String)> = vec![
             ("customer".into(), subscription.customer.into()),
             (
@@ -740,7 +738,7 @@ impl Stripe {
                 "metadata[company_id]".into(),
                 subscription.company_id.to_string(),
             ),
-            ("metadata[signup_id]".into(), subscription.signup_id.into()),
+            (origin_key.into(), origin_id),
             ("metadata[plan]".into(), SELF_SERVE_PLAN.into()),
         ];
         for (index, price) in subscription.price_ids.iter().enumerate() {
@@ -757,7 +755,7 @@ impl Stripe {
         self.post_keyed(
             "/v1/subscriptions",
             &form,
-            &format!("signup:{}:subscription", subscription.signup_id),
+            &subscription.origin.idempotency_key(),
         )
         .await
     }
@@ -815,6 +813,89 @@ impl Stripe {
 
 /// `metadata[plan]` of self-serve subscriptions.
 pub const SELF_SERVE_PLAN: &str = "self_serve_v1";
+
+/// What a test-seam SetupIntent is for: its idempotency key and metadata.
+#[derive(Debug, Clone, Copy)]
+pub enum SetupPurpose<'a> {
+    /// `signup:<id>:si:<attempt>`, `metadata[signup_id]`, purpose `signup`.
+    Signup { signup_id: &'a str, attempt: u8 },
+    /// `plan-invite:<id>:si`, `metadata[plan_invite_id]`, purpose `plan_invite`.
+    PlanInvite { invite_id: &'a str },
+}
+
+/// The Stripe customer of a plan invite's company (when it has none yet).
+#[derive(Debug, Clone)]
+pub struct InviteCustomer<'a> {
+    pub invite_id: &'a str,
+    pub company_id: i32,
+    pub company_name: &'a str,
+    /// The company's first Manager's email (the same for every Manager who
+    /// accepts), or none.
+    pub email: Option<&'a str>,
+}
+
+/// Moving a legacy company onto a plan (plan invites). Every POST carries
+/// an idempotency key built from the invite id.
+impl Stripe {
+    /// Idempotency key `plan-invite:<id>:customer`.
+    pub async fn create_invite_customer(
+        &self,
+        customer: &InviteCustomer<'_>,
+    ) -> Result<Value, StripeError> {
+        let mut form = vec![("name", customer.company_name.to_string())];
+        if let Some(email) = customer.email {
+            form.push(("email", email.to_string()));
+        }
+        form.push(("metadata[company_id]", customer.company_id.to_string()));
+        form.push(("metadata[plan_invite_id]", customer.invite_id.to_string()));
+        self.post_keyed(
+            "/v1/customers",
+            &form,
+            &format!("plan-invite:{}:customer", customer.invite_id),
+        )
+        .await
+    }
+
+    /// Makes `payment_method` the customer's default. Idempotency key
+    /// `plan-invite:<id>:customer-pm`.
+    pub async fn set_invite_default_payment_method(
+        &self,
+        customer: &str,
+        payment_method: &str,
+        invite_id: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/customers/{}", path_part(customer)),
+            &[(
+                "invoice_settings[default_payment_method]",
+                payment_method.into(),
+            )],
+            &format!("plan-invite:{invite_id}:customer-pm"),
+        )
+        .await
+    }
+
+    /// The legacy subscription ends at its period end, marked as replaced
+    /// by `replaced_by` (billing then never follows it again). Idempotency
+    /// key `plan-invite:<id>:replace-legacy`.
+    pub async fn replace_legacy_subscription(
+        &self,
+        legacy_id: &str,
+        replaced_by: &str,
+        invite_id: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/subscriptions/{}", path_part(legacy_id)),
+            &[
+                ("cancel_at_period_end", "true".into()),
+                ("metadata[replaced_by]", replaced_by.into()),
+                ("metadata[plan_invite_id]", invite_id.into()),
+            ],
+            &format!("plan-invite:{invite_id}:replace-legacy"),
+        )
+        .await
+    }
+}
 
 fn data(list: Value) -> Vec<Value> {
     match list {
@@ -996,6 +1077,7 @@ pub fn subscription_snapshot(subscription: &Value) -> SubscriptionSnapshot {
                 .then(|| unix_date(&item["current_period_end"]))
                 .flatten()
         }),
+        replaced_by: non_empty(&subscription["metadata"]["replaced_by"]),
     }
 }
 
@@ -1025,6 +1107,7 @@ pub fn invoice_snapshot(invoice: &Value) -> InvoiceSnapshot {
         invoice_pdf: text(&invoice["invoice_pdf"]),
         paid_at: unix_date(&invoice["status_transitions"]["paid_at"]),
         live_subscription_status: None,
+        replaced_by: non_empty(&details["metadata"]["replaced_by"]),
     }
 }
 
@@ -1123,6 +1206,9 @@ pub async fn latest_event(
             let subscription_id = invoice.subscription_id.as_deref().unwrap_or_default();
             let live = stripe.subscription(subscription_id).await?;
             invoice.live_subscription_status = live["status"].as_str().map(str::to_string);
+            invoice.replaced_by = invoice
+                .replaced_by
+                .or_else(|| non_empty(&live["metadata"]["replaced_by"]));
             Ok(Some(BillingEvent::Invoice {
                 id,
                 paid: true,

@@ -1531,6 +1531,7 @@ mod tests {
                 invoice_pdf: None,
                 paid_at: None,
                 live_subscription_status: paid.then(|| "active".to_string()),
+                replaced_by: None,
             },
         }
     }
@@ -1557,6 +1558,7 @@ mod tests {
                 monthly_total_cents: None,
                 trial_end: None,
                 cancel_at: None,
+                replaced_by: None,
             },
         }
     }

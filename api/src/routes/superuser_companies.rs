@@ -138,7 +138,20 @@ pub struct CompanySummary {
     pub billing_required_since: Option<DateTime<Utc>>,
     /// Its stored Stripe subscription, or null when it never had one.
     pub billing: Option<CompanyBillingSummary>,
+    /// Its live plan invite (open and not expired, or being accepted), or
+    /// null.
+    pub plan_invite: Option<CompanyPlanInvite>,
     pub features: Features,
+}
+
+/// A company's live plan invite.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CompanyPlanInvite {
+    /// `open` (waiting for a Manager) or `accepting` (a Manager accepted;
+    /// being finished).
+    pub status: String,
+    /// When its links stop working (ISO 8601, UTC).
+    pub expires_at: DateTime<Utc>,
 }
 
 /// A company's stored Stripe subscription state.
@@ -209,6 +222,30 @@ async fn active_addons(pool: &sqlx::MySqlPool) -> ApiResult<HashMap<i32, Vec<Add
     Ok(active)
 }
 
+/// Every live plan invite, by company.
+async fn plan_invites_by_company(
+    pool: &sqlx::MySqlPool,
+) -> ApiResult<HashMap<i32, CompanyPlanInvite>> {
+    let rows: Vec<(i32, String, NaiveDateTime)> = sqlx::query_as(
+        "SELECT company_id, CAST(status AS CHAR), expires_at FROM plan_invites
+          WHERE status = 'accepting' OR (status = 'open' AND expires_at > UTC_TIMESTAMP())",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(company_id, status, expires_at)| {
+            (
+                company_id,
+                CompanyPlanInvite {
+                    status,
+                    expires_at: expires_at.and_utc(),
+                },
+            )
+        })
+        .collect())
+}
+
 /// Every stored subscription, by company.
 async fn billing_by_company(
     pool: &sqlx::MySqlPool,
@@ -242,7 +279,8 @@ async fn billing_by_company(
 /// Every live company, most users first: users counting toward the limit,
 /// tours progress, connected integrations, feature switches and whether
 /// Stripe payment is required, plus its plan, usable and free add-ons, Manager
-/// count and stored subscription. The slower checks are per company:
+/// count, stored subscription and live plan invite (details with
+/// `get_platform_company_plan_move`). The slower checks are per company:
 /// `/domain-trust`, `/ses-inbound`, `/setup-checklist`.
 #[utoipa::path(
     get,
@@ -293,6 +331,7 @@ pub async fn list_companies(
         .await?;
     let mut active = active_addons(&state.pool).await?;
     let mut billing = billing_by_company(&state.pool).await?;
+    let mut plan_invites = plan_invites_by_company(&state.pool).await?;
     Ok(Json(
         rows.into_iter()
             .map(|row| {
@@ -330,6 +369,7 @@ pub async fn list_companies(
                     manager_count: row.manager_count,
                     billing_required_since: row.billing_required_at.map(|d| d.and_utc()),
                     billing: billing.remove(&row.id),
+                    plan_invite: plan_invites.remove(&row.id),
                     features: row.features,
                 }
             })

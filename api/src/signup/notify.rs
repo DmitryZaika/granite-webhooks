@@ -8,9 +8,10 @@
 use super::consent::long_date;
 use super::intent::Intent;
 use crate::billing::catalog::SIGNUP_TZ;
+use crate::entitlements::AddonKey;
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingEmail, SendFailure};
-use chrono::{NaiveDateTime, TimeZone};
+use chrono::{NaiveDate, NaiveDateTime, TimeZone};
 use lambda_http::tracing;
 use std::fmt::Write as _;
 
@@ -145,6 +146,97 @@ pub async fn provisioning_given_up(
     }
 }
 
+/// `Acme Stone accepted their plan: Quotes, first charge Nov 23, 2026`.
+fn plan_accepted_text(
+    company_name: &str,
+    addons: &[AddonKey],
+    first_charge_on: NaiveDate,
+) -> String {
+    let addons = if addons.is_empty() {
+        "no add-ons".to_string()
+    } else {
+        addons
+            .iter()
+            .map(|key| key.label())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "{company_name} accepted their plan: {addons}, first charge {}",
+        first_charge_on.format("%b %-d, %Y")
+    )
+}
+
+/// Tells staff (Telegram and email, as after a signup) that a company
+/// accepted its plan invite. Best effort.
+pub async fn after_plan_accepted(
+    state: &AppState,
+    company_name: &str,
+    company_id: i32,
+    addons: &[AddonKey],
+    first_charge_on: NaiveDate,
+) {
+    let text = plan_accepted_text(company_name, addons, first_charge_on);
+    if let Some(staff) = state.signup.notify_user_id
+        && !state
+            .webhooks
+            .notify_telegram(staff, &format!("{text}\nCompany id: {company_id}"))
+            .await
+    {
+        tracing::warn!(company_id, "plan accepted Telegram notice failed");
+    }
+    if let Some(to) = state.signup.notify_email.as_deref() {
+        let body = format!(
+            r#"<div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+  <h2 style="color: #1e293b;">Plan accepted</h2>
+  <p style="color: #475569; line-height: 1.6;">{}.</p>
+  <p style="color: #475569; line-height: 1.6;">Company id: {company_id}</p>
+</div>"#,
+            escape(&text)
+        );
+        let notice = email(to, format!("Plan accepted: {company_name}"), body);
+        if let Err(err) = state.webhooks.send_email(&notice).await {
+            tracing::warn!(
+                company_id,
+                kind = failure_kind(&err),
+                "plan accepted staff email failed"
+            );
+        }
+    }
+}
+
+/// Tells staff the maintenance job stopped finishing a company's plan
+/// acceptance (Telegram and email). Best effort.
+pub async fn plan_acceptance_given_up(state: &AppState, company_id: i32, last_error: Option<&str>) {
+    let error = last_error.unwrap_or("unknown");
+    let text = format!(
+        "Plan acceptance gave up after 26 hours\nCompany: {company_id} (finish its subscription by hand)\nLast error: {error}"
+    );
+    if let Some(staff) = state.signup.notify_user_id
+        && !state.webhooks.notify_telegram(staff, &text).await
+    {
+        tracing::warn!(company_id, "plan acceptance give-up Telegram notice failed");
+    }
+    if let Some(to) = state.signup.notify_email.as_deref() {
+        let body = format!(
+            r#"<div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+  <h2 style="color: #1e293b;">Plan acceptance gave up</h2>
+  <p style="color: #475569; line-height: 1.6;">The maintenance job stopped retrying a company's plan acceptance 26 hours after a Manager accepted it.</p>
+  <p style="color: #475569; line-height: 1.6;">Company: {company_id}<br>Last error: {}</p>
+</div>"#,
+            escape(error)
+        );
+        let notice = email(to, "Plan acceptance gave up".into(), body);
+        if let Err(err) = state.webhooks.send_email(&notice).await {
+            tracing::warn!(
+                company_id,
+                kind = failure_kind(&err),
+                "plan acceptance give-up email failed"
+            );
+        }
+    }
+}
+
 /// The failure without its text, which can quote the recipient's address.
 const fn failure_kind(err: &SendFailure) -> &'static str {
     match err {
@@ -227,9 +319,7 @@ fn staff_html(intent: &Intent, company_id: i32, user_id: i32) -> String {
 mod tests {
     use super::*;
     use crate::billing::catalog::PlanChoice;
-    use crate::entitlements::AddonKey;
     use crate::signup::intent::{CompanyDetails, SignupStatus};
-    use chrono::NaiveDate;
 
     fn intent() -> Intent {
         let at = NaiveDate::from_ymd_opt(2026, 10, 23)
@@ -299,6 +389,19 @@ mod tests {
         assert!(html.contains("https://granite-manager.com/login"));
         assert!(html.contains("https://granite-manager.com/employee?welcome=1"));
         assert!(!html.contains('\u{2014}'));
+    }
+
+    #[test]
+    fn the_plan_accepted_notice_names_the_add_ons_and_first_charge() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 23).unwrap();
+        assert_eq!(
+            plan_accepted_text("Acme Stone", &[AddonKey::Quotes], day),
+            "Acme Stone accepted their plan: Quotes, first charge Nov 23, 2026"
+        );
+        assert_eq!(
+            plan_accepted_text("Acme Stone", &[], day),
+            "Acme Stone accepted their plan: no add-ons, first charge Nov 23, 2026"
+        );
     }
 
     #[test]

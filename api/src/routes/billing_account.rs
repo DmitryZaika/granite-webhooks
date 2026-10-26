@@ -2,7 +2,8 @@
 //!
 //! - `GET  /v1/billing/gate`         → past-due warning / paused access, for every page
 //! - `GET  /v1/billing`              → the subscription, card, plans and invoices (managers)
-//! - `POST /v1/billing/checkout`     → a Stripe Checkout link to subscribe (managers)
+//! - `POST /v1/billing/checkout`     → refused: plans come through a plan invite (managers)
+//! - `POST /v1/billing/plan-invite/link` → the caller's link to the open plan invite (managers)
 //! - `POST /v1/billing/portal`       → a Stripe billing portal link (managers)
 //! - `PUT  /v1/billing/subscription` → change the plan (managers)
 //! - `GET  /v1/billing/reactivation` → what restoring a suspended company costs (managers)
@@ -13,18 +14,17 @@
 use crate::auth::{BillingManager, CurrentUser};
 use crate::billing::account::{self, Card, PageInvoice, SyncOptions};
 use crate::billing::gate::{self, BillingNotice};
+use crate::billing::invites;
 use crate::billing::reactivation::{load_billing_plans, reactivation_plan};
 use crate::billing::store::{BillingStore, MySqlBillingStore};
-use crate::billing::{
-    CompanyBilling, MANAGER_POSITION, can_start_checkout, needs_new_subscription,
-};
-use crate::error::{ApiResult, ErrorBody};
+use crate::billing::{CompanyBilling, MANAGER_POSITION, needs_new_subscription};
+use crate::error::{ApiError, ApiResult, CodedErrorBody, ErrorBody};
 use crate::extract::JsonBody;
 use crate::state::{AppState, origin_allowed};
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -34,6 +34,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(gate))
         .routes(routes!(overview))
         .routes(routes!(checkout))
+        .routes(routes!(plan_invite_link))
         .routes(routes!(portal))
         .routes(routes!(change_plan))
         .routes(routes!(reactivation_quote))
@@ -213,14 +214,27 @@ pub struct BillingOverview {
     pub plans: Vec<Plan>,
     /// Access is paused until the company pays.
     pub restricted: bool,
-    /// The subscription ended (or never started): subscribing goes through
-    /// Checkout (`POST /v1/billing/checkout`), not a plan change.
+    /// Always false: the flat-price Checkout no longer starts subscriptions.
+    /// A company without a plan accepts a plan invite (`plan_invite`), or
+    /// contacts Granite Manager.
     pub starts_checkout: bool,
+    /// The plan invite a Manager can accept now, or null (then "Contact
+    /// Granite Manager to choose your plan").
+    pub plan_invite: Option<OpenPlanInvite>,
     /// Paused and without a running subscription: pay on the restore page
     /// (`GET /v1/billing/reactivation`).
     pub needs_new_subscription: bool,
     /// Stripe is configured on the server.
     pub billing_configured: bool,
+}
+
+/// A plan invite waiting for the company's Managers.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpenPlanInvite {
+    /// When its links stop working (ISO 8601, UTC).
+    pub expires_at: DateTime<Utc>,
+    /// The plan's first charge day (`YYYY-MM-DD`).
+    pub first_charge_on: NaiveDate,
 }
 
 /// Query of `GET /v1/billing`.
@@ -237,7 +251,8 @@ pub struct OverviewQuery {
 ///
 /// The subscription (refreshed from Stripe at most every 5 minutes, or now
 /// with `checkout=success`), the card on file, the plans with Stripe's
-/// prices and the invoices (read live from Stripe, else the stored copy).
+/// prices, the invoices (read live from Stripe, else the stored copy) and
+/// the open plan invite (get its link with `create_billing_plan_invite_link`).
 /// Managers only; other users read `GET /v1/billing/gate`.
 #[utoipa::path(
     get,
@@ -281,13 +296,20 @@ pub async fn overview(
     };
     let invoices = account::page_invoices(&state.stripe, &state.pool, record.as_ref()).await?;
     let card = account::default_card(&state.stripe, record.as_ref()).await;
+    let plan_invite = invites::open_for_company(&state.pool, user.company_id)
+        .await?
+        .map(|invite| OpenPlanInvite {
+            expires_at: invite.expires_at.and_utc(),
+            first_charge_on: invite.first_charge_on,
+        });
     Ok(Json(BillingOverview {
         subscription: record.as_ref().map(subscription),
         card,
         invoices: invoices.into_iter().map(Invoice::from).collect(),
         plans: plans(&state).await,
         restricted: gate.restricted,
-        starts_checkout: can_start_checkout(record.as_ref()),
+        starts_checkout: false,
+        plan_invite,
         needs_new_subscription: gate.restricted && needs_new_subscription(record.as_ref()),
         billing_configured: state.stripe.is_enabled(),
     }))
@@ -311,64 +333,75 @@ fn billing_url(state: &AppState, headers: &HeaderMap) -> String {
 /// A link to open in the browser.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Redirect {
-    /// Stripe's page.
+    /// Stripe's page, or the payments app's plan invite page.
     pub url: String,
 }
 
-/// Body of `POST /v1/billing/checkout` and `PUT /v1/billing/subscription`.
+/// Body of `PUT /v1/billing/subscription`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct PlanChoice {
     /// A plan's `price_id` from `GET /v1/billing`.
     pub price_id: String,
 }
 
-/// Subscribe through Stripe Checkout
+/// Subscribe through Stripe Checkout (retired)
 ///
-/// A Stripe Checkout link that subscribes the company to the plan; Stripe
-/// returns to `/admin/billing?checkout=success` (or `cancel`), whose page
-/// then calls `GET /v1/billing?checkout=success`. Only while the company has
-/// no running subscription, here or at Stripe (400 otherwise: change the
-/// plan with `PUT /v1/billing/subscription`).
+/// Always refused with 409 `plan_invite_required` ("Contact Granite Manager
+/// to choose your plan."): the flat-price Checkout no longer starts
+/// subscriptions. A company moves onto a plan by accepting a plan invite
+/// (`plan_invite` of `get_billing`, link from
+/// `create_billing_plan_invite_link`). Changing the plan of a running
+/// legacy subscription (`PUT /v1/billing/subscription`) and restoring a
+/// paused company (`/v1/billing/reactivation`) still work.
 #[utoipa::path(
     post,
     path = "/v1/billing/checkout",
     operation_id = "create_billing_checkout",
     tag = "billing",
-    request_body = PlanChoice,
     responses(
-        (status = 200, description = "The Checkout link", body = Redirect),
-        (status = 400, description = "Unknown plan, already subscribed, or Stripe refused", body = ErrorBody),
+        (status = 200, description = "Never: the Checkout link is no longer made", body = Redirect),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a manager of the company", body = ErrorBody),
+        (status = 409, description = "Plans come through a plan invite (code plan_invite_required)", body = CodedErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+#[allow(clippy::unused_async)] // an axum handler
+pub async fn checkout(BillingManager(_user): BillingManager) -> ApiResult<Json<Redirect>> {
+    Err(ApiError::coded(
+        StatusCode::CONFLICT,
+        "plan_invite_required",
+        "Contact Granite Manager to choose your plan.",
+    ))
+}
+
+/// Get my link to the open plan invite
+///
+/// Makes a new link for the caller to the company's open plan invite (the
+/// payments app's `/upgrade/<token>`, where a Manager reviews and accepts
+/// the plan). 404 `invite_not_found` when no invite is open.
+#[utoipa::path(
+    post,
+    path = "/v1/billing/plan-invite/link",
+    operation_id = "create_billing_plan_invite_link",
+    tag = "billing",
+    responses(
+        (status = 200, description = "The link", body = Redirect),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not a manager of the company", body = ErrorBody),
+        (status = 404, description = "No open plan invite (code invite_not_found)", body = CodedErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
     ),
     security(("session_cookie" = []))
 )]
-pub async fn checkout(
+pub async fn plan_invite_link(
     State(state): State<AppState>,
     BillingManager(user): BillingManager,
-    headers: HeaderMap,
-    JsonBody(input): JsonBody<PlanChoice>,
 ) -> ApiResult<Json<Redirect>> {
-    let name: Option<String> = sqlx::query_scalar("SELECT name FROM company WHERE id = ?")
-        .bind(user.company_id)
-        .fetch_optional(&state.pool)
+    let invite = invites::open_for_company(&state.pool, user.company_id)
         .await?
-        .flatten();
-    let name = name
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "Company".into());
-    let url = account::checkout_url(
-        &state.stripe,
-        &MySqlBillingStore(&state.pool),
-        &state.billing_plans,
-        user.company_id,
-        &name,
-        input.price_id.trim(),
-        &billing_url(&state, &headers),
-    )
-    .await?;
+        .ok_or_else(invites::not_found)?;
+    let url = invites::mint_link(&state.pool, &invite.id, user.id).await?;
     Ok(Json(Redirect { url }))
 }
 

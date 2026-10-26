@@ -6,13 +6,15 @@
 //! after whatever step a crash stopped it at: every Stripe POST carries an
 //! idempotency key built from the signup id, every status change is guarded.
 
-use super::consent::{self, ConsentAcceptance, PaymentFacts};
+use super::consent::{self, ConsentAcceptance, ConsentOrigin, PaymentFacts};
 use super::intent::{self, CompanyDetails, Intent, SignupStatus};
 use super::{RequestMeta, email_lock_name, funnel, notify, unavailable};
 use crate::billing::lock::{CompanyLock, LockError, NamedLock};
 use crate::billing::machine::apply_subscription_change;
 use crate::billing::store::MySqlBillingStore;
-use crate::billing::stripe::{NewSubscription, StripeError, stripe_id, subscription_snapshot};
+use crate::billing::stripe::{
+    NewSubscription, StripeError, SubscriptionOrigin, stripe_id, subscription_snapshot,
+};
 use crate::billing::{self, items, seats};
 use crate::company_create::{
     CompanyInit, OwnerInit, PlanSource, create_company_tx, create_owner_tx,
@@ -204,7 +206,7 @@ async fn accept(
     .bind(accepted_at)
     .bind(facts.trial_end_at.trunc_subsecs(0))
     .bind(facts.quote.fee_cents)
-    .bind(facts.deadline_at.trunc_subsecs(0))
+    .bind(facts.deadline_at.map(|at| at.trunc_subsecs(0)))
     .bind(&price_ids)
     .bind(accepted_at)
     .bind(&intent.id)
@@ -227,7 +229,9 @@ async fn accept(
     };
     consent::insert_records(
         &mut tx,
-        &intent.id,
+        ConsentOrigin::Signup {
+            signup_id: &intent.id,
+        },
         &rendered,
         &facts,
         &payment,
@@ -526,7 +530,7 @@ async fn subscription(
         None => state
             .stripe
             .create_self_serve_subscription(&NewSubscription {
-                signup_id: &intent.id,
+                origin: SubscriptionOrigin::Signup(&intent.id),
                 company_id,
                 customer,
                 payment_method,

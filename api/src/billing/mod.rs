@@ -13,6 +13,7 @@
 pub mod account;
 pub mod catalog;
 pub mod gate;
+pub mod invites;
 pub mod items;
 pub mod lock;
 pub mod machine;
@@ -191,6 +192,9 @@ pub struct SubscriptionSnapshot {
     /// When the subscription is scheduled to end: `cancel_at`, or the period
     /// end with `cancel_at_period_end`.
     pub cancel_at: Option<NaiveDateTime>,
+    /// `metadata.replaced_by`: a legacy subscription a plan move replaced
+    /// with this subscription id (it ends at its period end).
+    pub replaced_by: Option<String>,
 }
 
 /// One item of a Stripe subscription.
@@ -222,6 +226,8 @@ pub struct InvoiceSnapshot {
     /// The invoice's subscription status read from Stripe when the event is
     /// applied; `None` when it was not read.
     pub live_subscription_status: Option<String>,
+    /// The subscription's `metadata.replaced_by` (a plan move replaced it).
+    pub replaced_by: Option<String>,
 }
 
 /// The Stripe events billing acts on.
@@ -429,6 +435,16 @@ pub fn outstanding_balance_cents(invoices: &[BillingInvoice]) -> i64 {
         .filter(|invoice| invoice.status == "open")
         .map(|invoice| invoice.amount_due_cents)
         .sum()
+}
+
+/// The payments app's origin: `PAYMENTS_APP_URL`, read per request, default
+/// `https://payments.granite-manager.com`.
+pub fn payments_app_url() -> String {
+    std::env::var("PAYMENTS_APP_URL")
+        .ok()
+        .map(|url| url.trim().trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| "https://payments.granite-manager.com".into())
 }
 
 /// The current time, whole seconds (what a DATETIME column keeps).

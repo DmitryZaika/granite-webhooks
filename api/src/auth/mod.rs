@@ -8,6 +8,7 @@
 //! | `AdminUser`    | `getAdminUser`              | `is_admin \|\| is_superuser`              |
 //! | `UserManager`  | `canEditAdminUsers`         | a superuser, or an admin holding Manager in the company |
 //! | `CompanyManager` | (`can_manage_billing`)    | anyone holding Manager in the company (superusers too only then) |
+//! | `PositionedUser` | -                         | any valid session; also gives the user's positions in every company |
 //! | `InstallerUser` | `getInstallerUser` | an installer of the company |
 //! | `ShopOrEmployeeUser` | `getShopOrEmployeeUser` | an employee, or a shop manager / worker of the company |
 //! | `device::DeviceUser` | (Granite Phone app)  | a live `X-Granite-Device` token of an employee, admin or superuser |
@@ -272,6 +273,20 @@ impl FromRequestParts<AppState> for BillingManager {
         } else {
             Err(ApiError::Forbidden)
         }
+    }
+}
+
+/// Any signed-in user, with their positions in every company: for routes
+/// that check a position in a company other than the one the request acts
+/// in (a plan invite's company).
+pub struct PositionedUser(pub SessionUser, pub Vec<session::UserPositionRow>);
+
+impl FromRequestParts<AppState> for PositionedUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        let (user, positions) = authenticate_with_positions(parts, state).await?;
+        Ok(Self(user, positions))
     }
 }
 

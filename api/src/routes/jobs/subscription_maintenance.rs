@@ -1,5 +1,5 @@
-//! `POST /v1/jobs/subscription-maintenance`: self-serve signups and
-//! subscription seats. See `crate::signup::maintenance`.
+//! `POST /v1/jobs/subscription-maintenance`: self-serve signups, plan invite
+//! acceptances and subscription seats. See `crate::signup::maintenance`.
 
 use super::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
@@ -8,17 +8,21 @@ use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 
-/// Resume stuck signups, expire abandoned ones and reconcile seats
+/// Resume stuck signups and plan moves, expire abandoned signups and reconcile seats
 ///
 /// One run, which starts no new work after 40 seconds:
 /// 1. Resumes up to 5 signups stuck in provisioning for 10 minutes or more
 ///    (oldest first; a signup is given up after 10 failed runs).
-/// 2. Expires up to 50 abandoned signups (24 hours after they started, or 11
+/// 2. Resumes up to 5 plan invites whose acceptance stopped before the
+///    company switched to its plan, with the same wait; after 26 hours staff
+///    are alerted instead.
+/// 3. Expires up to 50 abandoned signups (24 hours after they started, or 11
 ///    days waiting for bank verification) and deletes their Stripe customers.
-/// 3. Once every 23 hours, pushes each subscription company's extra-user
+/// 4. Once every 23 hours, pushes each subscription company's extra-user
 ///    quantity to Stripe where it differs from its billable users.
 ///
-/// Returns the counts; `processed` is `resumed` + `expired`.
+/// Returns the counts; `processed` is `resumed` + `invites_resumed` +
+/// `expired`.
 #[utoipa::path(
     post,
     path = "/v1/jobs/subscription-maintenance",

@@ -5,7 +5,7 @@
 //! never makes a second customer.
 
 use super::intent::Intent;
-use crate::billing::stripe::{SignupCustomer, StripeError};
+use crate::billing::stripe::{SetupPurpose, SignupCustomer, StripeError};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use lambda_http::tracing;
@@ -127,7 +127,14 @@ pub async fn setup(state: &AppState, intent: &Intent) -> ApiResult<Setup> {
     let created = if let (true, Some(method)) = (test, &state.signup.test_payment_method) {
         state
             .stripe
-            .create_confirmed_test_setup_intent(&customer, &intent.id, attempt, method)
+            .create_confirmed_test_setup_intent(
+                &customer,
+                SetupPurpose::Signup {
+                    signup_id: &intent.id,
+                    attempt,
+                },
+                method,
+            )
             .await
     } else {
         state

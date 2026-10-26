@@ -198,6 +198,20 @@ async fn save_with_outstanding<S: BillingStore>(
     Ok(next)
 }
 
+/// `replaced_by` is set (a plan move replaced this subscription) and the
+/// record names another subscription.
+fn replaced_by_another(
+    record: &CompanyBilling,
+    replaced_by: Option<&str>,
+    subscription_id: Option<&str>,
+) -> bool {
+    replaced_by.is_some()
+        && record
+            .stripe_subscription_id
+            .as_deref()
+            .is_some_and(|current| Some(current) != subscription_id)
+}
+
 /// Applies a subscription's state; answers the managers notified.
 pub async fn apply_subscription_change<S: BillingStore>(
     store: &S,
@@ -214,6 +228,10 @@ pub async fn apply_subscription_change<S: BillingStore>(
     else {
         return Ok(Vec::new());
     };
+    // A subscription a plan move replaced never takes the record back.
+    if replaced_by_another(&record, snapshot.replaced_by.as_deref(), Some(&snapshot.id)) {
+        return Ok(Vec::new());
+    }
     let status = if snapshot.deleted {
         "canceled"
     } else {
@@ -290,6 +308,15 @@ pub async fn apply_invoice_change<S: BillingStore>(
             paid_at: paid.then(|| invoice.paid_at.unwrap_or(now)),
         })
         .await?;
+    // An invoice of a subscription a plan move replaced: recorded, nothing else.
+    if replaced_by_another(
+        &record,
+        invoice.replaced_by.as_deref(),
+        invoice.subscription_id.as_deref(),
+    ) {
+        save_with_outstanding(store, record).await?;
+        return Ok(Vec::new());
+    }
     let other_subscription =
         has_live_other_subscription(&record, invoice.subscription_id.as_deref());
     if paid
@@ -495,6 +522,7 @@ mod tests {
                 monthly_total_cents: None,
                 trial_end: None,
                 cancel_at: None,
+                replaced_by: None,
             },
         }
     }
@@ -516,6 +544,7 @@ mod tests {
                 invoice_pdf: Some("https://pay.stripe.com/invoice/test/pdf".into()),
                 paid_at: paid.then(|| at("2026-09-01 00:00:00")),
                 live_subscription_status: None,
+                replaced_by: None,
             },
         }
     }
@@ -839,6 +868,95 @@ mod tests {
         assert_eq!(record.payment_status, PaymentStatus::Active);
         assert_eq!(record.stripe_subscription_id.as_deref(), Some("sub_new"));
         assert_eq!(store.open_notifications(1), []);
+    }
+
+    /// Company 1 moved onto a plan: `sub_new` (in `status`) replaced the
+    /// legacy `sub_old`.
+    fn moved(status: &str) -> Memory {
+        let store = Memory::default();
+        store.users.borrow_mut().push((10, 1, true));
+        store.records.borrow_mut().insert(
+            1,
+            CompanyBilling {
+                stripe_subscription_id: Some("sub_new".into()),
+                subscription_status: status.into(),
+                trial_end_at: Some(at("2026-11-14 17:00:00")),
+                ..active(1)
+            },
+        );
+        store
+    }
+
+    fn replaced(event: &mut BillingEvent) {
+        match event {
+            BillingEvent::Subscription { subscription, .. } => {
+                subscription.id = "sub_old".into();
+                subscription.replaced_by = Some("sub_new".into());
+            }
+            BillingEvent::Invoice { invoice, .. } => {
+                invoice.subscription_id = Some("sub_old".into());
+                invoice.replaced_by = Some("sub_new".into());
+            }
+            _ => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn a_replaced_legacy_subscription_never_takes_the_record_back() {
+        let store = moved("trialing");
+        // The legacy subscription, still paid and now cancelling at its period end.
+        let mut event = subscription_event("evt_old_update", 1, "active", false);
+        replaced(&mut event);
+        if let BillingEvent::Subscription { subscription, .. } = &mut event {
+            subscription.cancel_at = Some(at("2026-11-14 17:00:00"));
+        }
+        apply_event(&store, &event, at("2026-10-25 00:00:00"))
+            .await
+            .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.stripe_subscription_id.as_deref(), Some("sub_new"));
+        assert_eq!(record.subscription_status, "trialing");
+        assert_eq!(record.cancel_at, None);
+        assert_eq!(record.trial_end_at, Some(at("2026-11-14 17:00:00")));
+    }
+
+    #[tokio::test]
+    async fn a_replaced_legacy_subscription_ending_changes_nothing_even_after_the_new_one() {
+        let store = moved("canceled");
+        let mut event = subscription_event("evt_old_end", 1, "canceled", true);
+        replaced(&mut event);
+        apply_event(&store, &event, at("2026-11-14 17:00:00"))
+            .await
+            .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.stripe_subscription_id.as_deref(), Some("sub_new"));
+        assert_eq!(record.payment_status, PaymentStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn invoices_of_a_replaced_subscription_start_no_grace_and_switch_nothing() {
+        // Even once the new subscription ended, which disarms the live-subscription check.
+        let store = moved("canceled");
+        let mut failed = invoice_event("evt_old_failed", 1, false, 30_000);
+        replaced(&mut failed);
+        apply_event(&store, &failed, at("2026-11-14 18:00:00"))
+            .await
+            .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.stripe_subscription_id.as_deref(), Some("sub_new"));
+        assert_eq!(record.payment_status, PaymentStatus::Active);
+        assert_eq!(record.grace_period_ends_at, None);
+        assert_eq!(store.open_notifications(1), []);
+        assert_eq!(record.outstanding_balance_cents, 30_000);
+
+        let mut paid = invoice_event("evt_old_paid", 1, true, 30_000);
+        replaced(&mut paid);
+        apply_event(&store, &paid, at("2026-11-14 19:00:00"))
+            .await
+            .unwrap();
+        let record = store.record(1);
+        assert_eq!(record.stripe_subscription_id.as_deref(), Some("sub_new"));
+        assert_eq!(record.subscription_status, "canceled");
     }
 
     #[tokio::test]

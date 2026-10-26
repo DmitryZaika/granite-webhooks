@@ -10,12 +10,24 @@
 use super::catalog::PriceKind;
 use super::{SubscriptionSnapshot, is_ended_subscription_status};
 use chrono::NaiveDateTime;
-use sqlx::MySqlPool;
+use sqlx::{MySqlConnection, MySqlPool};
 
 /// Syncs `snapshot`'s items into the company's rows. The caller holds the
 /// company's billing lock.
 pub async fn sync_items(
     pool: &MySqlPool,
+    company_id: i32,
+    snapshot: &SubscriptionSnapshot,
+    now: NaiveDateTime,
+) -> sqlx::Result<()> {
+    let mut tx = pool.begin().await?;
+    sync_items_in(&mut tx, company_id, snapshot, now).await?;
+    tx.commit().await
+}
+
+/// [`sync_items`] inside the caller's transaction.
+pub async fn sync_items_in(
+    tx: &mut MySqlConnection,
     company_id: i32,
     snapshot: &SubscriptionSnapshot,
     now: NaiveDateTime,
@@ -31,7 +43,6 @@ pub async fn sync_items(
     if kinds.is_empty() {
         return Ok(());
     }
-    let mut tx = pool.begin().await?;
     if snapshot.deleted || is_ended_subscription_status(&snapshot.status) {
         sqlx::query(
             "UPDATE company_addons SET ended_at = ?
@@ -45,7 +56,7 @@ pub async fn sync_items(
             .bind(company_id)
             .execute(&mut *tx)
             .await?;
-        return tx.commit().await;
+        return Ok(());
     }
     let mut extra_user_item = None;
     let mut kept: Vec<&str> = Vec::new();
@@ -94,5 +105,5 @@ pub async fn sync_items(
         .bind(company_id)
         .execute(&mut *tx)
         .await?;
-    tx.commit().await
+    Ok(())
 }

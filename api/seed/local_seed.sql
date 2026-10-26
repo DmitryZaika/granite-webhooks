@@ -561,3 +561,48 @@ INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VA
   ('aaaaaaaa-0000-4000-8000-000000020101', 20101, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
   ('aaaaaaaa-0000-4000-8000-000000020102', 20102, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
   ('aaaaaaaa-0000-4000-8000-000000020103', 20103, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);
+
+-- Move to plan (ids 20600-20699), for the plan invite e2e.
+-- 20600 Legacy Move Stone: legacy, no billing row. 20600 Lena Manager (Manager,
+--   manager@legacy-move.test) and 20601 Rob Rep (not a Manager). An open invite
+--   (Quotes; first charge 30 days out, expires in 14) made by user 103, with the
+--   dev link token `sb11-dev-invite-token-0001` for Lena: only its SHA-256 is
+--   stored (48f4a140...). Open /upgrade/sb11-dev-invite-token-0001.
+-- 20601 Legacy Sub Stone: legacy, paying a legacy single-price subscription
+--   (sub_seed_legacy, active, period end 20 days out; billing not required, so
+--   the reminder and reconcile jobs pass it by). 20602 Lila Manager (Manager,
+--   manager@legacy-sub.test).
+-- Sessions aaaaaaaa-0000-4000-8000-0000000<user id>.
+INSERT INTO company (id, name) VALUES
+  (20600, 'Legacy Move Stone'),
+  (20601, 'Legacy Sub Stone');
+
+INSERT INTO users (id, email, password, name, is_employee, is_admin, is_superuser, is_deleted, company_id) VALUES
+  (20600, 'manager@legacy-move.test', '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Lena Manager', 1, 1, 0, 0, 20600),
+  (20601, 'rep@legacy-move.test',     '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Rob Rep',      1, 0, 0, 0, 20600),
+  (20602, 'manager@legacy-sub.test',  '$2b$10$daaV4OW7Z3vjsAwLf.2lTeFKeDjT0vAMrimETNcoQ3i//afF85GEa', 'Lila Manager', 1, 1, 0, 0, 20601);
+
+INSERT INTO users_positions (user_id, position_id, company_id) VALUES
+  (20600, 5, 20600),
+  (20601, 1, 20600),
+  (20602, 5, 20601);
+
+INSERT INTO sessions (id, user_id, expiration_date, is_deleted, created_date) VALUES
+  ('aaaaaaaa-0000-4000-8000-000000020600', 20600, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020601', 20601, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP),
+  ('aaaaaaaa-0000-4000-8000-000000020602', 20602, '2037-12-31 00:00:00', 0, CURRENT_TIMESTAMP);
+
+INSERT INTO company_billing (company_id, stripe_customer_id, stripe_subscription_id, stripe_price_id,
+                             stripe_subscription_item_id, subscription_status, payment_status,
+                             current_period_start, current_period_end, plan_name, monthly_price_cents)
+VALUES (20601, 'cus_seed_legacy', 'sub_seed_legacy', 'price_seed_legacy', 'si_seed_legacy', 'active', 'active',
+        DATE_SUB(UTC_TIMESTAMP(), INTERVAL 10 DAY), DATE_ADD(UTC_TIMESTAMP(), INTERVAL 20 DAY), 'Pro', 30000);
+
+INSERT INTO plan_invites (id, company_id, created_by, addons, first_charge_on, first_charge_at, expires_at,
+                          status, created_at, updated_at)
+VALUES ('5b110000-0000-4000-8000-000000020600', 20600, 103, '["quotes"]',
+        DATE_ADD(UTC_DATE(), INTERVAL 30 DAY), TIMESTAMP(DATE_ADD(UTC_DATE(), INTERVAL 30 DAY), '14:00:00'),
+        DATE_ADD(UTC_TIMESTAMP(), INTERVAL 14 DAY), 'open', UTC_TIMESTAMP(), UTC_TIMESTAMP());
+
+INSERT INTO plan_invite_tokens (token_sha256, invite_id, user_id, created_at) VALUES
+  ('48f4a14034abe625fa5329327b97fde5d35886111825a91fc9c9f6e8cb0da5ac', '5b110000-0000-4000-8000-000000020600', 20600, UTC_TIMESTAMP());

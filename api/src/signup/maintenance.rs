@@ -1,13 +1,14 @@
 //! `POST /v1/jobs/subscription-maintenance`.
 //!
-//! Resumes stuck provisioning, expires abandoned signups (deleting their
-//! Stripe customers) and, once a day, reconciles the extra-user quantity of
-//! every subscription company.
+//! Resumes stuck provisioning and plan invite acceptances, expires abandoned
+//! signups (deleting their Stripe customers) and, once a day, reconciles the
+//! extra-user quantity of every subscription company.
 
 use super::funnel;
 use super::intent::BANK_VERIFICATION_DAYS;
 use super::notify;
 use super::provision::{self, RunOutcome, record_failure};
+use crate::billing::invites::accept as invite_accept;
 use crate::billing::stripe::StripeError;
 use crate::billing::{self, seats};
 use crate::job_runs;
@@ -38,7 +39,7 @@ const SEATS_EVERY_HOURS: i64 = 23;
 /// What one run did.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 pub struct MaintenanceRun {
-    /// `resumed` + `expired` (what the scheduler logs).
+    /// `resumed` + `invites_resumed` + `expired` (what the scheduler logs).
     pub processed: usize,
     /// Stuck signups whose provisioning was run again.
     pub resumed: usize,
@@ -58,6 +59,12 @@ pub struct MaintenanceRun {
     /// Resumes that failed and Stripe customers that could not be deleted
     /// (retried on a later run).
     pub errors: usize,
+    /// Plan invites stuck in acceptance whose switch was run again.
+    pub invites_resumed: usize,
+    /// Resumed plan invites this run finished (the company is on its plan).
+    pub invites_accepted: usize,
+    /// Plan invite acceptances given up on (staff were alerted).
+    pub invites_given_up: usize,
 }
 
 /// One run of the job.
@@ -66,10 +73,12 @@ pub async fn run(state: &AppState) -> sqlx::Result<MaintenanceRun> {
     let mut outcome = MaintenanceRun::default();
     give_up(state, &mut outcome).await?;
     resume(state, started, &mut outcome).await?;
+    give_up_invites(state, &mut outcome).await?;
+    resume_invites(state, started, &mut outcome).await?;
     expire(state, started, &mut outcome).await?;
     delete_customers(state, started, &mut outcome).await?;
     reconcile_seats(state, started, &mut outcome).await?;
-    outcome.processed = outcome.resumed + outcome.expired;
+    outcome.processed = outcome.resumed + outcome.invites_resumed + outcome.expired;
     Ok(outcome)
 }
 
@@ -154,6 +163,80 @@ async fn resume(
                 let signup = funnel::distinct_id(&id);
                 tracing::warn!(?company_id, %signup, error = %err, "signup provisioning resume failed");
                 record_failure(&state.pool, &id, &err).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Plan invites accepted more than [`GIVE_UP_AFTER_HOURS`] ago and still not
+/// finished stop being resumed (`gave_up_at`): staff get one alert and finish
+/// the switch by hand. The company keeps its legacy plan meanwhile.
+async fn give_up_invites(state: &AppState, outcome: &mut MaintenanceRun) -> sqlx::Result<()> {
+    let now = billing::now();
+    let stuck: Vec<(String, i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, company_id, last_error FROM plan_invites
+          WHERE status = 'accepting' AND gave_up_at IS NULL AND accepting_at <= ?
+          ORDER BY accepting_at, id LIMIT ?",
+    )
+    .bind(now - Duration::hours(GIVE_UP_AFTER_HOURS))
+    .bind(RESUME_BATCH)
+    .fetch_all(&state.pool)
+    .await?;
+    for (id, company_id, last_error) in stuck {
+        let marked = sqlx::query(
+            "UPDATE plan_invites SET gave_up_at = ?, updated_at = ?
+              WHERE id = ? AND status = 'accepting' AND gave_up_at IS NULL",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+        if marked.rows_affected() != 1 {
+            continue;
+        }
+        outcome.invites_given_up += 1;
+        tracing::error!(company_id, "plan invite acceptance given up; staff alerted");
+        notify::plan_acceptance_given_up(state, company_id, last_error.as_deref()).await;
+    }
+    Ok(())
+}
+
+/// Plan invites stuck in `accepting` (the Manager left, or the switch
+/// failed) run again with the signups' wait: 10 minutes, doubling per
+/// failed run.
+async fn resume_invites(
+    state: &AppState,
+    started: Instant,
+    outcome: &mut MaintenanceRun,
+) -> sqlx::Result<()> {
+    let now = billing::now();
+    let candidates: Vec<(String, u8, i32, NaiveDateTime)> = sqlx::query_as(
+        "SELECT id, provision_attempts, company_id, updated_at FROM plan_invites
+          WHERE status = 'accepting' AND gave_up_at IS NULL AND updated_at <= ?
+          ORDER BY updated_at, id LIMIT ?",
+    )
+    .bind(now - Duration::minutes(RESUME_AFTER_MINUTES))
+    .bind(RESUME_BATCH * 4)
+    .fetch_all(&state.pool)
+    .await?;
+    let due = candidates
+        .into_iter()
+        .filter(|(_, attempts, _, updated_at)| *updated_at + resume_wait(*attempts) <= now)
+        .take(usize::try_from(RESUME_BATCH).unwrap_or(5));
+    for (id, _, company_id, _) in due {
+        if out_of_time(started) {
+            break;
+        }
+        outcome.invites_resumed += 1;
+        match invite_accept::run(state, &id).await {
+            Ok(invite_accept::RunOutcome::Accepted { .. }) => outcome.invites_accepted += 1,
+            Ok(invite_accept::RunOutcome::AlreadyAccepted | invite_accept::RunOutcome::Busy) => {}
+            Err(err) => {
+                outcome.errors += 1;
+                tracing::warn!(company_id, error = %err, "plan invite acceptance resume failed");
+                invite_accept::record_failure(&state.pool, &id, &err).await?;
             }
         }
     }
