@@ -174,3 +174,57 @@ async fn a_booking_needs_the_estimates_calendar_and_a_contact(pool: MySqlPool) {
     sample.assert_status(StatusCode::CREATED);
     assert_eq!(sample.json::<Value>()["id"], 0);
 }
+
+#[test_db::test(seed)]
+async fn admins_pick_the_calendar_estimates_are_booked_on(pool: MySqlPool) {
+    let (server, _) = server(&pool).await;
+    let estimates_calendar = || {
+        let request = server
+            .get("/v1/schedule/settings")
+            .with_session(sessions::REP);
+        async move { request.await.json::<Value>()["estimates_calendar_id"].clone() }
+    };
+    let pick = |session: &'static str, calendar: i64| {
+        server
+            .put("/v1/schedule/settings")
+            .with_session(session)
+            .json(&json!({ "estimates_calendar_id": calendar }))
+    };
+    assert_eq!(estimates_calendar().await, 8820);
+    pick(sessions::REP, 8821)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    pick(sessions::ADMIN, 999_999)
+        .await
+        .assert_status_bad_request();
+    pick(sessions::ADMIN, 8821)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(estimates_calendar().await, 8821);
+
+    let book = |calendar: i64| {
+        server
+            .post("/v1/events/estimates")
+            .with_session(sessions::REP)
+            .json(&booking(1000, calendar))
+    };
+    book(8820).await.assert_status(StatusCode::BAD_REQUEST);
+    let booked = book(8821).await;
+    booked.assert_status(StatusCode::CREATED);
+    let id = booked.json::<Value>()["id"].as_i64().unwrap();
+    let reminders: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM appointment_reminders WHERE event_id = ? AND calendar_slug = 'estimates'",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(reminders, 2);
+
+    // A deleted pick falls back to the Estimates calendar.
+    sqlx::query("UPDATE calendars SET deleted_at = NOW() WHERE id = 8821")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(estimates_calendar().await, 8820);
+}

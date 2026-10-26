@@ -737,7 +737,8 @@ pub fn with_clarify_marker(text: &str, question: &str) -> String {
 
 /// A question back about which feature is meant, as saved:
 /// `[[CLARIFY:question|label=section,section|…]]` also keeps where each
-/// choice is answered from.
+/// choice is answered from. A choice without sections (the company's own
+/// process) is its label alone.
 pub fn with_clarify_choices_marker(
     text: &str,
     question: &str,
@@ -747,11 +748,12 @@ pub fn with_clarify_choices_marker(
     let choices: Vec<String> = choices
         .iter()
         .map(|(label, sections)| {
-            format!(
-                "{}={}",
-                trim(&label.replace(['[', ']', '|', '=', ','], " ")),
-                sections.join(",")
-            )
+            let label = label.replace(['[', ']', '|', '=', ','], " ");
+            if sections.is_empty() {
+                trim(&label).to_string()
+            } else {
+                format!("{}={}", trim(&label), sections.join(","))
+            }
         })
         .collect();
     format!(
@@ -768,8 +770,9 @@ pub fn parse_clarify_marker(text: &str) -> Option<String> {
         .filter(|question| !question.is_empty())
 }
 
-/// The choices a saved question back offered (`label`, its sections); none
-/// for the question between the app and the company's process.
+/// The choices a saved question back offered (`label`, its sections; none
+/// for the company's own process); none at all for the question between
+/// the app and the company's process.
 pub fn parse_clarify_choices(text: &str) -> Vec<(String, Vec<String>)> {
     let Some(marker) = first_capture(clarify_marker(), text) else {
         return Vec::new();
@@ -778,14 +781,16 @@ pub fn parse_clarify_choices(text: &str) -> Vec<(String, Vec<String>)> {
         .split('|')
         .skip(1)
         .filter_map(|choice| {
-            let (label, sections) = choice.split_once('=')?;
+            let (label, sections) = choice.split_once('=').unwrap_or((choice, ""));
             let sections: Vec<String> = sections
                 .split(',')
                 .map(|id| trim(id).to_string())
                 .filter(|id| !id.is_empty())
                 .collect();
             let label = trim(label);
-            (!label.is_empty() && !sections.is_empty()).then(|| (label.to_string(), sections))
+            let company = !choice.contains('=');
+            (!label.is_empty() && (company || !sections.is_empty()))
+                .then(|| (label.to_string(), sections))
         })
         .collect()
 }

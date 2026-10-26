@@ -94,7 +94,8 @@ pub const CRM_MANUAL_RULES: &str = r#"How to use the CRM user manual:
 25. Changing a person's name (installer, sales rep, technician, shop worker, any staff member) is always the same task: rename their user account. There is no separate installer-name, sales-rep-name, or technician-name field anywhere in the product. Steps: Admin > Company settings > Users, find the row, **⋯** > **Edit**, change **Name**, **Save** (toast **User updated**). A **Manager** with Admin access can do this (a Super Admin also needs the Manager position), and a Manager may rename anyone in their own company including installers. The new name then appears wherever that person is shown (Survey cards, the survey installer and sales rep dropdowns, checklists, Users Activity, assignment lists), including surveys and checklists submitted before the rename. Never answer that you cannot confirm how to change a name, and never treat "installer name" as an undocumented field. Users can also change their own name on My Account.
 26. Mark as unread / Mark as read are real features. Emails: **CRM > Emails**, **Inbox** row envelope (closed = **Mark as unread**, open = **Mark as read**), or the toolbar envelope after selecting threads in Inbox or Sent. Opening a thread marks it read. SMS: **CRM > SMS**, hover a read row and click the envelope **Mark as unread**. Opening an SMS thread marks it read. Never answer that you cannot confirm Mark as unread.
 27. Users type fast: expect typos and loose names for pages, buttons, and features (for example "custmers", "deal bord", "the stones page"). Answer for the closest matching page or feature, starting with one short line naming it if the wording was off. Ask a question back only when two features fit equally well, and then name both in one line.
-28. Keep how-to answers short: the numbered steps of the one way that does what was asked (about 8 at most, one line each), then one line on who can do it when that matters. No background, alternatives, troubleshooting or extra settings the user did not ask about."#;
+28. Keep how-to answers short: the numbered steps of the one way that does what was asked (about 8 at most, one line each), then one line on who can do it when that matters. No background, alternatives, troubleshooting or extra settings the user did not ask about.
+29. A special order in a quote is a color whose name is typed in **Color** instead of picked from the list, priced in the **$ Price /sq ft** box. Never write the words "Other color" or "other color", even when the user does: say special order."#;
 
 /// `buildInstructionUserMessage`: the question with the hints it needs.
 pub fn instruction_user_message(query: &str) -> String {
@@ -121,9 +122,23 @@ pub fn instruction_user_message(query: &str) -> String {
 /// A how-to answered from the CRM manual: short steps, not the company
 /// instructions' complete checklist.
 pub fn manual_user_message(question: &str) -> String {
-    format!(
-        "Answer how to do this in Granite Manager from the CRM user manual: short numbered steps with the exact labels, only what the question needs.\n\nQuestion: {question}\n\nAnswer:"
-    )
+    // The users' word for a special order, which the app doesn't use: the
+    // model kept writing it back to them.
+    let other_color = if re!(r"\bother colou?rs?\b", "i").is_match(question) {
+        "\n\nThe user writes \"other color\": they mean a special order, a color name typed in Color instead of picked from the list. Call it a special order. Never write the words \"other color\", not even to say there is no such option."
+    } else {
+        ""
+    };
+    format!("{MANUAL_QUESTION}{other_color}\n\nQuestion: {question}\n\nAnswer:")
+}
+
+/// How [`manual_user_message`] starts.
+const MANUAL_QUESTION: &str = "Answer how to do this in Granite Manager from the CRM user manual: short numbered steps with the exact labels, only what the question needs.";
+
+/// Whether `message` is a question [`manual_user_message`] wrote: its answer
+/// came from the CRM manual.
+pub fn is_manual_question(message: &str) -> bool {
+    message.starts_with(MANUAL_QUESTION)
 }
 
 /// The question in a message [`instruction_user_message`] or

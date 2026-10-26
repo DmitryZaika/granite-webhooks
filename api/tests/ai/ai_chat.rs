@@ -476,20 +476,24 @@ fn contents(request: &Value) -> Vec<String> {
         .collect()
 }
 
-/// "How do I make a special order?" is the app's Other color or the
-/// company's own process: the chat asks instead of guessing.
+const SPECIAL_ORDER_QUESTION: &str = "Do you mean a special-order slab in a quote, the Special Order calculator, or your company's own process?";
+
+/// "How do I make a special order?" is a special-order slab in a quote, the
+/// Special Order calculator or the company's own process: the chat asks one
+/// question with all three instead of guessing.
 async fn asked_back(server: &TestServer, pool: &MySqlPool, ai: &OpenAi) {
     let events = ask(
         server,
         json!({ "query": "how do I make a special order?", "isNew": true }),
     )
     .await;
-    assert_eq!(answer(&events), CLARIFY_QUESTION);
+    assert_eq!(answer(&events), SPECIAL_ORDER_QUESTION);
     let choices: Value = serde_json::from_str(named(&events, "clarify")[0]).unwrap();
     assert_eq!(
         choices,
         json!([
-            { "label": "In Granite Manager", "source": "manual" },
+            { "label": "Special-order slab in a quote", "source": "manual" },
+            { "label": "Special Order calculator", "source": "manual" },
             { "label": "Our company's process", "source": "company" },
         ])
     );
@@ -497,7 +501,9 @@ async fn asked_back(server: &TestServer, pool: &MySqlPool, ai: &OpenAi) {
     let saved = history(pool).await;
     assert_eq!(
         saved.last().unwrap()["content"],
-        format!("{CLARIFY_QUESTION}\n\n[[CLARIFY:how do I make a special order?]]")
+        format!(
+            "{SPECIAL_ORDER_QUESTION}\n\n[[CLARIFY:how do I make a special order?|Special-order slab in a quote=quote-drawing-color-slab-layout|Special Order calculator=samples-special-order|Our company's process]]"
+        )
     );
 }
 
@@ -507,17 +513,46 @@ fn picks(sections: &[&str]) -> Reply {
 }
 
 #[test_db::test(seed)]
-async fn picking_granite_manager_answers_the_question_from_the_manual(pool: MySqlPool) {
+async fn picking_the_quote_answers_the_question_from_the_manual(pool: MySqlPool) {
     sqlx::raw_sql(SPECIAL_ORDERS).execute(&pool).await.unwrap();
-    let reply = "Open the quote, click **Edit drawing** and type the color. [[INSTRUCTION:none]]";
-    let (server, ai) = setup(
-        &pool,
-        vec![
-            picks(&["quote-drawing-color-slab-layout"]),
-            Reply::Text(reply.into()),
-        ],
+    let reply = "Open the quote, click **Edit drawing** and type the color. [[INSTRUCTION:1]]";
+    let (server, ai) = setup(&pool, vec![Reply::Text(reply.into())]).await;
+    asked_back(&server, &pool, &ai).await;
+
+    let events = ask(
+        &server,
+        json!({ "query": "Special-order slab in a quote", "isNew": false }),
     )
     .await;
+
+    assert_eq!(answer(&events), reply);
+    assert!(named(&events, "clarify").is_empty());
+    // A manual answer has no company instruction sources, cited or not.
+    assert!(named(&events, "instructions").is_empty());
+    assert!(named(&events, "images").is_empty());
+    assert_eq!(named(&events, "crmManual"), ["true"]);
+    // The choice has its sections: no pick.
+    let requests = ai.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1);
+    let sent = contents(&requests[0]);
+    assert!(sent.iter().any(|c| c.contains("CRM USER MANUAL:")
+        && c.contains("#### Special order (a color not in the list)")));
+    assert!(
+        sent.iter()
+            .all(|c| !c.contains("Here are the instructions you can use"))
+    );
+    assert!(sent.iter().all(|c| !c.contains("[[CLARIFY:")));
+    assert!(sent.last().unwrap().contains(
+        "Question: how do I make a special order? (I mean Special-order slab in a quote in Granite Manager.)"
+    ));
+}
+
+/// "In Granite Manager" typed to the question of three: the manual, which
+/// still has to ask which special order.
+#[test_db::test(seed)]
+async fn typing_the_app_to_the_question_of_three_asks_which_feature(pool: MySqlPool) {
+    sqlx::raw_sql(SPECIAL_ORDERS).execute(&pool).await.unwrap();
+    let (server, ai) = setup(&pool, Vec::new()).await;
     asked_back(&server, &pool, &ai).await;
 
     let events = ask(
@@ -526,30 +561,19 @@ async fn picking_granite_manager_answers_the_question_from_the_manual(pool: MySq
     )
     .await;
 
-    assert_eq!(answer(&events), reply);
-    assert!(named(&events, "clarify").is_empty());
-    assert!(named(&events, "instructions").is_empty());
-    assert_eq!(named(&events, "crmManual"), ["true"]);
-    let pick = ai.requests.lock().unwrap()[0].clone();
-    assert_eq!(pick["response_format"]["type"], "json_object");
-    assert!(
-        contents(&pick)
-            .last()
-            .unwrap()
-            .ends_with("Question: how do I make a special order?")
+    assert_eq!(
+        answer(&events),
+        "Do you mean a special-order slab in a quote, or the Special Order calculator?"
     );
-    let request = ai.requests.lock().unwrap()[1].clone();
-    let sent = contents(&request);
-    assert!(sent.iter().any(|c| c.contains("CRM USER MANUAL:")
-        && c.contains("#### Other color (a color not in the price list)")));
-    assert!(
-        sent.iter()
-            .all(|c| !c.contains("Here are the instructions you can use"))
+    let choices: Value = serde_json::from_str(named(&events, "clarify")[0]).unwrap();
+    assert_eq!(
+        choices,
+        json!([
+            { "label": "Special-order slab in a quote", "source": "manual" },
+            { "label": "Special Order calculator", "source": "manual" },
+        ])
     );
-    assert!(sent.iter().all(|c| !c.contains("[[CLARIFY:")));
-    assert!(sent.last().unwrap().contains(
-        "Question: how do I make a special order? (I mean how to do this in Granite Manager.)"
-    ));
+    assert!(ai.requests.lock().unwrap().is_empty());
 }
 
 #[test_db::test(seed)]
@@ -585,14 +609,7 @@ async fn a_special_order_in_a_quote_goes_to_the_manual_without_asking(pool: MySq
     sqlx::raw_sql(SPECIAL_ORDERS).execute(&pool).await.unwrap();
     let reply =
         "Open the quote, click **Edit drawing**, go to **Color & Edge**. [[INSTRUCTION:none]]";
-    let (server, ai) = setup(
-        &pool,
-        vec![
-            picks(&["quote-drawing-color-slab-layout"]),
-            Reply::Text(reply.into()),
-        ],
-    )
-    .await;
+    let (server, ai) = setup(&pool, vec![Reply::Text(reply.into())]).await;
 
     let events = ask(
         &server,
@@ -603,11 +620,13 @@ async fn a_special_order_in_a_quote_goes_to_the_manual_without_asking(pool: MySq
     assert_eq!(answer(&events), reply);
     assert!(named(&events, "clarify").is_empty());
     assert!(named(&events, "instructions").is_empty());
-    let request = ai.requests.lock().unwrap()[1].clone();
+    // "quote" says which special order: its section, no pick.
+    assert_eq!(ai.requests.lock().unwrap().len(), 1);
+    let request = ai.requests.lock().unwrap()[0].clone();
     assert!(
         contents(&request)
             .iter()
-            .any(|c| c.contains("#### Other color (a color not in the price list)"))
+            .any(|c| c.contains("#### Special order (a color not in the list)"))
     );
 }
 
@@ -855,5 +874,198 @@ async fn admins_keep_the_assistant(pool: MySqlPool) {
             system.starts_with("You are the AI assistant inside Granite Manager"),
             "{system}"
         );
+    }
+}
+
+/// A company with no instruction about the question (only the AI follow-up
+/// one, and one about sealing) is not asked whether it means its own
+/// process: the manual answers, with no instruction sources.
+#[test_db::test(seed)]
+async fn a_company_with_no_instruction_about_it_is_not_asked_about_its_process(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO instructions (id, title, rich_text, company_id) VALUES
+           (9120, 'AI follow-up instruction', '<p>Follow up every two days by email.</p>', 100),
+           (9121, 'Sealing', '<p>Seal every counter once a year.</p>', 100);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let reply =
+        "In **Color**, type the color's name and enter its **$ Price /sq ft**. [[INSTRUCTION:1]]";
+    let (server, ai) = setup(&pool, vec![Reply::Text(reply.into())]).await;
+
+    let events = ask(
+        &server,
+        json!({ "query": "How to make a special order?", "isNew": true }),
+    )
+    .await;
+    let asked = answer(&events);
+    assert_eq!(
+        asked,
+        "Do you mean a special-order slab in a quote, or the Special Order calculator?"
+    );
+    assert!(!asked.contains("company"));
+    let choices: Value = serde_json::from_str(named(&events, "clarify")[0]).unwrap();
+    assert!(
+        choices
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["source"] == "manual")
+    );
+    assert!(ai.requests.lock().unwrap().is_empty());
+
+    let events = ask(
+        &server,
+        json!({ "query": "Special-order slab in a quote", "isNew": false }),
+    )
+    .await;
+    assert_eq!(answer(&events), reply);
+    assert!(named(&events, "instructions").is_empty());
+    assert!(named(&events, "images").is_empty());
+    assert_eq!(named(&events, "crmManual"), ["true"]);
+}
+
+/// A company with an instruction about it may mean its own process: asked.
+/// The generic question stays for what the clarify table doesn't know.
+#[test_db::test(seed)]
+async fn a_company_with_an_instruction_about_it_is_asked(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO instructions (id, title, rich_text, company_id) VALUES
+           (9122, 'Walk-in lead steps', '<p>Greet them, then fill in the walk-in form.</p>', 100);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (server, ai) = setup(&pool, Vec::new()).await;
+    let events = ask(
+        &server,
+        json!({ "query": "how do I add a walk-in lead?", "isNew": true }),
+    )
+    .await;
+    assert_eq!(answer(&events), CLARIFY_QUESTION);
+    let choices: Value = serde_json::from_str(named(&events, "clarify")[0]).unwrap();
+    assert_eq!(
+        choices,
+        json!([
+            { "label": "In Granite Manager", "source": "manual" },
+            { "label": "Our company's process", "source": "company" },
+        ])
+    );
+    assert!(ai.requests.lock().unwrap().is_empty());
+}
+
+/// Like company 1's handbook: a page with pictures that mentions colors and
+/// options, but nothing about special orders in the app.
+const HANDBOOK: &str = "
+INSERT INTO instructions (id, title, rich_text, company_id) VALUES
+  (9130, 'Salesrep Handbook - 12.3: Cabinets - Renderings and Moraware quotes',
+   '<p>Cabinet renderings: pick the door style and the color option, then send the rendering.</p><img src=\"https://img.test/moraware.png\"><p>Moraware quotes have no other option for cabinets.</p>', 100),
+  (9131, 'Special Orders', '<p>Take a 50% deposit, then order the slabs from the supplier.</p>', 100);
+";
+
+/// The chat so far: a how-to the manual answered.
+async fn manual_answer_before(pool: &MySqlPool) {
+    let earlier = json!([
+        { "role": "system", "content": "Here are the instructions you can use, each TITLE is linked to its own BODY:" },
+        { "role": "system", "content": "CRM USER MANUAL:\n\n## Quotes" },
+        { "role": "user", "content": "Answer how to do this in Granite Manager from the CRM user manual: short numbered steps with the exact labels, only what the question needs.\n\nQuestion: how do I add a special order slab to a quote\n\nAnswer:" },
+        { "role": "assistant", "content": "1. In **Color**, type the color's name.\n2. Enter its **$ Price /sq ft**." }
+    ]);
+    sqlx::query("INSERT INTO chat_history (history, user_id) VALUES (?, 100)")
+        .bind(earlier.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// A follow-up to a manual answer ("what does it mean?", "there is no such
+/// option") stays on the manual: no company sources or their pictures, even
+/// when the model cites one. A follow-up about the company's own process
+/// goes to its instructions.
+#[test_db::test(seed)]
+async fn a_follow_up_to_a_manual_answer_stays_on_the_manual(pool: MySqlPool) {
+    sqlx::raw_sql(HANDBOOK).execute(&pool).await.unwrap();
+    manual_answer_before(&pool).await;
+    let reply = "Type the color's name in **Color**; there is no option to pick. [[INSTRUCTION:1]]";
+    let company = "Take a **50%** deposit, then order the slabs. [[INSTRUCTION:1]]";
+    let (server, ai) = setup(
+        &pool,
+        vec![
+            picks(&["quote-drawing-color-slab-layout"]),
+            Reply::Text(reply.into()),
+            Reply::Text(company.into()),
+        ],
+    )
+    .await;
+
+    let events = ask(
+        &server,
+        json!({ "query": "what does it mean other color?? there is no such option", "isNew": false }),
+    )
+    .await;
+    assert_eq!(answer(&events), reply);
+    assert!(named(&events, "instructions").is_empty());
+    assert!(named(&events, "images").is_empty());
+    assert_eq!(named(&events, "crmManual"), ["true"]);
+    let requests = ai.requests.lock().unwrap().clone();
+    let sent = contents(&requests[1]);
+    assert!(
+        sent.iter()
+            .any(|c| c.contains("#### Special order (a color not in the list)"))
+    );
+    assert!(
+        sent.last()
+            .unwrap()
+            .starts_with("Answer how to do this in Granite Manager from the CRM user manual")
+    );
+
+    let events = ask(
+        &server,
+        json!({ "query": "what is our special order deposit policy", "isNew": false }),
+    )
+    .await;
+    assert_eq!(answer(&events), company);
+    assert!(named(&events, "crmManual").is_empty());
+    let used: Value = serde_json::from_str(named(&events, "instructions")[0]).unwrap();
+    assert_eq!(used, json!([{ "id": 9131, "title": "Special Orders" }]));
+}
+
+/// A source only for an instruction the model cited and that has what the
+/// answer says: none when it cites nothing (no guess from the question's
+/// words), none when the cited one doesn't have the answer.
+#[test_db::test(seed)]
+async fn a_source_is_only_an_instruction_the_answer_cites_and_uses(pool: MySqlPool) {
+    sqlx::raw_sql(INSTRUCTIONS).execute(&pool).await.unwrap();
+    let (server, _) = setup(
+        &pool,
+        vec![
+            Reply::Text("Fabrication is **$25** per sq ft for granite.".into()),
+            Reply::Text("Open the quote and click **Email**. [[INSTRUCTION:1]]".into()),
+            Reply::Text("Fabrication is **$25** per sq ft for granite. [[INSTRUCTION:1]]".into()),
+        ],
+    )
+    .await;
+    for (reply, cited) in [(0, false), (1, false), (2, true)] {
+        let events = ask(
+            &server,
+            json!({ "query": "what is the price for fabrication", "isNew": true }),
+        )
+        .await;
+        assert_eq!(
+            !named(&events, "instructions").is_empty(),
+            cited,
+            "reply {reply}"
+        );
+        if cited {
+            let used: Value = serde_json::from_str(named(&events, "instructions")[0]).unwrap();
+            assert_eq!(used, json!([{ "id": 9100, "title": "Fabrication Prices" }]));
+            assert_eq!(
+                named(&events, "images"),
+                [r#"["https://img.test/fab.png"]"#]
+            );
+        } else {
+            assert!(named(&events, "images").is_empty(), "reply {reply}");
+        }
     }
 }

@@ -31,6 +31,7 @@
   { "query": "how do I change the price on one line of the quote", "howTo": true },
   { "query": "how do I print a quote", "howTo": true },
   { "query": "how do I share the catalog with a customer", "howTo": true },
+  { "query": "how do I upload a supplier price list", "howTo": true },
   { "query": "what is our special order deposit policy", "howTo": false },
   { "query": "how do I make a special order?", "howTo": false },
   { "query": "who approves special orders", "howTo": false },

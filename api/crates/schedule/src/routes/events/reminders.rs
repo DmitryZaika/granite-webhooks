@@ -61,14 +61,18 @@ pub fn rep_send_times(
     ]
 }
 
-/// The event's built-in calendar slug when it is one that sends reminders.
+/// The event's built-in calendar slug when it is one that sends reminders
+/// (`estimates` too on the calendar an admin picked for estimates).
 pub async fn eligible_slug(
     pool: &MySqlPool,
     event_id: i32,
     company_id: i32,
 ) -> Result<Option<String>, sqlx::Error> {
     let slug: Option<Option<String>> = sqlx::query_scalar(
-        "SELECT cal.slug FROM events e JOIN calendars cal ON cal.id = e.calendar_id
+        "SELECT CASE WHEN cal.slug IS NULL AND cal.id = co.estimates_calendar_id
+                     THEN 'estimates' ELSE cal.slug END
+           FROM events e JOIN calendars cal ON cal.id = e.calendar_id
+           JOIN company co ON co.id = cal.company_id
           WHERE e.id = ? AND cal.company_id = ? AND e.deleted_date IS NULL LIMIT 1",
     )
     .bind(event_id)
