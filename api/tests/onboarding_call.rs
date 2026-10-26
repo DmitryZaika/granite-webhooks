@@ -557,6 +557,18 @@ impl Harness {
             .collect()
     }
 
+    /// The reply-to addresses of each email to `email`.
+    fn reply_tos(&self, email: &str) -> Vec<Vec<String>> {
+        self.mailbox
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|sent| serde_json::from_value::<OutgoingEmail>(sent.clone()).ok())
+            .filter(|sent| sent.to.iter().any(|to| to == email))
+            .map(|sent| sent.reply_to)
+            .collect()
+    }
+
     /// Subjects of the fee notices to `email`.
     fn notices_to(&self, email: &str) -> Vec<String> {
         self.subjects_to(email)
@@ -994,6 +1006,11 @@ async fn reminders_go_once_to_each_manager_across_two_runs(pool: MySqlPool) {
         h.subjects_to("manager@onboarding.test"),
         ["Book your Granite Manager onboarding call"]
     );
+    // It asks people to reply: replies go to support, not to noreply.
+    assert_eq!(
+        h.reply_tos("manager@onboarding.test"),
+        [vec!["support@granite-manager.com".to_string()]]
+    );
     let rows: Vec<(i32, String, String)> = sqlx::query_as(
         "SELECT user_id, step, status FROM billing_reminder_emails
           WHERE company_id = 20400 AND cycle_kind = 'onboarding' ORDER BY user_id",
@@ -1203,6 +1220,10 @@ async fn after_the_deadline_the_notice_then_exactly_one_invoice(pool: MySqlPool)
     assert_eq!(subjects.len(), 1);
     assert!(subjects[0].starts_with(PREFIX_NOTICE));
     assert!(h.subjects_to("rep@onboarding.test").is_empty());
+    assert_eq!(
+        h.reply_tos("manager@onboarding.test"),
+        [vec!["support@granite-manager.com".to_string()]]
+    );
 
     let charged = h.run(charge_after + Duration::hours(1)).await;
     let again = h

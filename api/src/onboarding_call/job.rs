@@ -18,7 +18,7 @@ use super::fee::{self, FeeError};
 use super::store::{self, EMAIL_CYCLE_KIND, NOTICE_STEP, NewAvailabilityDay, SaveError, Stored};
 use crate::billing::account::default_card;
 use crate::billing::catalog::SIGNUP_TZ;
-use crate::billing::reminder_emails::RenderedEmail;
+use crate::billing::reminder_emails::{RenderedEmail, SUPPORT_EMAIL};
 use crate::billing::reminders::{ReminderSendResult, classify_send_failure, describe_card};
 use crate::billing::store::{BillingStore, MySqlBillingStore};
 use crate::job_runs;
@@ -523,7 +523,8 @@ async fn send(state: &AppState, to: &str, email: &RenderedEmail) -> ReminderSend
         subject: email.subject.clone(),
         body: email.html.clone(),
         signature: None,
-        reply_to: Vec::new(),
+        // The reminders and the fee notice ask people to reply.
+        reply_to: vec![SUPPORT_EMAIL.into()],
         in_reply_to: None,
         references: Vec::new(),
         attachments: Vec::new(),

@@ -608,7 +608,7 @@ async fn a_confirmation_that_reached_no_manager_is_resent_once_after_ten_minutes
 }
 
 #[test_db::test(seed)]
-async fn a_resend_that_fails_again_is_retried_on_the_next_run(pool: MySqlPool) {
+async fn a_failed_resend_stays_unrecorded_and_is_retried_on_the_next_run(pool: MySqlPool) {
     let f = fixture(pool, Plan::Active).await;
     f.fail_emails(2);
     f.request(MANAGER_SESSION, json!({}))
@@ -619,10 +619,12 @@ async fn a_resend_that_fails_again_is_retried_on_the_next_run(pool: MySqlPool) {
     f.fail_emails(2);
     let due = requested_at + Duration::minutes(10);
     assert_eq!(f.resend(due).await, 0);
+    // Recorded only after a Manager received it: a failed send leaves it unset.
     assert_eq!(f.confirmation().await.1, None);
     assert!(f.emails_to(MANAGER_ONE).is_empty());
 
     assert_eq!(f.resend(due + Duration::minutes(1)).await, 1);
+    assert_eq!(f.confirmation().await.1, Some(due + Duration::minutes(1)));
     assert_eq!(f.emails_to(MANAGER_ONE).len(), 1);
     assert_eq!(f.emails_to(MANAGER_TWO).len(), 1);
     let confirmation = text(&f.emails_to(MANAGER_ONE)[0]);

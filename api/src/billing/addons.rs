@@ -95,8 +95,12 @@ pub struct AccountSubscription {
     /// cancellation is scheduled) or Stripe cannot be read.
     pub next_invoice: Option<AccountNextInvoice>,
     /// What the next charge is paid with; null when none is saved or Stripe
-    /// cannot be read.
+    /// cannot be read (see `payment_method_known`).
     pub payment_method: Option<AccountPaymentMethod>,
+    /// Stripe answered for the payment method: a null `payment_method` then
+    /// means none is saved. False when Stripe could not be read: say it could
+    /// not be loaded, never that none is on file.
+    pub payment_method_known: bool,
     /// The scheduled cancellation request; null when none is scheduled
     /// (`POST /v1/billing/cancellation-request` schedules one).
     pub cancellation: Option<CancellationRequestBody>,
@@ -130,6 +134,7 @@ impl AccountSubscription {
             monthly_total_cents: None,
             next_invoice: None,
             payment_method: None,
+            payment_method_known: false,
             cancellation: None,
             invoices: Vec::new(),
             can_change: false,
@@ -507,33 +512,41 @@ async fn live_subscription(
 }
 
 /// The subscription's default payment method, else the customer's.
+/// The payment method on file; `Err` when Stripe could not tell (not
+/// configured, or the customer could not be read).
 async fn current_payment_method(
     stripe: &Stripe,
     subscription: Option<&Value>,
     customer: Option<&str>,
-) -> Option<AccountPaymentMethod> {
+) -> Result<Option<AccountPaymentMethod>, StripeError> {
     if !stripe.is_enabled() {
-        return None;
+        return Err(StripeError::NotConfigured);
     }
     if let Some(default) = subscription.map(|raw| &raw["default_payment_method"]) {
         if let Some(method) = payment_method(default) {
-            return Some(method);
+            return Ok(Some(method));
         }
         if let Some(id) = default.as_str()
             && let Ok(method) = stripe.payment_method(id).await
             && let Some(method) = payment_method(&method)
         {
-            return Some(method);
+            return Ok(Some(method));
         }
     }
-    let customer = stripe
-        .customer_with_default_payment_method(customer?)
-        .await
-        .ok()?;
+    let Some(customer) = customer else {
+        return Ok(None);
+    };
+    let customer = match stripe.customer_with_default_payment_method(customer).await {
+        Ok(customer) => customer,
+        Err(StripeError::Missing(_)) => return Ok(None),
+        Err(err) => return Err(err),
+    };
     if customer["deleted"] == true {
-        return None;
+        return Ok(None);
     }
-    payment_method(&customer["invoice_settings"]["default_payment_method"])
+    Ok(payment_method(
+        &customer["invoice_settings"]["default_payment_method"],
+    ))
 }
 
 async fn preview(
@@ -725,8 +738,18 @@ pub async fn account_view(state: &AppState, company_id: i32) -> sqlx::Result<Acc
             current_payment_method(&stripe, live.as_ref().map(|(raw, _)| raw), customer),
         )
     } else {
-        (None, None)
+        (
+            None,
+            Err(StripeError::Request("Stripe could not be reached".into())),
+        )
     };
+    let payment_method_known = payment_method.is_ok();
+    let payment_method = payment_method.unwrap_or_else(|err| {
+        if stripe.is_enabled() && reachable {
+            tracing::warn!(company_id, error = %err.code(), "account page: payment method unavailable");
+        }
+        None
+    });
 
     let base_cents = live_unit_cents(snapshot, BASE_LOOKUP_KEY)
         .or_else(|| catalog.as_ref().map(|catalog| catalog.base.unit_cents));
@@ -774,6 +797,7 @@ pub async fn account_view(state: &AppState, company_id: i32) -> sqlx::Result<Acc
             .or_else(|| record.as_ref().and_then(|r| r.monthly_price_cents)),
         next_invoice,
         payment_method,
+        payment_method_known,
         cancellation,
         invoices,
         can_change,
