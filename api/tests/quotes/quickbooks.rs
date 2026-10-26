@@ -248,8 +248,11 @@ async fn a_quote_makes_one_invoice_with_the_companys_items(pool: MySqlPool) {
                 "amount": amount, "qty": null, "unit_price": amount, "item_ref_value": item,
                 "item_ref_name": null, "editable": true })
     };
+    let mut opened = line("new:1", "DescriptionOnly", Value::Null, Value::Null);
+    opened["description"] = json!("Flat edge");
     let body = json!({
         "quote_id": 9801,
+        "draft": [line("new:0", "SalesItemLineDetail", json!(500), json!("3")), opened],
         "invoice": {
             "id": "", "sync_token": "", "doc_number": null, "txn_date": "2026-10-26",
             "due_date": null, "total_amt": 500, "balance": null, "currency": null,
@@ -281,6 +284,16 @@ async fn a_quote_makes_one_invoice_with_the_companys_items(pool: MySqlPool) {
             .await
             .unwrap();
     assert_eq!(linked.as_deref(), Some("9"));
+    let edits: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT kind, draft_text, saved_text FROM qbo_invoice_draft_edits WHERE company_id = 100",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        edits,
+        [("changed".into(), Some("Flat edge".into()), Some("Kitchen".into()))]
+    );
     server
         .post("/v1/customers/1000/qbo-invoices")
         .with_session(sessions::REP)

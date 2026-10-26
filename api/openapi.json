@@ -40264,6 +40264,73 @@
         ]
       }
     },
+    "/v1/ai/invoice-style": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Write an invoice draft in the company's style",
+        "description": "Rewrites a quote's invoice draft the way the company's latest\n`QuickBooks` invoices read, following the changes reps keep making to\ndrafts. The amounts stay the draft's; when there is nothing to learn from\nor the model fails, the draft comes back as it was (`styled` false).\nNothing is saved.",
+        "operationId": "style_invoice_draft",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceStyleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The draft, styled or as it was",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceStyle"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/ai/signature-fields": {
       "post": {
         "tags": [
@@ -72703,6 +72770,16 @@
             ],
             "format": "int32",
             "description": "The quote it is made from, which keeps the new invoice's id."
+          },
+          "draft": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "description": "The lines the editor opened with: what the rep changed in them is\nkept for the next drafts to learn from."
           }
         }
       },
@@ -72734,6 +72811,37 @@
           "instruction": {
             "type": "string",
             "description": "What to change."
+          }
+        }
+      },
+      "InvoiceStyle": {
+        "type": "object",
+        "description": "`POST /v1/ai/invoice-style`.",
+        "required": [
+          "invoice",
+          "styled"
+        ],
+        "properties": {
+          "invoice": {
+            "$ref": "#/components/schemas/EditableInvoice",
+            "description": "The draft in the company's style, or as it was."
+          },
+          "styled": {
+            "type": "boolean",
+            "description": "False when the draft came back as it was (no examples, or the model\nfailed or answered something unusable)."
+          }
+        }
+      },
+      "InvoiceStyleInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/ai/invoice-style`.",
+        "required": [
+          "invoice"
+        ],
+        "properties": {
+          "invoice": {
+            "$ref": "#/components/schemas/EditableInvoice",
+            "description": "The draft the editor would open with."
           }
         }
       },

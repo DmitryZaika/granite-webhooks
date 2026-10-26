@@ -33,6 +33,7 @@ pub mod email_template;
 pub mod first_contact;
 pub mod improve;
 pub mod invoice_edit;
+pub mod invoice_style;
 pub mod manual_feedback;
 pub mod reply_context;
 pub mod signature_fields;
@@ -47,6 +48,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(call_activity::call_activities))
         .routes(routes!(email_template::email_template))
         .routes(routes!(invoice_edit::invoice_edit))
+        .routes(routes!(invoice_style::invoice_style))
         .routes(routes!(signature_fields::detect))
         .routes(routes!(agentic::ask))
         .routes(routes!(agentic::job))

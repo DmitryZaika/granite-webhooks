@@ -33,8 +33,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::header;
 use axum::response::IntoResponse;
 use invoice::{
-    Address, EditableInvoice, InvoiceSummary, create_payload, editable, summary, text,
-    update_payload,
+    Address, EditableInvoice, InvoiceSummary, Line, create_payload, draft_edits, editable, summary,
+    text, update_payload,
 };
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
@@ -409,6 +409,9 @@ pub struct InvoiceCreate {
     pub invoice: EditableInvoice,
     /// The quote it is made from, which keeps the new invoice's id.
     pub quote_id: Option<i32>,
+    /// The lines the editor opened with: what the rep changed in them is
+    /// kept for the next drafts to learn from.
+    pub draft: Option<Vec<Line>>,
 }
 
 /// Create a QuickBooks invoice for a customer
@@ -500,6 +503,24 @@ pub async fn create_invoice(
         .bind(company_id)
         .execute(&state.pool)
         .await?;
+    }
+    if let Some(draft) = &input.draft {
+        for edit in draft_edits(draft, &input.invoice.lines) {
+            sqlx::query(
+                "INSERT INTO qbo_invoice_draft_edits
+                   (company_id, user_id, quote_id, qbo_invoice_id, kind, draft_text, saved_text)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(company_id)
+            .bind(user.id)
+            .bind(input.quote_id)
+            .bind(&invoice.id)
+            .bind(edit.kind)
+            .bind(edit.draft_text)
+            .bind(edit.saved_text)
+            .execute(&state.pool)
+            .await?;
+        }
     }
     Ok(Json(invoice))
 }
