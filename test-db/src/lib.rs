@@ -309,7 +309,10 @@ async fn restore(
             plan.template
         )
         .expect("write to String");
-        if let Some(next) = expected.auto_increment {
+        // An ALTER is DDL, far slower than the refill: only when the counter moved.
+        if let Some(next) = expected.auto_increment
+            && state.auto_increment != expected.auto_increment
+        {
             write!(script, "ALTER TABLE `{table}` AUTO_INCREMENT = {next};")
                 .expect("write to String");
         }
