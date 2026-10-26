@@ -42402,6 +42402,86 @@
         ]
       }
     },
+    "/v1/qbo/invoices/recent": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "List recent QuickBooks invoices as QuickBooks has them",
+        "description": "The company's newest invoices with every field `QuickBooks` keeps (class,\nCC, terms, custom fields, lines), to learn how the company writes its\ninvoices. Admins only; read-only.",
+        "operationId": "list_recent_qbo_invoices",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many, newest first (1–500, default 200).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invoices, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecentInvoices"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "QuickBooks is not connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "QuickBooks failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/me/qbo-sales": {
       "get": {
         "tags": [
@@ -82569,6 +82649,22 @@
             ],
             "format": "date-time",
             "description": "When."
+          }
+        }
+      },
+      "RecentInvoices": {
+        "type": "object",
+        "description": "`GET /v1/qbo/invoices/recent`.",
+        "required": [
+          "invoices"
+        ],
+        "properties": {
+          "invoices": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "`QuickBooks`' own invoice objects (class, CC, terms, lines, ...)."
           }
         }
       },

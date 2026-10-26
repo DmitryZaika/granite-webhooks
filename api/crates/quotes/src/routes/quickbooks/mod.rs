@@ -21,7 +21,7 @@ pub mod class_sales;
 pub mod invoice;
 pub mod sales;
 
-use crate::auth::EmployeeUser;
+use crate::auth::{AdminUser, EmployeeUser};
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
 use crate::openapi::{IntoParams, ToSchema};
@@ -48,6 +48,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(invoice_pdf))
         .routes(routes!(customers))
         .routes(routes!(items))
+        .routes(routes!(recent_invoices))
         .routes(routes!(sales::my_sales))
         .routes(routes!(sales::my_customers))
         .routes(routes!(class_sales::class_sales))
@@ -940,6 +941,67 @@ pub async fn items(
         .collect();
     items.sort_by_key(|item| item.name.to_lowercase());
     Ok(Json(QboItems { items }))
+}
+
+/// Query of `GET /v1/qbo/invoices/recent`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct RecentQuery {
+    /// How many, newest first (1–500, default 200).
+    pub limit: Option<u32>,
+}
+
+/// `GET /v1/qbo/invoices/recent`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RecentInvoices {
+    /// `QuickBooks`' own invoice objects (class, CC, terms, lines, ...).
+    #[schema(value_type = Vec<Object>)]
+    pub invoices: Vec<Value>,
+}
+
+/// List recent QuickBooks invoices as QuickBooks has them
+///
+/// The company's newest invoices with every field `QuickBooks` keeps (class,
+/// CC, terms, custom fields, lines), to learn how the company writes its
+/// invoices. Admins only; read-only.
+#[crate::openapi::path(
+    get,
+    path = "/v1/qbo/invoices/recent",
+    operation_id = "list_recent_qbo_invoices",
+    tag = "quickbooks",
+    params(RecentQuery),
+    responses(
+        (status = 200, description = "Invoices, newest first", body = RecentInvoices),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an admin", body = ErrorBody),
+        (status = 409, description = "QuickBooks is not connected", body = ErrorBody),
+        (status = 502, description = "QuickBooks failed", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn recent_invoices(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Query(query): Query<RecentQuery>,
+) -> ApiResult<Json<RecentInvoices>> {
+    let limit = query.limit.unwrap_or(200).clamp(1, 500);
+    let access = state
+        .qbo
+        .access(&state.pool, user.company_id)
+        .await
+        .map_err(qbo_error)?;
+    let invoices = state
+        .qbo
+        .query(
+            &access,
+            &format!(
+                "select * from Invoice ORDERBY MetaData.CreateTime DESC STARTPOSITION 1 MAXRESULTS {limit}"
+            ),
+            "Invoice",
+        )
+        .await
+        .map_err(qbo_error)?;
+    Ok(Json(RecentInvoices { invoices }))
 }
 
 #[cfg(test)]

@@ -80,6 +80,11 @@ async fn server(pool: &MySqlPool, access_expires_in: i64) -> (TestServer, Arc<Mu
                         { "Id": "3", "Name": "Mark", "FullyQualifiedName": "Mark" },
                     ] } }));
                 }
+                if q.starts_with("select * from Invoice ORDERBY MetaData.CreateTime DESC") {
+                    let mut raw = invoice();
+                    raw["ClassRef"] = json!({ "value": "1", "name": "Rita" });
+                    return Json(json!({ "QueryResponse": { "Invoice": [raw] } }));
+                }
                 if q.starts_with("select * from Item where Active = true") {
                     return Json(json!({ "QueryResponse": { "Item": [
                         { "Id": "5", "Name": "tile", "Type": "Service" },
@@ -301,6 +306,23 @@ async fn a_quote_makes_one_invoice_with_the_companys_items(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::CONFLICT);
     assert_eq!(posted.lock().unwrap().len(), 1);
+}
+
+#[test_db::test(seed)]
+async fn admins_read_recent_invoices_as_quickbooks_has_them(pool: MySqlPool) {
+    let (server, _) = server(&pool, 10).await;
+    let body: Value = server
+        .get("/v1/qbo/invoices/recent?limit=5")
+        .with_session(sessions::ADMIN)
+        .await
+        .json();
+    assert_eq!(body["invoices"][0]["ClassRef"]["name"], "Rita");
+    assert_eq!(body["invoices"][0]["DocNumber"], "1001");
+    server
+        .get("/v1/qbo/invoices/recent")
+        .with_session(sessions::REP)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
 }
 
 #[test_db::test(seed)]
