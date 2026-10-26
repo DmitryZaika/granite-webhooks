@@ -419,7 +419,11 @@ async fn a_preview_keeps_the_gaps_signs_the_texts_and_knows_the_offer(pool: MySq
         .collect();
     // The model's long second wait is kept, only capped: no wait is over 30
     // days.
-    assert!(delays[1] >= 29 * 1440, "{delays:?}");
+    let shown: Vec<String> = preview
+        .iter()
+        .map(|m| format!("{} {} {}", m["delay_minutes"], m["channel"], m["goal"]))
+        .collect();
+    assert!(delays[1] >= 29 * 1440, "{shown:#?}");
     assert!(delays.iter().skip(1).all(|d| *d <= 30 * 1440), "{delays:?}");
     for message in &preview {
         if message["channel"] == "sms" {
