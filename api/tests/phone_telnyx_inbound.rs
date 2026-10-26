@@ -337,8 +337,9 @@ async fn with_no_phone_to_ring_the_call_goes_on_at_once(pool: MySqlPool) {
         [json!({ "token": "push-1",
                  "data": { "granite": "1", "type": "missed_call", "callId": id.to_string() },
                  "android": { "priority": "HIGH", "ttl": "60s" },
-                 "apns": { "headers": { "apns-push-type": "background", "apns-priority": "5" },
-                           "payload": { "aps": { "content-available": 1 } } } })]
+                 "apns": { "headers": { "apns-push-type": "alert", "apns-priority": "10" },
+                           "payload": { "aps": { "alert": { "title": "Missed call" },
+                                                 "sound": "default", "mutable-content": 1 } } } })]
     );
     // With cell fallback on, her verified cell rings first, behind "press 1".
     set_settings(

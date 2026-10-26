@@ -1168,8 +1168,11 @@ async fn dialing_911_alerts_the_companys_admins(pool: MySqlPool) {
         [
             json!({ "token": "push-104", "data": { "granite": "1", "type": "e911_alert" },
                  "android": { "priority": "HIGH", "ttl": "60s" },
-                 "apns": { "headers": { "apns-push-type": "background", "apns-priority": "5" },
-                           "payload": { "aps": { "content-available": 1 } } } })
+                 "apns": { "headers": { "apns-push-type": "alert", "apns-priority": "10" },
+                           "payload": { "aps": {
+                               "alert": { "title": "911 was dialed",
+                                          "body": "Someone in your company dialed 911. Open Granite Phone for details." },
+                               "sound": "default", "mutable-content": 1 } } } })
         ]
     );
     let gone: Option<String> =
