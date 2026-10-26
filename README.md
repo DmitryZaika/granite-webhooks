@@ -113,3 +113,9 @@ curl -v -X POST \
 The `api/` crate replaces Remix loaders with JSON endpoints. See `api/README.md`
 for the route layout, auth, local setup (`make api-db-reset api-test api-local`)
 and the migration playbook.
+
+## Webhooks (third parties' callbacks Lambda)
+
+The `webhooks/` crate and the crates in `webhooks/crates/`. See
+`webhooks/README.md` for which crate holds what and the checks to run while
+coding (`cargo test -p 'webhooks*'`).

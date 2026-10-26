@@ -172,7 +172,7 @@ api-openapi:
 # Only builds with the `openapi` feature run utoipa; the others serve this file.
 .PHONY: webhooks-openapi
 webhooks-openapi:
-	UPDATE_OPENAPI=1 cargo test -p webhooks --features openapi --lib openapi_tests::spec_file_is_current
+	UPDATE_OPENAPI=1 cargo test -p webhooks --features openapi --lib axum_helpers::axum_app::openapi_tests::spec_file_is_current
 
 # Serves http://localhost:9100/lambda-url/api/... through the Lambda runtime emulator.
 # A dev build, not --release: an edit rebuilds in seconds, not minutes (the

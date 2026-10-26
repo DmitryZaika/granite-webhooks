@@ -11,9 +11,7 @@
   "paths": {
     "/v1/webhooks/new-lead-form/{company_id}": {
       "post": {
-        "tags": [
-          "crate::webhooks::receive"
-        ],
+        "tags": [],
         "description": "Create a marketing lead from Make, Zapier, or the website.\n\n**`referral_source`** is optional. When provided, prefer `website` or `facebook` so statistics group correctly. Aliases such as `Facebook Form` or `WordPress` are rewritten automatically; other unrecognized values are stored as sent and flagged for review.\n\n**`form_name`** is optional. When provided, use the specific form id, for example `cabinet_quote`, `facebook_form`, `facebook_cabinet_quote_form`, or `quick_quote`.",
         "operationId": "new_lead_form",
         "parameters": [

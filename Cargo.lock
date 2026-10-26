@@ -4783,19 +4783,31 @@ name = "webhooks"
 version = "0.1.0"
 dependencies = [
  "axum",
- "axum-test",
+ "common",
+ "http-body-util",
+ "lambda_http",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tower-http",
+ "utoipa 5.5.0",
+ "webhooks-core",
+ "webhooks-email",
+ "webhooks-leads",
+ "webhooks-phone",
+]
+
+[[package]]
+name = "webhooks-core"
+version = "0.1.0"
+dependencies = [
+ "axum",
  "base64",
  "bytes",
  "chrono",
  "common",
- "dotenvy",
- "email_reply_parser",
  "http-body-util",
  "lambda_http",
- "mail-builder",
- "mail-parser",
- "rand 0.10.2",
- "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -4805,11 +4817,80 @@ dependencies = [
  "test-db",
  "thiserror",
  "tokio",
- "tower-http",
  "tracing-test",
- "urlencoding",
  "utoipa 5.5.0",
  "uuid",
+]
+
+[[package]]
+name = "webhooks-email"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "bytes",
+ "common",
+ "email_reply_parser",
+ "lambda_http",
+ "mail-builder",
+ "mail-parser",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "test-db",
+ "tokio",
+ "urlencoding",
+ "uuid",
+ "webhooks-core",
+]
+
+[[package]]
+name = "webhooks-leads"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "chrono",
+ "common",
+ "lambda_http",
+ "rand 0.10.2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sqlx",
+ "test-db",
+ "tokio",
+ "tracing-test",
+ "utoipa 5.5.0",
+ "webhooks-core",
+ "webhooks-phone",
+]
+
+[[package]]
+name = "webhooks-phone"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "chrono",
+ "common",
+ "lambda_http",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "test-db",
+ "thiserror",
+ "tokio",
+ "tracing-test",
+ "urlencoding",
+ "uuid",
+ "webhooks-core",
 ]
 
 [[package]]

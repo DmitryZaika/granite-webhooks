@@ -2,6 +2,10 @@
 members = [
     "common",
     "webhooks",
+    "webhooks/crates/core",
+    "webhooks/crates/email",
+    "webhooks/crates/leads",
+    "webhooks/crates/phone",
     "time-triggered",
     "api",
     "api/crates/accounts",
