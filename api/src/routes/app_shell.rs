@@ -136,7 +136,7 @@ impl ShellPlan {
         Self {
             source: plan.source(),
             addons: plan.entitled(),
-            manage_url: format!("{}/account", crate::billing::payments_app_url()),
+            manage_url: crate::billing::payments_account_url(),
         }
     }
 }

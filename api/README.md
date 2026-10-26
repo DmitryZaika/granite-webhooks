@@ -174,6 +174,30 @@ prices from the Stripe lookup keys in `billing/catalog.rs` and also reads
 `SIGNUP_TEST_PAYMENT_METHOD`. `POST /v1/jobs/subscription-maintenance`
 resumes stuck provisioning, expires abandoned signups and reconciles seats.
 
+Onboarding with Dima (`src/onboarding_call/`, Terms section 11): provisioning
+gives each self-serve company a commitment to complete an onboarding call
+within 30 days or pay the fee fixed at signup. `GET /v1/onboarding-call`
+hands Managers and Admins a booking link, the widget's booking is recorded with
+`POST /v1/onboarding-call/bookings`, and superusers extend, waive, complete or
+mark a no-show at `/v1/superuser/companies/{id}/onboarding-commitment`.
+`POST /v1/jobs/onboarding-commitments` checks once a UTC day whether Calendly
+offers a slot within 5 business days (none tolls every open deadline a day),
+then per company once a day refreshes the call from Calendly, completes it 48
+hours after it ends, emails the day 7, 21 and 27 reminders and the fee notice
+to Managers (deduped in `billing_reminder_emails`, `cycle_kind = onboarding`),
+and 7 days after the notice charges the fee as its own Stripe invoice
+(`metadata.kind = onboarding_fee`, whose webhook events never reach
+subscription billing). Bookings are ours when the invitee carries
+`utm_campaign=granite-onboarding` and `utm_content=company-<id>`; nothing
+changes in Dima's Calendly. Env: `CALENDLY_API_TOKEN` (the existing token,
+reused), `CALENDLY_BASE_URL` (default `https://api.calendly.com`), optional
+`CALENDLY_ONBOARDING_URL` (else the account's own page) and
+`ONBOARDING_FEE_CHARGING=1` (off: a passed deadline ends as `fee_skipped`,
+never charged later). The onboarding emails are sent from
+`BILLING_EMAIL_FROM_ADDRESS`. Stripe does not retry a failed fee invoice
+(`fee_failed`): `SIGNUP_NOTIFY_USER_ID` (Telegram) and `SIGNUP_NOTIFY_EMAIL`
+also get that alert, and staff follow up by hand.
+
 Move to plan (`src/billing/invites/`, `routes/superuser_plan_invites.rs`,
 `routes/plan_invites.rs`): a superuser invites a legacy company's Managers to
 a plan (`plan_invites`, links `PAYMENTS_APP_URL/upgrade/<token>`, only token

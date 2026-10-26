@@ -14,12 +14,14 @@
 use super::CompanyBilling;
 use super::account::Card;
 use super::reminder_emails::{
-    FirstChargeEmailInput, ReminderEmailInput, render_first_charge_email, render_reminder_email,
+    FirstChargeEmailInput, OnboardingLine, ReminderEmailInput, render_first_charge_email,
+    render_reminder_email,
 };
 use super::store::StoreResult;
 use super::{PaymentStatus, add_grace_days, first_payment_deadline, is_awaiting_first_payment};
 use crate::webhooks_client::SendFailure;
 use chrono::{Duration, NaiveDateTime};
+use lambda_http::tracing;
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -295,6 +297,9 @@ pub trait ReminderStore {
         user_ids: &[i32],
     ) -> StoreResult<Vec<ReminderContact>>;
     async fn company_name(&self, company_id: i32) -> StoreResult<String>;
+    /// The onboarding call's line in the first-charge email; `None` without a
+    /// commitment or for a status the email does not mention.
+    async fn onboarding_line(&self, company_id: i32) -> StoreResult<Option<OnboardingLine>>;
     async fn reminders(
         &self,
         company_id: i32,
@@ -979,6 +984,19 @@ async fn first_charge_company<S: ReminderStore, E: ReminderEffects>(
         open_contacts(contacts, &stored_rows, due.step, now)
     };
     let company_name = store.company_name(company_id).await?;
+    let account_url = super::payments_account_url();
+    // Best effort: the email goes out without the line rather than not at all.
+    let onboarding = store
+        .onboarding_line(company_id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                %error,
+                company_id,
+                "onboarding line for the first-charge email not read"
+            );
+            None
+        });
     for contact in open {
         if limit_reached(effects, limits, result) {
             return Ok(());
@@ -999,6 +1017,8 @@ async fn first_charge_company<S: ReminderStore, E: ReminderEffects>(
             user_name: contact.name.as_deref(),
             quote: &quote,
             app_url: effects.app_url(),
+            account_url: &account_url,
+            onboarding,
         });
         let email = ReminderEmail {
             to: contact.email,
@@ -1197,6 +1217,8 @@ mod tests {
         /// A payment that was queued on the lock during a send: it lands the
         /// moment the lock is released, before the next email.
         pay_on_unlock: Cell<Option<NaiveDateTime>>,
+        onboarding: Cell<Option<OnboardingLine>>,
+        onboarding_fails: Cell<bool>,
     }
 
     fn contact(user_id: i32, name: &str, email: &str) -> ReminderContact {
@@ -1244,6 +1266,8 @@ mod tests {
             elapsed: Cell::new(std::time::Duration::ZERO),
             send_cost: Cell::new(std::time::Duration::ZERO),
             pay_on_unlock: Cell::new(None),
+            onboarding: Cell::new(None),
+            onboarding_fails: Cell::new(false),
         }
     }
 
@@ -1302,6 +1326,12 @@ mod tests {
         }
         async fn company_name(&self, _: i32) -> StoreResult<String> {
             Ok("Granite Co".into())
+        }
+        async fn onboarding_line(&self, _: i32) -> StoreResult<Option<OnboardingLine>> {
+            if self.onboarding_fails.get() {
+                return Err(db_down());
+            }
+            Ok(self.onboarding.get())
         }
         async fn reminders(
             &self,
@@ -2218,6 +2248,53 @@ mod tests {
         let sent = fake.sent.borrow();
         assert!(sent[0].text.contains("$300.00 plus applicable sales tax"));
         assert!(sent[0].text.contains("Visa ending in 4242"));
+        let cancel = format!(
+            "use Request cancellation on your account page ({}), or email support@granite-manager.com.",
+            crate::billing::payments_account_url()
+        );
+        assert!(sent[0].text.contains(&cancel));
+    }
+
+    #[tokio::test]
+    async fn first_charge_states_the_onboarding_status() {
+        let fake = fake();
+        with_trial(&fake);
+        fake.onboarding.set(Some(OnboardingLine::Booked {
+            start_at: Some(at("2026-10-16 14:00:00")),
+        }));
+
+        fake.tick(trial_ends() - Duration::days(7)).await;
+
+        let sent = fake.sent.borrow();
+        assert_eq!(sent.len(), 2);
+        assert!(sent.iter().all(|email| {
+            email
+                .text
+                .contains("Your onboarding call is booked for Fri, Oct 16 at 10:00 AM EDT.")
+        }));
+    }
+
+    #[tokio::test]
+    async fn first_charge_goes_without_the_onboarding_line_when_it_cannot_be_read() {
+        let fake = fake();
+        with_trial(&fake);
+        fake.onboarding.set(Some(OnboardingLine::Complete));
+        fake.onboarding_fails.set(true);
+
+        let result = fake.tick(trial_ends() - Duration::days(7)).await;
+
+        assert_eq!(result.sent, 2);
+        assert_eq!(result.company_errors, 0);
+        assert_eq!(
+            fake.subjects(),
+            first_charge_subjects(&["October 20, 2026"])
+        );
+        assert!(
+            fake.sent
+                .borrow()
+                .iter()
+                .all(|email| !email.text.contains("Onboarding"))
+        );
     }
 
     #[tokio::test]

@@ -56,6 +56,14 @@ pub async fn sync_items_in(
             .bind(company_id)
             .execute(&mut *tx)
             .await?;
+        // The subscription really ended: a scheduled cancellation is done.
+        sqlx::query(
+            "UPDATE billing_cancellation_requests SET status = 'completed'
+              WHERE company_id = ? AND status = 'scheduled'",
+        )
+        .bind(company_id)
+        .execute(&mut *tx)
+        .await?;
         return Ok(());
     }
     let mut extra_user_item = None;

@@ -11,6 +11,10 @@
 //! the CRM's `billing*.ts` on `fix/stripe-billing`.
 
 pub mod account;
+pub mod addons;
+pub mod amount_notice;
+pub mod cancellation;
+pub mod cancellation_emails;
 pub mod catalog;
 pub mod gate;
 pub mod invites;
@@ -445,6 +449,11 @@ pub fn payments_app_url() -> String {
         .map(|url| url.trim().trim_end_matches('/').to_string())
         .filter(|url| !url.is_empty())
         .unwrap_or_else(|| "https://payments.granite-manager.com".into())
+}
+
+/// The payments app's account page.
+pub fn payments_account_url() -> String {
+    format!("{}/account", payments_app_url())
 }
 
 /// The current time, whole seconds (what a DATETIME column keeps).

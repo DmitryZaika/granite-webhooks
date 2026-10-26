@@ -15,6 +15,7 @@ use super::{
     CompanyBilling, PaymentStatus, StripeLiveState, days_remaining, first_payment_deadline,
     is_awaiting_first_payment, is_overdue, stripe_confirms_non_payment, with_grace_expiry,
 };
+use crate::onboarding_call::fee::is_fee_invoice_object;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use lambda_http::tracing;
 use sqlx::MySqlPool;
@@ -459,6 +460,7 @@ impl GateStripe for LiveGate<'_> {
                     .open_invoices(customer)
                     .await?
                     .iter()
+                    .filter(|invoice| !is_fee_invoice_object(invoice))
                     .filter_map(|invoice| invoice["amount_remaining"].as_i64())
                     .sum(),
                 None => 0,

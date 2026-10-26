@@ -412,13 +412,18 @@ pub struct PortalChoice {
     /// subscription).
     #[serde(default)]
     pub flow: Option<String>,
+    /// Where the portal sends the manager back: `account` (the payments
+    /// app's account page), else `/admin/billing` (the default).
+    #[serde(default)]
+    pub return_to: Option<String>,
 }
 
 /// Open the Stripe billing portal
 ///
 /// A Stripe billing portal link for the company's customer, returning to
-/// `/admin/billing`. The portal updates cards and customer details and lists
-/// invoices; it cannot cancel or change the plan.
+/// `/admin/billing`, or to the payments app's account page with
+/// `return_to: "account"`. The portal updates cards and customer details and
+/// lists invoices; it cannot cancel or change the plan.
 #[utoipa::path(
     post,
     path = "/v1/billing/portal",
@@ -440,11 +445,16 @@ pub async fn portal(
     headers: HeaderMap,
     JsonBody(input): JsonBody<PortalChoice>,
 ) -> ApiResult<Json<Redirect>> {
+    let return_url = if input.return_to.as_deref() == Some("account") {
+        crate::billing::payments_account_url()
+    } else {
+        billing_url(&state, &headers)
+    };
     let url = account::portal_url(
         &state.stripe,
         &MySqlBillingStore(&state.pool),
         user.company_id,
-        &billing_url(&state, &headers),
+        &return_url,
         input.flow.as_deref() != Some("manage"),
     )
     .await?;

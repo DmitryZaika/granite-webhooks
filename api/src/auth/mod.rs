@@ -121,8 +121,9 @@ async fn company_paused(state: &AppState, company_id: i32) -> bool {
 
 /// Paths (and everything below them) that work while the company's access
 /// is paused for billing: paying, signing in and out, the app shell, the
-/// bell, superuser tools and the onboarding call / plan invites.
-const OPEN_WHILE_PAUSED: [&str; 7] = [
+/// bell, superuser tools, the onboarding call / plan invites, and the phone
+/// (calls, texts and 911 must keep working; homeowners still call in).
+const OPEN_WHILE_PAUSED: [&str; 8] = [
     "/v1/billing",
     "/v1/auth",
     "/v1/app/shell",
@@ -130,6 +131,7 @@ const OPEN_WHILE_PAUSED: [&str; 7] = [
     "/v1/superuser",
     "/v1/onboarding-call",
     "/v1/plan-invites",
+    "/v1/phone",
 ];
 
 /// The path itself or anything below it, so `/v1/billing` does not also open
@@ -336,6 +338,8 @@ mod tests {
             "/v1/superuser/companies",
             "/v1/onboarding-call",
             "/v1/plan-invites/abc",
+            "/v1/phone/calls",
+            "/v1/phone/texts/index",
             "/v1/me",
         ] {
             assert!(open(path), "{path} should stay open");
@@ -361,6 +365,7 @@ mod tests {
             "/v1/app/shellx",
             "/v1/mex",
             "/v1/me/",
+            "/v1/phonex",
         ] {
             assert!(!open(path), "{path} should be paused");
         }

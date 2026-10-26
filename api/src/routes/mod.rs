@@ -12,6 +12,8 @@ pub mod attachable;
 pub mod auth;
 pub mod billing;
 pub mod billing_account;
+pub mod billing_addons;
+pub mod billing_cancellation;
 pub mod billing_setup;
 pub mod bug_reports;
 pub mod calendars;
@@ -48,6 +50,7 @@ pub mod marketing;
 pub mod me;
 pub mod notifications;
 pub mod onboarding;
+pub mod onboarding_call;
 pub mod online_quotes;
 pub mod phone;
 pub mod places;
@@ -161,6 +164,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(auth::router())
         .merge(app_shell::router())
         .merge(onboarding::router())
+        .merge(onboarding_call::router())
         .merge(ai::router())
         .merge(notifications::router())
         .merge(quickbooks::router())
@@ -171,6 +175,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(suppliers::router())
         .merge(billing::router())
         .merge(billing_account::router())
+        .merge(billing_addons::router())
+        .merge(billing_cancellation::router())
         .merge(integrations::router())
         .merge(superuser_companies::router())
         .merge(superuser_plan_invites::router())
