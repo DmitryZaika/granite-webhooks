@@ -3,8 +3,6 @@
 //! A new subscription is charged to a card the manager picks, confirmed in
 //! the browser with Stripe.js, then checked here. Also Stripe as the access
 //! gate asks it (`LiveGate`).
-// Generic over the store, like `machine`.
-#![allow(clippy::future_not_send)]
 
 use super::machine::{
     BillingNotice, GateStripe, NO_BILLING_NOTICE, apply_subscription_change, evaluate_gate,

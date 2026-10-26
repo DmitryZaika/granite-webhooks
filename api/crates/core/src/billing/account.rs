@@ -3,7 +3,6 @@
 //! The company's record refreshed from Stripe, its card, and starting
 //! Checkout, the billing portal or a plan change. Port of `syncBillingFromStripe`, `createCheckoutUrl`, `createPortalUrl`,
 //! `updateSubscriptionPlan` and `listSavedCards` in `stripeBilling.server.ts`.
-#![allow(clippy::future_not_send)]
 
 use super::machine::apply_subscription_change;
 use super::reactivation::{ReactivationError, refresh_subscription};

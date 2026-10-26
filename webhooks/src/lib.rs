@@ -3,7 +3,10 @@
     clippy::option_if_let_else,
     clippy::missing_errors_doc,
     clippy::must_use_candidate,
-    clippy::missing_panics_doc
+    clippy::missing_panics_doc,
+    // Checking that every async fn's future is Send took a third of
+    // clippy's time; axum and tokio::spawn require it where it matters.
+    clippy::future_not_send
 )]
 
 pub mod amazon;

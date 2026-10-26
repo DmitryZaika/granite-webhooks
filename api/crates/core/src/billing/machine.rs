@@ -1,8 +1,5 @@
 //! The billing state machine: Stripe events in, `company_billing` and the
 //! managers' notifications out, and the access gate a page load checks.
-// Generic over the store: the MySQL store's futures are `Send` (handlers
-// compile); the in-memory test store's are not, and need not be.
-#![allow(clippy::future_not_send)]
 
 use super::store::{BillingStore, StoreResult};
 use super::{

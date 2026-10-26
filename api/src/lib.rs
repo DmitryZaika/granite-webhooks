@@ -11,7 +11,10 @@
     clippy::struct_excessive_bools,
     // Doc comments double as OpenAPI descriptions; product names like
     // CloudTalk are prose there, not code.
-    clippy::doc_markdown
+    clippy::doc_markdown,
+    // Checking that every async fn's future is Send took a third of
+    // clippy's time; axum and tokio::spawn require it where it matters.
+    clippy::future_not_send
 )]
 
 // Every crate of the API, at the paths their modules had when this was one
