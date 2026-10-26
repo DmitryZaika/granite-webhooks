@@ -42,6 +42,7 @@ async fn the_schedule_lists_a_ranges_events(pool: MySqlPool) {
     assert_eq!(body["events"][1]["title"], "Install");
     assert_eq!(body["events"][1]["customer_id"], 1000);
     assert_eq!(body["events"][1]["customer_name"], "Alice Lead");
+    assert_eq!(body["events"][1]["created_user_name"], "Rita Rep");
     assert_eq!(body["events"][1]["start_date"], "2026-04-10T15:00:00Z");
     assert_eq!(body["events"][0]["rrule"], "FREQ=WEEKLY");
     assert_eq!(body["quickbooks_connected"], false);
