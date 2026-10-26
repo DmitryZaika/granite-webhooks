@@ -122,7 +122,14 @@ pub fn instruction_user_message(query: &str) -> String {
 /// A how-to answered from the CRM manual: short steps, not the company
 /// instructions' complete checklist.
 pub fn manual_user_message(question: &str) -> String {
-    format!("{MANUAL_QUESTION}\n\nQuestion: {question}\n\nAnswer:")
+    // The users' word for a special order, which the app doesn't use: the
+    // model kept writing it back to them.
+    let other_color = if re!(r"\bother colou?rs?\b", "i").is_match(question) {
+        "\n\nThe user writes \"other color\": in Granite Manager that is a special order, a color name typed in Color instead of picked from the list. Don't write the words \"other color\"."
+    } else {
+        ""
+    };
+    format!("{MANUAL_QUESTION}{other_color}\n\nQuestion: {question}\n\nAnswer:")
 }
 
 /// How [`manual_user_message`] starts.
