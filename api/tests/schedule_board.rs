@@ -215,10 +215,7 @@ async fn admins_pick_the_day_weeks_start_on(pool: MySqlPool) {
             .with_session(session)
             .json(&json!({ "week_starts_on": day }))
     };
-    assert_eq!(
-        settings(sessions::REP).await,
-        json!({ "week_starts_on": "sunday" })
-    );
+    assert_eq!(settings(sessions::REP).await["week_starts_on"], "sunday");
     set(sessions::REP, "monday")
         .await
         .assert_status(StatusCode::FORBIDDEN);

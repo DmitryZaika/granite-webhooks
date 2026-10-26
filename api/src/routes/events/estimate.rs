@@ -9,6 +9,7 @@ use super::writes::{EventInput, check};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::routes::schedule::settings::estimates_calendar_id;
 use crate::routes::sms::provider::phone10;
 use crate::state::AppState;
 use axum::Json;
@@ -33,7 +34,8 @@ pub struct EstimateInput {
     /// customer's primary email).
     #[serde(default)]
     pub customer_email: Option<String>,
-    /// The event; `calendar_id` must be the Estimates calendar.
+    /// The event; `calendar_id` must be the company's estimates calendar
+    /// (`GET /v1/schedule/settings`).
     #[serde(flatten)]
     pub event: EventInput,
 }
@@ -81,14 +83,7 @@ async fn check_booking(
         .event
         .calendar_id
         .ok_or_else(|| bad("Estimates calendar is required"))?;
-    let slug: Option<Option<String>> = sqlx::query_scalar(
-        "SELECT slug FROM calendars WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
-    )
-    .bind(calendar_id)
-    .bind(company_id)
-    .fetch_optional(pool)
-    .await?;
-    if slug.flatten().as_deref() != Some("estimates") {
+    if estimates_calendar_id(pool, company_id).await? != Some(calendar_id) {
         return Err(bad("Estimates calendar not found"));
     }
     Ok((customer_name, calendar_id))
