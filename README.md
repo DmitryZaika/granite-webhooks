@@ -60,6 +60,21 @@ basedirs = ["/Users/you/granite-webhooks", "/Users/you/granite-webhooks-ci"]
 `.cargo/config.toml`, so CI and machines without sccache are unaffected.
 Workspace crates (incremental), proc macros and build scripts are not cached.
 
+### macOS
+
+macOS checks every new program before it first runs (Gatekeeper and
+XProtect), and each build makes new test binaries: a big one waits a few
+seconds, about half of a `cargo test -p 'api*'` after a change. Programs
+started by an app listed under Developer Tools are not checked. Run once:
+
+```
+sudo spctl developer-mode enable-terminal
+```
+
+It lists Terminal in System Settings > Privacy & Security > Developer Tools.
+Turn on there each app that runs cargo (add another terminal, such as
+Alacritty or iTerm2, or an editor with +), then restart it.
+
 ### Windows
 
 The same commands work. What makes the builds slower there, and helps:
