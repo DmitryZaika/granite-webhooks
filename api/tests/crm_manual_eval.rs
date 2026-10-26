@@ -330,7 +330,10 @@ async fn the_model_picks_and_answers(pool: MySqlPool) {
         took_all.push(*took);
         match picked {
             Ok(ids) => {
-                let ids = ids.clone().unwrap_or_default();
+                // Not about the app (the model says): the manual's own words, as the chat does.
+                let ids = ids
+                    .clone()
+                    .unwrap_or_else(|| crm_manual::section_ids_for(&case.question));
                 chars += size(&ids);
                 let hit = !case.clarify && case.sections.iter().any(|s| ids.contains(s));
                 hits += usize::from(hit);
