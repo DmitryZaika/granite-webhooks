@@ -564,6 +564,12 @@ pub(crate) async fn function_handler(
             0
         }
     };
+    let call_history_count = or_logged(
+        "call-history",
+        post_api_job("call-history", "call history").await,
+        "call history",
+    )
+    .await;
     if let Err(error) = report_job("phone", post_api_job("phone", "Phone").await).await {
         tracing::error!(?error, "Failed to process Phone; continuing");
     }
@@ -576,7 +582,7 @@ pub(crate) async fn function_handler(
             }
         };
     let message = format!(
-        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, {} contact syncs, and {} PostHog auto-fix changes",
+        "Successfully processed {} emails, {} activity deadline reminders, {} estimate appointment reminders, {} maintenance due reminders, {} sms follow-ups, {} checklist surveys, {} call points, {} e-signature reminders, {} contact syncs, {} saved calls, and {} PostHog auto-fix changes",
         processed_email_count,
         reminder_count,
         estimate_reminder_count,
@@ -586,6 +592,7 @@ pub(crate) async fn function_handler(
         call_points_count,
         signature_reminder_count,
         contact_sync_count,
+        call_history_count,
         posthog_autofix_count
     );
     let resp = OutgoingMessage::new(event.context.request_id, message.clone());

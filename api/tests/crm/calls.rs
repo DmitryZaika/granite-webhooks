@@ -80,6 +80,56 @@ async fn cloudtalk_calls_are_listed_once(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn saved_calls_stay_after_a_provider_change(pool: MySqlPool) {
+    sqlx::raw_sql(
+        "INSERT INTO provider_calls (company_id, provider, call_id, customer_digits, started_at, item) VALUES
+           (101, 'cloudtalk', '1', '4635550200', '2026-05-01 10:00:00', '{\"Cdr\": {\"id\": \"1\"}}'),
+           (101, 'cloudtalk', 'old', '4635550200', '2026-05-02 10:00:00', '{\"Cdr\": {\"id\": \"old\"}}'),
+           (101, 'cloudtalk', 'early', '4635550200', '2026-03-01 10:00:00', '{\"Cdr\": {\"id\": \"early\"}}'),
+           (100, 'cloudtalk', '7', '3175550100', '2026-05-01 10:00:00', '{\"Cdr\": {\"id\": \"7\"}}');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (server, _) = server(pool).await;
+    // The live calls, then the saved ones the live answer did not hold.
+    let body: Value = server
+        .get("/v1/calls/cloudtalk?phone=463-555-0200&date_from=2026-04-01")
+        .with_session(sessions::OTHER_COMPANY_REP)
+        .await
+        .json();
+    let calls: Vec<(&str, &str)> = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["Cdr"]["id"].as_str().unwrap(),
+                c["provider"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            ("1", "cloudtalk"),
+            ("shared", "cloudtalk"),
+            ("old", "cloudtalk")
+        ]
+    );
+    // Acme no longer has CloudTalk: its saved CloudTalk calls still show.
+    let acme: Value = server
+        .get("/v1/calls/ringcentral?phone=317-555-0100")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(
+        acme["items"],
+        json!([{ "Cdr": { "id": "7" }, "provider": "cloudtalk" }])
+    );
+}
+
+#[test_db::test(seed)]
 async fn a_call_rings_the_agent(pool: MySqlPool) {
     let (server, started) = server(pool.clone()).await;
     let call = |digits: &str| {

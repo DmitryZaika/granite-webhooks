@@ -37285,7 +37285,7 @@
           "calls"
         ],
         "summary": "List calls with a customer",
-        "description": "With `deal_id`: calls with the deal's customer since the deal was created\n(none for another company's deal). With `customer_id`: calls with the\ncustomer's numbers (none for another company's customer). With\n`phone`/`phone2`: every call with those numbers in the date range.\nEmpty when the company has not set up the provider. `telnyx` reads the\ncompany's Granite Phone call log (ended calls, newest first, at most\n200; calls logged to the customer count too; recordings and AI notes\nonly of the calls the caller may hear, `Telnyx.may_hear`): call the\nrecording route with `Cdr.recording_link` and `POST /v1/call-transcripts`\nwith `Cdr.id`.",
+        "description": "With `deal_id`: calls with the deal's customer since the deal was created\n(none for another company's deal). With `customer_id`: calls with the\ncustomer's numbers (none for another company's customer). With\n`phone`/`phone2`: every call with those numbers in the date range.\n`cloudtalk` and `ringcentral` add the calls saved from either provider,\nalso one the company no longer uses (only those when it has not set up\nthe provider). `telnyx` reads the\ncompany's Granite Phone call log (ended calls, newest first, at most\n200; calls logged to the customer count too; recordings and AI notes\nonly of the calls the caller may hear, `Telnyx.may_hear`): call the\nrecording route with `Cdr.recording_link` and `POST /v1/call-transcripts`\nwith `Cdr.id`.",
         "operationId": "list_calls",
         "parameters": [
           {
@@ -42625,6 +42625,53 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SurveyRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
+    "/v1/jobs/call-history": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Save call history",
+        "description": "Saves the `CloudTalk` and `RingCentral` calls of every connected company,\nso they stay in its history after it changes provider.",
+        "operationId": "run_call_history",
+        "responses": {
+          "200": {
+            "description": "What was done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallHistoryRun"
                 }
               }
             }
@@ -61911,6 +61958,20 @@
           "Outbound"
         ]
       },
+      "CallHistoryRun": {
+        "type": "object",
+        "description": "What a run did.",
+        "required": [
+          "processed"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Calls saved or refreshed, both providers.",
+            "minimum": 0
+          }
+        }
+      },
       "CallId": {
         "oneOf": [
           {
@@ -62482,7 +62543,7 @@
           "items": {
             "type": "array",
             "items": {},
-            "description": "Calls in the `CloudTalk` shape (`Cdr`, `Contact`, `Agent`, …). A\n`telnyx` call's `Cdr.id` and `Cdr.recording_link` are `tx_<call id>`\n(for `POST /v1/call-transcripts` and the recording route; the link\nis empty when not recorded), times are RFC 3339 UTC, `Agent` is the\nuser who placed or answered it, `CallNumber.internal_name` our\nnumber's label, and a `Telnyx` part adds `call_id`, `status`\n(`answered`, `missed`, `voicemail`, `ai_message`, `declined`,\n`busy`, `no_answer`, `failed`, `canceled`), `line_label`,\n`our_number`, `customer_id`, `deal_id`, `transcript_status`,\n`ai_note` (null until written), `note_added` (the AI note is on the\ndeal), `via_cell`, `spam_likely` and `may_hear`: false when the\ncaller may not hear the call (only its user, the users of its direct\nline, for an unanswered incoming call the users its line rings, its\ndeal's owner, admins and sales managers may), and then `recorded` is\nfalse, `recording_link` empty and `ai_note` null."
+            "description": "Calls in the `CloudTalk` shape (`Cdr`, `Contact`, `Agent`, …). A\n`telnyx` call's `Cdr.id` and `Cdr.recording_link` are `tx_<call id>`\n(for `POST /v1/call-transcripts` and the recording route; the link\nis empty when not recorded), times are RFC 3339 UTC, `Agent` is the\nuser who placed or answered it, `CallNumber.internal_name` our\nnumber's label, and a `Telnyx` part adds `call_id`, `status`\n(`answered`, `missed`, `voicemail`, `ai_message`, `declined`,\n`busy`, `no_answer`, `failed`, `canceled`), `line_label`,\n`our_number`, `customer_id`, `deal_id`, `transcript_status`,\n`ai_note` (null until written), `note_added` (the AI note is on the\ndeal), `via_cell`, `spam_likely` and `may_hear`: false when the\ncaller may not hear the call (only its user, the users of its direct\nline, for an unanswered incoming call the users its line rings, its\ndeal's owner, admins and sales managers may), and then `recorded` is\nfalse, `recording_link` empty and `ai_note` null. A `CloudTalk` or\n`RingCentral` call has `provider`: the one that carried it."
           }
         }
       },

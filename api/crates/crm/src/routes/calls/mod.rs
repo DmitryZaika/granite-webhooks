@@ -2,7 +2,8 @@
 //!
 //! - `GET /v1/calls/{provider}` → a deal's or customer's calls, in the
 //!   `CloudTalk` call shape (`RingCentral` rows are converted, and so are
-//!   Granite Phone calls from our own call log, `telnyx`)
+//!   Granite Phone calls from our own call log, `telnyx`), with the calls
+//!   saved from any provider the company used before
 //! - `POST /v1/calls/{provider}` → call a number: `CloudTalk` rings the
 //!   caller's agent first, `RingCentral` rings their line (`RingOut`)
 //! - `POST /v1/call-transcripts` → a recorded call's transcript
@@ -15,6 +16,7 @@ mod audio;
 pub mod provider;
 pub mod recording;
 pub mod ringcentral;
+pub mod saved;
 pub mod telnyx;
 mod transcript;
 
@@ -86,7 +88,8 @@ pub struct Calls {
     /// caller may not hear the call (only its user, the users of its direct
     /// line, for an unanswered incoming call the users its line rings, its
     /// deal's owner, admins and sales managers may), and then `recorded` is
-    /// false, `recording_link` empty and `ai_note` null.
+    /// false, `recording_link` empty and `ai_note` null. A `CloudTalk` or
+    /// `RingCentral` call has `provider`: the one that carried it.
     pub items: Vec<Value>,
 }
 
@@ -183,7 +186,9 @@ const TELNYX_CALLS_LIMIT: i64 = 200;
 /// (none for another company's deal). With `customer_id`: calls with the
 /// customer's numbers (none for another company's customer). With
 /// `phone`/`phone2`: every call with those numbers in the date range.
-/// Empty when the company has not set up the provider. `telnyx` reads the
+/// `cloudtalk` and `ringcentral` add the calls saved from either provider,
+/// also one the company no longer uses (only those when it has not set up
+/// the provider). `telnyx` reads the
 /// company's Granite Phone call log (ended calls, newest first, at most
 /// 200; calls logged to the customer count too; recordings and AI notes
 /// only of the calls the caller may hear, `Telnyx.may_hear`): call the
@@ -329,7 +334,43 @@ pub async fn list(
         }
         _ => Vec::new(),
     };
+    let mut live = HashSet::new();
+    let mut items: Vec<Value> = items
+        .into_iter()
+        .map(|item| {
+            live.insert(id_text(&item["Cdr"]["id"]));
+            with_provider(item, provider.as_str())
+        })
+        .collect();
+    // Calls saved from every provider the company has used, even one it has
+    // left, that the live answer did not already hold.
+    let numbers: Vec<String> = phones
+        .iter()
+        .filter_map(|phone| crate::phone::numbers::last10(phone))
+        .collect();
+    let saved_calls = saved::list(
+        &state.pool,
+        user.company_id,
+        &numbers,
+        day_bounds(date_from.as_deref()).map(|(start, _)| start),
+        day_bounds(date_to.as_deref()).map(|(_, end)| end),
+    )
+    .await?;
+    for call in saved_calls {
+        if call.provider == provider.as_str() && live.contains(&call.call_id) {
+            continue;
+        }
+        items.push(with_provider(call.item, &call.provider));
+    }
     Ok(Json(Calls { items }).into_response())
+}
+
+/// `item` with the provider that carried the call (`provider`).
+fn with_provider(mut item: Value, provider: &str) -> Value {
+    if let Some(fields) = item.as_object_mut() {
+        fields.insert("provider".into(), json!(provider));
+    }
+    item
 }
 
 /// Body of `POST /v1/calls/{provider}`.

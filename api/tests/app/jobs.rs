@@ -316,3 +316,56 @@ async fn outbound_calls_become_call_points(pool: MySqlPool) {
     .unwrap();
     assert_eq!(untouched, (0, true));
 }
+
+#[test_db::test(seed)]
+async fn provider_calls_are_saved_for_the_history(pool: MySqlPool) {
+    // Company 101 has CloudTalk keys.
+    let router = Router::new().route(
+        "/calls/index.json",
+        axum::routing::get(|| async {
+            Json(json!({ "responseData": { "data": [
+                { "Cdr": { "id": 1, "type": "incoming", "public_external": "+13175550100",
+                           "started_at": "2026-05-01 10:00:00" } },
+                { "Cdr": { "id": "2", "type": "outgoing", "public_external": "+13175550101",
+                           "started_at": "2026-05-01 11:00:00" } },
+                { "Cdr": { "id": "3", "type": "internal", "public_external": "",
+                           "started_at": "2026-05-01 12:00:00" } },
+            ] } }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
+        .with_cloudtalk_base(&format!("http://{address}"))
+        .with_job_key("job-secret");
+    let server = TestServer::new(app(state));
+    for _ in 0..2 {
+        let body: Value = server
+            .post("/v1/jobs/call-history")
+            .add_header("Authorization", "job-secret")
+            .await
+            .json();
+        assert!(body["processed"].as_u64().unwrap() >= 2);
+    }
+    let rows: Vec<(i32, String, String, String)> = sqlx::query_as(
+        "SELECT company_id, CAST(provider AS CHAR), call_id, customer_digits FROM provider_calls ORDER BY call_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (101, "cloudtalk".into(), "1".into(), "3175550100".into()),
+            (101, "cloudtalk".into(), "2".into(), "3175550101".into()),
+        ]
+    );
+    let synced: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM provider_call_syncs WHERE company_id = 101 AND provider = 'cloudtalk'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(synced, 1);
+}
