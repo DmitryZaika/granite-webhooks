@@ -14,56 +14,15 @@
     clippy::doc_markdown
 )]
 
-pub mod ai;
+// Every crate of the API, at the paths their modules had when this was one
+// crate (`api::state::AppState`, `api::routes::sms`): each crate re-exports
+// the ones below it, so these two hold them all.
+pub use api_admin::*;
+pub use api_ai::*;
+
 pub mod analytics_proxy;
-pub mod auth;
-pub mod automation_notice;
-pub mod billing;
-pub mod call_notes;
-pub mod chat;
-pub mod commissions;
-pub mod db;
-pub mod deliverability;
-pub mod email_signature;
-pub mod error;
-pub mod extract;
-pub mod followups;
-pub mod images;
-pub mod kitchen_design;
-pub mod maps;
-pub mod native_delivery;
-pub mod native_signing;
-pub mod oauth_state;
 pub mod openapi;
-pub mod pdf;
-pub mod pdf_fonts;
-pub mod pdf_preview;
-pub mod period;
-pub mod phone;
-pub mod posthog;
-pub mod posthog_autofix;
-pub mod price_list_chunking;
-pub mod price_lists;
-pub mod push;
-pub mod qbo;
-pub mod quote_pricing;
-pub mod ringcentral_connect;
 pub mod routes;
-pub mod serde_helpers;
-pub mod setup_checklist;
-pub mod signing_pdf;
-pub mod signwell;
-pub mod sigv4;
-pub mod sql;
-pub mod state;
-pub mod storage;
-pub mod supplier_file_processor;
-pub mod telegram;
-pub mod telnyx;
-pub mod thumbnails;
-pub mod transcribe;
-pub mod voicemail;
-pub mod webhooks_client;
 
 use axum::extract::{MatchedPath, Request, State};
 use axum::http::HeaderValue;

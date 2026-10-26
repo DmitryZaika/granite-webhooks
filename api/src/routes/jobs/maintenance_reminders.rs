@@ -3,7 +3,7 @@
 //! manager of the company, and a `maintenance` push to their phones. Port of
 //! `maintenanceReminders.server.ts`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
 use crate::openapi::ToSchema;
 use crate::phone::crm_push::push_maintenance;

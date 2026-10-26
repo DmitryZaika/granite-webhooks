@@ -81,7 +81,7 @@ that function (`main.rs` then uses `run_with_streaming_response`). Put it on
 a subdomain of the session cookie's domain (for example through CloudFront)
 so the browser sends the cookie; the frontend calls it from
 `VITE_GRANITE_STREAM_URL`. The chat's CRM manual is
-`api/src/chat/crm_manual.json`, rebuilt from the CRM repo with
+`api/crates/ai/src/chat/crm_manual.json`, rebuilt from the CRM repo with
 `node scripts/sync-crm-manual.mjs ../general_datebase`.
 
 ### Pictures, PDFs and audio

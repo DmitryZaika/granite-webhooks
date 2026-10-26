@@ -8,7 +8,7 @@
 //! Port of `processDueAppointmentReminders` and
 //! `processDueAppointmentRepReminders`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
 use crate::openapi::ToSchema;
 use crate::phone::crm_push::push_notification_logged;

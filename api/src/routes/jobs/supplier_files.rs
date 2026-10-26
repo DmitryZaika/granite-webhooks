@@ -4,7 +4,7 @@
 //! one-minute sweep. A big PDF takes minutes, so the time-triggered Lambda
 //! should call this on the long-running (Function URL) deployment.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
 use crate::openapi::ToSchema;
 use crate::state::AppState;

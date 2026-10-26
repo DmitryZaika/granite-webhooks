@@ -10,7 +10,7 @@
 //! (`checklist-survey-<id>`, `checklist-survey-reminder-<n>-<id>`); a
 //! submitted survey leaves `checklist-survey-done-<id>`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
 use crate::openapi::ToSchema;
 use crate::routes::events::notify::customer_phone;

@@ -50,8 +50,8 @@
 //!    registered gets its campaign) and the number assignments still pending
 //!    (a few a run; Telnyx's 10DLC webhooks are the fast path).
 
-use super::JobCaller;
 use crate::ai::{AiError, Caller, Chat, MINI_MODEL};
+use crate::auth::job::JobCaller;
 use crate::call_notes;
 use crate::error::{ApiResult, ErrorBody};
 use crate::openapi::ToSchema;

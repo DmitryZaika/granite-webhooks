@@ -5,25 +5,16 @@
 //! annotations on each route; this module only adds the document-level parts.
 //!
 //! utoipa only runs with the `openapi` feature (`make api-openapi` and the
-//! spec tests): it is a large share of the crate's compile time. Without it
-//! the annotations expand to nothing but each route's method and path,
-//! [`OpenApiRouter`] registers routes straight with axum, and
-//! `/openapi.json` serves the checked-in file (`make api-openapi`).
+//! spec tests; see `api_core::openapi`). Without it `/openapi.json` serves
+//! the checked-in file (`make api-openapi`).
 
 use crate::routes;
 use crate::state::AppState;
 use axum::Router;
 use std::sync::Arc;
 
-pub use api_macros::path;
-#[cfg(not(feature = "openapi"))]
-pub use api_macros::{IntoParams, ToSchema, routes};
-#[cfg(not(feature = "openapi"))]
-pub use plain::OpenApiRouter;
-#[cfg(feature = "openapi")]
-pub use utoipa::{IntoParams, ToSchema};
-#[cfg(feature = "openapi")]
-pub use utoipa_axum::{router::OpenApiRouter, routes};
+// The route macros, so `crate::openapi::path` works here as in every crate.
+pub use api_core::openapi::*;
 
 #[cfg(feature = "openapi")]
 use crate::error::ErrorBody;
@@ -33,12 +24,6 @@ use utoipa::openapi::OpenApi as OpenApiDoc;
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
 #[cfg(feature = "openapi")]
 use utoipa::{Modify, OpenApi};
-
-/// Name of the `__session` cookie scheme every route lists under `security`.
-pub const SESSION_SECURITY: &str = "session_cookie";
-
-/// Name of the Granite Phone app's `X-Granite-Device` token scheme.
-pub const DEVICE_SECURITY: &str = "device_token";
 
 #[cfg(feature = "openapi")]
 #[derive(OpenApi)]
@@ -169,67 +154,3 @@ pub fn router_and_spec_json() -> (Router<AppState>, Arc<str>) {
 
 /// `api/openapi.json`, which `make api-openapi` writes.
 pub const CHECKED_IN: &str = include_str!("../openapi.json");
-
-#[cfg(not(feature = "openapi"))]
-mod plain {
-    use axum::Router;
-    use axum::extract::Request;
-    use axum::response::IntoResponse;
-    use axum::routing::{MethodRouter, Route};
-    use std::convert::Infallible;
-    use tower_layer::Layer;
-    use tower_service::Service;
-
-    /// `utoipa_axum`'s `OpenApiRouter` without the document: the routes of
-    /// [`api_macros::routes!`] go straight to axum.
-    pub struct OpenApiRouter<S = ()>(Router<S>);
-
-    impl<S: Clone + Send + Sync + 'static> OpenApiRouter<S> {
-        pub fn new() -> Self {
-            Self(Router::new())
-        }
-
-        /// Registers the handlers of one `routes!`, which share a path.
-        #[must_use]
-        pub fn routes<const N: usize>(self, routes: [(&'static str, MethodRouter<S>); N]) -> Self {
-            debug_assert!(
-                routes.iter().all(|(path, _)| *path == routes[0].0),
-                "the handlers of one routes! must share a path"
-            );
-            Self(
-                routes
-                    .into_iter()
-                    .fold(self.0, |axum_router, (path, method_router)| {
-                        axum_router.route(if path.is_empty() { "/" } else { path }, method_router)
-                    }),
-            )
-        }
-
-        #[must_use]
-        pub fn merge(self, other: Self) -> Self {
-            Self(self.0.merge(other.0))
-        }
-
-        #[must_use]
-        pub fn layer<L>(self, layer: L) -> Self
-        where
-            L: Layer<Route> + Clone + Send + Sync + 'static,
-            L::Service: Service<Request> + Clone + Send + Sync + 'static,
-            <L::Service as Service<Request>>::Response: IntoResponse + 'static,
-            <L::Service as Service<Request>>::Error: Into<Infallible> + 'static,
-            <L::Service as Service<Request>>::Future: Send + 'static,
-        {
-            Self(self.0.layer(layer))
-        }
-
-        pub fn into_router(self) -> Router<S> {
-            self.0
-        }
-    }
-
-    impl<S: Clone + Send + Sync + 'static> Default for OpenApiRouter<S> {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-}

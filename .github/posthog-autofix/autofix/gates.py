@@ -177,7 +177,9 @@ def workspace_crates(git: Git, rev: str) -> dict[str, str]:
 
 
 def touched_crates(crates: dict[str, str], touched: Iterable[str]) -> list[str]:
-    """The packages owning the touched files (the deepest member wins)."""
+    """The packages owning the touched files (the deepest member wins). The
+    `api` package's integration tests cover the crates in `api/crates/`, so a
+    touched `api-*` package brings `api` along."""
     found: set[str] = set()
     members = sorted(crates, key=len, reverse=True)
     for path in touched:
@@ -185,6 +187,8 @@ def touched_crates(crates: dict[str, str], touched: Iterable[str]) -> list[str]:
             if PurePosixPath(path).is_relative_to(member):
                 found.add(crates[member])
                 break
+    if any(name.startswith("api-") for name in found) and "api" in crates.values():
+        found.add("api")
     return sorted(found)
 
 

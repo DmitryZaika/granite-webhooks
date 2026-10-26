@@ -2,6 +2,10 @@
 //! `report_server_errors`): the route's template, never the path itself,
 //! whose segments carry the company's Telnyx webhook token or a customer's
 //! number. No database: one that never answers makes the routes fail.
+//!
+//! It sets the PostHog variables for its whole process, so it is a test
+//! binary of its own: every other test's server errors would reach its
+//! stand-in.
 
 use api::app;
 use api::state::AppState;

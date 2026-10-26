@@ -9,8 +9,8 @@
 //! up to [`CLASSIFY_PER_RUN`] calls before it answers, and the next run
 //! takes the rest.
 
-use super::JobCaller;
 use crate::ai::Caller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
 use crate::openapi::ToSchema;
 use crate::routes::calls::recording::{CallTranscriptError, transcribe_call};

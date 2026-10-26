@@ -6,7 +6,7 @@
 //! a few customers without a contact per provider; one that is still missing
 //! after its try waits a while (`Provider::retry_after_hours`) for the next.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
 use crate::openapi::ToSchema;
 use crate::state::AppState;

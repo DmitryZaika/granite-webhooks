@@ -1,4 +1,4 @@
-// Refreshes the manual text in api/src/chat/crm_manual.json from the CRM
+// Refreshes the manual text in api/crates/ai/src/chat/crm_manual.json from the CRM
 // repo's docs/manual/*.md. The topic table (which keywords pick which
 // sections) lives in the JSON itself; edit it there. Also copies the CRM
 // repo's test cases of the how-to detector (both repos run the same ones).
@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const crm = process.argv[2] ?? '../general_datebase'
-const target = new URL('../api/src/chat/crm_manual.json', import.meta.url)
+const target = new URL('../api/crates/ai/src/chat/crm_manual.json', import.meta.url)
 const current = JSON.parse(fs.readFileSync(target, 'utf8'))
 const dir = path.join(crm, 'docs/manual')
 const sections = fs
@@ -34,5 +34,5 @@ const manual = {
 fs.writeFileSync(target, `${JSON.stringify(manual, null, 1)}\n`)
 fs.copyFileSync(
   path.join(crm, 'app/utils/crmManualHowToCases.json'),
-  new URL('../api/src/chat/crm_manual_how_to_cases.json', import.meta.url),
+  new URL('../api/crates/ai/src/chat/crm_manual_how_to_cases.json', import.meta.url),
 )

@@ -7,7 +7,7 @@
 //! never send it twice; a send whose outcome is unknown is never retried.
 //! Port of the CRM's `nativeSignatureReminders.server.ts`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::native_signing::{
     CompletedFile, FrozenSettings, LifecycleEvent, NativeSigning, Recipient, reminder_schedule,

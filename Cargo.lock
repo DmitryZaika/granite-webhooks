@@ -117,7 +117,10 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "ammonia",
- "api-macros",
+ "api-admin",
+ "api-ai",
+ "api-core",
+ "api-phone",
  "aws-credential-types",
  "aws-sigv4",
  "aws-smithy-runtime-api",
@@ -166,12 +169,307 @@ dependencies = [
 ]
 
 [[package]]
+name = "api-accounts"
+version = "0.1.0"
+dependencies = [
+ "api-crm",
+ "axum",
+ "bcrypt",
+ "chrono",
+ "common",
+ "getrandom 0.3.4",
+ "lambda_http",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "utoipa 6.0.0",
+ "utoipa-axum",
+ "uuid",
+]
+
+[[package]]
+name = "api-admin"
+version = "0.1.0"
+dependencies = [
+ "api-accounts",
+ "api-crm",
+ "api-schedule",
+ "aws-credential-types",
+ "axum",
+ "base64",
+ "bcrypt",
+ "chrono",
+ "common",
+ "futures-util",
+ "lambda_http",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "url",
+ "utoipa 6.0.0",
+ "utoipa-axum",
+]
+
+[[package]]
+name = "api-ai"
+version = "0.1.0"
+dependencies = [
+ "api-accounts",
+ "api-followups",
+ "api-inventory",
+ "api-quotes",
+ "axum",
+ "base64",
+ "chrono",
+ "chrono-tz",
+ "common",
+ "fancy-regex 0.19.2",
+ "image",
+ "lambda_http",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "url",
+ "utoipa 6.0.0",
+ "utoipa-axum",
+ "uuid",
+]
+
+[[package]]
+name = "api-core"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "api-macros",
+ "aws-credential-types",
+ "aws-sigv4",
+ "aws-smithy-runtime-api",
+ "axum",
+ "base64",
+ "chrono",
+ "common",
+ "futures-util",
+ "getrandom 0.3.4",
+ "hickory-resolver",
+ "hmac 0.13.0",
+ "lambda_http",
+ "percent-encoding",
+ "regex",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_html_form",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tower-http",
+ "tower-layer",
+ "tower-service",
+ "url",
+ "utoipa 6.0.0",
+ "utoipa-axum",
+ "uuid",
+]
+
+[[package]]
+name = "api-crm"
+version = "0.1.0"
+dependencies = [
+ "api-core",
+ "api-media",
+ "axum",
+ "chrono",
+ "chrono-tz",
+ "common",
+ "futures-util",
+ "hmac 0.13.0",
+ "image",
+ "lambda_http",
+ "percent-encoding",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "url",
+ "utoipa 6.0.0",
+ "utoipa-axum",
+ "uuid",
+]
+
+[[package]]
+name = "api-followups"
+version = "0.1.0"
+dependencies = [
+ "api-crm",
+ "axum",
+ "chrono",
+ "chrono-tz",
+ "common",
+ "fancy-regex 0.19.2",
+ "lambda_http",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "utoipa 6.0.0",
+ "utoipa-axum",
+]
+
+[[package]]
+name = "api-inventory"
+version = "0.1.0"
+dependencies = [
+ "api-crm",
+ "axum",
+ "base64",
+ "chrono",
+ "common",
+ "futures-util",
+ "lambda_http",
+ "lopdf",
+ "percent-encoding",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "tokio",
+ "url",
+ "utoipa 6.0.0",
+ "utoipa-axum",
+]
+
+[[package]]
 name = "api-macros"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "api-media"
+version = "0.1.0"
+dependencies = [
+ "ammonia",
+ "api-core",
+ "base64",
+ "chrono",
+ "chrono-tz",
+ "common",
+ "hayro",
+ "image",
+ "jpeg-encoder",
+ "lopdf",
+ "miniz_oxide 0.8.9",
+ "pdf-writer",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "unicode-normalization",
+ "utoipa 6.0.0",
+ "utoipa-axum",
+ "uuid",
+ "zune-heic",
+]
+
+[[package]]
+name = "api-phone"
+version = "0.1.0"
+dependencies = [
+ "api-accounts",
+ "api-crm",
+ "axum",
+ "base64",
+ "chrono",
+ "getrandom 0.3.4",
+ "hmac 0.13.0",
+ "lambda_http",
+ "regex",
+ "serde",
+ "serde_html_form",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "url",
+ "utoipa 6.0.0",
+ "utoipa-axum",
+ "uuid",
+]
+
+[[package]]
+name = "api-quotes"
+version = "0.1.0"
+dependencies = [
+ "api-crm",
+ "api-schedule",
+ "axum",
+ "base64",
+ "chrono",
+ "chrono-tz",
+ "common",
+ "getrandom 0.3.4",
+ "hmac 0.13.0",
+ "lambda_http",
+ "lopdf",
+ "percent-encoding",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "tokio",
+ "utoipa 6.0.0",
+ "utoipa-axum",
+ "uuid",
+]
+
+[[package]]
+name = "api-schedule"
+version = "0.1.0"
+dependencies = [
+ "api-crm",
+ "axum",
+ "chrono",
+ "chrono-tz",
+ "common",
+ "lambda_http",
+ "regex",
+ "serde",
+ "sqlx",
+ "utoipa 6.0.0",
+ "utoipa-axum",
 ]
 
 [[package]]

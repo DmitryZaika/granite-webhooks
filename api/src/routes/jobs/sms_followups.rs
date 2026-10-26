@@ -6,7 +6,7 @@
 //! waiting on them (`followups::digest`). Replaces the
 //! Remix `api.sms-followups.process` route.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::auth::session::find_user;
 use crate::error::{ApiResult, ErrorBody};
 use crate::followups::processor::{FollowupRun, process_due_followups, rep_sms_provider};
