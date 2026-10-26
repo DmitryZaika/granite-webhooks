@@ -95,7 +95,7 @@ pub const CRM_MANUAL_RULES: &str = r#"How to use the CRM user manual:
 26. Mark as unread / Mark as read are real features. Emails: **CRM > Emails**, **Inbox** row envelope (closed = **Mark as unread**, open = **Mark as read**), or the toolbar envelope after selecting threads in Inbox or Sent. Opening a thread marks it read. SMS: **CRM > SMS**, hover a read row and click the envelope **Mark as unread**. Opening an SMS thread marks it read. Never answer that you cannot confirm Mark as unread.
 27. Users type fast: expect typos and loose names for pages, buttons, and features (for example "custmers", "deal bord", "the stones page"). Answer for the closest matching page or feature, starting with one short line naming it if the wording was off. Ask a question back only when two features fit equally well, and then name both in one line.
 28. Keep how-to answers short: the numbered steps of the one way that does what was asked (about 8 at most, one line each), then one line on who can do it when that matters. No background, alternatives, troubleshooting or extra settings the user did not ask about.
-29. A special order in a quote is a color whose name is typed in **Color** instead of picked from the list, priced in the **$ Price /sq ft** box. Never write the words "Other color" or "other color", even when the user does: say special order."#;
+29. A special order in a quote is a color whose name is typed in **Color** instead of picked from the list, priced in the **Special order** box under **Color** ($ Price /sq ft). Never write the words "Other color" or "other color", even when the user does: say special order."#;
 
 /// `buildInstructionUserMessage`: the question with the hints it needs.
 pub fn instruction_user_message(query: &str) -> String {
