@@ -19,6 +19,7 @@
 
 pub mod class_sales;
 pub mod invoice;
+pub mod rules;
 pub mod sales;
 
 use crate::auth::{AdminUser, EmployeeUser};
@@ -33,8 +34,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::header;
 use axum::response::IntoResponse;
 use invoice::{
-    Address, EditableInvoice, InvoiceSummary, Line, create_payload, draft_edits, editable, summary,
-    text, update_payload,
+    Address, EditableInvoice, InvoiceSummary, Line, create_payload, editable, summary, text,
+    update_payload,
 };
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
@@ -49,6 +50,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(customers))
         .routes(routes!(items))
         .routes(routes!(recent_invoices))
+        .routes(routes!(rules::invoice_draft))
         .routes(routes!(sales::my_sales))
         .routes(routes!(sales::my_customers))
         .routes(routes!(class_sales::class_sales))
@@ -481,8 +483,23 @@ pub async fn create_invoice(
         input.invoice.bill_addr.as_ref(),
     )
     .await?;
-    let payload = create_payload(&qbo_id, &input.invoice, row.email.as_deref())
-        .map_err(ApiError::BadRequest)?;
+    let class = match input
+        .invoice
+        .class_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        Some(name) => Some(class_id(&state, &access, name).await?),
+        None => None,
+    };
+    let payload = create_payload(
+        &qbo_id,
+        &input.invoice,
+        row.email.as_deref(),
+        class.as_deref(),
+    )
+    .map_err(ApiError::BadRequest)?;
     let created = state
         .qbo
         .post(&access, "invoice", &payload)
@@ -505,25 +522,40 @@ pub async fn create_invoice(
         .execute(&state.pool)
         .await?;
     }
-    if let Some(draft) = &input.draft {
-        for edit in draft_edits(draft, &input.invoice.lines) {
-            sqlx::query(
-                "INSERT INTO qbo_invoice_draft_edits
-                   (company_id, user_id, quote_id, qbo_invoice_id, kind, draft_text, saved_text)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(company_id)
-            .bind(user.id)
-            .bind(input.quote_id)
-            .bind(&invoice.id)
-            .bind(edit.kind)
-            .bind(edit.draft_text)
-            .bind(edit.saved_text)
-            .execute(&state.pool)
-            .await?;
-        }
+    if let Some(draft) = &input.draft
+        && let Err(err) = rules::record(
+            &state.pool,
+            &user,
+            input.quote_id,
+            &invoice.id,
+            draft,
+            &input.invoice,
+        )
+        .await
+    {
+        // The invoice is made; only the lesson is lost.
+        tracing::error!(error = %err, "invoice draft outcomes not kept");
     }
     Ok(Json(invoice))
+}
+
+/// A `QuickBooks` class's id by its full name.
+async fn class_id(state: &AppState, access: &Access, name: &str) -> ApiResult<String> {
+    let rows = state
+        .qbo
+        .query(
+            access,
+            &format!(
+                "select Id from Class where FullyQualifiedName = '{}'",
+                escape(name)
+            ),
+            "Class",
+        )
+        .await
+        .map_err(qbo_error)?;
+    rows.first()
+        .and_then(|row| text(&row["Id"]))
+        .ok_or_else(|| ApiError::BadRequest(format!("QuickBooks has no class named \"{name}\"")))
 }
 
 /// The access token, once the invoice is known to be the customer's.
@@ -886,6 +918,8 @@ pub struct QboItem {
 pub struct QboItems {
     /// By name.
     pub items: Vec<QboItem>,
+    /// The active classes' full names, by name.
+    pub classes: Vec<String>,
 }
 
 /// List QuickBooks products and services
@@ -940,7 +974,20 @@ pub async fn items(
         })
         .collect();
     items.sort_by_key(|item| item.name.to_lowercase());
-    Ok(Json(QboItems { items }))
+    let mut classes: Vec<String> = state
+        .qbo
+        .query(
+            &access,
+            "select * from Class where Active = true MAXRESULTS 1000",
+            "Class",
+        )
+        .await
+        .map_err(qbo_error)?
+        .iter()
+        .filter_map(|row| text(&row["FullyQualifiedName"]).or_else(|| text(&row["Name"])))
+        .collect();
+    classes.sort_by_key(|name| name.to_lowercase());
+    Ok(Json(QboItems { items, classes }))
 }
 
 /// Query of `GET /v1/qbo/invoices/recent`.

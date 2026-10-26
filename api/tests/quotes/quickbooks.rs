@@ -80,6 +80,16 @@ async fn server(pool: &MySqlPool, access_expires_in: i64) -> (TestServer, Arc<Mu
                         { "Id": "3", "Name": "Mark", "FullyQualifiedName": "Mark" },
                     ] } }));
                 }
+                if q.starts_with("select * from Class where Active = true") {
+                    return Json(json!({ "QueryResponse": { "Class": [
+                        { "Id": "1", "Name": "Rita", "FullyQualifiedName": "Rita" },
+                        { "Id": "2", "Name": "Kitchens", "FullyQualifiedName": "Rita:Kitchens" },
+                        { "Id": "4", "Name": "Rita Rep", "FullyQualifiedName": "Rita Rep" },
+                    ] } }));
+                }
+                if q == "select Id from Class where FullyQualifiedName = 'Rita'" {
+                    return Json(json!({ "QueryResponse": { "Class": [{ "Id": "1" }] } }));
+                }
                 if q.starts_with("select * from Invoice ORDERBY MetaData.CreateTime DESC") {
                     let mut raw = invoice();
                     raw["ClassRef"] = json!({ "value": "1", "name": "Rita" });
@@ -248,6 +258,7 @@ async fn a_quote_makes_one_invoice_with_the_companys_items(pool: MySqlPool) {
         items["items"],
         json!([{ "id": "3", "name": "Stone" }, { "id": "5", "name": "tile" }])
     );
+    assert_eq!(items["classes"], json!(["Rita", "Rita Rep", "Rita:Kitchens"]));
     let line = |id: &str, detail: &str, amount: Value, item: Value| {
         json!({ "id": id, "line_num": null, "detail_type": detail, "description": "Kitchen",
                 "amount": amount, "qty": null, "unit_price": amount, "item_ref_value": item,
@@ -268,6 +279,8 @@ async fn a_quote_makes_one_invoice_with_the_companys_items(pool: MySqlPool) {
                 line("new:0", "SalesItemLineDetail", json!(500), json!("3")),
                 line("new:1", "DescriptionOnly", Value::Null, Value::Null),
             ],
+            "class_name": "Rita",
+            "bill_email_cc": "rep@acme.test",
         },
     });
     let created: Value = server
@@ -289,15 +302,27 @@ async fn a_quote_makes_one_invoice_with_the_companys_items(pool: MySqlPool) {
             .await
             .unwrap();
     assert_eq!(linked.as_deref(), Some("9"));
-    let edits: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT kind, draft_text, saved_text FROM qbo_invoice_draft_edits WHERE company_id = 100",
+    assert_eq!(sent["ClassRef"]["value"], "1");
+    assert_eq!(sent["BillEmailCc"]["Address"], "rep@acme.test");
+    let outcomes: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT field, outcome, saved_value FROM qbo_invoice_draft_outcomes
+          WHERE company_id = 100 ORDER BY id",
     )
     .fetch_all(&pool)
     .await
     .unwrap();
+    let outcome = |field: &str, outcome: &str, value: Option<&str>| {
+        (field.to_string(), outcome.to_string(), value.map(String::from))
+    };
     assert_eq!(
-        edits,
-        [("changed".into(), Some("Flat edge".into()), Some("Kitchen".into()))]
+        outcomes,
+        [
+            outcome("line", "kept", None),
+            outcome("line", "changed", Some("Kitchen")),
+            outcome("class", "value", Some("Rita")),
+            outcome("cc", "sales_rep", None),
+            outcome("item", "value", Some("3")),
+        ]
     );
     server
         .post("/v1/customers/1000/qbo-invoices")
@@ -306,6 +331,85 @@ async fn a_quote_makes_one_invoice_with_the_companys_items(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::CONFLICT);
     assert_eq!(posted.lock().unwrap().len(), 1);
+}
+
+#[test_db::test(seed)]
+async fn a_draft_follows_what_recent_invoices_keep_doing(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO quotes (id, customer_id, quote_name, quote_type, created_date, sales_rep,
+                             company_id, salesperson_id, created_by, status)
+         VALUES (9802, 1000, 'Kitchen', 'countertops', NOW(), 'Rep', 100, 100, 100, 'converted')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for _ in 0..4 {
+        sqlx::query(
+            "INSERT INTO qbo_invoice_draft_outcomes (company_id, field, draft_shape, draft_text, outcome, saved_value) VALUES
+               (100, 'line', '# lin ft finished edge - flat', '33.5 lin ft Finished Edge - Flat', 'changed', 'Flat Edge'),
+               (100, 'line', 'laser template', 'Laser Template', 'removed', NULL),
+               (100, 'line', '# sink - 60/40', '1 Sink - 60/40', 'kept', NULL),
+               (100, 'class', NULL, NULL, 'sales_rep', NULL),
+               (100, 'cc', NULL, NULL, 'none', NULL),
+               (100, 'item', NULL, 'tile', 'value', '5')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let (server, _) = server(&pool, 10).await;
+    let line = |id: &str, detail: &str, text: &str, amount: Value| {
+        json!({ "id": id, "line_num": null, "detail_type": detail, "description": text,
+                "amount": amount, "qty": null, "unit_price": amount, "item_ref_value": "3",
+                "item_ref_name": "Stone", "editable": true })
+    };
+    let draft: Value = server
+        .post("/v1/quotes/9802/invoice-draft")
+        .with_session(sessions::REP)
+        .json(&json!({ "lines": [
+            line("new:0", "SalesItemLineDetail", "Kitchen based @ 26.6 sqft", json!(500)),
+            line("new:1", "DescriptionOnly", "40.9 lin ft Finished Edge - Flat", Value::Null),
+            line("new:2", "DescriptionOnly", "40.9 lin ft Finished Edge - Eased", Value::Null),
+            line("new:3", "DescriptionOnly", "Laser Template", Value::Null),
+            line("new:4", "DescriptionOnly", "1 Sink - 60/40", Value::Null),
+        ] }))
+        .await
+        .json();
+    let texts: Vec<&str> = draft["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["description"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "Kitchen based @ 26.6 sqft",
+            "Flat Edge",
+            "40.9 lin ft Finished Edge - Eased",
+            "1 Sink - 60/40"
+        ]
+    );
+    assert_eq!(draft["lines"][0]["amount"], 500.0);
+    assert_eq!(draft["removed"][0]["description"], "Laser Template");
+    // Class is the quote's rep; the newest scanned invoice ("Rita") is 1 of 5.
+    assert_eq!(draft["class_name"], "Rita Rep");
+    assert_eq!(draft["bill_email_cc"], Value::Null);
+    assert_eq!(draft["item_id"], "5");
+    assert_eq!(draft["item_name"], "tile");
+    assert_eq!(draft["lines"][0]["item_ref_value"], "5");
+    let scanned: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM qbo_invoice_scans WHERE company_id = 100")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(scanned, 1);
+    server
+        .post("/v1/quotes/424242/invoice-draft")
+        .with_session(sessions::REP)
+        .json(&json!({ "lines": [] }))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 }
 
 #[test_db::test(seed)]

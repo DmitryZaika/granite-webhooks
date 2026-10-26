@@ -229,6 +229,12 @@ pub struct EditableInvoice {
     pub ship_addr: Option<Address>,
     /// The lines, in order.
     pub lines: Vec<Line>,
+    /// `QuickBooks` class (by name; set on a new invoice only).
+    #[serde(default)]
+    pub class_name: Option<String>,
+    /// CC of the invoice email (set on a new invoice only).
+    #[serde(default)]
+    pub bill_email_cc: Option<String>,
 }
 
 fn rows(value: &Value) -> Vec<Value> {
@@ -277,6 +283,8 @@ pub fn editable(value: &Value) -> Option<EditableInvoice> {
         bill_addr: address("BillAddr"),
         ship_addr: address("ShipAddr"),
         lines: rows(&value["Line"]).iter().filter_map(parse_line).collect(),
+        class_name: text(&value["ClassRef"]["name"]),
+        bill_email_cc: text(&value["BillEmailCc"]["Address"]),
     })
 }
 
@@ -464,11 +472,13 @@ pub fn update_payload(current: &Value, edited: &EditableInvoice) -> Result<Value
 }
 
 /// A new invoice for `customer` (its `QuickBooks` id) with the editor's
-/// lines, emailed to `email` when `QuickBooks` sends it.
+/// lines and CC, in class `class` (a `QuickBooks` class id), emailed to
+/// `email` when `QuickBooks` sends it.
 pub fn create_payload(
     customer: &str,
     edited: &EditableInvoice,
     email: Option<&str>,
+    class: Option<&str>,
 ) -> Result<Value, String> {
     let mut lines = Vec::new();
     for line in &edited.lines {
@@ -491,66 +501,18 @@ pub fn create_payload(
     if let Some(email) = email.map(str::trim).filter(|email| !email.is_empty()) {
         payload["BillEmail"] = json!({ "Address": email });
     }
+    if let Some(cc) = edited
+        .bill_email_cc
+        .as_deref()
+        .map(str::trim)
+        .filter(|cc| !cc.is_empty())
+    {
+        payload["BillEmailCc"] = json!({ "Address": cc });
+    }
+    if let Some(class) = class {
+        payload["ClassRef"] = json!({ "value": class });
+    }
     Ok(payload)
-}
-
-/// One change a rep made to a draft's line before creating the invoice.
-#[derive(Debug, PartialEq, Eq)]
-pub struct DraftEdit {
-    /// `changed` (its text), `item` (its product), `removed` or `added`.
-    pub kind: &'static str,
-    pub draft_text: Option<String>,
-    pub saved_text: Option<String>,
-}
-
-fn clipped(text: Option<&str>) -> Option<String> {
-    text.map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(|text| text.chars().take(1000).collect())
-}
-
-/// What changed between the lines a draft opened with and the ones saved,
-/// matched by line id.
-pub fn draft_edits(draft: &[Line], saved: &[Line]) -> Vec<DraftEdit> {
-    let kept = |line: &&Line| {
-        line.id.is_some()
-            && matches!(
-                line.detail_type.as_str(),
-                "SalesItemLineDetail" | "DescriptionOnly"
-            )
-    };
-    let edit = |kind, before: Option<&str>, after: Option<&str>| DraftEdit {
-        kind,
-        draft_text: clipped(before),
-        saved_text: clipped(after),
-    };
-    let mut edits = Vec::new();
-    for before in draft.iter().filter(kept) {
-        let Some(after) = saved.iter().find(|line| line.id == before.id) else {
-            edits.push(edit("removed", before.description.as_deref(), None));
-            continue;
-        };
-        let (old, new) = (
-            clipped(before.description.as_deref()),
-            clipped(after.description.as_deref()),
-        );
-        if old != new {
-            edits.push(edit("changed", old.as_deref(), new.as_deref()));
-        }
-        if before.item_ref_value != after.item_ref_value {
-            edits.push(edit(
-                "item",
-                before.item_ref_name.as_deref(),
-                after.item_ref_name.as_deref(),
-            ));
-        }
-    }
-    for after in saved.iter().filter(kept) {
-        if !draft.iter().any(|line| line.id == after.id) {
-            edits.push(edit("added", None, after.description.as_deref()));
-        }
-    }
-    edits
 }
 
 /// The editor's dates, notes and addresses.
@@ -628,46 +590,12 @@ mod tests {
     }
 
     #[test]
-    fn draft_edits_are_the_changed_removed_and_added_lines() {
-        let line = |id: &str, kind: &str, text: &str| Line {
-            id: Some(id.into()),
-            line_num: None,
-            detail_type: kind.into(),
-            description: Some(text.into()),
-            amount: None,
-            qty: None,
-            unit_price: None,
-            item_ref_value: None,
-            item_ref_name: None,
-            editable: true,
-        };
-        let draft = [
-            line("new:0", "SalesItemLineDetail", "Kitchen based @ 30 sqft"),
-            line("new:1", "DescriptionOnly", "Flat edge"),
-            line("new:2", "DescriptionOnly", "Laser Template"),
-        ];
-        let mut saved = vec![
-            line("new:0", "SalesItemLineDetail", "Kitchen based @ 30 sqft"),
-            line("new:1", "DescriptionOnly", " Flat Edge "),
-            line("new:x", "DescriptionOnly", "10 year sealer"),
-        ];
-        saved[0].item_ref_value = Some("1".into());
-        saved[0].item_ref_name = Some("Package".into());
-        let edits = draft_edits(&draft, &saved);
-        let kinds: Vec<_> = edits.iter().map(|edit| edit.kind).collect();
-        assert_eq!(kinds, ["item", "changed", "removed", "added"]);
-        assert_eq!(edits[1].saved_text.as_deref(), Some("Flat Edge"));
-        assert_eq!(edits[2].draft_text.as_deref(), Some("Laser Template"));
-        assert_eq!(edits[3].saved_text.as_deref(), Some("10 year sealer"));
-        assert!(draft_edits(&draft, &draft).is_empty());
-    }
-
-    #[test]
-    fn a_new_invoice_takes_the_editable_lines_and_the_email() {
+    fn a_new_invoice_takes_the_editable_lines_the_email_cc_and_class() {
         let mut invoice = editable(&current()).unwrap();
         invoice.lines[0].id = Some("new:a".into());
         invoice.lines[1].id = Some("new:b".into());
-        let payload = create_payload("42", &invoice, Some(" a@x.test ")).unwrap();
+        invoice.bill_email_cc = Some(" rep@x.test ".into());
+        let payload = create_payload("42", &invoice, Some(" a@x.test "), Some("7")).unwrap();
         assert_eq!(payload["CustomerRef"]["value"], "42");
         let lines = payload["Line"].as_array().unwrap();
         assert_eq!(lines.len(), 2);
@@ -677,8 +605,8 @@ mod tests {
         assert!(payload.get("Id").is_none());
 
         invoice.lines[0].item_ref_value = None;
-        assert!(create_payload("42", &invoice, None).is_err());
+        assert!(create_payload("42", &invoice, None, None).is_err());
         invoice.lines.remove(0);
-        assert!(create_payload("42", &invoice, None).is_err());
+        assert!(create_payload("42", &invoice, None, None).is_err());
     }
 }

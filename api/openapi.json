@@ -40264,73 +40264,6 @@
         ]
       }
     },
-    "/v1/ai/invoice-style": {
-      "post": {
-        "tags": [
-          "ai"
-        ],
-        "summary": "Write an invoice draft in the company's style",
-        "description": "Rewrites a quote's invoice draft the way the company's latest\n`QuickBooks` invoices read, following the changes reps keep making to\ndrafts. The amounts stay the draft's; when there is nothing to learn from\nor the model fails, the draft comes back as it was (`styled` false).\nNothing is saved.",
-        "operationId": "style_invoice_draft",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/InvoiceStyleInput"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "The draft, styled or as it was",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InvoiceStyle"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Caller is not an employee or admin",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Database error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session_cookie": []
-          }
-        ]
-      }
-    },
     "/v1/ai/signature-fields": {
       "post": {
         "tags": [
@@ -42466,6 +42399,95 @@
           },
           "502": {
             "description": "QuickBooks failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/quotes/{id}/invoice-draft": {
+      "post": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Make a quote's invoice draft the company's way",
+        "description": "Applies the changes the company's recent invoices keep making to such a\ndraft: lines reworded or left out (text lines only; amounts never change),\nand the class, CC and product they usually get, from invoices made here\nand, for a company that just connected, its newest `QuickBooks` invoices.\nNothing is saved.",
+        "operationId": "apply_invoice_draft_rules",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The draft the company's way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftRules"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such quote in the caller's company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
             "content": {
               "application/json": {
                 "schema": {
@@ -68486,6 +68508,58 @@
         },
         "additionalProperties": false
       },
+      "DraftRules": {
+        "type": "object",
+        "description": "`POST /v1/quotes/{id}/invoice-draft`.",
+        "required": [
+          "lines",
+          "removed"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "description": "The lines with the company's usual changes made."
+          },
+          "removed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Line"
+            },
+            "description": "Text lines the company usually leaves out, for the editor to offer back."
+          },
+          "class_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The class the company's invoices usually get."
+          },
+          "bill_email_cc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The CC they usually get."
+          },
+          "item_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The product their priced lines usually use."
+          },
+          "item_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          }
+        }
+      },
       "DraftedEmail": {
         "type": "object",
         "description": "A drafted email.",
@@ -68799,6 +68873,20 @@
               "$ref": "#/components/schemas/Line"
             },
             "description": "The lines, in order."
+          },
+          "class_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`QuickBooks` class (by name; set on a new invoice only)."
+          },
+          "bill_email_cc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "CC of the invoice email (set on a new invoice only)."
           }
         }
       },
@@ -72891,37 +72979,6 @@
           "instruction": {
             "type": "string",
             "description": "What to change."
-          }
-        }
-      },
-      "InvoiceStyle": {
-        "type": "object",
-        "description": "`POST /v1/ai/invoice-style`.",
-        "required": [
-          "invoice",
-          "styled"
-        ],
-        "properties": {
-          "invoice": {
-            "$ref": "#/components/schemas/EditableInvoice",
-            "description": "The draft in the company's style, or as it was."
-          },
-          "styled": {
-            "type": "boolean",
-            "description": "False when the draft came back as it was (no examples, or the model\nfailed or answered something unusable)."
-          }
-        }
-      },
-      "InvoiceStyleInput": {
-        "type": "object",
-        "description": "Body of `POST /v1/ai/invoice-style`.",
-        "required": [
-          "invoice"
-        ],
-        "properties": {
-          "invoice": {
-            "$ref": "#/components/schemas/EditableInvoice",
-            "description": "The draft the editor would open with."
           }
         }
       },
@@ -80817,7 +80874,8 @@
         "type": "object",
         "description": "`GET /v1/qbo/items`.",
         "required": [
-          "items"
+          "items",
+          "classes"
         ],
         "properties": {
           "items": {
@@ -80826,6 +80884,13 @@
               "$ref": "#/components/schemas/QboItem"
             },
             "description": "By name."
+          },
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The active classes' full names, by name."
           }
         }
       },
