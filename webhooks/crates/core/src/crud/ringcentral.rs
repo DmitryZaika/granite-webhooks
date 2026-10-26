@@ -50,6 +50,11 @@ pub async fn insert_outbound_sms(
     sms: &RingcentralSMS,
     company_id: i32,
 ) -> Result<MySqlQueryResult, sqlx::Error> {
+    // A sent MMS also arrives as a push with no id and a blank body; nothing can
+    // match it to the sent row, and stored it shows as an empty bubble.
+    if sms.id.is_none() && sms.text.0.trim().is_empty() {
+        return Ok(MySqlQueryResult::default());
+    }
     if let Some(ringcentral_id) = sms.id {
         // Tier 1: exact text match for normal text-only and true-MMS sends.
         // Oldest unclaimed row first: echoes arrive in send order, so it is the one waiting.
@@ -580,6 +585,20 @@ mod tests {
             1,
             "must merge, not duplicate"
         );
+    }
+
+    #[test_db::test]
+    async fn test_blank_echo_without_id_is_not_stored(pool: MySqlPool) {
+        let sms: RingcentralSMS = serde_json::from_value(serde_json::json!({
+            "sender": "+16468956758",
+            "recipient": "+13173161456",
+            "text": " ",
+            "agent": "540273",
+        }))
+        .expect("valid RingcentralSMS fixture");
+        insert_outbound_sms(&pool, &sms, 42).await.unwrap();
+
+        assert_eq!(outbound_row_count(&pool).await, 0);
     }
 
     // (c) Caption fallback: body is "<caption>\nPhoto 1: <url>" (buildAttachmentLinkSmsBody's
