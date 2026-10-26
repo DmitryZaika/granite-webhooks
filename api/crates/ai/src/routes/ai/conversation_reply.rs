@@ -1075,14 +1075,14 @@ mod tests {
             )
         };
         let text = build(at("2026-10-26T19:45:00Z"));
-        assert!(text.contains("QUOTE ALREADY FOLLOWED UP"));
+        assert!(text.contains("NOTE: QUOTE ALREADY FOLLOWED UP"));
         assert!(text.contains("got the quote 25 days ago") && text.contains("(14 days ago)"));
         assert!(text.contains("still on track"));
         // Every message shows how old it is.
         assert!(text.contains("[2026-10-12 14:30, 14 days ago] SMS Sales Rep"));
         assert!(text.contains("LATEST CUSTOMER MESSAGE (SMS at 2026-10-07 11:13, 19 days ago)"));
         // A day after the nudge it is too early; without a sent quote there is none.
-        assert!(!build(at("2026-10-13T15:00:00Z")).contains("QUOTE ALREADY FOLLOWED UP"));
+        assert!(!build(at("2026-10-13T15:00:00Z")).contains("NOTE: QUOTE ALREADY FOLLOWED UP"));
         let no_quote = build_user_prompt(
             FollowupChannel::Email,
             "Dema",
@@ -1095,7 +1095,7 @@ mod tests {
             &ReplyExtras::default(),
             at("2026-10-26T19:45:00Z"),
         );
-        assert!(!no_quote.contains("QUOTE ALREADY FOLLOWED UP"));
+        assert!(!no_quote.contains("NOTE: QUOTE ALREADY FOLLOWED UP"));
     }
 
     #[test]
