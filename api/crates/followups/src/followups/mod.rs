@@ -27,7 +27,6 @@ pub mod contact_resume;
 pub mod conversation;
 pub mod crm_hold;
 pub mod dates;
-pub mod digest;
 pub mod enrollments;
 pub mod facts;
 pub mod gather;
