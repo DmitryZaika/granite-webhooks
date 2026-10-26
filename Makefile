@@ -139,15 +139,17 @@ api-db-reset: api-db-up
 	DATABASE_URL=$(LOCAL_DB_URL) cargo sqlx migrate run --source migrations
 	$(LOCAL_MYSQL) --default-character-set=utf8mb4 $(LOCAL_DB_NAME) < api/seed/local_seed.sql
 
+# Every api crate's tests: the unit tests of api/crates/* and api's
+# integration tests (one binary per area, api/tests/<area>/main.rs).
 .PHONY: api-test
 api-test: api-db-up
-	DATABASE_URL=$(LOCAL_DB_URL) cargo test -p api
+	DATABASE_URL=$(LOCAL_DB_URL) cargo test -p 'api*'
 
 # Regenerates api/openapi.json from the route annotations (no database needed).
 # Only builds with the `openapi` feature run utoipa; the others serve this file.
 .PHONY: api-openapi
 api-openapi:
-	UPDATE_OPENAPI=1 cargo test -p api --features openapi --test it openapi::generated::spec_file_is_current
+	UPDATE_OPENAPI=1 cargo test -p api --features openapi --test app openapi::generated::spec_file_is_current
 
 # Serves http://localhost:9100/lambda-url/api/... through the Lambda runtime emulator.
 # A dev build, not --release: an edit rebuilds in seconds, not minutes (the

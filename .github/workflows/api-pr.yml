@@ -9,10 +9,11 @@ name: API tests
 #
 # On demand from any branch, with optional cargo test arguments in place of the
 # fixed suites below:
-#   gh workflow run "API tests" --ref <branch> [-f cargo_args="-p api --test it sms_flows::"]
+#   gh workflow run "API tests" --ref <branch> [-f cargo_args="-p api --test followups sms_flows::"]
 #
-# Every integration test file of api is a module of one test binary, `it`
-# (api/tests/it.rs); a filter `<file>::` selects one file's tests.
+# Every integration test file of api is a module of its area's test binary
+# (api/tests/<area>/main.rs, run with `--test <area>`); a filter `<file>::`
+# selects one file's tests.
 on:
   pull_request:
     branches: [main]
@@ -71,12 +72,12 @@ jobs:
         if: inputs.cargo_args == ''
         # Same build as the other steps: no `--features openapi`, so the
         # generated-spec checks (`openapi::generated`) run locally only.
-        run: cargo test -p api --test it -- openapi::
+        run: "cargo test -p api --test app -- openapi::"
 
       - name: Granite Phone tests
         if: inputs.cargo_args == ''
         run: >-
-          cargo test -p api --test it --
+          cargo test -p api --test phone --test telnyx --
           phone_admin::
           phone_auth::
           phone_bootstrap::
@@ -108,7 +109,7 @@ jobs:
       - name: Follow-up tests
         if: inputs.cargo_args == ''
         run: >-
-          cargo test -p api --test it --
+          cargo test -p api --test followups --
           followup_flows::
           followup_ai_cadence::
           followup_generation::

@@ -3,6 +3,8 @@ name: Deploy Lambda
 # Builds one app's Rust binary from the branch picked in "Use workflow from"
 # and uploads it as the code of that app's Lambda(s). Only the code changes:
 # environment variables and other configuration set on the Lambda are kept.
+# With "Deploy" unchecked it only builds: the zip is kept as the run's
+# artifact and AWS is never called.
 on:
   workflow_dispatch:
     inputs:
@@ -22,9 +24,14 @@ on:
           - api
           - webhooks
           - time-triggered
+      deploy:
+        description: Deploy (unchecked only builds the zip)
+        type: boolean
+        default: true
 
 concurrency:
-  group: deploy-${{ inputs.project }}-${{ inputs.environment }}
+  # A build-only run never waits behind (or holds up) a deploy.
+  group: ${{ inputs.deploy && format('deploy-{0}-{1}', inputs.project, inputs.environment) || format('build-{0}', github.run_id) }}
   cancel-in-progress: false
 
 permissions:
@@ -45,7 +52,7 @@ env:
 
 jobs:
   deploy:
-    name: ${{ inputs.project }} → ${{ inputs.environment }} (${{ github.ref_name }})
+    name: ${{ inputs.project }} → ${{ inputs.deploy && inputs.environment || 'build only' }} (${{ github.ref_name }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -117,12 +124,22 @@ jobs:
       - name: Build
         run: cargo lambda build --release --x86-64 --output-format zip -p "$APP" --bin "$APP"
 
+      - name: Keep the build
+        if: ${{ !inputs.deploy }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.project }}-${{ env.GIT_SHA }}
+          path: target/lambda/${{ inputs.project }}/bootstrap.zip
+          retention-days: 7
+
       - uses: aws-actions/configure-aws-credentials@v4
+        if: inputs.deploy
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy and verify
+        if: inputs.deploy
         run: |
           zip="target/lambda/$APP/bootstrap.zip"
           expected=$(openssl dgst -sha256 -binary "$zip" | base64)
