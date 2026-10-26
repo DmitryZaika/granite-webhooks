@@ -1,9 +1,11 @@
 //! Our own pushes to the Granite Phone app: FCM HTTP v1 data messages that
 //! carry ids only (missed call, voicemail, AI message, revoked, 911 alert).
 //! Telnyx sends the incoming-call pushes itself. On Android they go at the
-//! priority asked for, kept 60 s; to an iPhone as APNs background pushes
-//! (`content-available`, priority 5, the only one Apple allows for them),
-//! so the app gets the data while it is not running.
+//! priority asked for, kept 60 s. An iPhone can't run code for a background
+//! push it isn't sure to deliver, so it gets an alert with generic words
+//! ("New text") that the app's notification service extension rewrites with
+//! who it is from (`mutable-content`); `revoked` stays a background push
+//! (`content-available`, priority 5, the only one Apple allows for them).
 //!
 //! Credentials are the Firebase service account: `FCM_SERVICE_ACCOUNT_JSON`
 //! (the whole JSON), or `FCM_SERVICE_ACCOUNT_S3_KEY` (default `config/fcm-sa.json`), an object in
@@ -27,6 +29,59 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
+
+/// What an iPhone gets for `data`: an alert with the words Android's lock
+/// screen shows (the app's notification service extension names the sender;
+/// when it can't, these stay), or a background push for `revoked` and any
+/// type this server doesn't word.
+fn apns(data: &BTreeMap<String, String>) -> Value {
+    let field = |key: &str| data.get(key).map(String::as_str);
+    let (title, body) = match field("type") {
+        Some("missed_call") => ("Missed call", None),
+        Some("voicemail") => ("New voicemail", None),
+        Some("ai_message") => ("Missed call. AI took a message.", None),
+        Some("e911_alert") => (
+            "911 was dialed",
+            Some("Someone in your company dialed 911. Open Granite Phone for details.".to_string()),
+        ),
+        Some("text") => ("New text", None),
+        Some("email") => ("New email", None),
+        Some("notification") => ("CRM notification", None),
+        Some("lead") => (
+            match field("kind") {
+                Some("repeat") => "Repeated lead",
+                Some("assigned") => "Lead assigned to you",
+                Some("quote") => "Online quote finished",
+                _ => "New lead",
+            },
+            None,
+        ),
+        Some("maintenance") => (
+            "Maintenance due today",
+            match field("count") {
+                Some("1") => Some("1 check is due.".to_string()),
+                Some(count) if !count.is_empty() && count != "0" => {
+                    Some(format!("{count} checks are due."))
+                }
+                _ => None,
+            },
+        ),
+        _ => {
+            return json!({
+                "headers": { "apns-push-type": "background", "apns-priority": "5" },
+                "payload": { "aps": { "content-available": 1 } },
+            });
+        }
+    };
+    let mut alert = json!({ "title": title });
+    if let Some(body) = body {
+        alert["body"] = Value::String(body);
+    }
+    json!({
+        "headers": { "apns-push-type": "alert", "apns-priority": "10" },
+        "payload": { "aps": { "alert": alert, "sound": "default", "mutable-content": 1 } },
+    })
+}
 
 /// FCM's API root.
 pub const FCM_BASE_URL: &str = "https://fcm.googleapis.com";
@@ -180,10 +235,7 @@ impl Push {
             "token": token,
             "data": data,
             "android": { "priority": if high_priority { "HIGH" } else { "NORMAL" }, "ttl": "60s" },
-            "apns": {
-                "headers": { "apns-push-type": "background", "apns-priority": "5" },
-                "payload": { "aps": { "content-available": 1 } },
-            },
+            "apns": apns(data),
         } });
         let url = format!(
             "{}/v1/projects/{}/messages:send",
@@ -534,25 +586,63 @@ zVwmY+zvp0zIX68RsO90kuxb
         );
         assert_eq!(stub.token_requests.load(Ordering::SeqCst), 1);
         let messages = stub.messages.lock().unwrap().clone();
-        // An iPhone gets the same data as a background push.
-        let apns = json!({
-            "headers": { "apns-push-type": "background", "apns-priority": "5" },
-            "payload": { "aps": { "content-available": 1 } },
-        });
+        // An iPhone gets the same data with an alert its notification
+        // service extension rewrites.
         assert_eq!(
             messages[0],
             json!({ "message": {
                 "token": "good",
                 "data": { "callId": "42", "granite": "1", "type": "missed_call" },
                 "android": { "priority": "HIGH", "ttl": "60s" },
-                "apns": apns,
+                "apns": {
+                    "headers": { "apns-push-type": "alert", "apns-priority": "10" },
+                    "payload": { "aps": {
+                        "alert": { "title": "Missed call" },
+                        "sound": "default",
+                        "mutable-content": 1,
+                    } },
+                },
             } })
         );
         assert_eq!(
             messages[1]["message"]["android"],
             json!({ "priority": "NORMAL", "ttl": "60s" })
         );
-        assert_eq!(messages[1]["message"]["apns"], apns);
+        assert_eq!(
+            messages[1]["message"]["apns"]["payload"]["aps"]["alert"],
+            json!({ "title": "New voicemail" })
+        );
+    }
+
+    #[test]
+    fn an_iphone_gets_generic_words_or_a_background_push() {
+        let alert = |data: &BTreeMap<String, String>| apns(data)["payload"]["aps"]["alert"].clone();
+        let with = |kind: &str, extra: &[(&str, &str)]| {
+            let mut data = data(kind, "1");
+            data.extend(
+                extra
+                    .iter()
+                    .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
+            );
+            data
+        };
+        assert_eq!(alert(&with("text", &[])), json!({ "title": "New text" }));
+        assert_eq!(
+            alert(&with("lead", &[("kind", "assigned")])),
+            json!({ "title": "Lead assigned to you" })
+        );
+        assert_eq!(
+            alert(&with("maintenance", &[("count", "3")])),
+            json!({ "title": "Maintenance due today", "body": "3 checks are due." })
+        );
+        assert_eq!(
+            alert(&with("e911_alert", &[]))["body"],
+            "Someone in your company dialed 911. Open Granite Phone for details."
+        );
+        // Revoked (and a type this server doesn't word) stays a background push.
+        let revoked = apns(&with("revoked", &[]));
+        assert_eq!(revoked["headers"]["apns-push-type"], "background");
+        assert_eq!(revoked["payload"]["aps"], json!({ "content-available": 1 }));
     }
 
     #[tokio::test]
