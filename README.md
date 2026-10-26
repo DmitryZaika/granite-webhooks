@@ -58,9 +58,26 @@ basedirs = ["/Users/you/granite-webhooks", "/Users/you/granite-webhooks-ci"]
 
 `sccache --show-stats` shows the hits. It is set per machine, not in
 `.cargo/config.toml`, so CI and machines without sccache are unaffected.
-Workspace crates (incremental), proc macros and build scripts are not cached:
-a new worktree's first `cargo build -p api` measured 73 s instead of 80 s,
-since compiling `api` itself is most of it.
+Workspace crates (incremental), proc macros and build scripts are not cached.
+
+### Windows
+
+The same commands work. What makes the builds slower there, and helps:
+
+- Linking: MSVC's `link.exe` is slow on big test binaries. Rust ships
+  `rust-lld`; to use it, add to `%USERPROFILE%\.cargo\config.toml`
+  (`aarch64-pc-windows-msvc` on an ARM machine):
+
+  ```toml
+  [target.x86_64-pc-windows-msvc]
+  linker = "rust-lld.exe"
+  ```
+
+- Microsoft Defender scans every file cargo writes: exclude the checkout's
+  `target\` folder (Windows Security, Virus & threat protection, Exclusions).
+- `make test`/`cargo test` need the local MySQL (see `make api-db-up`):
+  `common`'s `query!` macros check their SQL against it at compile time, and
+  the tests make their databases on it.
 
 ## Functions
 
