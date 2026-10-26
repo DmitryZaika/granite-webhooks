@@ -3,13 +3,15 @@ name: Deploy Lambda
 # Builds one app's Rust binary from the branch picked in "Use workflow from"
 # and uploads it as the code of that app's Lambda(s). Only the code changes:
 # environment variables and other configuration set on the Lambda are kept.
+# Prod gets a release build; dev, which is only tried out, a debug build, done
+# in a fraction of the time (see Build).
 # With "Deploy" unchecked it only builds: the zip is kept as the run's
 # artifact and AWS is never called.
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: Environment
+        description: Environment (dev is a debug build, prod a release build)
         type: choice
         required: true
         default: dev
@@ -52,7 +54,7 @@ env:
 
 jobs:
   deploy:
-    name: ${{ inputs.project }} → ${{ inputs.deploy && inputs.environment || 'build only' }} (${{ github.ref_name }})
+    name: ${{ inputs.project }} → ${{ inputs.deploy && inputs.environment || format('{0} build only', inputs.environment) }} (${{ github.ref_name }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -95,9 +97,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # One cache per build profile, prod's under its old name. rust-cache only
+      # saves when its key missed, so with one key for both, the profile that
+      # did not save it would build every dependency from scratch on each run.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: lambda-${{ inputs.project }}
+          shared-key: lambda-${{ inputs.project }}${{ inputs.environment == 'dev' && '-dev' || '' }}
           key: cargo-lambda-${{ env.CARGO_LAMBDA_VERSION }}-zig-${{ env.ZIGLANG_VERSION }}
 
       - uses: astral-sh/setup-uv@v6
@@ -121,14 +126,24 @@ jobs:
               || { echo "::error::Migration $f failed"; exit 1; }
           done
 
+      # Dev builds without --release. Its binary is stripped and has no debug
+      # info, or it would not fit in a Lambda: as is, the api's is 284 MB and
+      # zips to 58 MB, over the 250 MB unzipped and the 50 MB zip that
+      # update-function-code takes (stripped: 130 MB, 38 MB). The two variables
+      # only change the dev profile, so the release build is untouched.
       - name: Build
-        run: cargo lambda build --release --x86-64 --output-format zip -p "$APP" --bin "$APP"
+        env:
+          CARGO_PROFILE_DEV_DEBUG: false
+          CARGO_PROFILE_DEV_STRIP: symbols
+        run: >-
+          cargo lambda build ${{ inputs.environment == 'prod' && '--release' || '' }}
+          --x86-64 --output-format zip -p "$APP" --bin "$APP"
 
       - name: Keep the build
         if: ${{ !inputs.deploy }}
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.project }}-${{ env.GIT_SHA }}
+          name: ${{ inputs.project }}-${{ inputs.environment }}-${{ env.GIT_SHA }}
           path: target/lambda/${{ inputs.project }}/bootstrap.zip
           retention-days: 7
 
