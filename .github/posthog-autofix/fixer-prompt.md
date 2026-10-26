@@ -15,7 +15,7 @@ Your working directory holds two git repositories, side by side, both checked ou
 
 - `granite-webhooks/`: a Rust workspace with the backend.
   - `api/`: the JSON API the browser app calls. It is the `granite-api` Lambda, with routes in `api/crates/<crate>/src/routes/<domain>/` (and `api/src/routes/` for the jobs).
-  - `webhooks/`: inbound webhooks (CloudTalk, SES, WordPress, Facebook, Documenso) and the Telegram bot. Its routes are in `webhooks/src/axum_helpers/axum_app.rs`.
+  - `webhooks/`: inbound webhooks (CloudTalk, SES, WordPress, Facebook, Documenso) and the Telegram bot. It is the crate `webhooks` (`webhooks/src/axum_helpers/axum_app.rs` merges every crate's routes) plus the crates in `webhooks/crates/`: `webhooks-core` (queries, schemas, auth), `webhooks-email`, `webhooks-phone`, `webhooks-leads`; each crate's routes are in its `lib.rs`.
   - `common/`: shared code. Its queries are checked at compile time.
   - `time-triggered/`: the scheduler Lambda.
   - `migrations/`: the shared MySQL schema. These are forward-only SQL files.
@@ -133,7 +133,7 @@ Test discipline:
   - unit tests sit in `#[cfg(test)] mod tests` beside the code;
   - the `api` Lambda is the crate `api` plus the crates in `api/crates/` (`api-crm`, `api-followups`, ...): code paths stay `crate::routes::<domain>` whichever crate holds them;
   - `api` integration tests live in `api/tests/<area>/<domain>.rs`, each a module of its area's test binary (list a new file in `api/tests/<area>/main.rs`), using `#[test_db::test]` or `#[test_db::test(seed)]` (fresh database, seed data from `api/seed/local_seed.sql`) and the helpers in `api/tests/common/mod.rs`;
-  - `webhooks` test helpers live in `webhooks/src/tests/`.
+  - the `webhooks` crates: code paths stay `crate::<module>` whichever crate holds them; test helpers live in `webhooks/crates/core/src/tests/` (`crate::tests::...` in every crate), and `crate::tests::utils::new_test_app` serves the crate's own routes.
 
   TypeScript:
   - tests sit beside the code as `*.test.ts(x)`, stub `fetch` with `vi.stubGlobal`, and opt into the DOM with `// @vitest-environment jsdom`.

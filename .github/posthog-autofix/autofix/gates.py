@@ -179,7 +179,9 @@ def workspace_crates(git: Git, rev: str) -> dict[str, str]:
 def touched_crates(crates: dict[str, str], touched: Iterable[str]) -> list[str]:
     """The packages owning the touched files (the deepest member wins). The
     `api` package's integration tests cover the crates in `api/crates/`, so a
-    touched `api-*` package brings `api` along."""
+    touched `api-*` package brings `api` along. The webhooks crates' tests
+    exercise the code of the crates below (`webhooks-core`'s queries in
+    every crate's tests), so a touched webhooks package brings them all."""
     found: set[str] = set()
     members = sorted(crates, key=len, reverse=True)
     for path in touched:
@@ -189,6 +191,10 @@ def touched_crates(crates: dict[str, str], touched: Iterable[str]) -> list[str]:
                 break
     if any(name.startswith("api-") for name in found) and "api" in crates.values():
         found.add("api")
+    if any(name == "webhooks" or name.startswith("webhooks-") for name in found):
+        found.update(
+            name for name in crates.values() if name == "webhooks" or name.startswith("webhooks-")
+        )
     return sorted(found)
 
 

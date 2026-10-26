@@ -69,11 +69,6 @@ utoipa-axum = { version = "0.3.0", optional = true }
 tower-layer = "0.3"
 tower-service = "0.3"
 serde_html_form = "0.4.1"
-# S3 and the SSM parameter are signed requests over reqwest (`sigv4`), not
-# SDK crates. aws-sigv4 is in the graph anyway, through common's SES client.
-aws-sigv4 = "1.5"
-aws-credential-types = "1.3"
-aws-smithy-runtime-api = { version = "1.16", features = ["client"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 # JPEG with 4:2:0 chroma and fitted Huffman tables (`image` writes 4:4:4 with stock tables).
 jpeg-encoder = "0.7"

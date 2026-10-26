@@ -29,6 +29,10 @@ DEFAULT_CRATES = frozenset(
         "api-quotes",
         "api-schedule",
         "webhooks",
+        "webhooks-core",
+        "webhooks-email",
+        "webhooks-leads",
+        "webhooks-phone",
         "common",
         "time-triggered",
     }

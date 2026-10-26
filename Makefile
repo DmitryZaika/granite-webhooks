@@ -168,6 +168,12 @@ api-test: api-db-up
 api-openapi:
 	UPDATE_OPENAPI=1 cargo test -p api --features openapi --test app openapi::generated::spec_file_is_current
 
+# Regenerates webhooks/openapi.json from the lead form route's annotations.
+# Only builds with the `openapi` feature run utoipa; the others serve this file.
+.PHONY: webhooks-openapi
+webhooks-openapi:
+	UPDATE_OPENAPI=1 cargo test -p webhooks-leads --features openapi --lib openapi::openapi_tests::spec_file_is_current
+
 # Serves http://localhost:9100/lambda-url/api/... through the Lambda runtime emulator.
 # A dev build, not --release: an edit rebuilds in seconds, not minutes (the
 # dependencies are optimized in the dev profile too, see Cargo.toml).

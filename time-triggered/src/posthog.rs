@@ -80,7 +80,7 @@ pub async fn report_failure(job: &str, error: &(impl Display + ?Sized)) {
         env_lookup,
     );
     let sent = async {
-        reqwest::Client::builder()
+        common::http::client_builder()
             .timeout(REQUEST_TIMEOUT)
             .build()?
             .post(API_ENDPOINT)

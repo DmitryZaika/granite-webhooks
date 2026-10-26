@@ -114,11 +114,10 @@ async fn quote(
     .bind(snapshot.map(Value::to_string))
     .execute(pool)
     .await
-    .unwrap();
-    sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)")
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    .unwrap()
+    .last_insert_id()
+    .try_into()
+    .unwrap()
 }
 
 async fn request(
@@ -139,11 +138,10 @@ async fn request(
     .bind(document)
     .execute(pool)
     .await
-    .unwrap();
-    sqlx::query_scalar("SELECT CAST(LAST_INSERT_ID() AS SIGNED)")
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    .unwrap()
+    .last_insert_id()
+    .try_into()
+    .unwrap()
 }
 
 fn event(kind: &str, document: &str) -> Value {

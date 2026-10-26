@@ -1,3 +1,11 @@
+//! The webhooks Lambda: every route (`axum_helpers::axum_app`), from the
+//! crates in `crates/`. The code is there:
+//!
+//! - `webhooks-core`: database code, schemas, auth, the Telegram bots,
+//!   `PostHog`, the request logger, the test helpers
+//! - `webhooks-email`: inbound email and the emails employees send
+//! - `webhooks-phone`: `CloudTalk`, `RingCentral`, Telnyx, texts, Google
+//! - `webhooks-leads`: lead forms, the Telegram lead bot, templates
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(
     clippy::option_if_let_else,
@@ -9,21 +17,16 @@
     clippy::future_not_send
 )]
 
-pub mod amazon;
-pub mod amazonses;
 pub mod axum_helpers;
-pub mod cloudtalk;
-pub mod crud;
-pub mod google;
-pub mod libs;
-pub mod middleware;
-pub mod openai;
-pub mod outbound;
-pub mod posthog;
-pub mod ringcentral;
-pub mod schemas;
-pub mod telegram;
-pub mod telnyx;
-pub mod template;
-pub mod tests;
-pub mod webhooks;
+
+/// Serves every route on the Lambda runtime until it stops.
+///
+/// Boxed, so that the runtime's code (generic over the router) compiles with
+/// this crate, while the crates below are still compiling: a future that only
+/// main.rs polls compiles with the binary, whose link-time optimization waits
+/// for every crate.
+pub fn run(
+    pool: sqlx::MySqlPool,
+) -> std::pin::Pin<Box<dyn Future<Output = Result<(), lambda_http::Error>>>> {
+    Box::pin(lambda_http::run(axum_helpers::axum_app::new_main_app(pool)))
+}

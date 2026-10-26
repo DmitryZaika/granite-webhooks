@@ -1,0 +1,40 @@
+[package]
+name = "webhooks-core"
+version = "0.1.0"
+edition = "2024"
+description = "The webhooks Lambda's foundation: database code, schemas, auth extractors, the Telegram bots, PostHog and the test helpers."
+
+[lib]
+# No doc tests; rustdoc would still compile the whole crate looking for them.
+doctest = false
+
+[features]
+# See webhooks-leads' `openapi` feature.
+openapi = ["dep:utoipa"]
+# The test helpers (`tests`) and the code's test stand-ins (placeholder bot
+# tokens), for the tests of the crates above: their dev-dependencies turn it on.
+test-support = []
+
+[dependencies]
+common = { path = "../../../common" }
+axum = "0.8"
+base64 = "0.22"
+bytes = "1.11"
+chrono = { version = "0.4", features = ["serde"] }
+http-body-util = "0.1"
+lambda_http = "1.1"
+# rustls without aws-lc-rs (a C build); `common::http` clients run on ring.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_urlencoded = "0.7"
+sha2 = "0.11"
+sqlx = { version = "0.9", features = ["runtime-tokio", "mysql", "chrono"] }
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+utoipa = { version = "5.5.0", features = ["axum_extras"], optional = true }
+uuid = "1.23"
+
+[dev-dependencies]
+test-db = { path = "../../../test-db" }
+tracing-test = "0.2.6"

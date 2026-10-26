@@ -38,7 +38,7 @@ pub mod qbo;
 pub mod ringcentral_connect;
 pub mod routes;
 pub mod serde_helpers;
-pub mod sigv4;
+pub use common::amazon::sigv4;
 pub mod sms_provider;
 pub mod sql;
 pub mod state;
