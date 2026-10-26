@@ -41642,6 +41642,113 @@
             "session_cookie": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "Create a QuickBooks invoice for a customer",
+        "description": "Creates the editor's invoice in `QuickBooks` for the customer, matching\nor creating the customer's `QuickBooks` customer first. With `quote_id`\nthe quote keeps the invoice's id, and a quote that has one already is\nrefused.",
+        "operationId": "create_customer_qbo_invoice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Customer id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The created invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditableInvoice"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No sales line, a sales line without an item, or QuickBooks refused it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such customer, or no such quote of the customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "QuickBooks is not connected, or the quote has an invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "QuickBooks failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/v1/customers/{id}/qbo-invoices/{invoice_id}": {
@@ -42135,6 +42242,73 @@
           },
           "403": {
             "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "QuickBooks failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/qbo/items": {
+      "get": {
+        "tags": [
+          "quickbooks"
+        ],
+        "summary": "List QuickBooks products and services",
+        "description": "The company's active services and products (up to 1000), by name, for\nthe lines of a new invoice.",
+        "operationId": "list_qbo_items",
+        "responses": {
+          "200": {
+            "description": "Items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QboItems"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "QuickBooks is not connected",
             "content": {
               "application/json": {
                 "schema": {
@@ -72450,6 +72624,27 @@
           }
         }
       },
+      "InvoiceCreate": {
+        "type": "object",
+        "description": "Body of `POST /v1/customers/{id}/qbo-invoices`.",
+        "required": [
+          "invoice"
+        ],
+        "properties": {
+          "invoice": {
+            "$ref": "#/components/schemas/EditableInvoice",
+            "description": "The invoice as the editor left it (`id` and `sync_token` unused)."
+          },
+          "quote_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The quote it is made from, which keeps the new invoice's id."
+          }
+        }
+      },
       "InvoiceEdit": {
         "type": "object",
         "description": "`POST /v1/ai/invoice-edit`.",
@@ -80351,6 +80546,40 @@
           }
         }
       },
+      "QboItem": {
+        "type": "object",
+        "description": "A product or service an invoice line can sell.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`QuickBooks` item id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          }
+        }
+      },
+      "QboItems": {
+        "type": "object",
+        "description": "`GET /v1/qbo/items`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QboItem"
+            },
+            "description": "By name."
+          }
+        }
+      },
       "Question": {
         "type": "object",
         "description": "A question of a questionnaire.",
@@ -81615,6 +81844,13 @@
               "null"
             ],
             "description": "The sales rep's phone."
+          },
+          "qbo_invoice_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `QuickBooks` invoice made from it."
           }
         }
       },
@@ -89510,6 +89746,7 @@
               "helpMessage": "",
               "messageFlow": "",
               "numberPool": false,
+              "optinFormLink": "",
               "optinKeywords": "",
               "optinMessage": "",
               "optoutKeywords": "",
