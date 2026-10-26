@@ -882,7 +882,7 @@ pub fn looks_like_how_to(query: &str) -> bool {
     {
         return true;
     }
-    // In a quote, a special order is a color priced by hand (Other color).
+    // In a quote, a special order is a color typed by name (not in the list).
     if re!(r"\bquotes?\b").is_match(&normalized)
         && re!(&format!(
             r"\b(?:{ACTION_VERBS})\s+{DETERMINERS}special orders?\b"
@@ -1212,7 +1212,7 @@ mod tests {
             "{ids:?}"
         );
         let manual = assemble(&ids, &HashMap::new());
-        assert!(manual.contains("#### Other color (a color not in the price list)"));
+        assert!(manual.contains("#### Special order (a color not in the list)"));
     }
 
     #[test]
@@ -1574,7 +1574,7 @@ mod tests {
             );
         }
         assert!(!CONTENTS.contains("(/admin"), "no routes");
-        assert!(CONTENTS.contains("Other color (a color not in the price list)"));
+        assert!(CONTENTS.contains("Special order (a color not in the list)"));
     }
 
     #[test]
