@@ -9,9 +9,15 @@ edition = "2024"
 # No doc tests; rustdoc would still compile the whole crate looking for them.
 doctest = false
 
+[features]
+# Generates the OpenAPI document of the lead form route with utoipa, for
+# `make webhooks-openapi` and its test (`--features openapi`). Builds without
+# it serve the checked-in webhooks/openapi.json.
+openapi = ["dep:utoipa"]
+
 [dependencies]
 common = { path = "../common" }
-utoipa = { version = "5.5.0", features = ["axum_extras"] }
+utoipa = { version = "5.5.0", features = ["axum_extras"], optional = true }
 axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 lambda_http = "1.1"

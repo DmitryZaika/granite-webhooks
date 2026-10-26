@@ -9,7 +9,6 @@ use sqlx::mysql::MySqlQueryResult;
 use std::fmt;
 use std::fmt::Display;
 use std::fmt::Write as _;
-use utoipa::ToSchema;
 
 fn clean_phone<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
@@ -251,15 +250,19 @@ impl fmt::Display for FaceBookContactForm {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
-#[schema(
-    example = json!({
-        "name": "Jane Doe",
-        "email": "jane@example.com",
-        "phone": "+13175551212",
-        "referral_source": "website",
-        "form_name": "cabinet_quote"
-    })
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(
+    feature = "openapi",
+    schema(
+        example = json!({
+            "name": "Jane Doe",
+            "email": "jane@example.com",
+            "phone": "+13175551212",
+            "referral_source": "website",
+            "form_name": "cabinet_quote"
+        })
+    )
 )]
 pub struct NewLeadForm {
     pub name: String,
@@ -314,13 +317,13 @@ pub struct NewLeadForm {
     /// Optional marketing channel for statistics. Prefer `website` or `facebook`
     /// when provided. Put the specific form identifier in `form_name` instead.
     #[serde(default)]
-    #[schema(example = "website")]
+    #[cfg_attr(feature = "openapi", schema(example = "website"))]
     pub referral_source: Option<String>,
 
     /// Optional specific form that produced the lead. Prefer snake_case.
     /// Examples: `cabinet_quote`, `facebook_form`, `quick_quote`.
     #[serde(default)]
-    #[schema(example = "cabinet_quote")]
+    #[cfg_attr(feature = "openapi", schema(example = "cabinet_quote"))]
     pub form_name: Option<String>,
 
     /// `referral_source` as sent, set only when it was rewritten before saving.

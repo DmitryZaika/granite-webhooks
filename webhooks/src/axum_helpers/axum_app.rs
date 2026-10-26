@@ -14,30 +14,27 @@ use crate::ringcentral::receive::{
     sms_received as ringcentral_sms_received, sms_sent as ringcentral_sms_sent, sync_ringcentral,
     unsync_ringcentral,
 };
-use crate::schemas::add_customer::NewLeadForm;
 use crate::telegram::cleanup::delete_lead_telegram_messages;
 use crate::telegram::crm_notify::crm_notify_handler;
 use crate::telegram::notifications_notify::notifications_notify_handler;
 use crate::telegram::receive::webhook_handler;
 use crate::telnyx::receive::event_progress;
 use crate::template::receive::{get_complete_template, get_template_variables};
-use crate::webhooks::receive::{
-    __path_new_lead_form, facebook_contact_form, new_lead_form, wordpress_contact_form,
-};
+use crate::webhooks::receive::{facebook_contact_form, new_lead_form, wordpress_contact_form};
 use axum::{
-    Json, Router,
+    Router,
     response::IntoResponse,
     routing::{delete, get, post},
 };
 use sqlx::MySqlPool;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
-use utoipa::OpenApi;
 
 async fn health_check() -> impl IntoResponse {
     OK_RESPONSE
 }
 
-#[derive(OpenApi)]
+#[cfg(feature = "openapi")]
+#[derive(utoipa::OpenApi)]
 #[openapi(
     info(
         title = "Granite Manager Webhooks API",
@@ -47,13 +44,64 @@ For `/v1/webhooks/new-lead-form/{company_id}`:\n\
 - `form_name` is optional; when set, use the specific form id (e.g. `cabinet_quote`, \
 `facebook_form`, `facebook_cabinet_quote_form`, `quick_quote`)."
     ),
-    paths(new_lead_form),
-    components(schemas(NewLeadForm))
+    paths(crate::webhooks::receive::new_lead_form),
+    components(schemas(crate::schemas::add_customer::NewLeadForm))
 )]
 struct ApiDoc;
 
+/// The document generated from the route annotations.
+#[cfg(feature = "openapi")]
 async fn openapi_spec() -> impl IntoResponse {
-    Json(ApiDoc::openapi())
+    axum::Json(<ApiDoc as utoipa::OpenApi>::openapi())
+}
+
+/// The checked-in `webhooks/openapi.json` (utoipa is a large share of this
+/// crate's build): `make webhooks-openapi` writes it.
+#[cfg(not(feature = "openapi"))]
+async fn openapi_spec() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        include_str!("../../openapi.json"),
+    )
+}
+
+#[cfg(all(test, not(feature = "openapi")))]
+mod served_spec_tests {
+    use axum::response::IntoResponse;
+    use http_body_util::BodyExt;
+
+    #[tokio::test]
+    async fn the_checked_in_spec_is_served_as_json() {
+        let response = super::openapi_spec().await.into_response();
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "application/json"
+        );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let spec: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(spec["paths"]["/v1/webhooks/new-lead-form/{company_id}"]["post"].is_object());
+    }
+}
+
+#[cfg(all(test, feature = "openapi"))]
+mod openapi_tests {
+    use super::ApiDoc;
+    use utoipa::OpenApi;
+
+    #[test]
+    fn spec_file_is_current() {
+        let generated = ApiDoc::openapi().to_pretty_json().expect("spec serializes") + "\n";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("openapi.json");
+        if std::env::var_os("UPDATE_OPENAPI").is_some() {
+            std::fs::write(&path, &generated).expect("write openapi.json");
+            return;
+        }
+        let checked_in = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            checked_in == generated,
+            "webhooks/openapi.json is stale; run `make webhooks-openapi` and commit the result"
+        );
+    }
 }
 
 pub fn new_main_app(pool: MySqlPool) -> Router {
