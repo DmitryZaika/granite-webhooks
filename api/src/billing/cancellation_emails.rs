@@ -1,6 +1,8 @@
 //! The emails of a cancellation request: the confirmation and the withdrawal
 //! notice to the company's Managers (04-legal 6.6, Terms 9 and 17.2), and the
-//! staff notice (email and Telegram). Pure: subjects, escaped HTML and text
+//! staff notice (email and Telegram).
+//!
+//! Pure: subjects, escaped HTML and text
 //! parts. The reason goes to staff only.
 
 use super::reminder_emails::{

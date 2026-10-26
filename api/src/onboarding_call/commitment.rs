@@ -1,6 +1,8 @@
 //! The onboarding commitment's rules (Terms section 11), pure: every
 //! transition takes the commitment, the facts and `now`, and returns the new
-//! commitment plus the timeline events to store. No I/O, no clock.
+//! commitment plus the timeline events to store.
+//!
+//! No I/O, no clock.
 
 use crate::billing::catalog::{SIGNUP_TZ, deadline_on, signup_day};
 use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
@@ -173,7 +175,7 @@ impl EventKind {
 
 /// A timeline entry: `detail` holds the facts behind it (reason, old and
 /// new deadline, call times, invoice id).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
     pub kind: EventKind,
     pub from: Option<Status>,
@@ -188,7 +190,7 @@ pub struct Event {
 /// The new commitment and what to append to its timeline. Save it when it
 /// differs from the old one (a field like `availability_checked_on` can
 /// change without an event).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
     pub commitment: Commitment,
     pub events: Vec<Event>,
@@ -349,7 +351,7 @@ pub enum Due {
     Invoice,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Daily {
     pub outcome: Outcome,
     pub due: Vec<Due>,
@@ -581,7 +583,9 @@ fn store_booking(out: &mut Outcome, booking: Booking, source: &str) {
 
 /// The customer booked (or rebooked) through the widget: `POST
 /// /v1/onboarding-call/bookings`, after the api checked our tag on the
-/// invitee. Replaces a stored booking (`Rescheduled`). A call starting at or
+/// invitee.
+///
+/// Replaces a stored booking (`Rescheduled`). A call starting at or
 /// before the missed call's start is refused.
 pub fn record_booking(
     commitment: &Commitment,
@@ -996,7 +1000,9 @@ fn run_daily(out: &mut Outcome, facts: &DailyFacts, now: NaiveDateTime) -> Vec<D
 
 /// The daily run for one company: booking refresh, void, auto-complete,
 /// suspension and its withdrawal, tolling, the deadline (notice or skip),
-/// the charge date, reminders. A notice falling due starts its cycle
+/// the charge date, reminders.
+///
+/// A notice falling due starts its cycle
 /// (`notice_cycle_at`); save the outcome before sending it.
 pub fn daily(commitment: &Commitment, facts: &DailyFacts, now: NaiveDateTime) -> Daily {
     let mut outcome = unchanged(commitment);
@@ -1096,8 +1102,9 @@ pub fn withdrawal(commitment: &Commitment, facts: &ChargeFacts) -> Option<Withdr
     }
 }
 
-/// The fee invoice was deleted or voided in Stripe before any charge:
-/// skipped for good (charging off, no consent), void (the subscription
+/// The fee invoice was deleted or voided in Stripe before any charge.
+///
+/// Skipped for good (charging off, no consent), void (the subscription
 /// ended) or suspended (the notice and its charge date kept for a
 /// withdrawal of the request). The invoice id is cleared, so its Stripe
 /// events change nothing. Only from `fee_invoiced`.

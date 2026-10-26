@@ -477,7 +477,10 @@ async fn earlier_days(
     let today = now.date();
     let first = commitment
         .availability_checked_on
-        .map_or(commitment.created_at.date(), |day| day + Duration::days(1))
+        .map_or_else(
+            || commitment.created_at.date(),
+            |day| day + Duration::days(1),
+        )
         .max(today - Duration::days(MAX_EARLIER_DAYS));
     let Some(last) = today.pred_opt().filter(|last| *last >= first) else {
         return Ok(Vec::new());
@@ -826,13 +829,10 @@ pub async fn run_at(state: &AppState, now: NaiveDateTime) -> OnboardingRun {
         }
     };
     let cutoff = now - Duration::hours(COMPANY_EVERY_HOURS);
-    let ids = match store::due_companies(pool, cutoff, COMPANIES_PER_RUN).await {
-        Ok(ids) => ids,
-        Err(_) => {
-            run.errors += 1;
-            report("Onboarding companies not listed", None, "database").await;
-            return run;
-        }
+    let Ok(ids) = store::due_companies(pool, cutoff, COMPANIES_PER_RUN).await else {
+        run.errors += 1;
+        report("Onboarding companies not listed", None, "database").await;
+        return run;
     };
     for company_id in ids {
         if Instant::now() >= deadline {

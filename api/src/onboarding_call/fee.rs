@@ -148,7 +148,9 @@ fn has_lines(invoice: &Value) -> bool {
         .is_some_and(|lines| !lines.is_empty())
 }
 
-/// Why the fee may not be charged now, or `None` when it may: the status is
+/// Why the fee may not be charged now, or `None` when it may.
+///
+/// The status is
 /// `notice_sent` or `fee_invoiced`, charging is on, the `onboarding_fee`
 /// consent is on file, the notice went out and its charge date has come.
 pub fn hold_reason(
@@ -608,10 +610,12 @@ async fn settle_void(
                 events: Vec::new(),
             };
         }
-        match withdrawal(c, &facts).or_else(|| tagged_withdrawal(tag, now)) {
-            Some(reason) => invoice_withdrawn(c, reason, now),
-            None => invoice_event(c, invoice_id, InvoiceEvent::Voided, now),
-        }
+        withdrawal(c, &facts)
+            .or_else(|| tagged_withdrawal(tag, now))
+            .map_or_else(
+                || invoice_event(c, invoice_id, InvoiceEvent::Voided, now),
+                |reason| invoice_withdrawn(c, reason, now),
+            )
     })
     .await?;
     tracing::info!(
@@ -623,7 +627,9 @@ async fn settle_void(
 }
 
 /// Creates (or finds) the fee invoice, records it, then finalizes and pays
-/// it. Also finishes an invoice a crash left behind (`fee_invoiced` with a
+/// it.
+///
+/// Also finishes an invoice a crash left behind (`fee_invoiced` with a
 /// draft, or an open one never attempted), or withdraws it when the fee may
 /// no longer be charged ([`withdrawal`]). [`FeeError::Held`] without asking
 /// Stripe anything when a `notice_sent` fee may not be charged now.
@@ -740,7 +746,9 @@ pub fn is_fee_event(event: &Value) -> bool {
 
 /// `invoice.paid`, `invoice.payment_failed` and `invoice.voided` of the fee
 /// invoice move the commitment (matched by `metadata.company_id` and the
-/// stored invoice id); other invoice events are ignored. The first failure
+/// stored invoice id); other invoice events are ignored.
+///
+/// The first failure
 /// tells staff. Never touches subscription billing.
 pub async fn apply_webhook(state: &AppState, event: &Value) -> Result<(), FeeError> {
     let kind = match event["type"].as_str() {

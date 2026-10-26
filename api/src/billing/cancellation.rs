@@ -207,7 +207,9 @@ fn is_key_reuse(err: &StripeError) -> bool {
 
 /// Requests cancellation for `user_id`'s company: schedules the Stripe
 /// subscription to end, records the request and emails the Managers and
-/// staff. A scheduled request is answered as is, with no Stripe call and no
+/// staff.
+///
+/// A scheduled request is answered as is, with no Stripe call and no
 /// email.
 pub async fn request(
     state: &AppState,
@@ -315,13 +317,15 @@ async fn request_locked(
 /// What a withdrawal did.
 struct Withdrawn {
     request: CancellationRequest,
-    withdrawn_at: NaiveDateTime,
+    at: NaiveDateTime,
     next_charge_at: Option<NaiveDateTime>,
 }
 
 /// Withdraws the company's scheduled request ("Keep my subscription"):
 /// the Stripe subscription renews again, the row is `withdrawn`, and the
-/// Managers and staff are emailed. When the latest request is already
+/// Managers and staff are emailed.
+///
+/// When the latest request is already
 /// withdrawn, nothing is done (no Stripe call, no email).
 pub async fn withdraw(
     state: &AppState,
@@ -418,7 +422,7 @@ async fn withdraw_locked(
     tx.commit().await?;
     Ok(Some(Withdrawn {
         request: existing,
-        withdrawn_at: now,
+        at: now,
         next_charge_at,
     }))
 }
@@ -535,7 +539,9 @@ async fn notify_staff(state: &AppState, notice: &StaffNoticeInput<'_>) {
 }
 
 /// Why a request made at `requested_at` avoids the onboarding fee (Terms
-/// 11.6, as the daily run suspends): once its notice went out, before the
+/// 11.6, as the daily run suspends).
+///
+/// Once its notice went out, before the
 /// fee's charge date; before that any request, before or after the
 /// deadline. `None` when no fee is pending (done, waived, already invoiced
 /// or void) or the charge date has come.
@@ -561,7 +567,9 @@ pub fn onboarding_fee(
 }
 
 /// The onboarding fee once a request made at `requested_at` is withdrawn at
-/// `withdrawn_at` (Terms 11.6, as the daily run resumes): a notice sent
+/// `withdrawn_at` (Terms 11.6, as the daily run resumes).
+///
+/// A notice sent
 /// stands when withdrawn before its charge date, else a new notice comes
 /// first; with no notice the deadline decides. `None` when no fee is
 /// pending or the request was made on or after the charge date.
@@ -674,7 +682,7 @@ async fn notify_withdrawn(state: &AppState, company_id: i32, user_id: i32, withd
         Ok(commitment) => fee_after_withdrawal(
             commitment.as_ref(),
             withdrawn.request.requested_at,
-            withdrawn.withdrawn_at,
+            withdrawn.at,
         ),
         Err(()) => Some(WithdrawalFee::Unknown),
     };
@@ -747,7 +755,9 @@ pub fn made_in_free_period(
 
 /// Resends, as of `now` (UTC), the confirmations of scheduled requests that
 /// reached no Manager, made at least 10 minutes ago, up to
-/// [`CONFIRMATIONS_PER_TICK`]; no new one is started after `deadline`. Each is
+/// [`CONFIRMATIONS_PER_TICK`]; no new one is started after `deadline`.
+///
+/// Each is
 /// sent under the company lock and recorded (`confirmation_sent_at`) only
 /// once a Manager received it. Answers how many were resent. Errors are
 /// logged with the company id only.

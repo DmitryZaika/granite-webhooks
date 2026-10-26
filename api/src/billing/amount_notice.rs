@@ -1,4 +1,6 @@
-//! The amount-change notice: when a seat or add-on change moves a self-serve
+//! The amount-change notice.
+//!
+//! When a seat or add-on change moves a self-serve
 //! company's monthly total, its Managers get an email with the old and new
 //! totals and the charge they first apply to, at most one a day (Terms 3.2,
 //! 5 and the ACH authorization promise it before the changed charge).

@@ -528,7 +528,9 @@ pub struct SignupCustomer<'a> {
     pub postal_code: &'a str,
 }
 
-/// What a self-serve subscription comes from: its idempotency key
+/// What a self-serve subscription comes from.
+///
+/// Its idempotency key
 /// (`signup:<id>:subscription`, `plan-invite:<id>:subscription`) and its
 /// origin metadata (`metadata[signup_id]`, `metadata[plan_invite_id]`).
 #[derive(Debug, Clone, Copy)]

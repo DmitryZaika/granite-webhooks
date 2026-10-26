@@ -292,7 +292,9 @@ fn refused(message: &str) -> AddonError {
 
 /// Estimate for adding (or the credit for removing) an add-on of
 /// `monthly_cents` at `now`: linear by the seconds left in the period,
-/// rounded to the cent. 0 while trialing (Stripe prorates the free period
+/// rounded to the cent.
+///
+/// 0 while trialing (Stripe prorates the free period
 /// to $0), and when the period is unknown or over.
 pub fn prorated_cents(
     monthly_cents: i64,
@@ -669,11 +671,14 @@ fn live_unit_cents(live: Option<&SubscriptionSnapshot>, lookup_key: &str) -> Opt
     live.and_then(|live| item_with(live, lookup_key)?.unit_amount_cents)
 }
 
-/// The account page of `company_id`. Stripe failures fall back to the
+/// The account page of `company_id`.
+///
+/// Stripe failures fall back to the
 /// stored rows; only database errors fail. Each Stripe read may take
 /// [`PAGE_STRIPE_TIMEOUT`]. The subscription, prices and invoices are read
 /// together, then the invoice preview and payment method, unless Stripe
 /// could not be reached for the subscription.
+#[allow(clippy::too_many_lines)]
 pub async fn account_view(state: &AppState, company_id: i32) -> sqlx::Result<AccountSubscription> {
     let pool = &state.pool;
     let company = company(pool, company_id).await?;

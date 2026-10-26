@@ -465,6 +465,7 @@ pub async fn accept(
 /// with its consent records. False: another request moved it first (or it
 /// expired meanwhile). On failure the invite stays open (a Stripe customer
 /// made on the way is kept on it for the retry).
+#[allow(clippy::too_many_lines)]
 async fn begin(
     state: &AppState,
     invite: &Invite,

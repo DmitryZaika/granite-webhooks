@@ -1,5 +1,6 @@
 //! The onboarding emails to a company's Managers: the reminders on days 7,
 //! 21 and 27 and the fee notice (04-legal.md sections 6.5 and Terms 11).
+//!
 //! Subjects, HTML (escaped) and plain-text parts, in the billing emails'
 //! look. Each email has one link. Every date is the buyer's calendar day
 //! and a call's time carries its zone (`SIGNUP_TZ`).

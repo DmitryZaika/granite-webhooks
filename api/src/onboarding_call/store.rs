@@ -258,7 +258,7 @@ pub async fn save(
         tx.rollback().await?;
         return Err(SaveError::Conflict);
     }
-    insert_events(&mut *tx, c.company_id, &outcome.events, now).await?;
+    insert_events(&mut tx, c.company_id, &outcome.events, now).await?;
     tx.commit().await?;
     Ok(version + 1)
 }
@@ -418,7 +418,9 @@ fn is_missing_table(err: &sqlx::Error) -> bool {
 
 /// `requested_at` of the company's latest cancellation request that is not
 /// withdrawn (scheduled, or `completed` once the subscription ended, so a
-/// completed request never resumes the countdown); `None` without one, or
+/// completed request never resumes the countdown).
+///
+/// `None` without one, or
 /// before `billing_cancellation_requests` exists.
 pub async fn cancellation_requested_at(
     pool: &MySqlPool,
@@ -550,7 +552,9 @@ fn is_duplicate(err: &sqlx::Error) -> bool {
 
 /// The send claim of one onboarding email to one user: the row is inserted
 /// as `sending` before the email goes out (or a refused one with attempts
-/// left is taken again). `None`: already sent, being sent, or not due again.
+/// left is taken again).
+///
+/// `None`: already sent, being sent, or not due again.
 pub async fn claim_email(
     pool: &MySqlPool,
     company_id: i32,

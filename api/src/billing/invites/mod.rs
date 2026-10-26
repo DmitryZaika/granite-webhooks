@@ -435,13 +435,12 @@ fn lock_failure(err: LockError) -> ApiError {
 /// say or they no longer match what the consent texts state.
 pub async fn load_catalog(stripe: &super::stripe::Stripe) -> Option<Catalog> {
     match Catalog::load(stripe).await {
-        Ok(catalog) => match crate::signup::consent::catalog_mismatch(&catalog) {
-            Some(mismatch) => {
+        Ok(catalog) => {
+            crate::signup::consent::catalog_mismatch(&catalog).map_or(Some(catalog), |mismatch| {
                 tracing::error!(%mismatch, "plan invite prices differ from the consent texts");
                 None
-            }
-            None => Some(catalog),
-        },
+            })
+        }
         Err(err) => {
             tracing::warn!(error = %err.reason(), "plan invite catalog unavailable");
             None
@@ -942,22 +941,21 @@ fn new_invite(
     // The end of the day the invite is stated to end on.
     let requested_expiry = invite_expires_at(facts.now, request.expires_in_days);
     let (expires_at, first_charge_on, first_charge_at, legacy_subscription_id) =
-        match facts.forcing_legacy() {
+        if let Some(legacy) = facts.forcing_legacy() {
             // The link never outlives the last day it can be accepted on.
-            Some(legacy) => (
+            (
                 requested_expiry.min(latest_legacy_expiry(legacy.current_period_end)),
                 local_day(legacy.current_period_end),
                 legacy.current_period_end,
                 Some(legacy.id.clone()),
-            ),
-            None => {
-                let day = check_first_charge(
-                    request.first_charge_on.as_deref(),
-                    signup_day(facts.now.and_utc()),
-                    expiry_day(facts.now, request.expires_in_days),
-                )?;
-                (requested_expiry, day, first_charge_instant(day), None)
-            }
+            )
+        } else {
+            let day = check_first_charge(
+                request.first_charge_on.as_deref(),
+                signup_day(facts.now.and_utc()),
+                expiry_day(facts.now, request.expires_in_days),
+            )?;
+            (requested_expiry, day, first_charge_instant(day), None)
         };
     Ok(Invite {
         id: uuid::Uuid::new_v4().to_string(),

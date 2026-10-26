@@ -1051,7 +1051,8 @@ async fn accepting_moves_the_company_onto_the_plan_and_only_then(pool: MySqlPool
     assert_eq!(addons, [("quotes".to_string(), "subscription".to_string())]);
 
     // The consents: terms (3 documents), auto_renewal, per_user_pricing.
-    let records: Vec<(String, String, Option<i32>, Option<i32>, String)> = sqlx::query_as(
+    type ConsentRow = (String, String, Option<i32>, Option<i32>, String);
+    let records: Vec<ConsentRow> = sqlx::query_as(
         "SELECT kind, CAST(source AS CHAR), company_id, user_id, CAST(amounts_and_dates AS CHAR)
            FROM consent_records WHERE plan_invite_id = ? ORDER BY id",
     )

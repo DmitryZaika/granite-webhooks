@@ -380,11 +380,11 @@ pub async fn create_onboarding_call_booking(
         return Err(ApiError::NotFound);
     }
     let calendly = &state.onboarding_call.calendly;
-    let Some(path) = calendly.invitee_path(&input.invitee_uri) else {
+    if calendly.invitee_path(&input.invitee_uri).is_none() {
         return Err(ApiError::BadRequest("Not a Calendly booking.".into()));
-    };
+    }
     let invitee = calendly
-        .invitee(&path)
+        .invitee(&input.invitee_uri)
         .await
         .map_err(|err| calendly_failure(&err))?;
     if !invitee.carries_tag(company_id) {
