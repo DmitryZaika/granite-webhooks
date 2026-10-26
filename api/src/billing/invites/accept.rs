@@ -11,8 +11,8 @@
 
 use super::emails::{self, Summary};
 use super::{
-    Invite, InviteStatus, MIN_DAYS_BEFORE_FIRST_CHARGE, load, load_catalog, local_day, not_found,
-    owes,
+    Invite, InviteStatus, MIN_DAYS_BEFORE_FIRST_CHARGE, has_ended, legacy_subscription, load,
+    load_catalog, local_day, not_found, owes,
 };
 use crate::auth::session::{SessionUser, UserPositionRow};
 use crate::billing::catalog::{Catalog, PlanChoice, Quote, QuoteLine, signup_day};
@@ -73,6 +73,23 @@ pub fn retry() -> ApiError {
         "acceptance_retry",
         "We could not finish switching your plan. Nothing was charged. Try again in a minute.",
     )
+}
+
+const SUBSCRIPTION_ENDED: &str = "invite_subscription_ended";
+
+/// 409 `invite_subscription_ended`.
+fn subscription_ended() -> ApiError {
+    coded(
+        StatusCode::CONFLICT,
+        SUBSCRIPTION_ENDED,
+        "The subscription for this plan was cancelled in Stripe, so the switch stopped. Ask Granite Manager to withdraw this invite and send a new one.",
+    )
+}
+
+/// The run stopped because the invite's subscription ended in Stripe: the
+/// invite is given up, so it is neither retried nor counted as a failure.
+pub fn is_subscription_ended(err: &ApiError) -> bool {
+    matches!(err, ApiError::Coded(coded) if coded.code == SUBSCRIPTION_ENDED)
 }
 
 fn payment_setup_unavailable() -> ApiError {
@@ -428,6 +445,7 @@ pub async fn accept(
     match run(state, &invite.id).await {
         Ok(RunOutcome::Accepted { .. } | RunOutcome::AlreadyAccepted) => Ok(done),
         Ok(RunOutcome::Busy) => Err(retry()),
+        Err(err) if is_subscription_ended(&err) => Err(err),
         Err(err) => {
             tracing::warn!(
                 company_id = invite.company_id,
@@ -462,6 +480,20 @@ async fn begin(
     let record = MySqlBillingStore(&state.pool)
         .by_company(invite.company_id)
         .await?;
+    // A subscription that started since the invite was sent would be billed
+    // alongside the new plan.
+    if legacy_subscription(state, record.as_ref())
+        .await
+        .is_some_and(|live| {
+            live.self_serve || invite.legacy_subscription_id.as_deref() != Some(live.id.as_str())
+        })
+    {
+        return Err(coded(
+            StatusCode::CONFLICT,
+            "invite_needs_new_date",
+            "The company's billing changed since this invite was sent. Ask Granite Manager for a new invite.",
+        ));
+    }
     if charge.overdue || record.as_ref().is_some_and(owes) {
         return Err(coded(
             StatusCode::CONFLICT,
@@ -743,6 +775,9 @@ async fn run_locked(state: &AppState, invite_id: &str) -> ApiResult<RunOutcome> 
         .map_err(|err| stripe_failure(&err))?;
     let subscription = subscription(state, &invite, customer, payment_method).await?;
     let snapshot = subscription_snapshot(&subscription);
+    if has_ended(&snapshot) {
+        return Err(stop_ended(pool, &invite).await?);
+    }
     if let Some(legacy_id) = invite.legacy_subscription_id.as_deref() {
         replace_legacy(state, &invite, legacy_id, &snapshot.id).await?;
     }
@@ -781,6 +816,28 @@ async fn run_locked(state: &AppState, invite_id: &str) -> ApiResult<RunOutcome> 
         company_id,
         user_id,
     })
+}
+
+/// The invite's subscription ended in Stripe (cancelled by hand): nothing
+/// is switched, and the invite is given up for staff to withdraw.
+async fn stop_ended(pool: &sqlx::MySqlPool, invite: &Invite) -> ApiResult<ApiError> {
+    let now = billing::now();
+    sqlx::query(
+        "UPDATE plan_invites
+            SET gave_up_at = COALESCE(gave_up_at, ?), last_error = ?, updated_at = ?
+          WHERE id = ? AND status = 'accepting'",
+    )
+    .bind(now)
+    .bind(SUBSCRIPTION_ENDED)
+    .bind(now)
+    .bind(&invite.id)
+    .execute(pool)
+    .await?;
+    tracing::warn!(
+        company_id = invite.company_id,
+        "plan invite subscription ended in Stripe; acceptance given up"
+    );
+    Ok(subscription_ended())
 }
 
 /// The invite's subscription: the stored one, or a new one under
@@ -840,7 +897,8 @@ async fn subscription(
 }
 
 /// Stripe forgets idempotency keys after 24 hours: a late resume first looks
-/// for the subscription an earlier run created (`metadata[plan_invite_id]`).
+/// for the subscription an earlier run created (`metadata[plan_invite_id]`)
+/// that has not ended.
 async fn adopt(state: &AppState, invite: &Invite, customer: &str) -> ApiResult<Option<Value>> {
     let late = invite
         .accepting_at
@@ -855,6 +913,7 @@ async fn adopt(state: &AppState, invite: &Invite, customer: &str) -> ApiResult<O
         .map_err(|err| stripe_failure(&err))?;
     Ok(existing.into_iter().find(|subscription| {
         subscription["metadata"]["plan_invite_id"].as_str() == Some(invite.id.as_str())
+            && !is_ended_subscription_status(subscription["status"].as_str().unwrap_or_default())
     }))
 }
 

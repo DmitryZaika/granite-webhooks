@@ -211,10 +211,11 @@ pub async fn resend_plan_invite(
 ///
 /// Its links stop working at once (410 `invite_revoked`). An open invite
 /// (expired ones too), or an acceptance that stopped being retried
-/// (`gave_up`) while Stripe has no subscription for it. 409
-/// `invite_accepting` while a Manager's acceptance is being finished,
-/// `invite_has_subscription` when Stripe already made the subscription of a
-/// given-up acceptance (finish or cancel it in Stripe first),
+/// (`gave_up`) while Stripe has no subscription for it that has not ended
+/// (a cancelled one does not count). 409 `invite_accepting` while a
+/// Manager's acceptance is being finished, `invite_has_subscription` when
+/// Stripe still has an active subscription for a given-up acceptance
+/// (cancel it in Stripe, then withdraw again),
 /// `invite_closed` once accepted or withdrawn. 503 when Stripe cannot be
 /// read (nothing changed).
 #[utoipa::path(

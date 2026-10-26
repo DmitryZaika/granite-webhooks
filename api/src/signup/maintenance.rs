@@ -233,6 +233,10 @@ async fn resume_invites(
         match invite_accept::run(state, &id).await {
             Ok(invite_accept::RunOutcome::Accepted { .. }) => outcome.invites_accepted += 1,
             Ok(invite_accept::RunOutcome::AlreadyAccepted | invite_accept::RunOutcome::Busy) => {}
+            // The run gave the invite up: no retry, not a failure.
+            Err(err) if invite_accept::is_subscription_ended(&err) => {
+                tracing::info!(company_id, "plan invite resume stopped: subscription ended");
+            }
             Err(err) => {
                 outcome.errors += 1;
                 tracing::warn!(company_id, error = %err, "plan invite acceptance resume failed");

@@ -20,8 +20,8 @@ use super::lock::{CompanyLock, LockError};
 use super::store::{BillingStore, MySqlBillingStore};
 use super::stripe::{StripeError, subscription_snapshot};
 use super::{
-    CompanyBilling, MANAGER_POSITION, PaymentStatus, is_ended_subscription_status,
-    is_paying_subscription_status, seats,
+    CompanyBilling, MANAGER_POSITION, PaymentStatus, SubscriptionSnapshot,
+    is_ended_subscription_status, is_paying_subscription_status, seats,
 };
 use crate::entitlements::AddonKey;
 use crate::error::{ApiError, ApiResult};
@@ -403,7 +403,7 @@ const INVITE_ACCEPTING: &str =
     "A Manager is accepting the current invite. Try again in a few minutes.";
 const INVITE_CLOSED: &str = "This invite is no longer open.";
 const PAYMENT_UNAVAILABLE: &str = "Payment collection is not live yet, so a Manager could not accept. Invites can be sent once it is.";
-const INVITE_HAS_SUBSCRIPTION: &str = "Stripe already has a subscription for this invite. Finish or cancel it in Stripe before revoking.";
+const INVITE_HAS_SUBSCRIPTION: &str = "Stripe still has an active subscription for this invite. Cancel it in Stripe, then withdraw the invite.";
 const STRIPE_UNREADABLE: &str =
     "Stripe cannot be read right now. Nothing changed. Try again later.";
 
@@ -514,6 +514,11 @@ pub fn owes(record: &CompanyBilling) -> bool {
 /// accepting it still leaves [`MIN_DAYS_BEFORE_FIRST_CHARGE`] days.
 pub fn latest_legacy_expiry(period_end: NaiveDateTime) -> NaiveDateTime {
     period_end - Duration::days(MIN_DAYS_BEFORE_FIRST_CHARGE)
+}
+
+/// The subscription was deleted or has ended (`canceled`, `incomplete_expired`).
+pub fn has_ended(snapshot: &SubscriptionSnapshot) -> bool {
+    snapshot.deleted || is_ended_subscription_status(&snapshot.status)
 }
 
 /// The subscription `record` names, read from Stripe now (the stored row
@@ -946,8 +951,8 @@ pub async fn resend(state: &AppState, company_id: i32, invite_id: &str) -> ApiRe
     Ok(send_invites(state, &invite, &links, &catalog, &company.name).await)
 }
 
-/// Withdraws an open invite (expired ones too), or an acceptance the
-/// maintenance job gave up on while Stripe has no subscription for it.
+/// Withdraws an open invite (expired ones too), or a given-up acceptance
+/// while Stripe has no subscription for it that has not ended.
 pub async fn revoke(
     state: &AppState,
     company_id: i32,
@@ -985,13 +990,14 @@ async fn revoke_locked(
           WHERE id = ? AND company_id = ?
             AND (status = 'open'
                  OR (status = 'accepting' AND gave_up_at IS NOT NULL
-                     AND stripe_subscription_id IS NULL))",
+                     AND stripe_subscription_id <=> ?))",
     )
     .bind(now)
     .bind(superuser_id)
     .bind(now)
     .bind(&invite.id)
     .bind(company_id)
+    .bind(&invite.stripe_subscription_id)
     .execute(&state.pool)
     .await?;
     if revoked.rows_affected() == 1 {
@@ -1008,8 +1014,20 @@ async fn revoke_locked(
 /// one, or one a run made whose answer was lost (`metadata[plan_invite_id]`,
 /// as acceptance looks for it). 503 when Stripe cannot be read.
 async fn has_subscription(state: &AppState, invite: &Invite) -> ApiResult<bool> {
-    if invite.stripe_subscription_id.is_some() {
-        return Ok(true);
+    let unreadable = |err: &StripeError| {
+        tracing::warn!(
+            company_id = invite.company_id,
+            stripe_code = err.code(),
+            "plan invite subscriptions not read"
+        );
+        ApiError::Unavailable(STRIPE_UNREADABLE.into())
+    };
+    if let Some(id) = invite.stripe_subscription_id.as_deref() {
+        match state.stripe.subscription(id).await {
+            Ok(stored) if !has_ended(&subscription_snapshot(&stored)) => return Ok(true),
+            Ok(_) | Err(StripeError::Missing(_)) => {}
+            Err(err) => return Err(unreadable(&err)),
+        }
     }
     let mut customer = invite.stripe_customer_id.clone();
     if customer.is_none() {
@@ -1025,14 +1043,7 @@ async fn has_subscription(state: &AppState, invite: &Invite) -> ApiResult<bool> 
         .stripe
         .list_subscriptions(&customer)
         .await
-        .map_err(|err| {
-            tracing::warn!(
-                company_id = invite.company_id,
-                stripe_code = err.code(),
-                "plan invite subscriptions not read"
-            );
-            ApiError::Unavailable(STRIPE_UNREADABLE.into())
-        })?;
+        .map_err(|err| unreadable(&err))?;
     Ok(subscriptions.iter().any(|subscription| {
         subscription["metadata"]["plan_invite_id"].as_str() == Some(invite.id.as_str())
             && !is_ended_subscription_status(subscription["status"].as_str().unwrap_or_default())

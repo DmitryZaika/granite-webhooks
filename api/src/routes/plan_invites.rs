@@ -97,8 +97,12 @@ pub struct AcceptanceDone {
 /// invite answers 200 again. 503 `acceptance_retry`: nothing was charged,
 /// call again shortly. 503 `payment_setup_unavailable`: payment methods
 /// cannot be added yet (nothing changed). 409 `invite_needs_new_date`: the
-/// first charge is less than 8 days away (ask for a new invite). 409
-/// `legacy_overdue`: the company has an overdue payment or a balance due.
+/// first charge is less than 8 days away, or the company's billing changed
+/// since the invite was sent (ask for a new invite). 409 `legacy_overdue`:
+/// the company has an overdue payment or a balance due. 409
+/// `invite_subscription_ended`: the invite's subscription was cancelled in
+/// Stripe, so the switch stopped and the company stays on its current plan
+/// (ask Granite Manager to withdraw the invite and send a new one).
 #[utoipa::path(
     post,
     path = "/v1/plan-invites/{token}/acceptance",
@@ -112,7 +116,7 @@ pub struct AcceptanceDone {
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Not a Manager of the invited company (code not_invited)", body = CodedErrorBody),
         (status = 404, description = "Unknown link (code invite_not_found)", body = CodedErrorBody),
-        (status = 409, description = "Texts changed, the first charge is under 8 days away, or the company owes money (codes consents_changed, invite_needs_new_date, legacy_overdue)", body = CodedErrorBody),
+        (status = 409, description = "Texts changed, the first charge is under 8 days away or the company's billing changed, the company owes money, or the invite's subscription was cancelled in Stripe (codes consents_changed, invite_needs_new_date, legacy_overdue, invite_subscription_ended)", body = CodedErrorBody),
         (status = 410, description = "The invite expired or was withdrawn (codes invite_expired, invite_revoked)", body = CodedErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
         (status = 503, description = "Try again shortly, or payment methods are not available yet (codes acceptance_retry, payment_setup_unavailable)", body = CodedErrorBody),

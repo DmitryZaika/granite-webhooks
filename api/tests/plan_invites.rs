@@ -297,6 +297,46 @@ impl Env {
             .unwrap()["items"]["data"][0]["current_period_end"] = json!(period_end);
     }
 
+    /// Cancels a subscription in Stripe by hand.
+    fn cancel_in_stripe(&self, id: &str) {
+        self.stripe
+            .lock()
+            .unwrap()
+            .subscriptions
+            .get_mut(id)
+            .unwrap()["status"] = json!("canceled");
+    }
+
+    /// The Stripe customer `cus_legacy` of company 100.
+    fn legacy_customer(&self) {
+        self.stripe.lock().unwrap().customers.insert(
+            "cus_legacy".into(),
+            json!({ "id": "cus_legacy", "object": "customer", "name": "Acme Stone",
+                    "metadata": { "company_id": "100" },
+                    "invoice_settings": { "default_payment_method": null } }),
+        );
+    }
+
+    /// The subscription the invite stored, if any.
+    async fn stored_subscription(&self, id: &str) -> Option<String> {
+        sqlx::query_scalar("SELECT stripe_subscription_id FROM plan_invites WHERE id = ?")
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .unwrap()
+    }
+
+    /// Company 100's add-on rows.
+    async fn addon_rows(&self) -> Vec<(String, String, Option<NaiveDateTime>)> {
+        sqlx::query_as(
+            "SELECT addon_key, CAST(source AS CHAR), ended_at FROM company_addons
+              WHERE company_id = 100 ORDER BY 1, 2, 3",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .unwrap()
+    }
+
     async fn invite_count(&self) -> i64 {
         sqlx::query_scalar("SELECT COUNT(*) FROM plan_invites WHERE company_id = 100")
             .fetch_one(&self.pool)
@@ -1530,7 +1570,7 @@ async fn a_given_up_acceptance_is_withdrawn_only_while_stripe_has_no_subscriptio
     assert_eq!(code(&refused), "invite_has_subscription");
     assert_eq!(
         refused.json::<Value>()["error"],
-        "Stripe already has a subscription for this invite. Finish or cancel it in Stripe before revoking."
+        "Stripe still has an active subscription for this invite. Cancel it in Stripe, then withdraw the invite."
     );
     assert_eq!(env.invite_row(&id).await.0, "accepting");
     // Left for staff: never cancelled here.
@@ -1542,6 +1582,175 @@ async fn a_given_up_acceptance_is_withdrawn_only_while_stripe_has_no_subscriptio
         .collect();
     assert_eq!(made.len(), 1);
     assert_eq!(made[0]["status"], "trialing");
+}
+
+#[test_db::test(seed)]
+async fn a_given_up_acceptance_whose_stored_subscription_was_cancelled_is_withdrawn(
+    pool: MySqlPool,
+) {
+    let env = Env::new(&pool).await;
+    let created = env.create().await;
+    let id = created["invite"]["id"].as_str().unwrap().to_string();
+    let token = env.token_for("manager@acme.test");
+    // Stripe makes the subscription; the run that stored it stopped later.
+    env.stripe
+        .lock()
+        .unwrap()
+        .fail(Method::POST, "/v1/subscriptions", FailMode::After, 1);
+    env.accept(&token, MANAGER)
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let made = env
+        .stripe
+        .lock()
+        .unwrap()
+        .subscriptions
+        .values()
+        .find(|sub| sub["metadata"]["plan_invite_id"] == id.as_str())
+        .map(|sub| sub["id"].as_str().unwrap().to_string())
+        .unwrap();
+    sqlx::query("UPDATE plan_invites SET stripe_subscription_id = ? WHERE id = ?")
+        .bind(&made)
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    give_up(&pool, &id).await;
+    // Still live in Stripe: refused.
+    let refused = env.revoke(&id).await;
+    refused.assert_status(StatusCode::CONFLICT);
+    assert_eq!(code(&refused), "invite_has_subscription");
+    // Cancelled in Stripe, as the message says: withdrawn.
+    env.cancel_in_stripe(&made);
+    env.revoke(&id).await.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(env.invite_row(&id).await.0, "revoked");
+    assert_eq!(env.plan_source(COMPANY).await, "legacy");
+}
+
+#[test_db::test(seed)]
+async fn a_subscription_cancelled_in_stripe_stops_the_switch_before_anything_changes(
+    pool: MySqlPool,
+) {
+    let env = Env::new(&pool).await;
+    env.legacy_customer();
+    env.bill_legacy("active", Utc::now().timestamp() + 20 * 86_400)
+        .await;
+    let created = env
+        .invite_for(COMPANY, &json!({ "addons": ["quotes"] }))
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let id = created.json::<Value>()["invite"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let token = env.token_for("manager@acme.test");
+    let addons_before = env.addon_rows().await;
+    // The subscription is made and stored, then ending the legacy one fails.
+    env.stripe.lock().unwrap().fail(
+        Method::POST,
+        "/v1/subscriptions/sub_legacy",
+        FailMode::Before,
+        1,
+    );
+    let failed = env.accept(&token, MANAGER).await;
+    failed.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(code(&failed), "acceptance_retry");
+    let made = env.stored_subscription(&id).await.unwrap();
+
+    // Staff cancel the new subscription in Stripe; the Manager checks again.
+    env.cancel_in_stripe(&made);
+    let stopped = env.accept_with(&token, MANAGER, &json!([])).await;
+    stopped.assert_status(StatusCode::CONFLICT);
+    assert_eq!(code(&stopped), "invite_subscription_ended");
+    assert_eq!(
+        stopped.json::<Value>()["error"],
+        "The subscription for this plan was cancelled in Stripe, so the switch stopped. Ask Granite Manager to withdraw this invite and send a new one."
+    );
+
+    // Nothing switched: legacy plan, legacy subscription untouched, same add-ons.
+    assert_eq!(env.plan_source(COMPANY).await, "legacy");
+    assert_eq!(billing_row(&pool).await.0.as_deref(), Some("sub_legacy"));
+    let legacy = env.stripe.lock().unwrap().subscriptions["sub_legacy"].clone();
+    assert_eq!(legacy["status"], "active");
+    assert_ne!(legacy["cancel_at_period_end"], true);
+    assert_eq!(legacy["metadata"]["replaced_by"], Value::Null);
+    assert_eq!(env.addon_rows().await, addons_before);
+
+    // Given up: not resumed by the job, and staff can withdraw it.
+    let (status, _, last_error) = env.invite_row(&id).await;
+    assert_eq!(status, "accepting");
+    assert_eq!(last_error.as_deref(), Some("invite_subscription_ended"));
+    let gave_up: i64 = sqlx::query_scalar(
+        "SELECT CAST(gave_up_at IS NOT NULL AS SIGNED) FROM plan_invites WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(gave_up, 1);
+    assert_eq!(env.plan_move(COMPANY).await["invites"][0]["gave_up"], true);
+    sqlx::query(
+        "UPDATE plan_invites SET updated_at = updated_at - INTERVAL 30 MINUTE WHERE id = ?",
+    )
+    .bind(&id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let job = env
+        .server
+        .post("/v1/jobs/subscription-maintenance")
+        .add_header("authorization", JOB_KEY)
+        .await;
+    job.assert_status_ok();
+    assert_eq!(job.json::<Value>()["invites_resumed"], 0);
+    env.revoke(&id).await.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(env.invite_row(&id).await.0, "revoked");
+    assert_eq!(env.calls("POST", "/v1/subscriptions").len(), 1);
+}
+
+#[test_db::test(seed)]
+async fn a_subscription_started_after_the_invite_was_sent_blocks_its_acceptance(pool: MySqlPool) {
+    let env = Env::new(&pool).await;
+    let billing_changed = "The company's billing changed since this invite was sent. Ask Granite Manager for a new invite.";
+    // Sent while the company had no subscription; one started since.
+    let created = env.create().await;
+    let id = created["invite"]["id"].as_str().unwrap().to_string();
+    let token = env.token_for("manager@acme.test");
+    env.bill_legacy("active", Utc::now().timestamp() + 40 * 86_400)
+        .await;
+    let refused = env.accept(&token, MANAGER).await;
+    refused.assert_status(StatusCode::CONFLICT);
+    assert_eq!(code(&refused), "invite_needs_new_date");
+    assert_eq!(refused.json::<Value>()["error"], billing_changed);
+    assert_eq!(env.invite_row(&id).await.0, "open");
+
+    // Sent for that subscription, which has self-serve prices now.
+    let created = env
+        .invite_for(COMPANY, &json!({ "addons": ["quotes"] }))
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let id = created.json::<Value>()["invite"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let token = env.token_for("manager@acme.test");
+    env.stripe
+        .lock()
+        .unwrap()
+        .subscriptions
+        .get_mut("sub_legacy")
+        .unwrap()["items"]["data"][0]["price"] =
+        fake_stripe::price("price_base", "granite_base_monthly_v1", 30_000);
+    let refused = env.accept(&token, MANAGER).await;
+    refused.assert_status(StatusCode::CONFLICT);
+    assert_eq!(code(&refused), "invite_needs_new_date");
+    assert_eq!(refused.json::<Value>()["error"], billing_changed);
+    assert_eq!(env.invite_row(&id).await.0, "open");
+
+    assert!(env.calls("POST", "/v1/customers").is_empty());
+    assert!(env.calls("POST", "/v1/setup_intents").is_empty());
+    assert!(env.calls("POST", "/v1/subscriptions").is_empty());
+    assert_eq!(env.plan_source(COMPANY).await, "legacy");
 }
 
 #[test_db::test(seed)]
