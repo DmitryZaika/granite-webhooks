@@ -20,7 +20,6 @@ use crate::libs::types::BasicResponse;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use lambda_http::tracing;
-use reqwest::Client;
 use sqlx::MySqlPool;
 
 fn parse_cloudtalk_sms(body: &Bytes, route: &'static str) -> Option<CloudtalkSMS> {
@@ -298,7 +297,7 @@ pub async fn sync_cloudtalk(
     State(pool): State<MySqlPool>,
     Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {
-    let client = Client::new();
+    let client = common::http::client();
     sync_customer_to_cloud_talk(&pool, &client, customer_id).await
 }
 
@@ -309,7 +308,7 @@ pub async fn unsync_cloudtalk(
     State(pool): State<MySqlPool>,
     Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {
-    let client = Client::new();
+    let client = common::http::client();
     crate::cloudtalk::api::delete_customer_from_cloud_talk(&pool, &client, customer_id).await
 }
 

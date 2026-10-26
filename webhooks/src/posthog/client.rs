@@ -31,7 +31,7 @@ pub struct Client {
 /// This function constructs a new client using the options provided.
 pub async fn client() -> Client {
     let options = ClientOptions::default();
-    let client = HttpClient::builder()
+    let client = common::http::client_builder()
         .timeout(Duration::from_secs(options.request_timeout_seconds))
         .build()
         .unwrap(); // Unwrap here is as safe as `HttpClient::new`

@@ -1,17 +1,13 @@
 use crate::axum_helpers::guards::Telegram;
 use crate::libs::types::BasicResponse;
-use chrono::Utc;
-use teloxide::types::InlineKeyboardMarkup;
-use teloxide::types::{Message, Recipient};
+use common::telegram::bot::{
+    Chat, ChatId, InlineKeyboardMarkup, Message, MessageId, ParseMode, RequestError, User, UserId,
+};
 
 use crate::libs::constants::ERR_SEND_TELEGRAM;
 use crate::libs::constants::internal_error;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use teloxide::types::{
-    Chat, ChatId, ChatKind, ChatPrivate, EffectId, MediaKind, MediaText, MessageCommon,
-    MessageKind, User, UserId,
-};
 
 /// An email the code under test tried to send.
 #[derive(Clone, Debug)]
@@ -40,54 +36,8 @@ pub fn take_sent_emails() -> Vec<SentEmail> {
     SENT_EMAILS.with(|sent| std::mem::take(&mut *sent.borrow_mut()))
 }
 
-pub fn telegram_user(id: u64) -> User {
-    User {
-        id: UserId(id),
-        is_bot: false,
-        first_name: "test".into(),
-        last_name: None,
-        username: None,
-        language_code: None,
-        is_premium: false,
-        added_to_attachment_menu: false,
-    }
-}
-
-pub fn generate_message_common(text: &str) -> MessageCommon {
-    MessageCommon {
-        author_signature: Some("Bot".to_string()),
-        paid_star_count: Some(10),
-        effect_id: Some(EffectId::default()),
-        forward_origin: None,
-        reply_to_message: None,
-        external_reply: None,
-        quote: None,
-        reply_to_story: None,
-        sender_boost_count: Some(5),
-        edit_date: Some(Utc::now()),
-        media_kind: MediaKind::Text(MediaText {
-            text: text.to_string(),
-            entities: Vec::new(),
-            link_preview_options: None,
-        }),
-        reply_markup: None,
-        is_automatic_forward: false,
-        has_protected_content: false,
-        is_from_offline: false,
-        business_connection_id: None,
-        reply_to_checklist_task_id: None,
-    }
-}
-
-const fn get_chat(chat_id: i64) -> Chat {
-    Chat {
-        id: ChatId(chat_id),
-        kind: ChatKind::Private(ChatPrivate {
-            username: None,
-            first_name: None,
-            last_name: None,
-        }),
-    }
+pub const fn telegram_user(id: u64) -> User {
+    User { id: UserId(id) }
 }
 
 pub fn generate_message(chat_id: i64, text: &str) -> Message {
@@ -95,21 +45,13 @@ pub fn generate_message(chat_id: i64, text: &str) -> Message {
 }
 
 pub fn generate_message_with_id(chat_id: i64, message_id: i32, text: &str) -> Message {
-    let from_user = telegram_user(1);
     Message {
-        id: teloxide::types::MessageId(message_id),
-        thread_id: None,
-        from: Some(from_user),
-        sender_chat: None,
-        date: Utc::now(),
-        is_topic_message: false,
-        via_bot: None,
-        sender_business_bot: None,
-        kind: MessageKind::Common(generate_message_common(text)),
-        chat: get_chat(chat_id),
-        is_paid_post: false,
-        suggested_post_info: None,
-        direct_messages_topic: None,
+        id: MessageId(message_id),
+        chat: Chat {
+            id: ChatId(chat_id),
+        },
+        from: Some(telegram_user(1)),
+        text: Some(text.to_string()),
     }
 }
 
@@ -154,18 +96,12 @@ impl MockTelegram {
 }
 
 impl Telegram for MockTelegram {
-    async fn send_message<C, T>(&self, chat: C, text: T) -> Result<Message, BasicResponse>
+    async fn send_message<T>(&self, chat: ChatId, text: T) -> Result<Message, BasicResponse>
     where
-        C: Into<Recipient> + Send,
         T: Into<String> + Send,
     {
-        let recipient = chat.into();
         let text = text.into();
-
-        let chat_id = match recipient {
-            Recipient::Id(id) => id.0,
-            Recipient::ChannelUsername(_) => 0,
-        };
+        let chat_id = chat.0;
 
         self.sent
             .lock()
@@ -178,30 +114,27 @@ impl Telegram for MockTelegram {
             Ok(self.dummy_message(chat_id, &text))
         }
     }
-    async fn send_repliable_message<C, T>(
+    async fn send_repliable_message<T>(
         &self,
-        chat: C,
+        chat: ChatId,
         text: T,
         repliable: InlineKeyboardMarkup,
-        _parse_mode: Option<teloxide::types::ParseMode>,
-    ) -> Result<Message, teloxide::RequestError>
+        _parse_mode: Option<ParseMode>,
+    ) -> Result<Message, RequestError>
     where
-        C: Into<Recipient> + Send,
         T: Into<String> + Send,
     {
-        let recipient = chat.into();
         let text = text.into();
-
-        let chat_id = match recipient {
-            Recipient::Id(id) => id.0,
-            Recipient::ChannelUsername(_) => 0,
-        };
+        let chat_id = chat.0;
         self.sent
             .lock()
             .unwrap()
             .push((chat_id, text.clone(), Some(repliable)));
         if self.fail {
-            Err(teloxide::RequestError::Api(teloxide::ApiError::BotBlocked))
+            Err(RequestError::Api {
+                code: 403,
+                description: "Forbidden: bot was blocked by the user".into(),
+            })
         } else {
             Ok(self.dummy_message(chat_id, &text))
         }

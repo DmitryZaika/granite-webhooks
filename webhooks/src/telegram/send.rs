@@ -1,8 +1,9 @@
 use crate::axum_helpers::guards::Telegram;
+use common::telegram::bot::{
+    ChatId, InlineKeyboardButton, InlineKeyboardMarkup, Message, RequestError,
+};
 use std::fmt::Display;
 use std::sync::Arc;
-use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 use tokio::task::JoinSet;
 
 use crate::crud::telegram_messages::insert_telegram_lead_message;
@@ -50,7 +51,7 @@ pub async fn send_lead_manager_message_to_all<T, V>(
     candidates: &[Candidate],
     include_assignment_prompt: bool,
     raw_bot: Arc<V>,
-) -> Result<Vec<Message>, teloxide::RequestError>
+) -> Result<Vec<Message>, RequestError>
 where
     T: Display + Sync + ?Sized,
     V: Telegram + Send + Sync + 'static + Clone,
@@ -89,7 +90,7 @@ pub async fn send_plain_message_to_chat<T>(
     chat_id: i64,
     message: &str,
     bot: &T,
-) -> Result<teloxide::prelude::Message, BasicResponse>
+) -> Result<Message, BasicResponse>
 where
     T: Telegram + Send + Sync + 'static + Clone,
 {
@@ -240,7 +241,7 @@ pub async fn send_lead_managers_dupliacate<V>(
     message: String,
     telegram_ids: Vec<i64>,
     raw_bot: Arc<V>,
-) -> Result<Vec<Message>, teloxide::RequestError>
+) -> Result<Vec<Message>, RequestError>
 where
     V: Telegram + Send + Sync + 'static + Clone,
 {

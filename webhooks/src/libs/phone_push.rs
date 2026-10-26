@@ -96,7 +96,7 @@ pub async fn push_lead(
             Audience::Rep(user_id) => Some(user_id),
         },
     };
-    match push_request(&Client::new(), &api_url, &key, &push)
+    match push_request(&common::http::client(), &api_url, &key, &push)
         .send()
         .await
     {
@@ -129,9 +129,14 @@ mod tests {
             kind: LeadKind::New,
             user_id: None,
         };
-        let request = push_request(&Client::new(), "https://api.test/", "lambda-key", &push)
-            .build()
-            .unwrap();
+        let request = push_request(
+            &common::http::client(),
+            "https://api.test/",
+            "lambda-key",
+            &push,
+        )
+        .build()
+        .unwrap();
         assert_eq!(request.method(), "POST");
         assert_eq!(
             request.url().as_str(),

@@ -2,11 +2,11 @@ use crate::libs::types::BasicResponse;
 use crate::posthog::{PostHogEvent, client};
 use axum::extract::FromRequestParts;
 use axum::http::{StatusCode, request::Parts};
+use common::telegram::bot::{
+    Bot, ChatId, InlineKeyboardMarkup, Message, MessageId, ParseMode, RequestError,
+};
 use lambda_http::tracing;
 use std::env::var;
-use teloxide::prelude::*;
-use teloxide::types::InlineKeyboardMarkup;
-use teloxide::types::{Message, ParseMode, Recipient};
 use uuid::{Uuid, uuid};
 
 use crate::axum_helpers::utils::get_remix_key;
@@ -16,24 +16,22 @@ use crate::libs::constants::{FORBIDDEN_RESPONSE, internal_error};
 pub(crate) const CORRECT_ID: Uuid = uuid!("9ca4dfa8-0eec-46cc-967f-3385624be883");
 
 pub trait Telegram: Send + Sync {
-    fn send_message<C, T>(
+    fn send_message<T>(
         &self,
-        chat: C,
+        chat: ChatId,
         text: T,
     ) -> impl Future<Output = Result<Message, BasicResponse>> + Send
     where
-        C: Into<Recipient> + Send,
         T: Into<String> + Send;
 
-    fn send_repliable_message<C, T>(
+    fn send_repliable_message<T>(
         &self,
-        chat: C,
+        chat: ChatId,
         text: T,
         repliable: InlineKeyboardMarkup,
         parse_mode: Option<ParseMode>,
-    ) -> impl Future<Output = Result<Message, teloxide::RequestError>> + Send
+    ) -> impl Future<Output = Result<Message, RequestError>> + Send
     where
-        C: Into<Recipient> + Send,
         T: Into<String> + Send;
 
     fn edit_message_text<T>(
@@ -54,7 +52,7 @@ pub trait Telegram: Send + Sync {
 
 #[derive(Clone)]
 pub struct TelegramBot {
-    bot: teloxide::Bot,
+    bot: Bot,
 }
 
 impl Default for TelegramBot {
@@ -65,29 +63,29 @@ impl Default for TelegramBot {
     }
 }
 
-/// `teloxide::Bot::from_env()`, except that tests (which never load `.env`)
-/// get a placeholder token instead of panicking.
-fn bot_from_env() -> teloxide::Bot {
+/// `Bot::from_env()`, except that tests (which never load `.env`) get a
+/// placeholder token instead of panicking.
+fn bot_from_env() -> Bot {
     #[cfg(test)]
     if std::env::var("TELOXIDE_TOKEN").is_err() {
-        return teloxide::Bot::new("test-token");
+        return Bot::new("test-token");
     }
-    teloxide::Bot::from_env()
+    Bot::from_env()
 }
 
 impl Telegram for TelegramBot {
-    fn send_message<C, T>(
+    fn send_message<T>(
         &self,
-        chat: C,
+        chat: ChatId,
         text: T,
     ) -> impl Future<Output = Result<Message, BasicResponse>> + Send
     where
-        C: Into<Recipient> + Send,
         T: Into<String> + Send,
     {
         let bot = self.bot.clone();
+        let text = text.into();
         async move {
-            match bot.send_message(chat, text).await {
+            match bot.send_message(chat, &text, None, None).await {
                 Ok(message) => Ok(message),
                 Err(err) => {
                     tracing::error!(?err, ERR_SEND_TELEGRAM);
@@ -97,24 +95,21 @@ impl Telegram for TelegramBot {
         }
     }
 
-    fn send_repliable_message<C, T>(
+    fn send_repliable_message<T>(
         &self,
-        chat: C,
+        chat: ChatId,
         text: T,
         repliable: InlineKeyboardMarkup,
         parse_mode: Option<ParseMode>,
-    ) -> impl Future<Output = Result<Message, teloxide::RequestError>> + Send
+    ) -> impl Future<Output = Result<Message, RequestError>> + Send
     where
-        C: Into<Recipient> + Send,
         T: Into<String> + Send,
     {
         let bot = self.bot.clone();
+        let text = text.into();
         async move {
-            let mut request = bot.send_message(chat, text).reply_markup(repliable);
-            if let Some(mode) = parse_mode {
-                request = request.parse_mode(mode);
-            }
-            request.await
+            bot.send_message(chat, &text, Some(&repliable), parse_mode)
+                .await
         }
     }
 
@@ -128,12 +123,15 @@ impl Telegram for TelegramBot {
         T: Into<String> + Send,
     {
         let bot = self.bot.clone();
-        let message_id = teloxide::types::MessageId(message_id);
-
+        let text = text.into();
         async move {
             match bot
-                .edit_message_text(ChatId(chat_id), message_id, text)
-                .reply_markup(InlineKeyboardMarkup::default())
+                .edit_message_text(
+                    ChatId(chat_id),
+                    MessageId(message_id),
+                    &text,
+                    Some(&InlineKeyboardMarkup::default()),
+                )
                 .await
             {
                 Ok(message) => Ok(message),
@@ -141,7 +139,7 @@ impl Telegram for TelegramBot {
                     tracing::error!(
                         ?err,
                         chat_id = chat_id,
-                        message_id = %message_id,
+                        message_id = message_id,
                         ERR_SEND_TELEGRAM
                     );
                     Err(internal_error(ERR_SEND_TELEGRAM))
@@ -158,10 +156,10 @@ impl Telegram for TelegramBot {
         let bot = self.bot.clone();
         async move {
             match bot
-                .delete_message(ChatId(chat_id), teloxide::types::MessageId(message_id))
+                .delete_message(ChatId(chat_id), MessageId(message_id))
                 .await
             {
-                Ok(_) => Ok(()),
+                Ok(()) => Ok(()),
                 Err(err) => {
                     tracing::error!(
                         ?err,
@@ -178,7 +176,7 @@ impl Telegram for TelegramBot {
 
 #[derive(Clone)]
 pub struct NotificationsTelegramBot {
-    bot: teloxide::Bot,
+    bot: Bot,
 }
 
 impl Default for NotificationsTelegramBot {
@@ -192,24 +190,24 @@ impl Default for NotificationsTelegramBot {
             panic!("TELOXIDE_NOTIFICATIONS_TOKEN must be set: {error}");
         });
         Self {
-            bot: teloxide::Bot::new(token),
+            bot: Bot::new(token),
         }
     }
 }
 
 impl Telegram for NotificationsTelegramBot {
-    fn send_message<C, T>(
+    fn send_message<T>(
         &self,
-        chat: C,
+        chat: ChatId,
         text: T,
     ) -> impl Future<Output = Result<Message, BasicResponse>> + Send
     where
-        C: Into<Recipient> + Send,
         T: Into<String> + Send,
     {
         let bot = self.bot.clone();
+        let text = text.into();
         async move {
-            match bot.send_message(chat, text).await {
+            match bot.send_message(chat, &text, None, None).await {
                 Ok(message) => Ok(message),
                 Err(err) => {
                     tracing::error!(?err, ERR_SEND_TELEGRAM);
@@ -219,24 +217,21 @@ impl Telegram for NotificationsTelegramBot {
         }
     }
 
-    fn send_repliable_message<C, T>(
+    fn send_repliable_message<T>(
         &self,
-        chat: C,
+        chat: ChatId,
         text: T,
         repliable: InlineKeyboardMarkup,
         parse_mode: Option<ParseMode>,
-    ) -> impl Future<Output = Result<Message, teloxide::RequestError>> + Send
+    ) -> impl Future<Output = Result<Message, RequestError>> + Send
     where
-        C: Into<Recipient> + Send,
         T: Into<String> + Send,
     {
         let bot = self.bot.clone();
+        let text = text.into();
         async move {
-            let mut request = bot.send_message(chat, text).reply_markup(repliable);
-            if let Some(mode) = parse_mode {
-                request = request.parse_mode(mode);
-            }
-            request.await
+            bot.send_message(chat, &text, Some(&repliable), parse_mode)
+                .await
         }
     }
 
@@ -250,12 +245,15 @@ impl Telegram for NotificationsTelegramBot {
         T: Into<String> + Send,
     {
         let bot = self.bot.clone();
-        let message_id = teloxide::types::MessageId(message_id);
-
+        let text = text.into();
         async move {
             match bot
-                .edit_message_text(ChatId(chat_id), message_id, text)
-                .reply_markup(InlineKeyboardMarkup::default())
+                .edit_message_text(
+                    ChatId(chat_id),
+                    MessageId(message_id),
+                    &text,
+                    Some(&InlineKeyboardMarkup::default()),
+                )
                 .await
             {
                 Ok(message) => Ok(message),
@@ -263,7 +261,7 @@ impl Telegram for NotificationsTelegramBot {
                     tracing::error!(
                         ?err,
                         chat_id = chat_id,
-                        message_id = %message_id,
+                        message_id = message_id,
                         ERR_SEND_TELEGRAM
                     );
                     Err(internal_error(ERR_SEND_TELEGRAM))
@@ -280,10 +278,10 @@ impl Telegram for NotificationsTelegramBot {
         let bot = self.bot.clone();
         async move {
             match bot
-                .delete_message(ChatId(chat_id), teloxide::types::MessageId(message_id))
+                .delete_message(ChatId(chat_id), MessageId(message_id))
                 .await
             {
-                Ok(_) => Ok(()),
+                Ok(()) => Ok(()),
                 Err(err) => {
                     tracing::error!(
                         ?err,

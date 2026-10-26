@@ -6,10 +6,9 @@ use crate::crud::users::get_user_notifications_tg_info;
 use crate::libs::constants::ERR_SEND_TELEGRAM;
 use crate::libs::constants::internal_error;
 use crate::libs::types::BasicResponse;
+use common::telegram::bot::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 use lambda_http::tracing;
 use sqlx::MySqlPool;
-use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
 pub struct CrmTelegramNotify {
     pub user_id: i32,
@@ -183,8 +182,8 @@ fn open_url_keyboard(label: &str, url: &str) -> Result<InlineKeyboardMarkup, Bas
         internal_error(ERR_SEND_TELEGRAM)
     })?;
     Ok(InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
-        label.to_string(),
-        parsed,
+        label,
+        parsed.to_string(),
     )]]))
 }
 

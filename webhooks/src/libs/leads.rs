@@ -21,7 +21,6 @@ use common::amazon::email::send_message;
 use common::crud::phone_app::users_with_app;
 use common::crud::scheduled_emails::reschedule_templates_for_deal_list;
 use lambda_http::tracing;
-use reqwest::Client;
 use sqlx::MySqlPool;
 
 const REGISTER_SUBJECT: &str = "Granite Manager";
@@ -372,7 +371,7 @@ where
     }
     let customer_id = i32::try_from(result.last_insert_id()).unwrap_or(0);
     if customer_id > 0 {
-        let client = Client::new();
+        let client = common::http::client();
         let _ = tokio::join!(
             sync_customer_to_cloud_talk(pool, &client, customer_id),
             sync_customer_to_ring_central(pool, &client, customer_id),

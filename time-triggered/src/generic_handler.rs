@@ -13,13 +13,11 @@ use common::crud::scheduled_emails::{
     mark_scheduled_email_failed_with_reason,
 };
 use common::crud::template::fetch_template_variable_data;
+use common::telegram::bot::{Bot, ChatId, InlineKeyboardButton, InlineKeyboardMarkup};
 use common::utils::email_send_window::automated_email_send_window_is_open_now;
 use common::utils::template::replace_template_variables;
 use lambda_runtime::{Error, LambdaEvent, tracing};
-use reqwest::Client;
 use sqlx::MySqlPool;
-use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
 fn activity_reminder_needs_telegram(
     telegram_activity_notifications: bool,
@@ -40,7 +38,7 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
     let bot = match std::env::var("TELOXIDE_NOTIFICATIONS_TOKEN")
         .or_else(|_| std::env::var("TELEGRAM_NOTIFICATIONS_BOT_TOKEN"))
     {
-        Ok(token) => Some(teloxide::Bot::new(token)),
+        Ok(token) => Some(Bot::new(token)),
         Err(error) => {
             tracing::warn!(
                 ?error,
@@ -81,7 +79,7 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
 /// The reminder's Telegram message, with a button to its deal: whether
 /// Telegram took it.
 async fn send_deadline_reminder_telegram(
-    bot: &teloxide::Bot,
+    bot: &Bot,
     telegram_id: i64,
     reminder: &DueActivityDeadlineReminder,
 ) -> bool {
@@ -101,12 +99,11 @@ async fn send_deadline_reminder_telegram(
         return false;
     };
     let keyboard = InlineKeyboardMarkup::new([[InlineKeyboardButton::url(
-        message.button_label.to_string(),
-        button_url,
+        message.button_label,
+        button_url.to_string(),
     )]]);
     match bot
-        .send_message(ChatId(telegram_id), message.text)
-        .reply_markup(keyboard)
+        .send_message(ChatId(telegram_id), &message.text, Some(&keyboard), None)
         .await
     {
         Ok(_) => true,
@@ -137,7 +134,7 @@ async fn push_notification_to_phones(notification_id: u64) -> usize {
         "{}/v1/phone/pushes/notification",
         api_url.trim_end_matches('/')
     );
-    let sent = Client::new()
+    let sent = common::http::client()
         .post(url)
         .header("Authorization", lambda_key)
         .timeout(PHONE_PUSH_TIMEOUT)
@@ -249,7 +246,7 @@ async fn post_api_job_within(
         }
     };
     let url = format!("{}/v1/jobs/{job}", api_url.trim_end_matches('/'));
-    let response = Client::new()
+    let response = common::http::client()
         .post(url)
         .header("Authorization", lambda_key)
         .timeout(timeout)
@@ -343,7 +340,7 @@ async fn start_supplier_files_job() {
         return;
     };
     let url = format!("{}/v1/jobs/supplier-files", api_url.trim_end_matches('/'));
-    let sent = Client::new()
+    let sent = common::http::client()
         .post(url)
         .header("Authorization", lambda_key)
         .timeout(std::time::Duration::from_secs(5))
@@ -693,7 +690,7 @@ mod tests {
 
     #[tokio::test]
     async fn connection_errors_are_reported() {
-        let error = Client::new()
+        let error = common::http::client()
             .post("http://127.0.0.1:1/v1/jobs/x")
             .send()
             .await

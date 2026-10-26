@@ -52,7 +52,7 @@ pub async fn push_inbound_email(email_id: u64) {
         tracing::warn!(email_id, "API_URL or LAMBDA_KEY not set; no email push");
         return;
     };
-    let sent = push_request(&Client::new(), &api_url, &key, email_id)
+    let sent = push_request(&common::http::client(), &api_url, &key, email_id)
         .send()
         .await;
     match sent {
@@ -78,9 +78,14 @@ mod tests {
 
     #[test]
     fn the_request_names_the_email_and_carries_the_key() {
-        let request = push_request(&Client::new(), "https://api.test/", "lambda-key", 42)
-            .build()
-            .unwrap();
+        let request = push_request(
+            &common::http::client(),
+            "https://api.test/",
+            "lambda-key",
+            42,
+        )
+        .build()
+        .unwrap();
         assert_eq!(request.method(), "POST");
         assert_eq!(
             request.url().as_str(),

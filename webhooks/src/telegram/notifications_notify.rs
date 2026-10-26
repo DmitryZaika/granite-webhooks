@@ -6,10 +6,10 @@ use crate::libs::constants::internal_error;
 use crate::libs::types::BasicResponse;
 use axum::Json;
 use axum::extract::State;
+use common::telegram::bot::ChatId;
 use lambda_http::tracing;
 use serde::Deserialize;
 use sqlx::MySqlPool;
-use teloxide::prelude::*;
 
 #[derive(Debug, Deserialize)]
 pub struct NotificationsNotifyRequest {

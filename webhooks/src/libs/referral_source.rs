@@ -143,7 +143,7 @@ impl OpenAiReferralClassifier {
     pub fn from_env(pool: MySqlPool) -> Self {
         Self {
             pool,
-            client: Client::new(),
+            client: common::http::client(),
             api_key: openai::api_key_from_env(),
         }
     }

@@ -21,10 +21,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "mysql", "chrono"] }
 
 http-body-util = "0.1"
-teloxide = { git = "https://github.com/colin99d/teloxide", features = ["macros"] }
-openssl-sys = { version = "0.9", features = ["vendored"] }
 rand = "0.10"
-reqwest = { version = "0.13", features = ["json", "multipart"] }
+# rustls without aws-lc-rs (a C build); `common::http` clients run on ring.
+reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "rustls-no-provider"] }
 sha2 = "0.11"
 uuid = "1.23"
 mail-parser = "0.11"

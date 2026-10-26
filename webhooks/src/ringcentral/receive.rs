@@ -22,7 +22,6 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use lambda_http::tracing;
-use reqwest::Client;
 use sqlx::MySqlPool;
 
 fn validation_token_response(headers: &HeaderMap) -> Option<Response> {
@@ -278,7 +277,7 @@ async fn store_recent_outbound(
     let path = format!(
         "account/~/extension/{extension}/message-store?messageType=SMS&direction=Outbound&dateFrom={since}&perPage=100"
     );
-    let client = Client::new();
+    let client = common::http::client();
     let messages = match common::telephony::ringcentral::request(
         pool,
         &client,
@@ -363,7 +362,7 @@ pub async fn sync_ringcentral(
     State(pool): State<MySqlPool>,
     Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {
-    let client = Client::new();
+    let client = common::http::client();
     sync_customer_to_ring_central(&pool, &client, customer_id).await
 }
 
@@ -374,7 +373,7 @@ pub async fn unsync_ringcentral(
     State(pool): State<MySqlPool>,
     Path((_company_id, customer_id)): Path<(i32, i32)>,
 ) -> BasicResponse {
-    let client = reqwest::Client::new();
+    let client = common::http::client();
     crate::ringcentral::api::delete_customer_from_ring_central(&pool, &client, customer_id).await
 }
 

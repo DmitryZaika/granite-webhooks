@@ -4,7 +4,6 @@
 
 use crate::ringcentral::schemas::MmsMedia;
 use lambda_http::tracing;
-use reqwest::Client;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -47,7 +46,7 @@ async fn post(body: &InboundMedia<'_>) -> Result<(), String> {
         "{}/v1/sms/ringcentral/inbound-media",
         api_url.trim_end_matches('/')
     );
-    let response = Client::new()
+    let response = common::http::client()
         .post(url)
         .header("Authorization", lambda_key)
         .json(body)

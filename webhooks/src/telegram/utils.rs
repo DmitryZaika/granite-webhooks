@@ -1,4 +1,4 @@
-use teloxide::types::MaybeInaccessibleMessage;
+use common::telegram::bot::Message;
 
 pub fn parse_assign(data: &str) -> Option<(i32, i32)> {
     let parts: Vec<&str> = data.split(':').collect();
@@ -49,9 +49,8 @@ pub fn gen_code() -> i32 {
     rand::random_range(100_000..=999_999)
 }
 
-pub fn extract_message(message: &MaybeInaccessibleMessage) -> Option<String> {
-    if let MaybeInaccessibleMessage::Regular(msg) = message {
-        return msg.text().map(std::string::ToString::to_string);
-    }
-    None
+/// The text of a callback's message; `None` once it is too old for Telegram
+/// to send.
+pub fn extract_message(message: &Message) -> Option<String> {
+    message.text().map(std::string::ToString::to_string)
 }

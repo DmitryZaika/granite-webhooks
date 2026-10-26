@@ -18,11 +18,9 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use common::crud::phone_app::users_with_app;
 use common::crud::scheduled_emails::schedule_templates_for_deal_list;
+use common::telegram::bot::{CallbackQuery, ChatId, Message, Update};
 use lambda_http::tracing;
-use reqwest::Client;
 use sqlx::MySqlPool;
-use teloxide::prelude::*;
-use teloxide::types::{ChatId, Update, UpdateKind};
 
 /// Sends a transactional email through SES. Under `cargo test` nothing leaves the
 /// process: the message is recorded for the test to inspect instead.
@@ -316,7 +314,7 @@ async fn handle_assign_lead<T: Telegram>(
         .await
         .unwrap();
     }
-    let client = Client::new();
+    let client = common::http::client();
     // For right now we log but ignore errors
     tokio::join!(
         sync_customer_to_cloud_talk(pool, &client, lead_id),
@@ -385,11 +383,13 @@ pub async fn webhook_handler(
     tg_bot: TelegramBot,
     axum::extract::Json(update): axum::extract::Json<Update>,
 ) -> BasicResponse {
-    match update.kind {
-        UpdateKind::Message(msg) => handle_message(msg, &pool, &tg_bot).await,
-        UpdateKind::CallbackQuery(cb) => handle_callback(cb, &pool, &tg_bot).await,
-        _ => OK_RESPONSE,
+    if let Some(msg) = update.message {
+        return handle_message(msg, &pool, &tg_bot).await;
     }
+    if let Some(cb) = update.callback_query {
+        return handle_callback(cb, &pool, &tg_bot).await;
+    }
+    OK_RESPONSE
 }
 
 #[cfg(test)]
@@ -403,10 +403,10 @@ mod local_tests {
     use chrono::{DateTime, Duration, NaiveDateTime, Utc};
     use common::crud::email_template::CreateEmailTemplate;
     use common::crud::email_template::insert_email_template;
+    use common::telegram::bot::InlineKeyboardButtonKind;
     use common::utils::email_send_window::clamp_automated_email_send_at;
     use serde_json::json;
     use sqlx::MySqlPool;
-    use teloxide::types::{CallbackQuery, InlineKeyboardButtonKind, MaybeInaccessibleMessage};
 
     fn chat_id(id: i64) -> ChatId {
         ChatId(id)
@@ -772,10 +772,7 @@ mod local_tests {
             id: "a".into(),
             from: telegram_user(3),
             message: None,
-            inline_message_id: None,
-            chat_instance: "".into(),
             data: None,
-            game_short_name: None,
         };
 
         let res = handle_callback(cb, &pool, &bot).await;
@@ -800,15 +797,12 @@ mod local_tests {
             _ => unreachable!(),
         };
         let inner_m = generate_message(1, "hello");
-        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let full = inner_m;
         let cb = CallbackQuery {
             id: "a".into(),
             from: telegram_user(456),
             message: Some(full),
-            inline_message_id: None,
-            chat_instance: "".into(),
             data: Some(option),
-            game_short_name: None,
         };
         let res = handle_callback(cb, &pool, &bot).await;
 
@@ -849,29 +843,23 @@ mod local_tests {
             _ => unreachable!(),
         };
         let inner_m = generate_message(1, "hello");
-        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let full = inner_m;
         let cb = CallbackQuery {
             id: "a".into(),
             from: telegram_user(456),
             message: Some(full),
-            inline_message_id: None,
-            chat_instance: "".into(),
             data: Some(option.clone()),
-            game_short_name: None,
         };
         let first = handle_callback(cb, &pool, &bot).await;
         assert_eq!(first.0, StatusCode::OK);
 
         let inner_m = generate_message(1, "hello");
-        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let full = inner_m;
         let cb = CallbackQuery {
             id: "b".into(),
             from: telegram_user(456),
             message: Some(full),
-            inline_message_id: None,
-            chat_instance: "".into(),
             data: Some(option),
-            game_short_name: None,
         };
         let second = handle_callback(cb, &pool, &bot).await;
         assert_eq!(second.0, StatusCode::OK);
@@ -911,15 +899,12 @@ mod local_tests {
             _ => unreachable!(),
         };
         let inner_m = generate_message(456, "hello");
-        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let full = inner_m;
         let cb = CallbackQuery {
             id: "a".into(),
             from: telegram_user(456),
             message: Some(full),
-            inline_message_id: None,
-            chat_instance: "".into(),
             data: Some(option),
-            game_short_name: None,
         };
         let res = handle_callback(cb, &pool, &bot).await;
 
@@ -983,15 +968,12 @@ mod local_tests {
             _ => unreachable!(),
         };
         let inner_m = generate_message(456, original_text);
-        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let full = inner_m;
         let cb = CallbackQuery {
             id: "a".into(),
             from: telegram_user(456),
             message: Some(full),
-            inline_message_id: None,
-            chat_instance: "".into(),
             data: Some(option),
-            game_short_name: None,
         };
         let res = handle_callback(cb, &pool, &bot).await;
         assert_eq!(res.0, StatusCode::OK);
@@ -1040,15 +1022,12 @@ mod local_tests {
             _ => unreachable!(),
         };
         let inner_m = generate_message(456, "hello");
-        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let full = inner_m;
         let cb = CallbackQuery {
             id: "a".into(),
             from: telegram_user(456),
             message: Some(full),
-            inline_message_id: None,
-            chat_instance: "".into(),
             data: Some(option),
-            game_short_name: None,
         };
         let res = handle_callback(cb, &pool, &bot).await;
 
@@ -1088,15 +1067,12 @@ mod local_tests {
             _ => unreachable!(),
         };
         let inner_m = generate_message(1, "hello");
-        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let full = inner_m;
         let cb = CallbackQuery {
             id: "a".into(),
             from: telegram_user(manager_id as u64),
             message: Some(full),
-            inline_message_id: None,
-            chat_instance: "".into(),
             data: Some(option),
-            game_short_name: None,
         };
         let res = handle_callback(cb, &pool, &bot).await;
 
@@ -1147,29 +1123,23 @@ mod local_tests {
             _ => unreachable!(),
         };
         let inner_m = generate_message(1, "hello");
-        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let full = inner_m;
         let cb = CallbackQuery {
             id: "a".into(),
             from: telegram_user(manager_id as u64),
             message: Some(full),
-            inline_message_id: None,
-            chat_instance: "".into(),
             data: Some(option.clone()),
-            game_short_name: None,
         };
         let res = handle_callback(cb, &pool, &bot).await;
         assert_eq!(res.0, StatusCode::OK);
 
         let inner_m = generate_message(1, "hello");
-        let full = MaybeInaccessibleMessage::Regular(Box::new(inner_m));
+        let full = inner_m;
         let retry = CallbackQuery {
             id: "retry".into(),
             from: telegram_user(manager_id as u64),
             message: Some(full),
-            inline_message_id: None,
-            chat_instance: "".into(),
             data: Some(option),
-            game_short_name: None,
         };
         let retry_res = handle_callback(retry, &pool, &bot).await;
         assert_eq!(retry_res.0, StatusCode::OK);

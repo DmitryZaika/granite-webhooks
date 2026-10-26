@@ -55,7 +55,7 @@ pub async fn fetch_conversation_messages(
         .map_err(|_| "TELNYX_API_KEY environment variable is not set".to_string())?;
 
     let url = format!("{TELNYX_API_BASE}/ai/conversations/{conversation_id}/messages");
-    let response = reqwest::Client::new()
+    let response = common::http::client()
         .get(url)
         .header("Authorization", format!("Bearer {api_key}"))
         .send()

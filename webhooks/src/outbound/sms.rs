@@ -484,7 +484,9 @@ pub async fn send_handler(
     State(pool): State<MySqlPool>,
     Json(sms): Json<OutgoingSms>,
 ) -> Result<Json<SentSms>, SendFailure> {
-    deliver(&pool, &Client::new(), &sms).await.map(Json)
+    deliver(&pool, &common::http::client(), &sms)
+        .await
+        .map(Json)
 }
 
 #[cfg(test)]
@@ -575,7 +577,7 @@ mod tests {
         use_cloudtalk(&stub.base);
         let sent = deliver(
             &pool,
-            &Client::new(),
+            &common::http::client(),
             &sms(
                 "cloudtalk",
                 90,
@@ -618,7 +620,9 @@ mod tests {
         let mut step = sms("cloudtalk", 93, Vec::new());
         step.is_automated = true;
         step.idempotency_key = Some("sms-flow-12-3".into());
-        deliver(&pool, &Client::new(), &step).await.unwrap();
+        deliver(&pool, &common::http::client(), &step)
+            .await
+            .unwrap();
         let stored: (Option<String>, bool) =
             sqlx::query_as("SELECT idempotency_key, is_automated <> 0 FROM cloudtalk_sms")
                 .fetch_one(&pool)
@@ -635,9 +639,13 @@ mod tests {
         })))
         .await;
         use_cloudtalk(&stub.base);
-        let failure = deliver(&pool, &Client::new(), &sms("cloudtalk", 91, Vec::new()))
-            .await
-            .unwrap_err();
+        let failure = deliver(
+            &pool,
+            &common::http::client(),
+            &sms("cloudtalk", 91, Vec::new()),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(failure.status, StatusCode::BAD_GATEWAY);
         assert_eq!(failure.error, "cloudtalk_insufficient_funds");
         let stored = rows(&pool, "cloudtalk_sms", "cloudtalk_id").await;
@@ -659,9 +667,13 @@ mod tests {
         })
         .await;
         use_cloudtalk(&stub.base);
-        let failure = deliver(&pool, &Client::new(), &sms("cloudtalk", 92, Vec::new()))
-            .await
-            .unwrap_err();
+        let failure = deliver(
+            &pool,
+            &common::http::client(),
+            &sms("cloudtalk", 92, Vec::new()),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(failure.error, "agent_no_number");
         assert!(
             rows(&pool, "cloudtalk_sms", "cloudtalk_id")
@@ -698,7 +710,7 @@ mod tests {
         let url = format!("{}/files/a.jpg", stub.base);
         let sent = deliver(
             &pool,
-            &Client::new(),
+            &common::http::client(),
             &sms("ringcentral", 93, vec![photo("a.png", &url)]),
         )
         .await
