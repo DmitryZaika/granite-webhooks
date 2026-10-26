@@ -11,7 +11,7 @@ use crate::phone_common;
 
 use axum::http::StatusCode;
 use common::{WithSession, sessions};
-use phone_common::{HEADER, add_session, phone_server, revoke_session, sql, token};
+use phone_common::{HEADER, add_session, enable_calling, phone_server, revoke_session, sql, token};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
 
@@ -212,9 +212,11 @@ async fn the_app_reads_emails_and_the_schedule_with_its_device_token(pool: MySql
 }
 
 #[test_db::test(seed)]
-async fn the_composer_reads_its_lists_but_cannot_change_them(pool: MySqlPool) {
-    // Rita (user 100, company 100) signed in on her phone.
+async fn the_composer_reads_its_lists_and_changes_only_the_templates(pool: MySqlPool) {
+    // Rita (user 100, company 100) signed in on her phone. Her company texts
+    // through Telnyx: without a texting provider there are no SMS templates.
     add_session(&pool, 305, 100, 100).await;
+    enable_calling(&pool, 100, "messaging_profile_id = 'profile-100'").await;
     let (server, _) = phone_server(pool.clone()).await;
 
     // From Stones, From Images, From Documents, Use Template, the email
@@ -250,13 +252,14 @@ async fn the_composer_reads_its_lists_but_cannot_change_them(pool: MySqlPool) {
         );
     }
 
-    // Those lists are read-only to the phone: a write needs the CRM session.
+    // Those lists are read-only to the phone but for the templates, which Use
+    // Template adds, edits and deletes: other writes need the CRM session.
     server
         .post("/v1/email-templates")
         .add_header(HEADER, token(305))
         .json(&json!({ "template_name": "x", "template_subject": "x", "template_body": "x" }))
         .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+        .assert_status(StatusCode::CREATED);
     server
         .delete("/v1/calendars/1")
         .add_header(HEADER, token(305))

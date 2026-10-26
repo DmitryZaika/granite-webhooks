@@ -396,7 +396,8 @@ async fn page_pages_and_clamps_past_the_end(pool: MySqlPool) {
         &[("tab", "all"), ("page_size", "4"), ("page", "2")],
     )
     .await;
-    assert_eq!(ids(&second["rows"]), vec![1008, 1006, 1005, 1004]);
+    // The fifth to eighth of the nine in the tab's order (see the test above).
+    assert_eq!(ids(&second["rows"]), vec![1006, 1005, 1004, 1001]);
     assert_eq!(second["total"], 9);
 
     let past = page(
@@ -444,7 +445,11 @@ async fn page_sorts_by_a_column(pool: MySqlPool) {
 async fn page_carries_its_customers_emails(pool: MySqlPool) {
     let leads = page(pool, &[("tab", "leads"), ("page_size", "3")]).await;
     assert_eq!(ids(&leads["rows"]), vec![8695, 1010, 1006]);
-    assert_eq!(leads["emails"]["8695"], json!(["nina@example.com"]));
+    // Every address, the primary first.
+    assert_eq!(
+        leads["emails"]["8695"],
+        json!(["nina@example.com", "nina.work@example.com"])
+    );
     assert_eq!(leads["emails"]["1010"], json!(["zoe@example.com"]));
     // Off this page.
     assert!(leads["emails"].get("1000").is_none());
