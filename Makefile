@@ -7,7 +7,9 @@ IAM_ROLE := arn:aws:iam::741448943665:role/cargo-lambda-role-2ed5069c-8882-460d-
 # cargo-lambda installed on the PATH when there is one (`cargo install
 # cargo-lambda`: Windows on ARM has no wheel for uvx), else through uvx.
 CARGO_LAMBDA ?= $(if $(shell command -v cargo-lambda 2>/dev/null),cargo-lambda,uvx cargo-lambda)
-BUILD_BASE := $(CARGO_LAMBDA) lambda build --release --x86-64
+# Dev (make build/deploy <app> dev) is a debug build, stripped to fit in a
+# Lambda, as in deploy-lambda.yml; the two variables only change the dev profile.
+BUILD_BASE = CARGO_PROFILE_DEV_DEBUG=false CARGO_PROFILE_DEV_STRIP=symbols $(CARGO_LAMBDA) lambda build $(if $(filter dev,$(ENV)),,--release) --x86-64
 
 # --- Build and deploy ---
 #   make build <app>          app: api, webhooks, time-triggered
@@ -49,7 +51,7 @@ build:
 deploy:
 	@test -n "$(APP)" -a -n "$(ENV)" || { echo "Usage: make deploy <$(APPS)> <$(ENVS)>" >&2; exit 1; }
 	@test -n "$(FUNCTION)" || { echo "$(APP) has no $(ENV) Lambda" >&2; exit 1; }
-	$(MAKE) build APP=$(APP)
+	$(MAKE) build APP=$(APP) ENV=$(ENV)
 	@eval "$$(aws configure export-credentials --profile $(AWS_DEPLOY_PROFILE) --format env)" && \
 	unset AWS_PROFILE && \
 	for function in $(FUNCTION); do \
