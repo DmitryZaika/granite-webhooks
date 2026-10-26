@@ -5,7 +5,13 @@ name: API tests
 # tests and the follow-up tests. The tests make their own databases (test-db) on the MySQL below;
 # .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local, where
 # common's query! macros check their SQL at compile time, so every migration
-# is applied there first, as in deploy-lambda.yml.
+# is applied there before the first cargo command.
+#
+# MySQL is a plain container rather than a service, so it starts, and applies
+# the migrations, while the toolchain and the cache are set up instead of
+# before the job's first step. Its data is disposable: it lives on a tmpfs,
+# without the binlog or fsyncs (as in docker-compose.local.yml), which makes
+# the ~400 DDL statements of the migrations take seconds, not half a minute.
 #
 # On demand from any branch, with optional cargo test arguments in place of the
 # fixed suites below:
@@ -39,21 +45,30 @@ jobs:
     name: api tests
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: granite
-          MYSQL_DATABASE: granite_local
-        ports:
-          - 3307:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -pgranite --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=30
     steps:
       - uses: actions/checkout@v4
+
+      # The image's entrypoint runs every file of /docker-entrypoint-initdb.d
+      # (the migrations, in name order) against MYSQL_DATABASE, and listens on
+      # TCP only once they have all applied.
+      - name: Start MySQL with the migrations
+        run: >-
+          docker run --detach --name mysql
+          --publish 3307:3306
+          --env MYSQL_ROOT_PASSWORD=granite
+          --env MYSQL_DATABASE=granite_local
+          --tmpfs /var/lib/mysql
+          --volume "$PWD/migrations:/docker-entrypoint-initdb.d:ro"
+          mysql:8.0
+          --default-authentication-plugin=mysql_native_password
+          --log-bin-trust-function-creators=1
+          --skip-log-bin
+          --innodb-flush-log-at-trx-commit=0
+          --sync-binlog=0
+          --innodb-doublewrite=0
+          --innodb-flush-method=nosync
+          --table-definition-cache=20000
+          --table-open-cache=20000
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -61,12 +76,18 @@ jobs:
         with:
           shared-key: api-tests
 
-      - name: Apply migrations to the test database
+      - name: Wait for MySQL and the migrations
+        timeout-minutes: 5
         run: |
-          for f in migrations/*.sql; do
-            mysql -h 127.0.0.1 -P 3307 -uroot -pgranite granite_local < "$f" \
-              || { echo "::error::Migration $f failed"; exit 1; }
+          until mysqladmin ping -h 127.0.0.1 -P 3307 -uroot -pgranite --silent 2>/dev/null; do
+            if [ "$(docker inspect --format '{{.State.Running}}' mysql)" != true ]; then
+              docker logs mysql 2>&1 | tail -n 40
+              echo "::error::MySQL stopped: a migration failed (see its log above)"
+              exit 1
+            fi
+            sleep 1
           done
+          docker logs mysql 2>&1 | grep -E 'Entrypoint\]: (Initializing|MySQL init process done)' || true
 
       - name: OpenAPI checks
         if: inputs.cargo_args == ''
