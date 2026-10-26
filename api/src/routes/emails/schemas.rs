@@ -31,6 +31,11 @@ pub struct ListQuery {
     /// Words to find in subject, text and addresses, or a customer name
     /// (whose addresses then match; not in the admin scope).
     pub search: Option<String>,
+    /// `true`: only the inbox conversations still unread for the caller (the
+    /// ones `inbox_unread` of `GET /v1/emails/folder-counts` counts), paged and
+    /// counted the same way. Inbox only; ignored for other folders and the
+    /// admin scope. Default `false`.
+    pub unread: Option<bool>,
     /// Default `employee`; `admin` lists the whole company's mail (admins
     /// only, no drafts).
     #[param(inline)]

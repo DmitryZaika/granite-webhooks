@@ -5,10 +5,12 @@
 //! `smsTemplateAutomation.server.ts` and `lib/dealNotification.server.ts` from
 //! the Remix app.
 
+use crate::phone::crm_push::push_notification_logged;
 use crate::state::AppState;
 use crate::telegram::Bot;
 use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::America::Indiana::Indianapolis;
+use common::crud::phone_app::has_app;
 use common::telegram::crm::format_activity_notification;
 use common::utils::email_send_window::{
     clamp_automated_email_send_at, clamp_automated_sms_send_at,
@@ -338,8 +340,9 @@ struct TelegramTarget {
 
 /// Tells the deal's owner and the customer's sales rep (not the actor).
 ///
-/// A `notifications` row each, and a Telegram message when they linked the
-/// notifications bot (`notifyDealAssignee`). Failures are logged, never
+/// A `notifications` row each, pushed to their phones, and a Telegram
+/// message when they linked the notifications bot (`notifyDealAssignee`).
+/// Failures are logged, never
 /// returned: the write that triggered it already succeeded.
 pub async fn notify_assignees(
     state: &AppState,
@@ -381,7 +384,7 @@ async fn try_notify(
     }
     let message = clip_message(message);
     for recipient in recipients {
-        sqlx::query(
+        let notification_id = sqlx::query(
             "INSERT INTO notifications (user_id, deal_id, message, notification_type, actor_name, due_at)
              VALUES (?, ?, ?, ?, ?, NOW())",
         )
@@ -391,7 +394,9 @@ async fn try_notify(
         .bind(kind.as_str())
         .bind(actor_name)
         .execute(&state.pool)
-        .await?;
+        .await?
+        .last_insert_id();
+        push_notification_logged(state, i64::try_from(notification_id).unwrap_or_default()).await;
 
         let target: Option<TelegramTarget> = sqlx::query_as(
             "SELECT notifications_telegram_id, telegram_activity_notifications
@@ -407,6 +412,10 @@ async fn try_notify(
         else {
             continue;
         };
+        // The app has it already.
+        if has_app(&state.pool, recipient).await {
+            continue;
+        }
         let text = format_activity_notification(
             kind.as_str(),
             people.customer_name.as_deref(),

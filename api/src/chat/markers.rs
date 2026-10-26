@@ -724,10 +724,81 @@ fn source_marker() -> &'static regex::Regex {
     re!(r"\[+\s*SOURCE\s*[:#-]?\s*([^\]]*?)\s*\]+", "i")
 }
 
+fn clarify_marker() -> &'static regex::Regex {
+    re!(r"\[\[CLARIFY:([^\]]*)\]\]", "i")
+}
+
+/// A clarifying question as saved in the history: `[[CLARIFY:…]]` keeps the
+/// question it asks about, for the reply that picks a source.
+pub fn with_clarify_marker(text: &str, question: &str) -> String {
+    let question = question.replace(['[', ']', '|'], " ");
+    format!("{text}\n\n[[CLARIFY:{}]]", trim(&question))
+}
+
+/// A question back about which feature is meant, as saved:
+/// `[[CLARIFY:question|label=section,section|…]]` also keeps where each
+/// choice is answered from.
+pub fn with_clarify_choices_marker(
+    text: &str,
+    question: &str,
+    choices: &[(&str, &[String])],
+) -> String {
+    let question = question.replace(['[', ']', '|'], " ");
+    let choices: Vec<String> = choices
+        .iter()
+        .map(|(label, sections)| {
+            format!(
+                "{}={}",
+                trim(&label.replace(['[', ']', '|', '=', ','], " ")),
+                sections.join(",")
+            )
+        })
+        .collect();
+    format!(
+        "{text}\n\n[[CLARIFY:{}|{}]]",
+        trim(&question),
+        choices.join("|")
+    )
+}
+
+/// The question a saved clarifying question asks about.
+pub fn parse_clarify_marker(text: &str) -> Option<String> {
+    first_capture(clarify_marker(), text)
+        .map(|marker| trim(marker.split('|').next().unwrap_or_default()).to_string())
+        .filter(|question| !question.is_empty())
+}
+
+/// The choices a saved question back offered (`label`, its sections); none
+/// for the question between the app and the company's process.
+pub fn parse_clarify_choices(text: &str) -> Vec<(String, Vec<String>)> {
+    let Some(marker) = first_capture(clarify_marker(), text) else {
+        return Vec::new();
+    };
+    marker
+        .split('|')
+        .skip(1)
+        .filter_map(|choice| {
+            let (label, sections) = choice.split_once('=')?;
+            let sections: Vec<String> = sections
+                .split(',')
+                .map(|id| trim(id).to_string())
+                .filter(|id| !id.is_empty())
+                .collect();
+            let label = trim(label);
+            (!label.is_empty() && !sections.is_empty()).then(|| (label.to_string(), sections))
+        })
+        .collect()
+}
+
+pub fn strip_clarify_marker(text: &str) -> String {
+    trim(&clarify_marker().replace_all(text, "")).to_string()
+}
+
 /// `stripChatResponseMarkersTrimmed`: the answer as the user reads it.
 pub fn strip_markers(text: &str) -> String {
     let text = re!(r"\[+\s*SOURCE\s*[:#-]?\s*[^\]]*?\s*\]+", "gi").replace_all(text, "");
     let text = re!(r"\[\[INSTRUCTION:[^\]]*\]\]", "gi").replace_all(&text, "");
+    let text = strip_clarify_marker(&text);
     let text = strip_special_order_marker(&text);
     let text = strip_thickness_options_marker(&text);
     let text = strip_slab_size_options_marker(&text);

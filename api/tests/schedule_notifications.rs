@@ -386,6 +386,45 @@ async fn due_rules_email_the_customer_once(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn after_rules_go_out_after_the_end(pool: MySqlPool) {
+    sqlx::raw_sql(CALENDARS).execute(&pool).await.unwrap();
+    let flow = rule(
+        &pool,
+        8830,
+        "email",
+        "Hi {{customer.first_name}}, we hope the installation went well.",
+        true,
+    )
+    .await;
+    sqlx::query("UPDATE schedule_notification_rules SET direction = 'after' WHERE flow_id = ?")
+        .bind(flow)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Ended 25 hours ago: a day after is due.
+    event(&pool, 8830, "1000", -27, false).await;
+    // Ended 18 hours ago, and still to come: not due.
+    event(&pool, 8830, "1000", -20, false).await;
+    event(&pool, 8830, "1000", 5, false).await;
+    let (server, sent) = server(&pool).await;
+    let body: Value = server
+        .post("/v1/jobs/appointment-reminders")
+        .add_header("Authorization", "job-secret")
+        .await
+        .json();
+    assert_eq!(
+        (&body["rule_sent"], &body["rule_failed"]),
+        (&json!(1), &json!(0))
+    );
+    let emails = sent.emails.lock().unwrap().clone();
+    assert_eq!(emails.len(), 1);
+    assert_eq!(
+        emails[0].body,
+        "<p>Hi Alice, we hope the installation went well.</p>"
+    );
+}
+
+#[test_db::test(seed)]
 async fn text_rules_go_from_the_office_manager(pool: MySqlPool) {
     sqlx::raw_sql(CALENDARS).execute(&pool).await.unwrap();
     rule(

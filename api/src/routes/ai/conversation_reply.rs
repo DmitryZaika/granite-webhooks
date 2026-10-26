@@ -151,6 +151,9 @@ More GOOD patterns:
 - SMS: 1–3 short sentences. Email: still concise.
 - Email body is the message only. Never prefix it with "Subject:"; the thread already has a subject.
 
+## Custom requests override length and structure
+When REPLY MODE is Custom or Custom revision, the rep's instruction decides what the message says and how long it is. Include every point the rep wrote, even when that takes many sentences or several questions. The sentence limits, "ONE question" and "short" rules above apply only to Fast reply and Follow up. Voice, greeting, signature, no invented facts and no AI stock lines still apply.
+
 Output ONLY valid JSON: {"body":"draft message"}"#;
 
 fn format_timeline(messages: &[FollowupTimelineMessage]) -> String {
@@ -328,7 +331,13 @@ pub fn build_user_prompt(
         }
         _ => String::new(),
     };
-    let length_note = if channel == FollowupChannel::Sms {
+    let length_note = if mode == ReplyMode::Custom {
+        if channel == FollowupChannel::Sms {
+            "CHANNEL: SMS — conversational texting tone. Length follows the rep's instruction (see REPLY MODE), not the 1–3 sentence rule."
+        } else {
+            "CHANNEL: EMAIL — length follows the rep's instruction (see REPLY MODE), not the 2–5 sentence rule. Do not include a Subject: line in the body."
+        }
+    } else if channel == FollowupChannel::Sms {
         "CHANNEL: SMS — keep the reply to 1–3 short sentences. One main question. Conversational texting tone."
     } else {
         "CHANNEL: EMAIL — slightly more detail is OK, but stay concise. Do not turn a simple exchange into a long email. Do not include a Subject: line in the body."
@@ -400,14 +409,14 @@ fn mode_note(mode: ReplyMode, custom: &CustomDraft) -> String {
                 custom.instruction_history.iter().map(String::as_str).collect()
             };
             format!(
-                "REPLY MODE: Custom revision.\nKeep the CURRENT DRAFT as the starting point. Apply the NEW INSTRUCTION to that draft.\nDo not start over unless the new instruction asks for a full rewrite.\nKeep wording that still fits. Honor every earlier instruction that still applies.\n\nCURRENT DRAFT:\n\"{}\"\n\nINSTRUCTIONS SO FAR (oldest first):\n{}\n\nNEW INSTRUCTION (apply this now):\n\"{}\"\n\nReturn a revised draft of the CURRENT DRAFT. Stay consistent with the conversation history.\nDo not invent facts the rep did not ask for.",
+                "REPLY MODE: Custom revision.\nKeep the CURRENT DRAFT as the starting point. Apply the NEW INSTRUCTION to that draft.\nDo not start over unless the new instruction asks for a full rewrite.\nKeep wording that still fits. Honor every earlier instruction that still applies.\n\nCURRENT DRAFT:\n\"{}\"\n\nINSTRUCTIONS SO FAR (oldest first):\n{}\n\nNEW INSTRUCTION (apply this now):\n\"{}\"\n\nReturn a revised draft of the CURRENT DRAFT. Keep every point the draft and the instructions cover unless the new instruction removes it; the instructions set the length, not the usual length rules. Stay consistent with the conversation history.\nDo not invent facts the rep did not ask for.",
                 custom.previous_draft,
                 history.iter().enumerate().map(|(i, item)| format!("{}. {item}", i + 1)).collect::<Vec<_>>().join("\n"),
                 custom.revision_instruction
             )
         }
         ReplyMode::Custom => format!(
-            "REPLY MODE: Custom.\nThe sales rep gave this instruction for the draft:\n\"{}\"\nFollow that instruction closely while still sounding natural and staying consistent with the conversation history.\nDo not ignore the thread. Do not invent facts the rep did not ask for.",
+            "REPLY MODE: Custom.\nThe sales rep gave this instruction for the draft:\n\"{}\"\nThe instruction is the content of the message. Cover EVERY point, detail, fact and question in it, in a natural order; drop none and do not shrink several points into one vague line. Turn the rep's notes into a clear, well-written message to the customer (fix grammar, keep their facts and names exactly).\nThe instruction sets the length, not the usual length rules: a short instruction gets a short message, a detailed one gets a complete message with every point. Several questions are fine when the rep asked them. On email, use short paragraphs when there are several points.\nStill sound natural and stay consistent with the conversation history.\nDo not ignore the thread. Do not invent facts the rep did not ask for.",
             custom.request
         ),
     }
@@ -829,6 +838,7 @@ mod tests {
             text.contains("REPLY MODE: Custom.")
                 && text.contains("Ask about quartzite timing only")
         );
+        assert!(text.contains("Cover EVERY point") && !text.contains("1–3 short sentences. One main question"));
         let revision = CustomDraft {
             request: "Price 1-2 white quartzite options".into(),
             previous_draft: "Hi! I can send pricing".into(),

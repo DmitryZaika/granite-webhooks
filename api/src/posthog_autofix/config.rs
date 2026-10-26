@@ -39,6 +39,8 @@ impl Mode {
 pub const DEFAULT_EXCLUDE: &[&str] = &[
     // The network dropped or a deploy replaced a chunk mid-session.
     "TypeError: Failed to fetch",
+    // The same lost connection, rethrown as a plain Error.
+    "Error: Failed to fetch",
     "TypeError: NetworkError when attempting to fetch resource",
     "TypeError: Load failed",
     "TypeError: Importing a module script failed",
@@ -59,6 +61,11 @@ pub const DEFAULT_EXCLUDE: &[&str] = &[
     "The database connection is closing",
     // A signed-out session: the app sends the user to the login page.
     "Granite API 401 on",
+    // The same 401, rewrapped by the SPA's SMS flows and call list.
+    "FlowActionError: unauthorized",
+    "Telephony 401",
+    // A rate limit: the caller waits for retryAfterSecs and tries again.
+    "Granite API 429 on",
 ];
 
 #[derive(Clone)]
@@ -406,6 +413,10 @@ mod tests {
             "DOMException: InvalidStateError: Failed to execute 'transaction' on 'IDBDatabase': The database connection is closing.",
             "TypeError: Script https://granitedepotindy.granite-manager.com/service-worker.js load failed",
             r#"GraniteApiError: Granite API 401 on /v1/me: {"error":"unauthorized"}"#,
+            "Error: Failed to fetch",
+            "FlowActionError: unauthorized",
+            "Error: Telephony 401: unauthorized",
+            r#"GraniteApiError: Granite API 429 on /v1/phone/web/devices/3/token: {"error":"rate_limited","retryAfterSecs":39}"#,
         ] {
             assert!(excluded(noise), "{noise}");
         }

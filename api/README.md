@@ -383,10 +383,13 @@ that flag, so copy any new variable to both. The browser reaches it at
 ## Scheduled jobs and webhooks
 
 `time-triggered` (every minute) posts to `<API_URL>/v1/jobs/*` with
-`Authorization: <LAMBDA_KEY>`, the API's `LAMBDA_KEY`. `webhooks` asks the API
-whether a called customer answered (`<API_URL>/v1/followups/call-check`, same
-key) and, after storing an inbound email, has it pushed to the recipients'
-phones (`<API_URL>/v1/emails/inbound-push`, same key); the API sends mail and texts through `webhooks` (`WEBHOOKS_URL`, and
+`Authorization: <LAMBDA_KEY>`, the API's `LAMBDA_KEY`, and has due activity
+reminders pushed to phones (`<API_URL>/v1/phone/pushes/notification`, same
+key). `webhooks` asks the API whether a called customer answered
+(`<API_URL>/v1/followups/call-check`, same key), after storing an inbound
+email has it pushed to the recipients' phones
+(`<API_URL>/v1/emails/inbound-push`, same key), and has the lead alerts it
+sends to Telegram pushed too (`<API_URL>/v1/phone/pushes/lead`, same key); the API sends mail and texts through `webhooks` (`WEBHOOKS_URL`, and
 `WEBHOOKS_KEY`).
 
 `WEBHOOKS_KEY` is the API's one credential for `webhooks`: an access token

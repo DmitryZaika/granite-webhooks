@@ -1,6 +1,7 @@
 pub mod email_template;
 pub mod notifications;
 pub mod outbound_email;
+pub mod phone_app;
 pub mod scheduled_emails;
 pub mod scheduled_sms;
 pub mod setup;

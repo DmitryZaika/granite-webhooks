@@ -423,7 +423,7 @@ async fn a_new_customer_becomes_a_lead_for_the_managers(pool: MySqlPool) {
     assert_eq!(quote["emails"][0]["recipients"], "jane@new.example");
 
     // The customer's email lists the colors with no price and links to the
-    // quote, which prices as it was shown.
+    // customer's own page, where the quote prices as it was shown.
     let email = sent.lock().unwrap()[0].clone();
     assert_eq!(email.to, vec!["jane@new.example"]);
     assert_eq!(email.from_name.as_deref(), Some("Acme Stone"));
@@ -435,14 +435,20 @@ async fn a_new_customer_becomes_a_lead_for_the_managers(pool: MySqlPool) {
         email.body
     );
     assert!(!email.body.contains('$'), "{}", email.body);
-    let token = quote["quote"]["portal_token"].as_str().unwrap();
+    let (view, company_id): (String, i32) =
+        sqlx::query_as("SELECT BIN_TO_UUID(view_id), company_id FROM customers WHERE id = ?")
+            .bind(customer_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(
         email.body.contains(&format!(
-            "https://acme.app.acme.test/quote-portal/{token}?e="
+            "https://acme.app.acme.test/customer/{company_id}/{view}?quote={quote_id}"
         )),
         "{}",
         email.body
     );
+    let token = quote["quote"]["portal_token"].as_str().unwrap();
     let portal = server
         .get(&format!("/v1/public/quote-portal/{token}"))
         .await

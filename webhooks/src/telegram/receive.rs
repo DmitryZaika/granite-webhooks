@@ -10,6 +10,7 @@ use crate::crud::users::{email_exists, get_user_tg_info, user_has_telegram_id};
 use crate::crud::users::{get_user_telegram_token, set_telegram_id, set_user_telegram_token};
 use crate::libs::constants::{ERR_DB, ERR_SEND_EMAIL, OK_RESPONSE};
 use crate::libs::constants::{FORBIDDEN_RESPONSE, internal_error};
+use crate::libs::phone_push::{Audience, LeadKind, push_lead};
 use crate::libs::types::BasicResponse;
 use crate::ringcentral::api::sync_customer_to_ring_central;
 use crate::telegram::utils::extract_message;
@@ -17,6 +18,7 @@ use crate::telegram::utils::parse_code;
 use crate::telegram::utils::{gen_code, lead_url, parse_assign, parse_slash_email};
 use axum::extract::State;
 use axum::http::StatusCode;
+use common::crud::phone_app::users_with_app;
 use common::crud::scheduled_emails::schedule_templates_for_deal_list;
 use lambda_http::tracing;
 use reqwest::Client;
@@ -325,6 +327,21 @@ async fn handle_assign_lead<T: Telegram>(
 
     let deal_id = result.last_insert_id();
     let lead_link = lead_url(deal_id);
+    push_lead(
+        position.company_id,
+        i64::from(lead_id),
+        Some(deal_id),
+        LeadKind::Assigned,
+        Audience::Rep(position.user_id),
+    )
+    .await;
+    // A rep with the app gets it there only.
+    if users_with_app(pool, position.company_id, &[position.user_id])
+        .await
+        .contains(&position.user_id)
+    {
+        return OK_RESPONSE;
+    }
     if let Some(telegram_id) = tg_info.telegram_id {
         let final_message = format!("You were assigned a lead. Click here: \n{lead_link}");
         return bot
