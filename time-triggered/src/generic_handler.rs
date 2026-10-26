@@ -326,20 +326,32 @@ async fn process_contact_sync() -> Result<usize, JobError> {
 
 /// Starts the supplier price file job without waiting for it: a big PDF takes
 /// minutes, and the API Lambda keeps working after this request gives up.
-/// Sent to the long-running deployment (`API_STREAM_URL`) when there is one.
 async fn start_supplier_files_job() {
+    start_api_job("supplier-files", "supplier files").await;
+}
+
+/// Starts the AI check of 10DLC texting registrations without waiting for
+/// it: one check takes minutes.
+async fn start_tendlc_checks_job() {
+    start_api_job("tendlc-checks", "10DLC AI checks").await;
+}
+
+/// Starts a long API job (`POST <API_URL>/v1/jobs/<job>`) without waiting
+/// for it. Sent to the long-running deployment (`API_STREAM_URL`) when there
+/// is one.
+async fn start_api_job(job: &str, label: &str) {
     let Some(api_url) = std::env::var("API_STREAM_URL")
         .ok()
         .or_else(|| std::env::var("API_URL").ok())
     else {
-        tracing::warn!("API_URL is not set; skipping supplier files");
+        tracing::warn!("API_URL is not set; skipping {label}");
         return;
     };
     let Ok(lambda_key) = std::env::var("LAMBDA_KEY") else {
-        tracing::warn!("LAMBDA_KEY is not set; skipping supplier files");
+        tracing::warn!("LAMBDA_KEY is not set; skipping {label}");
         return;
     };
-    let url = format!("{}/v1/jobs/supplier-files", api_url.trim_end_matches('/'));
+    let url = format!("{}/v1/jobs/{job}", api_url.trim_end_matches('/'));
     let sent = common::http::client()
         .post(url)
         .header("Authorization", lambda_key)
@@ -349,10 +361,10 @@ async fn start_supplier_files_job() {
     match sent {
         Ok(response) if !response.status().is_success() => tracing::warn!(
             status = response.status().as_u16(),
-            "Failed to start supplier files"
+            "Failed to start {label}"
         ),
         Err(error) if !error.is_timeout() => {
-            tracing::warn!(?error, "Failed to start supplier files");
+            tracing::warn!(?error, "Failed to start {label}");
         }
         _ => {}
     }
@@ -526,6 +538,7 @@ pub(crate) async fn function_handler(
     )
     .await;
     start_supplier_files_job().await;
+    start_tendlc_checks_job().await;
     let call_points_count = match report_job("call-points", process_call_points().await).await {
         Ok(count) => count,
         Err(error) => {

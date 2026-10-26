@@ -214,6 +214,11 @@ impl Ai {
         Self::new(None, CHAT_URL)
     }
 
+    /// A key is set: calls can be made.
+    pub fn is_enabled(&self) -> bool {
+        self.key.is_some()
+    }
+
     /// `OPEN_AI_SECRET_KEY`; `OPENAI_CHAT_URL` and `OPENAI_IMAGES_URL` point
     /// at a stand-in (the frontend's browser tests).
     pub fn from_env() -> Self {
@@ -301,10 +306,7 @@ impl Ai {
                     body: text.chars().take(300).collect(),
                 });
             }
-            let reply: Reply = response
-                .json()
-                .await
-                .map_err(request_failed)?;
+            let reply: Reply = response.json().await.map_err(request_failed)?;
             let usage = reply.usage;
             let first = reply.choices.into_iter().next();
             let finish_reason = first
@@ -377,10 +379,7 @@ impl Ai {
                     body: text.chars().take(300).collect(),
                 });
             }
-            let reply: Value = response
-                .json()
-                .await
-                .map_err(request_failed)?;
+            let reply: Value = response.json().await.map_err(request_failed)?;
             let usage: Option<Usage> = reply
                 .get("usage")
                 .cloned()
@@ -453,11 +452,7 @@ impl Ai {
             }
             let mut answer = String::new();
             let mut pending: Vec<u8> = Vec::new();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(request_failed)?
-            {
+            while let Some(chunk) = response.chunk().await.map_err(request_failed)? {
                 pending.extend_from_slice(&chunk);
                 while let Some(end) = pending.iter().position(|b| *b == b'\n') {
                     let line: Vec<u8> = pending.drain(..=end).collect();
@@ -577,10 +572,7 @@ impl Ai {
                     body: text.chars().take(300).collect(),
                 });
             }
-            let reply: Value = response
-                .json()
-                .await
-                .map_err(request_failed)?;
+            let reply: Value = response.json().await.map_err(request_failed)?;
             let image = reply["data"][0]["b64_json"].as_str().map(|b64| {
                 format!(
                     "data:image/{};base64,{b64}",

@@ -282,9 +282,13 @@ pub struct TenDlcCampaignDraft {
     pub age_gated: bool,
     /// The texts are about direct lending or loans.
     pub direct_lending: bool,
-    /// The privacy policy page (`https://...`); may be empty.
+    /// The page with the form customers fill out to give their number and
+    /// agree to texts (the quote form), `https://...`; the AI check reads it.
+    /// Not sent to Telnyx (the message flow names it).
+    pub optin_form_link: String,
+    /// The privacy policy page (`https://...`).
     pub privacy_policy_link: String,
-    /// The texting terms page (`https://...`); may be empty.
+    /// The texting terms page (`https://...`).
     pub terms_and_conditions_link: String,
     /// The carriers' terms for business texting are accepted (needed to
     /// send).
@@ -480,6 +484,7 @@ pub fn normalized(draft: &TenDlcDraft) -> TenDlcDraft {
             number_pool: campaign.number_pool,
             age_gated: campaign.age_gated,
             direct_lending: campaign.direct_lending,
+            optin_form_link: trim(&campaign.optin_form_link),
             privacy_policy_link: trim(&campaign.privacy_policy_link),
             terms_and_conditions_link: trim(&campaign.terms_and_conditions_link),
             terms_accepted: campaign.terms_accepted,
@@ -535,6 +540,11 @@ pub fn too_long(draft: &TenDlcDraft) -> Option<String> {
     if chars(&campaign.terms_and_conditions_link) > LIST_CHARS {
         return Some(format!(
             "Use at most {LIST_CHARS} characters for the terms link."
+        ));
+    }
+    if chars(&campaign.optin_form_link) > LIST_CHARS {
+        return Some(format!(
+            "Use at most {LIST_CHARS} characters for the quote form link."
         ));
     }
     if campaign.samples.len() > SAMPLES.1 {
@@ -874,24 +884,39 @@ fn campaign_problems(
         &campaign.optout_keywords,
         Some("STOP"),
     );
-    for (field, name, link) in [
+    // The pages the carriers (and the AI check) read are required; the
+    // example link is not.
+    for (field, name, link, required) in [
         (
             "campaign.embeddedLinkSample",
             "example link",
             &campaign.embedded_link_sample,
+            false,
+        ),
+        (
+            "campaign.optinFormLink",
+            "quote form link",
+            &campaign.optin_form_link,
+            true,
         ),
         (
             "campaign.privacyPolicyLink",
             "privacy policy link",
             &campaign.privacy_policy_link,
+            true,
         ),
         (
             "campaign.termsAndConditionsLink",
             "terms link",
             &campaign.terms_and_conditions_link,
+            true,
         ),
     ] {
-        if !link.is_empty() && !web_url(link) {
+        if link.is_empty() {
+            if required {
+                problems.push(problem(field, format!("Enter the {name}.")));
+            }
+        } else if !web_url(link) {
             problems.push(problem(
                 field,
                 format!("Enter the {name} as a full address starting with https://."),
@@ -923,12 +948,14 @@ pub fn problems(draft: &TenDlcDraft) -> Vec<TenDlcProblem> {
 }
 
 /// The campaign fields Telnyx no longer takes once a campaign is registered
-/// (all but the samples, message flow and help message) differ.
+/// (all but the samples, message flow and help message, and the quote form
+/// link, which is not sent) differ.
 pub fn locked_fields_changed(sent: &TenDlcCampaignDraft, now: &TenDlcCampaignDraft) -> bool {
     let editable = |campaign: &TenDlcCampaignDraft| TenDlcCampaignDraft {
         samples: Vec::new(),
         message_flow: String::new(),
         help_message: String::new(),
+        optin_form_link: String::new(),
         ..campaign.clone()
     };
     editable(sent) != editable(now)
@@ -1201,6 +1228,15 @@ pub struct Row {
     pub approved_at: Option<DateTime<Utc>>,
     pub rejected_at: Option<DateTime<Utc>>,
     pub refreshed_at: Option<DateTime<Utc>>,
+    /// The AI check (`super::tendlc_check`): where it is, who asked for it
+    /// and when, the run in progress, and the report (JSON).
+    pub ai_check_status: Option<String>,
+    pub ai_check_requested_at: Option<DateTime<Utc>>,
+    pub ai_check_requested_by_user_id: Option<i32>,
+    pub ai_check_started_at: Option<DateTime<Utc>>,
+    pub ai_check_attempts: i64,
+    pub ai_checked_at: Option<DateTime<Utc>>,
+    pub ai_check_report: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub company_name: String,
@@ -1216,7 +1252,11 @@ const SELECT: &str = "SELECT r.id, r.company_id, r.status, CAST(r.draft AS CHAR)
         r.draft_saved_at, COALESCE(NULLIF(TRIM(us.name), ''), us.email) AS draft_saved_by_name,
         r.ready_at, COALESCE(NULLIF(TRIM(ur.name), ''), ur.email) AS ready_by_name,
         r.sent_at, COALESCE(NULLIF(TRIM(ut.name), ''), ut.email) AS sent_by_name,
-        r.resent_at, r.approved_at, r.rejected_at, r.refreshed_at, r.created_at, r.updated_at,
+        r.resent_at, r.approved_at, r.rejected_at, r.refreshed_at,
+        r.ai_check_status, r.ai_check_requested_at, r.ai_check_requested_by_user_id,
+        r.ai_check_started_at, CAST(r.ai_check_attempts AS SIGNED) AS ai_check_attempts,
+        r.ai_checked_at, CAST(r.ai_check_report AS CHAR) AS ai_check_report,
+        r.created_at, r.updated_at,
         c.name AS company_name
    FROM tendlc_registrations r
    JOIN company c ON c.id = r.company_id
@@ -1445,6 +1485,9 @@ mod tests {
         draft.brand.city = "Indianapolis".into();
         draft.brand.state = "IN".into();
         draft.brand.postal_code = "46204".into();
+        draft.campaign.optin_form_link = "https://acmestone.com/quote".into();
+        draft.campaign.privacy_policy_link = "https://acmestone.com/privacy".into();
+        draft.campaign.terms_and_conditions_link = "https://acmestone.com/terms".into();
         draft.campaign.terms_accepted = true;
         normalized(&draft)
     }
@@ -1496,6 +1539,9 @@ mod tests {
             "campaign.optinKeywords",
             "campaign.optoutMessage",
             "campaign.optoutKeywords",
+            "campaign.optinFormLink",
+            "campaign.privacyPolicyLink",
+            "campaign.termsAndConditionsLink",
             "campaign.termsAccepted",
         ] {
             assert!(found.contains(&field.to_string()), "{field}: {found:?}");
@@ -1619,6 +1665,7 @@ mod tests {
         let mut now = sent.clone();
         now.samples[0] = "Acme Stone: new text. Reply STOP to opt out.".into();
         now.help_message = "Acme Stone help: call us.".into();
+        now.optin_form_link = "https://acmestone.com/get-a-quote".into();
         assert!(!locked_fields_changed(&sent, &now));
         assert!(editable_fields_changed(&sent, &now));
         now.usecase = Some(UseCase::CustomerCare);

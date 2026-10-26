@@ -42812,6 +42812,53 @@
         ]
       }
     },
+    "/v1/jobs/tendlc-checks": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Run the AI check of a texting registration (10DLC)",
+        "description": "Takes the registration that has waited longest for its AI check (or one\nwhose check stopped midway, after 15 minutes), reads its quote form,\nprivacy policy, terms and website, and has the AI check them and the\nform the way the carriers do. The Manager who marked it ready is\nemailed what to change, or that it passed; one that passed is ready and\nthe superusers are told (bell and email). After 3 runs where the AI\ncould not answer it goes to the superusers unchecked.",
+        "operationId": "run_tendlc_checks",
+        "responses": {
+          "200": {
+            "description": "How many registrations were checked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenDlcChecksRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
     "/v1/me/call-coaching": {
       "get": {
         "tags": [
@@ -55610,11 +55657,11 @@
           "phone"
         ],
         "summary": "Mark the texting registration (10DLC) ready",
-        "description": "Says the company's registration is complete: the superusers are told\n(bell) and one of them reviews it and sends it to Telnyx; the company\nnever sends it. Also after a rejection, once it is fixed. 400 when\nnothing is saved yet or it is not complete (the first of `problems`);\n409 once it is with Telnyx. Marking a ready one again changes nothing.\nAudited. The company's Managers only.",
+        "description": "Says the company's registration is complete. An AI checks it first\n(`aiCheck`, within minutes: the form and the quote form, privacy policy\nand terms pages, as the carriers check them) and emails the Manager the\nresult: what to change (it stays a draft), or that it passed, and then\nit is ready: the superusers are told (bell and email) and one of them\nsends it to Telnyx; the company never sends it. Without an AI on the\nserver it is ready at once. Also after a rejection, once it is fixed.\n400 when nothing is saved yet or it is not complete (the first of\n`problems`); 409 once it is with Telnyx. Marking a ready one, or one\nbeing checked, again changes nothing. Audited. The company's Managers\nonly.",
         "operationId": "mark_tendlc_registration_ready",
         "responses": {
           "200": {
-            "description": "The registration, ready",
+            "description": "The registration, being checked or ready",
             "content": {
               "application/json": {
                 "schema": {
@@ -89008,7 +89055,127 @@
           },
           "markReady": {
             "type": "boolean",
-            "description": "Mark it ready for a superuser (`POST .../ready`): a saved draft, or\none Telnyx refused once it is fixed (`problems` must be empty)."
+            "description": "Mark it ready for a superuser (`POST .../ready`): a saved draft, or\none Telnyx refused once it is fixed (`problems` must be empty); not\nwhile its AI check waits or runs."
+          }
+        }
+      },
+      "TenDlcAiCheck": {
+        "type": "object",
+        "description": "The AI check of the registration, as the API shows it.",
+        "required": [
+          "status",
+          "fixes",
+          "unclear"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/TenDlcAiCheckStatus"
+          },
+          "requestedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was asked for (the form was marked ready)."
+          },
+          "checkedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the result came; null before."
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The result in a few sentences; null before."
+          },
+          "fixes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TenDlcAiFix"
+            },
+            "description": "What to change (`changes`); empty otherwise."
+          },
+          "unclear": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TenDlcAiUnclear"
+            },
+            "description": "What the AI could not verify, for the superusers."
+          }
+        }
+      },
+      "TenDlcAiCheckStatus": {
+        "type": "string",
+        "description": "Where the AI check of a registration is.",
+        "enum": [
+          "Pending",
+          "Running",
+          "Passed",
+          "Changes",
+          "Failed"
+        ]
+      },
+      "TenDlcAiFix": {
+        "type": "object",
+        "description": "One change the AI asks for.",
+        "required": [
+          "location",
+          "label",
+          "problem",
+          "current",
+          "replacement"
+        ],
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "What to change: a form field (`campaign.messageFlow`,\n`campaign.samples.1`, `campaign.other` for a choice on the form) or a\npage (`page:quoteForm`, `page:privacyPolicy`, `page:terms`,\n`page:website`)."
+          },
+          "label": {
+            "type": "string",
+            "description": "The field or page, for people (\"How customers opt in\")."
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The page's link; null for a form field."
+          },
+          "problem": {
+            "type": "string",
+            "description": "What is wrong and what the carriers require."
+          },
+          "current": {
+            "type": "string",
+            "description": "The text as it is now (the field, or the passage on the page); empty\nwhen the text is missing and must be added."
+          },
+          "replacement": {
+            "type": "string",
+            "description": "The text to use instead (or to add)."
+          }
+        }
+      },
+      "TenDlcAiUnclear": {
+        "type": "object",
+        "description": "Something the AI could not verify (a page it could not read): for the\nsuperusers to look at by hand.",
+        "required": [
+          "label",
+          "note"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "The check (\"Opt-in checkbox\")."
+          },
+          "note": {
+            "type": "string",
+            "description": "What could not be verified, and why."
           }
         }
       },
@@ -89231,20 +89398,39 @@
             "description": "The texts are about direct lending or loans.",
             "default": false
           },
+          "optinFormLink": {
+            "type": "string",
+            "description": "The page with the form customers fill out to give their number and\nagree to texts (the quote form), `https://...`; the AI check reads it.\nNot sent to Telnyx (the message flow names it).",
+            "default": ""
+          },
           "privacyPolicyLink": {
             "type": "string",
-            "description": "The privacy policy page (`https://...`); may be empty.",
+            "description": "The privacy policy page (`https://...`).",
             "default": ""
           },
           "termsAndConditionsLink": {
             "type": "string",
-            "description": "The texting terms page (`https://...`); may be empty.",
+            "description": "The texting terms page (`https://...`).",
             "default": ""
           },
           "termsAccepted": {
             "type": "boolean",
             "description": "The carriers' terms for business texting are accepted (needed to\nsend).",
             "default": false
+          }
+        }
+      },
+      "TenDlcChecksRun": {
+        "type": "object",
+        "description": "What a run did.",
+        "required": [
+          "processed"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Registrations checked (0 or 1).",
+            "minimum": 0
           }
         }
       },
@@ -89687,6 +89873,17 @@
             ],
             "format": "date-time",
             "description": "When it was last refused; null when never."
+          },
+          "aiCheck": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TenDlcAiCheck",
+                "description": "The AI check that runs when a Manager marks it ready (the form and\nthe quote form, privacy policy and terms pages, as the carriers\ncheck them): waiting, running, passed (it went to the superusers),\nchanges (what to change) or failed (it went on unchecked); null when\nnever asked for."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "actions": {
             "$ref": "#/components/schemas/TenDlcActions",

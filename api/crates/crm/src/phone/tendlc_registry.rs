@@ -1250,20 +1250,23 @@ async fn notify_company(state: &AppState, row: &Row, outcome: Outcome) -> sqlx::
 /// Tells the superusers (bell) that a company marked its registration
 /// ready.
 pub async fn notify_ready(state: &AppState, row: &Row, by: &str) -> sqlx::Result<()> {
+    let name: String = row.company_name.trim().chars().take(100).collect();
+    notify_superusers(
+        state,
+        &format!("{name} marked its texting registration (10DLC) ready to send to Telnyx."),
+        by,
+    )
+    .await
+}
+
+/// Tells the superusers (bell) about a registration ready to send.
+pub async fn notify_superusers(state: &AppState, message: &str, by: &str) -> sqlx::Result<()> {
     let superusers: Vec<i32> = sqlx::query_scalar(
         "SELECT id FROM users WHERE COALESCE(is_superuser, 0) <> 0 AND is_deleted = 0 ORDER BY id",
     )
     .fetch_all(&state.pool)
     .await?;
-    let name: String = row.company_name.trim().chars().take(100).collect();
-    bell(
-        &state.pool,
-        &superusers,
-        &format!("{name} marked its texting registration (10DLC) ready to send to Telnyx."),
-        READY_NOTIFICATION,
-        by,
-    )
-    .await
+    bell(&state.pool, &superusers, message, READY_NOTIFICATION, by).await
 }
 
 /// What the job's 10DLC step did.
