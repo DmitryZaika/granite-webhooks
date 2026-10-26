@@ -53,6 +53,8 @@ class ArgvTest(unittest.TestCase):
         )
         schema = json.loads(flag_value(argv, "--json-schema"))
         self.assertEqual(schema["title"], "PostHog auto-fix result")
+        # The CLI rejects a draft 2020-12 "$schema": every run ended with no result.
+        self.assertNotIn("$schema", schema)
 
     def test_allowed_tools_are_one_argument_each_and_end_before_the_next_flag(self) -> None:
         start = self.argv.index("--allowedTools") + 1

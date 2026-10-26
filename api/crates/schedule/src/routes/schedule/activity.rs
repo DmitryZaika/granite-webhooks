@@ -166,7 +166,8 @@ pub async fn activity(
                 NULLIF(TRIM(e.recurrence_exdates), '') AS recurrence_exdates,
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
                 c.name AS customer_name, COALESCE(e.unscheduled, 0) <> 0 AS unscheduled,
-                au.name AS assignee_name, u.name AS creator_name
+                au.name AS assignee_name, u.name AS creator_name,
+                u.name AS created_user_name
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN users au ON e.assigned_user_id = au.id

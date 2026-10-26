@@ -87,6 +87,10 @@ pub struct ScheduleEvent {
     pub recurrence_exdates: Option<String>,
     /// Who made it.
     pub created_user_id: i32,
+    /// Name of the user who made it (the schedule shows it on the event).
+    /// Null when that user has no name.
+    #[sqlx(default)]
+    pub created_user_name: Option<String>,
     /// The installer or template maker on it.
     pub assigned_user_id: Option<i32>,
     /// Its sale.
@@ -176,7 +180,7 @@ async fn load_events(
                 DATE_FORMAT(e.recurrence_until, '%Y-%m-%dT%H:%i:%sZ') AS recurrence_until,
                 NULLIF(TRIM(e.recurrence_exdates), '') AS recurrence_exdates,
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
-                c.name AS customer_name
+                c.name AS customer_name, u.name AS created_user_name
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c
@@ -266,7 +270,7 @@ pub async fn unscheduled(
                 COALESCE(e.all_day, 0) <> 0 AS all_day, e.color, e.status, e.notes,
                 e.calendar_id, NULL AS rrule, NULL AS recurrence_until,
                 e.created_user_id, e.assigned_user_id, e.sale_id, e.customer_id,
-                c.name AS customer_name
+                c.name AS customer_name, u.name AS created_user_name
            FROM events e
            JOIN users u ON e.created_user_id = u.id
            LEFT JOIN customers c

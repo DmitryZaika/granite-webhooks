@@ -120,6 +120,16 @@
       ]
     },
     {
+      "id": "black-theme",
+      "version": 1,
+      "points": 10,
+      "checklist": false,
+      "required_steps": 1,
+      "base_keys": [
+        "my-account-theme"
+      ]
+    },
+    {
       "id": "setup-email-name",
       "version": 1,
       "points": 10,

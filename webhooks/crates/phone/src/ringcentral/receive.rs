@@ -251,7 +251,24 @@ async fn store_outbound_sms(
     form: &RingcentralSMS,
 ) -> BasicResponse {
     match insert_outbound_sms(pool, form, company_id).await {
-        Ok(_) => OK_RESPONSE,
+        Ok(result) => {
+            // A new row is a text sent from the RingCentral app: keep its pictures too.
+            // A merged CRM send (UPDATE, no insert id) already has its attachments.
+            if result.rows_affected() > 0
+                && result.last_insert_id() > 0
+                && let Some(message_id) = form.id
+            {
+                store_inbound_media(
+                    company_id,
+                    result.last_insert_id(),
+                    message_id,
+                    form.agent.as_deref(),
+                    &form.media,
+                )
+                .await;
+            }
+            OK_RESPONSE
+        }
         // Two pushes for the same text raced; the other one stored it.
         Err(sqlx::Error::Database(error)) if error.is_unique_violation() => OK_RESPONSE,
         Err(error) => {

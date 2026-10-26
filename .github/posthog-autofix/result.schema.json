@@ -1,5 +1,4 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PostHog auto-fix result",
   "description": "What the fixer agent concluded about one PostHog issue. Mirrors AgentResult in api/crates/admin/src/posthog_autofix/model.rs.",
   "type": "object",
