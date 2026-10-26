@@ -153,7 +153,7 @@ impl Address {
         }
     }
 
-    fn to_qbo(&self) -> Option<Value> {
+    pub fn to_qbo(&self) -> Option<Value> {
         let parts = [
             &self.line1,
             &self.line2,
@@ -459,6 +459,43 @@ pub fn update_payload(current: &Value, edited: &EditableInvoice) -> Result<Value
     next.extend(trailer);
     let mut payload =
         json!({ "Id": current_id, "SyncToken": sync_token, "sparse": true, "Line": next });
+    set_fields(&mut payload, edited);
+    Ok(payload)
+}
+
+/// A new invoice for `customer` (its `QuickBooks` id) with the editor's
+/// lines, emailed to `email` when `QuickBooks` sends it.
+pub fn create_payload(
+    customer: &str,
+    edited: &EditableInvoice,
+    email: Option<&str>,
+) -> Result<Value, String> {
+    let mut lines = Vec::new();
+    for line in &edited.lines {
+        match line.detail_type.as_str() {
+            "SalesItemLineDetail" if line.item_ref_value.is_none() => {
+                return Err("Sales line requires a QuickBooks item".into());
+            }
+            "SalesItemLineDetail" | "DescriptionOnly" => lines.push(new_line(line)),
+            _ => {}
+        }
+    }
+    if !lines
+        .iter()
+        .any(|line| line["DetailType"] == "SalesItemLineDetail")
+    {
+        return Err("The invoice needs a line with a product or service".into());
+    }
+    let mut payload = json!({ "CustomerRef": { "value": customer }, "Line": lines });
+    set_fields(&mut payload, edited);
+    if let Some(email) = email.map(str::trim).filter(|email| !email.is_empty()) {
+        payload["BillEmail"] = json!({ "Address": email });
+    }
+    Ok(payload)
+}
+
+/// The editor's dates, notes and addresses.
+fn set_fields(payload: &mut Value, edited: &EditableInvoice) {
     if let Some(date) = edited.due_date.as_deref().filter(|date| !date.is_empty()) {
         payload["DueDate"] = json!(date);
     }
@@ -477,7 +514,6 @@ pub fn update_payload(current: &Value, edited: &EditableInvoice) -> Result<Value
     if let Some(address) = edited.ship_addr.as_ref().and_then(Address::to_qbo) {
         payload["ShipAddr"] = address;
     }
-    Ok(payload)
 }
 
 #[cfg(test)]
@@ -530,5 +566,25 @@ mod tests {
         assert_eq!(payload["SyncToken"], "3");
         assert_eq!(payload["PrivateNote"], "call first");
         assert!(payload.get("BillAddr").is_none());
+    }
+
+    #[test]
+    fn a_new_invoice_takes_the_editable_lines_and_the_email() {
+        let mut invoice = editable(&current()).unwrap();
+        invoice.lines[0].id = Some("new:a".into());
+        invoice.lines[1].id = Some("new:b".into());
+        let payload = create_payload("42", &invoice, Some(" a@x.test ")).unwrap();
+        assert_eq!(payload["CustomerRef"]["value"], "42");
+        let lines = payload["Line"].as_array().unwrap();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["SalesItemLineDetail"]["ItemRef"]["value"], "9");
+        assert_eq!(lines[1]["DetailType"], "DescriptionOnly");
+        assert_eq!(payload["BillEmail"]["Address"], "a@x.test");
+        assert!(payload.get("Id").is_none());
+
+        invoice.lines[0].item_ref_value = None;
+        assert!(create_payload("42", &invoice, None).is_err());
+        invoice.lines.remove(0);
+        assert!(create_payload("42", &invoice, None).is_err());
     }
 }

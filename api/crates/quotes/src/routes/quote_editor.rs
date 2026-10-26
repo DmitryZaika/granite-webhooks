@@ -110,6 +110,7 @@ pub struct QuoteRow {
     pub signed_at: Option<String>,
     pub signature_data: Option<String>,
     pub customer_accepted_option_id: Option<i32>,
+    pub qbo_invoice_id: Option<String>,
 }
 
 pub const QUOTE_ROW_SELECT: &str = "SELECT q.id, q.company_id, q.customer_id, c.name AS customer_name,
@@ -127,7 +128,7 @@ pub const QUOTE_ROW_SELECT: &str = "SELECT q.id, q.company_id, q.customer_id, c.
        sp.phone_number AS salesperson_phone, CAST(q.draft_drawing_json AS CHAR) AS draft_drawing_json,
        q.current_step, q.current_revision, q.portal_token,
        DATE_FORMAT(q.signed_at, '%Y-%m-%dT%H:%i:%sZ') AS signed_at, q.signature_data,
-       q.customer_accepted_option_id
+       q.customer_accepted_option_id, q.qbo_invoice_id
   FROM quotes q
   LEFT JOIN customers c ON c.id = q.customer_id
   LEFT JOIN users cb ON cb.id = q.created_by
@@ -641,6 +642,8 @@ pub struct QuoteInfo {
     pub created_by_name: Option<String>,
     /// The sales rep's phone.
     pub salesperson_phone: Option<String>,
+    /// The `QuickBooks` invoice made from it.
+    pub qbo_invoice_id: Option<String>,
 }
 
 /// A saved revision.
@@ -1193,6 +1196,7 @@ fn info_of(row: &QuoteRow) -> QuoteInfo {
         created_date: row.created_date.clone(),
         created_by_name: row.created_by_name.clone(),
         salesperson_phone: row.salesperson_phone.clone(),
+        qbo_invoice_id: row.qbo_invoice_id.clone(),
     }
 }
 

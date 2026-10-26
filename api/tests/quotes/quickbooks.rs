@@ -80,6 +80,13 @@ async fn server(pool: &MySqlPool, access_expires_in: i64) -> (TestServer, Arc<Mu
                         { "Id": "3", "Name": "Mark", "FullyQualifiedName": "Mark" },
                     ] } }));
                 }
+                if q.starts_with("select * from Item where Active = true") {
+                    return Json(json!({ "QueryResponse": { "Item": [
+                        { "Id": "5", "Name": "tile", "Type": "Service" },
+                        { "Id": "3", "Name": "Stone", "Type": "NonInventory" },
+                        { "Id": "4", "Name": "Parts", "Type": "Category" },
+                    ] } }));
+                }
                 if q.contains("from Invoice where TxnDate >=") {
                     return Json(json!({ "QueryResponse": { "Invoice": [
                         { "Id": "9", "DocNumber": "1001", "TxnDate": "2026-05-02", "TotalAmt": 120, "CustomerRef": { "value": "42", "name": "Alice Lead" } },
@@ -214,6 +221,73 @@ async fn an_invoice_is_edited_and_its_pdf_read(pool: MySqlPool) {
         .with_session(sessions::REP)
         .await
         .assert_status_ok();
+}
+
+#[test_db::test(seed)]
+async fn a_quote_makes_one_invoice_with_the_companys_items(pool: MySqlPool) {
+    sqlx::query(
+        "INSERT INTO quotes (id, customer_id, quote_name, quote_type, created_date, sales_rep,
+                             company_id, salesperson_id, created_by, status)
+         VALUES (9801, 1000, 'Kitchen', 'countertops', NOW(), 'Rep', 100, 100, 100, 'converted')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (server, posted) = server(&pool, 10).await;
+    let items: Value = server
+        .get("/v1/qbo/items")
+        .with_session(sessions::REP)
+        .await
+        .json();
+    assert_eq!(
+        items["items"],
+        json!([{ "id": "3", "name": "Stone" }, { "id": "5", "name": "tile" }])
+    );
+    let line = |id: &str, detail: &str, amount: Value, item: Value| {
+        json!({ "id": id, "line_num": null, "detail_type": detail, "description": "Kitchen",
+                "amount": amount, "qty": null, "unit_price": amount, "item_ref_value": item,
+                "item_ref_name": null, "editable": true })
+    };
+    let body = json!({
+        "quote_id": 9801,
+        "invoice": {
+            "id": "", "sync_token": "", "doc_number": null, "txn_date": "2026-10-26",
+            "due_date": null, "total_amt": 500, "balance": null, "currency": null,
+            "customer_memo": null, "private_note": "Quote Kitchen", "bill_addr": null,
+            "ship_addr": { "line1": "1 Main", "line2": null, "line3": null, "city": "Carmel",
+                           "country_sub_division_code": "IN", "postal_code": "46032" },
+            "lines": [
+                line("new:0", "SalesItemLineDetail", json!(500), json!("3")),
+                line("new:1", "DescriptionOnly", Value::Null, Value::Null),
+            ],
+        },
+    });
+    let created: Value = server
+        .post("/v1/customers/1000/qbo-invoices")
+        .with_session(sessions::REP)
+        .json(&body)
+        .await
+        .json();
+    assert_eq!(created["id"], "9");
+    let sent = posted.lock().unwrap()[0].clone();
+    assert_eq!(sent["CustomerRef"]["value"], "42");
+    assert_eq!(sent["BillEmail"]["Address"], "alice@example.com");
+    assert_eq!(sent["ShipAddr"]["City"], "Carmel");
+    assert_eq!(sent["Line"][0]["SalesItemLineDetail"]["ItemRef"]["value"], "3");
+    assert_eq!(sent["Line"][1]["DetailType"], "DescriptionOnly");
+    let linked: Option<String> =
+        sqlx::query_scalar("SELECT qbo_invoice_id FROM quotes WHERE id = 9801")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(linked.as_deref(), Some("9"));
+    server
+        .post("/v1/customers/1000/qbo-invoices")
+        .with_session(sessions::REP)
+        .json(&body)
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    assert_eq!(posted.lock().unwrap().len(), 1);
 }
 
 #[test_db::test(seed)]

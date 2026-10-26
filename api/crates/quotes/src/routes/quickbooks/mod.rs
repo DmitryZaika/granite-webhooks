@@ -2,12 +2,15 @@
 //!
 //! - `GET /v1/customers/{id}/qbo-invoices` → the customer's invoices,
 //!   linking the customer to its `QuickBooks` customer on first use
+//! - `POST /v1/customers/{id}/qbo-invoices` → a new invoice (a quote's
+//!   Create invoice)
 //! - `GET`/`PUT /v1/customers/{id}/qbo-invoices/{invoice_id}` → one
 //!   invoice for the editor, and saving it
 //! - `GET /v1/customers/{id}/qbo-invoices/{invoice_id}/pdf` → its PDF
 //! - `GET /v1/qbo/invoices/{invoice_id}/pdf` → any invoice of the company
 //!   as a PDF (the rep's sales panel, schedule events)
 //! - `GET /v1/qbo/customers` → `QuickBooks` customers by email or name
+//! - `GET /v1/qbo/items` → the products and services a line can sell
 //! - `GET /v1/qbo/class-sales` → the "Sales by Class" report (admins)
 //! - `GET /v1/me/qbo-sales` → the rep's sales this month, and
 //!   `/customers` the customers behind them
@@ -29,18 +32,22 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::header;
 use axum::response::IntoResponse;
-use invoice::{EditableInvoice, InvoiceSummary, editable, summary, text, update_payload};
+use invoice::{
+    Address, EditableInvoice, InvoiceSummary, create_payload, editable, summary, text,
+    update_payload,
+};
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
-        .routes(routes!(customer_invoices))
+        .routes(routes!(customer_invoices, create_invoice))
         .routes(routes!(get_invoice, update_invoice))
         .routes(routes!(customer_invoice_pdf))
         .routes(routes!(invoice_pdf))
         .routes(routes!(customers))
+        .routes(routes!(items))
         .routes(routes!(sales::my_sales))
         .routes(routes!(sales::my_customers))
         .routes(routes!(class_sales::class_sales))
@@ -54,6 +61,19 @@ fn qbo_error(err: QboError) -> ApiError {
     }
     tracing::error!(error = %err, "QuickBooks request failed");
     ApiError::Upstream("QuickBooks request failed".into())
+}
+
+/// A write `QuickBooks` refused (a taken name, an inactive item) says why.
+#[allow(clippy::needless_pass_by_value)] // used as `map_err(qbo_refusal)`
+fn qbo_refusal(err: QboError) -> ApiError {
+    if let QboError::Status { status: 400, body } = &err
+        && let Ok(body) = serde_json::from_str::<Value>(body)
+        && let Some(detail) = text(&body["Fault"]["Error"][0]["Detail"])
+            .or_else(|| text(&body["Fault"]["Error"][0]["Message"]))
+    {
+        return ApiError::BadRequest(format!("QuickBooks: {detail}"));
+    }
+    qbo_error(err)
 }
 
 /// `ok`, or why there are no invoices.
@@ -313,6 +333,175 @@ pub async fn invoices_of_customer(
             CustomerInvoices::empty(InvoicesStatus::Error)
         }
     })
+}
+
+/// A `QuickBooks` display name: no `:` (it nests customers), tabs or new lines.
+fn display_name(name: &str) -> String {
+    name.split([':', '\t', '\n', '\r', ' '])
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(500)
+        .collect()
+}
+
+/// The customer's `QuickBooks` customer: the linked one, a match, or a new
+/// one made from the CRM customer. Links it.
+async fn qbo_customer_for(
+    state: &AppState,
+    access: &Access,
+    company_id: i32,
+    customer_id: i32,
+    row: &CustomerRow,
+    bill_addr: Option<&Address>,
+) -> ApiResult<String> {
+    if let Some(id) = row.qbo_id.clone() {
+        return Ok(id);
+    }
+    let id = if let Some(id) = resolve_qbo_id(state, access, row)
+        .await
+        .map_err(qbo_error)?
+    {
+        id
+    } else {
+        let name = display_name(row.name.as_deref().unwrap_or(""));
+        if name.is_empty() {
+            return Err(ApiError::BadRequest(
+                "The customer needs a name for QuickBooks".into(),
+            ));
+        }
+        let mut body = json!({ "DisplayName": name });
+        if let Some(email) = row
+            .email
+            .as_deref()
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+        {
+            body["PrimaryEmailAddr"] = json!({ "Address": email });
+        }
+        if let Some(address) = bill_addr.and_then(Address::to_qbo) {
+            body["BillAddr"] = address;
+        }
+        let created = state
+            .qbo
+            .post(access, "customer", &body)
+            .await
+            .map_err(qbo_refusal)?;
+        text(&created["Customer"]["Id"])
+            .ok_or_else(|| ApiError::Upstream("Failed to parse created customer".into()))?
+    };
+    sqlx::query(
+        "UPDATE customers SET qbo_id = ? WHERE id = ? AND company_id = ? AND deleted_at IS NULL",
+    )
+    .bind(&id)
+    .bind(customer_id)
+    .bind(company_id)
+    .execute(&state.pool)
+    .await?;
+    Ok(id)
+}
+
+/// Body of `POST /v1/customers/{id}/qbo-invoices`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct InvoiceCreate {
+    /// The invoice as the editor left it (`id` and `sync_token` unused).
+    pub invoice: EditableInvoice,
+    /// The quote it is made from, which keeps the new invoice's id.
+    pub quote_id: Option<i32>,
+}
+
+/// Create a QuickBooks invoice for a customer
+///
+/// Creates the editor's invoice in `QuickBooks` for the customer, matching
+/// or creating the customer's `QuickBooks` customer first. With `quote_id`
+/// the quote keeps the invoice's id, and a quote that has one already is
+/// refused.
+#[crate::openapi::path(
+    post,
+    path = "/v1/customers/{id}/qbo-invoices",
+    operation_id = "create_customer_qbo_invoice",
+    tag = "quickbooks",
+    params(("id" = i32, Path, description = "Customer id")),
+    request_body = InvoiceCreate,
+    responses(
+        (status = 200, description = "The created invoice", body = EditableInvoice),
+        (status = 400, description = "No sales line, a sales line without an item, or QuickBooks refused it", body = ErrorBody),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 404, description = "No such customer, or no such quote of the customer", body = ErrorBody),
+        (status = 409, description = "QuickBooks is not connected, or the quote has an invoice", body = ErrorBody),
+        (status = 502, description = "QuickBooks failed", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn create_invoice(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+    Path(customer_id): Path<i32>,
+    JsonBody(input): JsonBody<InvoiceCreate>,
+) -> ApiResult<Json<EditableInvoice>> {
+    let company_id = user.company_id;
+    if let Some(quote_id) = input.quote_id {
+        let invoiced: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT qbo_invoice_id FROM quotes
+              WHERE id = ? AND company_id = ? AND customer_id = ? AND deleted_at IS NULL",
+        )
+        .bind(quote_id)
+        .bind(company_id)
+        .bind(customer_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        match invoiced {
+            None => return Err(ApiError::NotFound),
+            Some(Some(_)) => {
+                return Err(ApiError::Conflict(
+                    "This quote already has an invoice".into(),
+                ));
+            }
+            Some(None) => {}
+        }
+    }
+    let row = customer(&state, company_id, customer_id).await?;
+    let access = state
+        .qbo
+        .access(&state.pool, company_id)
+        .await
+        .map_err(qbo_error)?;
+    let qbo_id = qbo_customer_for(
+        &state,
+        &access,
+        company_id,
+        customer_id,
+        &row,
+        input.invoice.bill_addr.as_ref(),
+    )
+    .await?;
+    let payload = create_payload(&qbo_id, &input.invoice, row.email.as_deref())
+        .map_err(ApiError::BadRequest)?;
+    let created = state
+        .qbo
+        .post(&access, "invoice", &payload)
+        .await
+        .map_err(qbo_refusal)?;
+    let created = if created["Invoice"].is_object() {
+        &created["Invoice"]
+    } else {
+        &created
+    };
+    let invoice = editable(created)
+        .ok_or_else(|| ApiError::Upstream("Failed to parse created invoice".into()))?;
+    if let Some(quote_id) = input.quote_id {
+        sqlx::query(
+            "UPDATE quotes SET qbo_invoice_id = ? WHERE id = ? AND company_id = ? AND qbo_invoice_id IS NULL",
+        )
+        .bind(&invoice.id)
+        .bind(quote_id)
+        .bind(company_id)
+        .execute(&state.pool)
+        .await?;
+    }
+    Ok(Json(invoice))
 }
 
 /// The access token, once the invoice is known to be the customer's.
@@ -659,6 +848,77 @@ pub async fn customers(
         connected: true,
         customers,
     }))
+}
+
+/// A product or service an invoice line can sell.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct QboItem {
+    /// `QuickBooks` item id.
+    pub id: String,
+    /// Its name.
+    pub name: String,
+}
+
+/// `GET /v1/qbo/items`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct QboItems {
+    /// By name.
+    pub items: Vec<QboItem>,
+}
+
+/// List QuickBooks products and services
+///
+/// The company's active services and products (up to 1000), by name, for
+/// the lines of a new invoice.
+#[crate::openapi::path(
+    get,
+    path = "/v1/qbo/items",
+    operation_id = "list_qbo_items",
+    tag = "quickbooks",
+    responses(
+        (status = 200, description = "Items", body = QboItems),
+        (status = 401, description = "No valid session", body = ErrorBody),
+        (status = 403, description = "Caller is not an employee or admin", body = ErrorBody),
+        (status = 409, description = "QuickBooks is not connected", body = ErrorBody),
+        (status = 502, description = "QuickBooks failed", body = ErrorBody),
+    ),
+    security(("session_cookie" = []))
+)]
+pub async fn items(
+    State(state): State<AppState>,
+    EmployeeUser(user): EmployeeUser,
+) -> ApiResult<Json<QboItems>> {
+    let access = state
+        .qbo
+        .access(&state.pool, user.company_id)
+        .await
+        .map_err(qbo_error)?;
+    let rows = state
+        .qbo
+        .query(
+            &access,
+            "select * from Item where Active = true MAXRESULTS 1000",
+            "Item",
+        )
+        .await
+        .map_err(qbo_error)?;
+    let mut items: Vec<QboItem> = rows
+        .iter()
+        .filter(|row| {
+            matches!(
+                row["Type"].as_str(),
+                Some("Service" | "NonInventory" | "Inventory")
+            )
+        })
+        .filter_map(|row| {
+            Some(QboItem {
+                id: text(&row["Id"])?,
+                name: text(&row["Name"])?,
+            })
+        })
+        .collect();
+    items.sort_by_key(|item| item.name.to_lowercase());
+    Ok(Json(QboItems { items }))
 }
 
 #[cfg(test)]
