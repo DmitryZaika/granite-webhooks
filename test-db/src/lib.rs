@@ -7,14 +7,21 @@
 //! 1. The migrations (and the seed) run once into a template database named
 //!    after a hash of their contents, so it is reused by every test binary and
 //!    every run until a migration or the seed changes.
-//! 2. A test takes a database from a per-process pool of copies of the
-//!    template. A new copy is one multi-statement script (`CREATE TABLE`s and
-//!    `INSERT ... SELECT`s).
-//! 3. After a passing test the copy goes back to the pool once it matches the
-//!    template again: tables whose `CHECKSUM TABLE` or `AUTO_INCREMENT` differ
-//!    from the template's are refilled. A copy whose tables were dropped or
-//!    added is dropped instead. A failing test leaves its database behind for
-//!    inspection; the next run drops it.
+//! 2. A test runs on a copy of the template. Copies stay on the server between
+//!    runs (`_test_db_c_<template>_<n>`): a run makes a new one only when more
+//!    tests run at once than there are copies. Making copies (each one script
+//!    of ~200 `CREATE TABLE`s and `INSERT ... SELECT`s) used to take most of a
+//!    run of a few tests, since every run made its own.
+//! 3. A test claims its copy with a MySQL named lock that it holds while it
+//!    runs, so no two tests share one, whatever process, test binary or
+//!    worktree they run in.
+//! 4. Before a test uses a copy, the copy is made to match the template again:
+//!    tables whose `CHECKSUM TABLE` or `AUTO_INCREMENT` differ from the
+//!    template's are refilled, and a copy whose tables were dropped or added
+//!    is made anew. The first failing tests of a process keep their copies
+//!    locked, as the tests left them, until the process ends, and print the
+//!    copies' names for inspection.
+//! 5. Templates no run has used for a week are dropped with their copies.
 //!
 //! ```ignore
 //! #[test_db::test]          // every migration
@@ -44,8 +51,21 @@ pub use test_db_macros::test;
 static MIGRATOR: Migrator = sqlx::migrate!("../migrations");
 const SEED: &str = include_str!("../../api/seed/local_seed.sql");
 const READY_TABLE: &str = "_test_db_ready";
-const COPY_PREFIX: &str = "_test_db_copy_";
 const TEMPLATE_PREFIX: &str = "_test_db_tpl_";
+const COPY_PREFIX: &str = "_test_db_c_";
+/// Copies of the previous test-db, one set per test process (`<pid>_<n>`).
+const PROCESS_COPY_PREFIX: &str = "_test_db_copy_";
+/// When each template was last used (`templates`), to drop unused ones.
+const CONTROL_DATABASE: &str = "_test_db";
+const UNUSED_TEMPLATE_DAYS: u32 = 7;
+/// Table definitions (and open tables) the server keeps: every copy's ~200
+/// tables. With the default 2000, checking copies evicts the tables running
+/// tests use, and their prepared statements fail ("Prepared statement needs
+/// to be re-prepared").
+const TABLE_CACHE: u32 = 20_000;
+/// Failed tests' copies a process keeps locked for inspection: each holds a
+/// connection, and a run where everything fails must not use them all up.
+const KEPT_FAILURES: usize = 8;
 
 /// What the template database contains.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,15 +110,15 @@ impl Template {
 
 struct TemplateState {
     plan: OnceCell<Plan>,
-    /// Copies that match the template and no running test uses.
-    free: Mutex<Vec<String>>,
+    /// Copies this process's tests released: tried before the others.
+    released: Mutex<Vec<usize>>,
 }
 
 impl TemplateState {
     const fn new() -> Self {
         Self {
             plan: OnceCell::const_new(),
-            free: Mutex::new(Vec::new()),
+            released: Mutex::new(Vec::new()),
         }
     }
 }
@@ -119,8 +139,46 @@ struct TableState {
     auto_increment: Option<u64>,
 }
 
-/// Runs one test on its own database copied from `template`. Used by
-/// `#[test_db::test]`; the test panics on failure like any `#[test]`.
+/// What the names of `template`'s copies start with.
+fn copy_prefix(template: &str) -> String {
+    let suffix = template.strip_prefix(TEMPLATE_PREFIX).unwrap_or(template);
+    format!("{COPY_PREFIX}{suffix}_")
+}
+
+/// The name of `template`'s `index`th copy.
+fn copy_name(template: &str, index: usize) -> String {
+    format!("{}{index}", copy_prefix(template))
+}
+
+/// A copy a test holds, and the connection holding its lock.
+struct Claim {
+    database: String,
+    index: usize,
+    lock: Option<MySqlConnection>,
+}
+
+impl Drop for Claim {
+    /// After a panic (the test failed) the lock's connection is leaked, so
+    /// the copy stays locked, as the test left it, until the process ends;
+    /// past [`KEPT_FAILURES`] the lock is let go with the connection.
+    fn drop(&mut self) {
+        static KEPT: AtomicUsize = AtomicUsize::new(0);
+        if std::thread::panicking()
+            && KEPT.fetch_add(1, Ordering::Relaxed) < KEPT_FAILURES
+            && let Some(lock) = self.lock.take()
+        {
+            eprintln!(
+                "test-db: the failed test's database `{}` stays as the test left it \
+                 until the next run claims it",
+                self.database
+            );
+            std::mem::forget(lock);
+        }
+    }
+}
+
+/// Runs one test on its own copy of `template`. Used by `#[test_db::test]`;
+/// the test panics on failure like any `#[test]`.
 ///
 /// # Panics
 ///
@@ -143,24 +201,29 @@ where
                 .await
                 .expect("build the test database template");
 
-            let database = checkout(&server, state, plan)
+            let mut claim = claim(&server, state, plan)
                 .await
-                .expect("create a test database");
+                .expect("claim a test database");
             let pool = MySqlPoolOptions::new()
-                .connect_with(server.clone().database(&database))
+                .connect_with(server.clone().database(&claim.database))
                 .await
                 .expect("connect to the test database");
 
-            // A panic here skips the rest: the database stays for inspection.
             test(pool.clone()).await;
             pool.close().await;
 
-            let reusable = restore(&server, plan, &database)
+            let mut lock = claim.lock.take().expect("the claim's lock");
+            sqlx::query("SELECT RELEASE_LOCK(?)")
+                .bind(&claim.database)
+                .execute(&mut lock)
                 .await
-                .expect("reset the test database");
-            if reusable {
-                state.free.lock().expect("free list").push(database);
-            }
+                .expect("release the test database");
+            lock.close().await.expect("close the lock connection");
+            state
+                .released
+                .lock()
+                .expect("released copies")
+                .push(claim.index);
         });
 }
 
@@ -169,48 +232,66 @@ fn server_options() -> MySqlConnectOptions {
     MySqlConnectOptions::from_str(&url).expect("DATABASE_URL is a MySQL URL")
 }
 
-/// A free copy of the template, or a new one.
-async fn checkout(
+/// Locks the first free copy (the ones this process released first) and
+/// makes it match the template, or makes a new copy when all are taken.
+async fn claim(
     server: &MySqlConnectOptions,
     state: &TemplateState,
     plan: &Plan,
-) -> Result<String, sqlx::Error> {
-    if let Some(database) = state.free.lock().expect("free list").pop() {
-        return Ok(database);
+) -> Result<Claim, sqlx::Error> {
+    let mut lock = MySqlConnection::connect_with(server).await?;
+    let mut next = 0;
+    loop {
+        let released = state.released.lock().expect("released copies").pop();
+        let index = released.unwrap_or_else(|| {
+            next += 1;
+            next - 1
+        });
+        let database = copy_name(&plan.template, index);
+        let locked: Option<i64> = sqlx::query_scalar("SELECT GET_LOCK(?, 0)")
+            .bind(&database)
+            .fetch_one(&mut lock)
+            .await?;
+        if locked != Some(1) {
+            continue;
+        }
+        if !restore(&mut lock, plan, &database).await? {
+            create(&mut lock, plan, &database).await?;
+        }
+        return Ok(Claim {
+            database,
+            index,
+            lock: Some(lock),
+        });
     }
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let database = format!(
-        "{COPY_PREFIX}{}_{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    );
-    let mut conn = MySqlConnection::connect_with(server).await?;
+}
+
+/// Replaces `database` with a new copy of the template.
+async fn create(
+    conn: &mut MySqlConnection,
+    plan: &Plan,
+    database: &str,
+) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(AssertSqlSafe(format!(
         "DROP DATABASE IF EXISTS `{database}`; CREATE DATABASE `{database}`; USE `{database}`; {}",
         plan.script
     )))
-    .execute(&mut conn)
+    .execute(conn)
     .await?;
-    conn.close().await?;
-    Ok(database)
+    Ok(())
 }
 
-/// Makes `database` match the template again. Returns false (and drops the
-/// database) when its tables, views, triggers or routines are not the template's.
+/// Makes `database` match the template again. Returns false when it does not
+/// exist or its tables, views, triggers or routines are not the template's.
 async fn restore(
-    server: &MySqlConnectOptions,
+    conn: &mut MySqlConnection,
     plan: &Plan,
     database: &str,
 ) -> Result<bool, sqlx::Error> {
-    let mut conn = MySqlConnection::connect_with(server).await?;
-    let tables = table_states(&mut conn, database).await?;
-
+    let tables = table_states(conn, database).await?;
     let same_tables =
         tables.len() == plan.tables.len() && tables.keys().all(|t| plan.tables.contains_key(t));
-    if !same_tables || other_objects(&mut conn, database).await? != plan.other_objects {
-        conn.execute(AssertSqlSafe(format!("DROP DATABASE `{database}`")))
-            .await?;
-        conn.close().await?;
+    if !same_tables || other_objects(conn, database).await? != plan.other_objects {
         return Ok(false);
     }
 
@@ -235,11 +316,8 @@ async fn restore(
     }
     if dirty {
         script.push_str("SET FOREIGN_KEY_CHECKS = 1;");
-        sqlx::raw_sql(AssertSqlSafe(script))
-            .execute(&mut conn)
-            .await?;
+        sqlx::raw_sql(AssertSqlSafe(script)).execute(conn).await?;
     }
-    conn.close().await?;
     Ok(true)
 }
 
@@ -324,8 +402,10 @@ async fn table_states(
 async fn build_plan(server: &MySqlConnectOptions, template: Template) -> Result<Plan, sqlx::Error> {
     let name = template.name();
     let mut conn = MySqlConnection::connect_with(server).await?;
-    drop_dead_copies(&mut conn).await?;
+    raise_table_caches(&mut conn).await;
+    drop_process_copies(&mut conn).await?;
     ensure_template(&mut conn, template, &name).await?;
+    drop_unused_templates(&mut conn).await?;
 
     let tables = table_states(&mut conn, &name).await?;
     let other_objects = other_objects(&mut conn, &name).await?;
@@ -363,9 +443,9 @@ async fn build_plan(server: &MySqlConnectOptions, template: Template) -> Result<
     })
 }
 
-/// Creates the template database unless a finished one with this name exists.
-/// A MySQL named lock keeps parallel test binaries (or worktrees sharing the
-/// server) from building it twice.
+/// Creates the template database unless a finished one with this name
+/// exists, and records that it is in use. A MySQL named lock keeps parallel
+/// test binaries (or worktrees sharing the server) from building it twice.
 async fn ensure_template(
     conn: &mut MySqlConnection,
     template: Template,
@@ -406,6 +486,21 @@ async fn ensure_template(
         .await?;
     }
 
+    sqlx::raw_sql(AssertSqlSafe(format!(
+        "CREATE DATABASE IF NOT EXISTS `{CONTROL_DATABASE}`; \
+         CREATE TABLE IF NOT EXISTS `{CONTROL_DATABASE}`.templates \
+           (name VARCHAR(64) PRIMARY KEY, used_at DATETIME NOT NULL)"
+    )))
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query(AssertSqlSafe(format!(
+        "INSERT INTO `{CONTROL_DATABASE}`.templates (name, used_at) VALUES (?, UTC_TIMESTAMP()) \
+         ON DUPLICATE KEY UPDATE used_at = UTC_TIMESTAMP()"
+    )))
+    .bind(name)
+    .execute(&mut *conn)
+    .await?;
+
     sqlx::query("SELECT RELEASE_LOCK(?)")
         .bind(name)
         .execute(&mut *conn)
@@ -413,28 +508,130 @@ async fn ensure_template(
     Ok(())
 }
 
-/// Drops copies left by test processes that are no longer running (failed
-/// tests, or every copy of a finished run).
-async fn drop_dead_copies(conn: &mut MySqlConnection) -> Result<(), sqlx::Error> {
-    let databases: Vec<String> = sqlx::query_scalar(
-        "SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?",
-    )
-    .bind(format!("{}%", COPY_PREFIX.replace('_', "\\_")))
+/// Drops the templates no run has used for [`UNUSED_TEMPLATE_DAYS`] days,
+/// and their copies no test holds. A template of an older test-db (not in
+/// the `templates` table) counts as used now.
+async fn drop_unused_templates(conn: &mut MySqlConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(AssertSqlSafe(format!(
+        "INSERT IGNORE INTO `{CONTROL_DATABASE}`.templates (name, used_at) \
+         SELECT schema_name, UTC_TIMESTAMP() FROM information_schema.schemata \
+          WHERE schema_name LIKE ?"
+    )))
+    .bind(like_prefix(TEMPLATE_PREFIX))
+    .execute(&mut *conn)
+    .await?;
+    let unused: Vec<String> = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT name FROM `{CONTROL_DATABASE}`.templates \
+          WHERE used_at < UTC_TIMESTAMP() - INTERVAL {UNUSED_TEMPLATE_DAYS} DAY"
+    )))
     .fetch_all(&mut *conn)
     .await?;
-    for database in databases {
-        let pid = database[COPY_PREFIX.len()..]
+    for template in unused {
+        for copy in databases_like(conn, &like_prefix(&copy_prefix(&template))).await? {
+            if lock_now(conn, &copy).await? {
+                drop_database(conn, &copy).await?;
+                release(conn, &copy).await?;
+            }
+        }
+        if lock_now(conn, &template).await? {
+            drop_database(conn, &template).await?;
+            sqlx::query(AssertSqlSafe(format!(
+                "DELETE FROM `{CONTROL_DATABASE}`.templates WHERE name = ?"
+            )))
+            .bind(&template)
+            .execute(&mut *conn)
+            .await?;
+            release(conn, &template).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Raises the server's table caches to [`TABLE_CACHE`] (they reset when it
+/// restarts). A user without the privilege keeps the server's own sizes.
+async fn raise_table_caches(conn: &mut MySqlConnection) {
+    let raised = async {
+        let (definitions, open): (u64, u64) =
+            sqlx::query_as("SELECT @@GLOBAL.table_definition_cache, @@GLOBAL.table_open_cache")
+                .fetch_one(&mut *conn)
+                .await?;
+        for (variable, size) in [
+            ("table_definition_cache", definitions),
+            ("table_open_cache", open),
+        ] {
+            if size < u64::from(TABLE_CACHE) {
+                conn.execute(AssertSqlSafe(format!(
+                    "SET GLOBAL {variable} = {TABLE_CACHE}"
+                )))
+                .await?;
+            }
+        }
+        Ok::<_, sqlx::Error>(())
+    }
+    .await;
+    if let Err(error) = raised {
+        eprintln!(
+            "test-db: the table caches stay small ({error}): tests may fail with \
+             \"Prepared statement needs to be re-prepared\""
+        );
+    }
+}
+
+/// Drops the copies of the previous test-db (one set per test process)
+/// whose process is no longer running.
+async fn drop_process_copies(conn: &mut MySqlConnection) -> Result<(), sqlx::Error> {
+    for database in databases_like(conn, &like_prefix(PROCESS_COPY_PREFIX)).await? {
+        let pid = database[PROCESS_COPY_PREFIX.len()..]
             .split('_')
             .next()
             .and_then(|pid| pid.parse::<u32>().ok());
         if pid.is_some_and(process_is_running) {
             continue;
         }
-        conn.execute(AssertSqlSafe(format!(
-            "DROP DATABASE IF EXISTS `{database}`"
-        )))
-        .await?;
+        drop_database(conn, &database).await?;
     }
+    Ok(())
+}
+
+/// A `LIKE` pattern matching every name that starts with `prefix`.
+fn like_prefix(prefix: &str) -> String {
+    format!("{}%", prefix.replace('_', "\\_"))
+}
+
+async fn databases_like(
+    conn: &mut MySqlConnection,
+    pattern: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?",
+    )
+    .bind(pattern)
+    .fetch_all(conn)
+    .await
+}
+
+/// Takes the named lock `name` if no other session holds it.
+async fn lock_now(conn: &mut MySqlConnection, name: &str) -> Result<bool, sqlx::Error> {
+    let locked: Option<i64> = sqlx::query_scalar("SELECT GET_LOCK(?, 0)")
+        .bind(name)
+        .fetch_one(conn)
+        .await?;
+    Ok(locked == Some(1))
+}
+
+async fn release(conn: &mut MySqlConnection, name: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT RELEASE_LOCK(?)")
+        .bind(name)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+async fn drop_database(conn: &mut MySqlConnection, database: &str) -> Result<(), sqlx::Error> {
+    conn.execute(AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS `{database}`"
+    )))
+    .await?;
     Ok(())
 }
 

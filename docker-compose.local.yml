@@ -26,6 +26,9 @@ services:
       - "--sync-binlog=0"
       - "--innodb-doublewrite=0"
       - "--innodb-flush-method=nosync"
+      # Test copies keep ~200 tables each (test-db raises these too).
+      - "--table-definition-cache=20000"
+      - "--table-open-cache=20000"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pgranite"]
       interval: 2s
