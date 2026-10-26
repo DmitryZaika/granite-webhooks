@@ -357,7 +357,9 @@ pub fn section_ids_for(search: &str) -> Vec<String> {
             picked.push(id);
         }
     };
+    let mut named: Vec<&str> = Vec::new();
     for topic in matched_topics(&search) {
+        named.push(&topic.id);
         add(&topic.id);
         for related in &topic.related {
             add(related);
@@ -370,7 +372,13 @@ pub fn section_ids_for(search: &str) -> Vec<String> {
             add(*id);
         }
     }
-    picked.sort_by(|a, b| score(b).total_cmp(&score(a)));
+    // The sections the topic table names first, each lot by the words.
+    picked.sort_by(|a, b| {
+        named
+            .contains(b)
+            .cmp(&named.contains(a))
+            .then_with(|| score(b).total_cmp(&score(a)))
+    });
     let mut selected = MANUAL.core.clone();
     if picked.is_empty() {
         selected.extend(MANUAL.fallback.iter().cloned());
@@ -553,7 +561,7 @@ const PICK_RULES: &str = r#"You find where the Granite Manager user manual answe
 
 Reply with a JSON object only, in one of these forms:
 1. {"sections": ["id", "id"]}: the 1 to 3 sections whose text answers the question, best first. Prefer the section of the page or screen where the task is done.
-2. {"clarify": {"question": "...", "choices": [{"label": "...", "sections": ["id"]}]}}: only when the question fits two or more different features of the app about equally well, their steps differ, and nothing in the question or the earlier questions says which. The question is one short sentence that names the choices; 2 to 5 choices, each label a few words naming the feature as the app names it, with the sections that answer it.
+2. {"clarify": {"question": "...", "choices": [{"label": "...", "sections": ["id"]}]}}: rarely; only when the question fits two or more different features of the app about equally well, their steps differ, and nothing in the question or the earlier questions says which ("how do I add a template": an email, SMS or quote email template). Never ask about parts of one tool, or when one meaning is the usual one in a countertop shop. The question is one short sentence that names the choices; 2 to 5 choices, each label a few words naming the feature as the app names it, with the sections that answer it.
 3. {"sections": []}: the question is not about using Granite Manager (the company's own prices, policies or process, or small talk).
 
 Users type fast: read typos and run-together words as the closest app words ("specail" is special, "aquote" is a quote, "deal bord" is the deal board). A follow-up ("and how do I undo it?") is about the same feature as the earlier questions.
@@ -669,8 +677,9 @@ pub async fn pick(
 
 /// The sections to answer `question` from (`search`: it and the earlier
 /// questions), or the question to ask back: the clarify table's, else the
-/// model's pick with the best section of the manual's own words in case it
-/// missed one, else the manual's own words alone.
+/// model's pick (or question back, for a feature the topic table doesn't
+/// name) with the best section of the manual's own words in case it missed
+/// one, else the manual's own words alone.
 pub async fn sections_for(
     state: &AppState,
     caller: Caller<'_>,
@@ -685,6 +694,12 @@ pub async fn sections_for(
     }
     let fallback = section_ids_for(search);
     match pick(state, caller, question, earlier).await {
+        // A feature the topic table names is not one to ask about ("how to
+        // make a layout" is the quote's slab layout): the manual's own words.
+        Some(Picked::Ask(_)) if matches_topic(question) => Ok(fallback
+            .into_iter()
+            .filter(|id| !MANUAL.core.contains(id))
+            .collect()),
         Some(Picked::Ask(clarification)) => Err(clarification),
         Some(Picked::Sections(mut ids)) if !ids.is_empty() => {
             // The best of the manual's own words the model did not pick.

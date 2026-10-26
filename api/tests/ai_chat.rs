@@ -776,6 +776,38 @@ async fn the_model_asks_back_when_a_question_fits_several_features(pool: MySqlPo
     assert!(sent.contains("(I mean SMS templates in Granite Manager.)"));
 }
 
+/// A feature the topic table names is answered, even when the model would
+/// ask back: "layout" in this app is the quote's slab layout.
+#[test_db::test(seed)]
+async fn a_feature_the_topic_table_names_is_not_asked_back(pool: MySqlPool) {
+    let asked = json!({ "clarify": {
+        "question": "Do you mean a quote drawing layout or an AI Design picture?",
+        "choices": [
+            { "label": "Quote drawing layout", "sections": ["quote-drawing"] },
+            { "label": "AI Design picture", "sections": ["ai-chat-ai-design"] }
+        ]
+    } });
+    let reply = "Open **Slabs & Layout** and click **Auto layout**.";
+    let (server, ai) = setup(
+        &pool,
+        vec![Reply::Text(asked.to_string()), Reply::Text(reply.into())],
+    )
+    .await;
+    let events = ask(
+        &server,
+        json!({ "query": "How to make a layout", "isNew": true }),
+    )
+    .await;
+    assert_eq!(answer(&events), reply);
+    assert!(named(&events, "clarify").is_empty());
+    let requests = ai.requests.lock().unwrap().clone();
+    assert!(
+        contents(&requests[1])
+            .iter()
+            .any(|c| c.contains("### Slabs & Layout"))
+    );
+}
+
 /// A how-to question that names records ("can I delete a deal?") is the
 /// manual's, not the assistant's.
 #[test_db::test(seed)]
