@@ -117,6 +117,15 @@ pub fn instruction_user_message(query: &str) -> String {
     )
 }
 
+/// The question in a message [`instruction_user_message`] wrote (any other
+/// message as it is).
+pub fn asked_question(message: &str) -> &str {
+    message
+        .split_once("\n\nQuestion: ")
+        .and_then(|(_, rest)| rest.strip_suffix("\n\nAnswer:"))
+        .unwrap_or(message)
+}
+
 fn lookup_kind_is_contact(query: &str) -> bool {
     let trimmed = query.trim();
     if trimmed.contains('@') {
