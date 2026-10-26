@@ -2,7 +2,7 @@ name: API tests
 
 # Pull requests to main: the api crate's OpenAPI checks (every route
 # documented, api/openapi.json current), the Granite Phone integration
-# tests and the follow-up tests. The tests make their own databases (test-db) on the MySQL below;
+# tests, the follow-up tests and the manual chat tests. The tests make their own databases (test-db) on the MySQL below;
 # .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local, where
 # common's query! macros check their SQL at compile time, so every migration
 # is applied there first, as in deploy-lambda.yml.
@@ -108,6 +108,19 @@ jobs:
           --test followup_settings
           --test sms_flows
 
+      - name: Manual chat tests
+        if: inputs.cargo_args == ''
+        run: >-
+          cargo test -p api
+          --test ai_chat
+          --test crm_manual_eval
+          --test crm_manual_feedback
+          --test manual_feedback_reviews
+
       - name: Requested tests
         if: inputs.cargo_args != ''
+        # Read only by the opt-in evals that ask the real model, like
+        # crm_manual_eval's ignored test (-- --ignored).
+        env:
+          OPEN_AI_SECRET_KEY: ${{ secrets.OPEN_AI_SECRET_KEY }}
         run: cargo test ${{ inputs.cargo_args }}

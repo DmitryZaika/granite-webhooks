@@ -189,7 +189,7 @@ async fn an_instructions_answer_streams_with_the_instruction_it_used(pool: MySql
     assert_eq!(request["stream"], true);
     let system = request["messages"][0]["content"].as_str().unwrap();
     assert!(
-        system.starts_with("PRICE QUERY: Check Instruction 1 first"),
+        system.contains("PRICE QUERY: Check Instruction 1 first"),
         "{system}"
     );
     assert!(system.contains("TITLE: Fabrication Prices") && system.contains("TITLE: Sealing"));
@@ -501,11 +501,23 @@ async fn asked_back(server: &TestServer, pool: &MySqlPool, ai: &OpenAi) {
     );
 }
 
+/// The model's pick of the manual's sections, before the answer.
+fn picks(sections: &[&str]) -> Reply {
+    Reply::Text(json!({ "sections": sections }).to_string())
+}
+
 #[test_db::test(seed)]
 async fn picking_granite_manager_answers_the_question_from_the_manual(pool: MySqlPool) {
     sqlx::raw_sql(SPECIAL_ORDERS).execute(&pool).await.unwrap();
     let reply = "Open the quote, click **Edit drawing** and type the color. [[INSTRUCTION:none]]";
-    let (server, ai) = setup(&pool, vec![Reply::Text(reply.into())]).await;
+    let (server, ai) = setup(
+        &pool,
+        vec![
+            picks(&["quote-drawing-color-slab-layout"]),
+            Reply::Text(reply.into()),
+        ],
+    )
+    .await;
     asked_back(&server, &pool, &ai).await;
 
     let events = ask(
@@ -517,7 +529,16 @@ async fn picking_granite_manager_answers_the_question_from_the_manual(pool: MySq
     assert_eq!(answer(&events), reply);
     assert!(named(&events, "clarify").is_empty());
     assert!(named(&events, "instructions").is_empty());
-    let request = ai.requests.lock().unwrap()[0].clone();
+    assert_eq!(named(&events, "crmManual"), ["true"]);
+    let pick = ai.requests.lock().unwrap()[0].clone();
+    assert_eq!(pick["response_format"]["type"], "json_object");
+    assert!(
+        contents(&pick)
+            .last()
+            .unwrap()
+            .ends_with("Question: how do I make a special order?")
+    );
+    let request = ai.requests.lock().unwrap()[1].clone();
     let sent = contents(&request);
     assert!(sent.iter().any(|c| c.contains("CRM USER MANUAL:")
         && c.contains("#### Other color (a color not in the price list)")));
@@ -564,7 +585,14 @@ async fn a_special_order_in_a_quote_goes_to_the_manual_without_asking(pool: MySq
     sqlx::raw_sql(SPECIAL_ORDERS).execute(&pool).await.unwrap();
     let reply =
         "Open the quote, click **Edit drawing**, go to **Color & Edge**. [[INSTRUCTION:none]]";
-    let (server, ai) = setup(&pool, vec![Reply::Text(reply.into())]).await;
+    let (server, ai) = setup(
+        &pool,
+        vec![
+            picks(&["quote-drawing-color-slab-layout"]),
+            Reply::Text(reply.into()),
+        ],
+    )
+    .await;
 
     let events = ask(
         &server,
@@ -575,11 +603,238 @@ async fn a_special_order_in_a_quote_goes_to_the_manual_without_asking(pool: MySq
     assert_eq!(answer(&events), reply);
     assert!(named(&events, "clarify").is_empty());
     assert!(named(&events, "instructions").is_empty());
-    let request = ai.requests.lock().unwrap()[0].clone();
+    let request = ai.requests.lock().unwrap()[1].clone();
     assert!(
         contents(&request)
             .iter()
             .any(|c| c.contains("#### Other color (a color not in the price list)"))
+    );
+}
+
+/// The model reads the manual's table of contents and picks the sections;
+/// only those (and the core ones) reach the answer, whatever the typos.
+#[test_db::test(seed)]
+async fn the_model_picks_the_manual_s_sections_for_the_answer(pool: MySqlPool) {
+    let reply =
+        "Open **Edit drawing**, step **5 Color & Edge**, **Slabs & Layout**, **Auto layout**.";
+    let (server, ai) = setup(
+        &pool,
+        vec![
+            picks(&["quote-drawing-color-slab-layout", "no-such-section"]),
+            Reply::Text(reply.into()),
+        ],
+    )
+    .await;
+
+    let events = ask(
+        &server,
+        json!({ "query": "How to make a layout", "isNew": true }),
+    )
+    .await;
+
+    assert_eq!(answer(&events), reply);
+    assert_eq!(named(&events, "crmManual"), ["true"]);
+    let requests = ai.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let pick = contents(&requests[0]);
+    assert!(pick[0].contains("[quote-drawing-color-slab-layout] "));
+    assert!(pick[0].contains("[admin-phone-telnyx] "));
+    assert_eq!(requests[0]["reasoning_effort"], "none");
+    let manual = contents(&requests[1]).join("\n");
+    assert!(manual.contains("### Slabs & Layout"));
+    assert!(manual.contains("## How the application is organized"));
+    // Not the portals' overviews the manual falls back to.
+    assert!(!manual.contains("## Shop portal (`/shop`)"));
+    assert!(!manual.contains("## Employee portal (`/employee`) — feature map"));
+    // Short steps, with room to write them: reasoning took the 1024 tokens.
+    let answering = &requests[1];
+    assert_eq!(answering["reasoning_effort"], "low");
+    assert_eq!(answering["max_completion_tokens"], 2000);
+    assert!(contents(answering).last().unwrap().starts_with(
+        "Answer how to do this in Granite Manager from the CRM user manual: short numbered steps"
+    ));
+    assert!(
+        contents(answering)
+            .last()
+            .unwrap()
+            .ends_with("Question: How to make a layout\n\nAnswer:")
+    );
+}
+
+/// A question that fits several features is asked back with the ones there
+/// are, without the model; the pick is answered from that feature's sections.
+#[test_db::test(seed)]
+async fn turning_off_notifications_asks_which_ones_first(pool: MySqlPool) {
+    let reply =
+        "Click the bell, then the gear, and switch off **Emails** under **Telegram alerts**.";
+    let (server, ai) = setup(&pool, vec![Reply::Text(reply.into())]).await;
+
+    let events = ask(
+        &server,
+        json!({ "query": "How to turn off notifications", "isNew": true }),
+    )
+    .await;
+    let question = answer(&events);
+    assert!(
+        question.starts_with("Which notifications do you mean"),
+        "{question}"
+    );
+    let choices: Value = serde_json::from_str(named(&events, "clarify")[0]).unwrap();
+    let labels: Vec<&str> = choices
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            assert_eq!(c["source"], "manual");
+            c["label"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Bell in the header",
+            "Desktop pop-ups",
+            "Telegram alerts",
+            "Granite Phone app",
+            "Phone ringing",
+            "Reminders to customers"
+        ]
+    );
+    assert!(named(&events, "crmManual").is_empty());
+    assert!(ai.requests.lock().unwrap().is_empty());
+    let saved = history(&pool).await;
+    let asked = saved.last().unwrap()["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        asked.ends_with("[[CLARIFY:How to turn off notifications|Bell in the header=notifications|Desktop pop-ups=notifications|Telegram alerts=notifications,my-account-telegram|Granite Phone app=notifications,admin-phone-telnyx|Phone ringing=notifications,phone-calls,admin-phone-telnyx|Reminders to customers=schedule-notifications,notifications]]"),
+        "{asked}"
+    );
+
+    let events = ask(
+        &server,
+        json!({ "query": "Telegram alerts", "isNew": false }),
+    )
+    .await;
+
+    assert_eq!(answer(&events), reply);
+    assert_eq!(named(&events, "crmManual"), ["true"]);
+    let requests = ai.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1, "no pick: the choice has its sections");
+    let sent = contents(&requests[0]);
+    assert!(sent.iter().any(|c| c.contains("### Telegram alerts")
+        && c.contains("#### Choose which alerts go to Telegram")));
+    assert!(sent.last().unwrap().contains(
+        "Question: How to turn off notifications (I mean Telegram alerts in Granite Manager.)"
+    ));
+    assert!(sent.iter().all(|c| !c.contains("[[CLARIFY:")));
+}
+
+/// The model may ask back too, when the question fits features the clarify
+/// table doesn't know.
+#[test_db::test(seed)]
+async fn the_model_asks_back_when_a_question_fits_several_features(pool: MySqlPool) {
+    let asked = json!({ "clarify": {
+        "question": "Do you mean email templates or SMS templates?",
+        "choices": [
+            { "label": "Email templates", "sections": ["admin-automations"] },
+            { "label": "SMS templates", "sections": ["employee-sms"] }
+        ]
+    } });
+    let reply = "Open **CRM > SMS**, click the template icon and **Add a Template**.";
+    let (server, ai) = setup(
+        &pool,
+        vec![Reply::Text(asked.to_string()), Reply::Text(reply.into())],
+    )
+    .await;
+
+    let events = ask(
+        &server,
+        json!({ "query": "how do I add a template", "isNew": true }),
+    )
+    .await;
+    assert_eq!(
+        answer(&events),
+        "Do you mean email templates or SMS templates?"
+    );
+    let choices: Value = serde_json::from_str(named(&events, "clarify")[0]).unwrap();
+    assert_eq!(
+        choices,
+        json!([
+            { "label": "Email templates", "source": "manual" },
+            { "label": "SMS templates", "source": "manual" }
+        ])
+    );
+
+    let events = ask(&server, json!({ "query": "SMS templates", "isNew": false })).await;
+    assert_eq!(answer(&events), reply);
+    let requests = ai.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let sent = contents(&requests[1]).join("\n");
+    assert!(sent.contains("### SMS templates"));
+    assert!(sent.contains("(I mean SMS templates in Granite Manager.)"));
+}
+
+/// A feature the topic table names is answered, even when the model would
+/// ask back: "layout" in this app is the quote's slab layout.
+#[test_db::test(seed)]
+async fn a_feature_the_topic_table_names_is_not_asked_back(pool: MySqlPool) {
+    let asked = json!({ "clarify": {
+        "question": "Do you mean a quote drawing layout or an AI Design picture?",
+        "choices": [
+            { "label": "Quote drawing layout", "sections": ["quote-drawing"] },
+            { "label": "AI Design picture", "sections": ["ai-chat-ai-design"] }
+        ]
+    } });
+    let reply = "Open **Slabs & Layout** and click **Auto layout**.";
+    let (server, ai) = setup(
+        &pool,
+        vec![Reply::Text(asked.to_string()), Reply::Text(reply.into())],
+    )
+    .await;
+    let events = ask(
+        &server,
+        json!({ "query": "How to make a layout", "isNew": true }),
+    )
+    .await;
+    assert_eq!(answer(&events), reply);
+    assert!(named(&events, "clarify").is_empty());
+    let requests = ai.requests.lock().unwrap().clone();
+    assert!(
+        contents(&requests[1])
+            .iter()
+            .any(|c| c.contains("### Slabs & Layout"))
+    );
+}
+
+/// A how-to question that names records ("can I delete a deal?") is the
+/// manual's, not the assistant's.
+#[test_db::test(seed)]
+async fn a_how_to_about_records_is_answered_from_the_manual(pool: MySqlPool) {
+    let reply = "Open the deal and click **Delete**.";
+    let (server, ai) = setup(
+        &pool,
+        vec![
+            picks(&["employee-deals-deal-board-pipeline"]),
+            Reply::Text(reply.into()),
+        ],
+    )
+    .await;
+    let events = ask(
+        &server,
+        json!({ "query": "can i delete a deal?", "isNew": true }),
+    )
+    .await;
+    assert_eq!(answer(&events), reply);
+    let requests = ai.requests.lock().unwrap().clone();
+    for request in &requests {
+        assert!(request.get("tools").is_none_or(Value::is_null), "{request}");
+    }
+    assert!(
+        contents(&requests[1])
+            .iter()
+            .any(|c| c.contains("### Deleting a deal"))
     );
 }
 
