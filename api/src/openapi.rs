@@ -1,24 +1,31 @@
 //! OpenAPI document for the API.
 //!
 //! Served at `GET /openapi.json` and checked in as `api/openapi.json`. Paths
-//! and schemas come from the `#[utoipa::path]` and `ToSchema` annotations on
-//! each route; this module only adds the document-level parts.
+//! and schemas come from the `#[crate::openapi::path]` and `ToSchema`
+//! annotations on each route; this module only adds the document-level parts.
+//!
+//! utoipa only runs with the `openapi` feature (`make api-openapi` and the
+//! spec tests; see `api_core::openapi`). Without it `/openapi.json` serves
+//! the checked-in file (`make api-openapi`).
 
-use crate::error::ErrorBody;
 use crate::routes;
 use crate::state::AppState;
 use axum::Router;
+use std::sync::Arc;
+
+// The route macros, so `crate::openapi::path` works here as in every crate.
+pub use api_core::openapi::*;
+
+#[cfg(feature = "openapi")]
+use crate::error::ErrorBody;
+#[cfg(feature = "openapi")]
 use utoipa::openapi::OpenApi as OpenApiDoc;
+#[cfg(feature = "openapi")]
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
+#[cfg(feature = "openapi")]
 use utoipa::{Modify, OpenApi};
-use utoipa_axum::router::OpenApiRouter;
 
-/// Name of the `__session` cookie scheme every route lists under `security`.
-pub const SESSION_SECURITY: &str = "session_cookie";
-
-/// Name of the Granite Phone app's `X-Granite-Device` token scheme.
-pub const DEVICE_SECURITY: &str = "device_token";
-
+#[cfg(feature = "openapi")]
 #[derive(OpenApi)]
 #[openapi(
     info(
@@ -74,8 +81,10 @@ pub const DEVICE_SECURITY: &str = "device_token";
 )]
 struct ApiDoc;
 
+#[cfg(feature = "openapi")]
 struct SessionCookie;
 
+#[cfg(feature = "openapi")]
 impl Modify for SessionCookie {
     fn modify(&self, openapi: &mut OpenApiDoc) {
         // utoipa fills `license` from Cargo.toml, where the crate has none.
@@ -115,12 +124,33 @@ impl Modify for SessionCookie {
 }
 
 /// Every route plus the OpenAPI document describing them.
+#[cfg(feature = "openapi")]
 pub fn router_with_spec() -> (Router<AppState>, OpenApiDoc) {
     OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(routes::router())
         .split_for_parts()
 }
 
+#[cfg(feature = "openapi")]
 pub fn spec() -> OpenApiDoc {
     router_with_spec().1
 }
+
+/// Every route, and the OpenAPI document as JSON for `GET /openapi.json`.
+#[cfg(feature = "openapi")]
+pub fn router_and_spec_json() -> (Router<AppState>, Arc<str>) {
+    let (router, spec) = router_with_spec();
+    (
+        router,
+        spec.to_json().expect("OpenAPI spec serializes").into(),
+    )
+}
+
+/// Every route, and the checked-in OpenAPI document for `GET /openapi.json`.
+#[cfg(not(feature = "openapi"))]
+pub fn router_and_spec_json() -> (Router<AppState>, Arc<str>) {
+    (routes::router().into_router(), CHECKED_IN.into())
+}
+
+/// `api/openapi.json`, which `make api-openapi` writes.
+pub const CHECKED_IN: &str = include_str!("../openapi.json");

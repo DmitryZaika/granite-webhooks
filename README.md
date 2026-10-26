@@ -35,6 +35,65 @@ When server dies instantly:
 1. Find server: sudo lsof -i :9000
 2. Kill that server: kill -9 <PID>
 
+## Build cache
+
+Each checkout or worktree has its own `target/` and would build the ~400
+dependencies from scratch. With [sccache](https://github.com/mozilla/sccache)
+as cargo's compiler wrapper, a dependency compiled once (same version,
+features and flags) comes from the shared cache in every other worktree:
+
+```
+brew install sccache
+printf '[build]\nrustc-wrapper = "sccache"\n' >> ~/.cargo/config.toml
+```
+
+sccache hashes absolute paths, and every worktree's `target/` has its own, so
+list the worktree roots as base directories in
+`~/Library/Application Support/Mozilla.sccache/config` (macOS), adding each
+new worktree:
+
+```toml
+basedirs = ["/Users/you/granite-webhooks", "/Users/you/granite-webhooks-ci"]
+```
+
+`sccache --show-stats` shows the hits. It is set per machine, not in
+`.cargo/config.toml`, so CI and machines without sccache are unaffected.
+Workspace crates (incremental), proc macros and build scripts are not cached.
+
+### macOS
+
+macOS checks every new program before it first runs (Gatekeeper and
+XProtect), and each build makes new test binaries: a big one waits a few
+seconds, about half of a `cargo test -p 'api*'` after a change. Programs
+started by an app listed under Developer Tools are not checked. Run once:
+
+```
+sudo spctl developer-mode enable-terminal
+```
+
+It lists Terminal in System Settings > Privacy & Security > Developer Tools.
+Turn on there each app that runs cargo (add another terminal, such as
+Alacritty or iTerm2, or an editor with +), then restart it.
+
+### Windows
+
+The same commands work. What makes the builds slower there, and helps:
+
+- Linking: MSVC's `link.exe` is slow on big test binaries. Rust ships
+  `rust-lld`; to use it, add to `%USERPROFILE%\.cargo\config.toml`
+  (`aarch64-pc-windows-msvc` on an ARM machine):
+
+  ```toml
+  [target.x86_64-pc-windows-msvc]
+  linker = "rust-lld.exe"
+  ```
+
+- Microsoft Defender scans every file cargo writes: exclude the checkout's
+  `target\` folder (Windows Security, Virus & threat protection, Exclusions).
+- `make test`/`cargo test` need the local MySQL (see `make api-db-up`):
+  `common`'s `query!` macros check their SQL against it at compile time, and
+  the tests make their databases on it.
+
 ## Functions
 
 ### Documenso

@@ -4,7 +4,7 @@ use super::schemas::{
 };
 use crate::routes::catalog::schemas::Color;
 use crate::routes::fixtures::Kind;
-use crate::routes::stones::queries::escape_like;
+use crate::sql::escape_like;
 use crate::sql::push_in;
 use sqlx::{MySql, MySqlPool, QueryBuilder};
 

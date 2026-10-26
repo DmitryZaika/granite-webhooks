@@ -3,8 +3,9 @@
 //! manager of the company, and a `maintenance` push to their phones. Port of
 //! `maintenanceReminders.server.ts`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::phone::crm_push::push_maintenance;
 use crate::phone::devices::LIVE_DEVICE;
 use crate::state::AppState;
@@ -16,7 +17,6 @@ use common::crud::phone_app::users_with_app;
 use lambda_http::tracing;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use utoipa::ToSchema;
 
 const REMINDER_HOUR: u32 = 9;
 /// `positions.id` of a shop manager.
@@ -90,7 +90,7 @@ async fn due_items(
 /// notifications a list of their company's equipment checks due today, once a
 /// day, and pushes how many there are to the signed-in phones of each shop
 /// worker and shop manager (Telegram linked or not).
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/maintenance-reminders",
     operation_id = "run_maintenance_reminders",

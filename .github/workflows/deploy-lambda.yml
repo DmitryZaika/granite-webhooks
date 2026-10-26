@@ -3,11 +3,15 @@ name: Deploy Lambda
 # Builds one app's Rust binary from the branch picked in "Use workflow from"
 # and uploads it as the code of that app's Lambda(s). Only the code changes:
 # environment variables and other configuration set on the Lambda are kept.
+# Prod gets a release build; dev, which is only tried out, a debug build, done
+# in a fraction of the time (see Build).
+# With "Deploy" unchecked it only builds: the zip is kept as the run's
+# artifact and AWS is never called.
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: Environment
+        description: Environment (dev is a debug build, prod a release build)
         type: choice
         required: true
         default: dev
@@ -22,9 +26,14 @@ on:
           - api
           - webhooks
           - time-triggered
+      deploy:
+        description: Deploy (unchecked only builds the zip)
+        type: boolean
+        default: true
 
 concurrency:
-  group: deploy-${{ inputs.project }}-${{ inputs.environment }}
+  # A build-only run never waits behind (or holds up) a deploy.
+  group: ${{ inputs.deploy && format('deploy-{0}-{1}', inputs.project, inputs.environment) || format('build-{0}', github.run_id) }}
   cancel-in-progress: false
 
 permissions:
@@ -45,7 +54,7 @@ env:
 
 jobs:
   deploy:
-    name: ${{ inputs.project }} → ${{ inputs.environment }} (${{ github.ref_name }})
+    name: ${{ inputs.project }} → ${{ inputs.deploy && inputs.environment || format('{0} build only', inputs.environment) }} (${{ github.ref_name }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -53,17 +62,6 @@ jobs:
       DEPLOY_ENV: ${{ inputs.environment }}
       BRANCH: ${{ github.ref_name }}
     steps:
-      # sqlx's query! macros check every query against this schema at compile
-      # time. .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local.
-      # Started in the background (not as a service container) so pulling and
-      # initializing MySQL overlaps with the setup steps below.
-      - name: Start build database
-        run: |
-          docker run -d --name mysql -p 3307:3306 \
-            -e MYSQL_ROOT_PASSWORD=granite -e MYSQL_DATABASE=granite_local \
-            mysql:8.0
-
-
       # The Lambdas of each app in each environment, as in the Makefile.
       - name: Resolve Lambda functions
         run: |
@@ -81,6 +79,30 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      # sqlx's query! macros check every query against this schema at compile
+      # time. .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local.
+      # As in the API tests: the image's entrypoint applies the migrations (in
+      # name order) on a tmpfs without fsyncs, and MySQL listens on TCP once
+      # they all applied. `docker run` is in the background so pulling the
+      # image overlaps with the setup steps below.
+      - name: Start the build database with the migrations
+        run: >-
+          docker run --detach --name mysql
+          --publish 3307:3306
+          --env MYSQL_ROOT_PASSWORD=granite
+          --env MYSQL_DATABASE=granite_local
+          --tmpfs /var/lib/mysql
+          --volume "$PWD/migrations:/docker-entrypoint-initdb.d:ro"
+          mysql:8.0
+          --default-authentication-plugin=mysql_native_password
+          --log-bin-trust-function-creators=1
+          --skip-log-bin
+          --innodb-flush-log-at-trx-commit=0
+          --sync-binlog=0
+          --innodb-doublewrite=0
+          --innodb-flush-method=nosync
+          > "$RUNNER_TEMP/mysql-start.log" 2>&1 &
+
       - name: Record commit
         run: |
           echo "GIT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
@@ -88,9 +110,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # One cache per build profile, prod's under its old name. rust-cache only
+      # saves when its key missed, so with one key for both, the profile that
+      # did not save it would build every dependency from scratch on each run.
+      # Its key leaves out Cargo.toml's [profile] sections: a profile's cache
+      # is renamed when the profile changes (dev: dependencies at opt-level 1).
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: lambda-${{ inputs.project }}
+          shared-key: lambda-${{ inputs.project }}${{ inputs.environment == 'dev' && '-dev-o1' || '' }}
           key: cargo-lambda-${{ env.CARGO_LAMBDA_VERSION }}-zig-${{ env.ZIGLANG_VERSION }}
 
       - uses: astral-sh/setup-uv@v6
@@ -103,43 +130,86 @@ jobs:
           uv tool install "cargo-lambda==$CARGO_LAMBDA_VERSION" --with "ziglang==$ZIGLANG_VERSION"
           echo "$(uv tool dir)/cargo-lambda/bin" >> "$GITHUB_PATH"
 
-      - name: Apply migrations to the build database
+      - name: Wait for the build database and the migrations
+        timeout-minutes: 5
         run: |
-          for _ in $(seq 120); do
-            docker exec mysql mysqladmin ping -h 127.0.0.1 -pgranite --silent 2>/dev/null && break
+          until docker exec mysql mysqladmin ping -h 127.0.0.1 -uroot -pgranite --silent 2>/dev/null; do
+            if ! docker inspect mysql >/dev/null 2>&1; then
+              # Still pulling the image, unless `docker run` gave up.
+              if ! pgrep -f "docker run --detach --name mysql" >/dev/null; then
+                cat "$RUNNER_TEMP/mysql-start.log"
+                echo "::error::MySQL did not start (see docker's output above)"
+                exit 1
+              fi
+            elif [ "$(docker inspect --format '{{.State.Running}}' mysql)" != true ]; then
+              docker logs mysql 2>&1 | tail -n 40
+              echo "::error::MySQL stopped: a migration failed (see its log above)"
+              exit 1
+            fi
             sleep 1
           done
-          for f in migrations/*.sql; do
-            mysql -h 127.0.0.1 -P 3307 -uroot -pgranite granite_local < "$f" \
-              || { echo "::error::Migration $f failed"; exit 1; }
-          done
 
+      # Dev builds without --release. Its binary is stripped and has no debug
+      # info, or it would not fit in a Lambda: as is, the api's is 284 MB and
+      # zips to 58 MB, over the 250 MB unzipped and the 50 MB zip that
+      # update-function-code takes (stripped: 130 MB, 38 MB). The two variables
+      # only change the dev profile, so the release build is untouched.
       - name: Build
-        run: cargo lambda build --release --x86-64 --output-format zip -p "$APP" --bin "$APP"
+        env:
+          CARGO_PROFILE_DEV_DEBUG: false
+          CARGO_PROFILE_DEV_STRIP: symbols
+        run: >-
+          cargo lambda build ${{ inputs.environment == 'prod' && '--release' || '' }}
+          --x86-64 --output-format zip -p "$APP" --bin "$APP"
+
+      - name: Keep the build
+        if: ${{ !inputs.deploy }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.project }}-${{ inputs.environment }}-${{ env.GIT_SHA }}
+          path: target/lambda/${{ inputs.project }}/bootstrap.zip
+          retention-days: 7
 
       - uses: aws-actions/configure-aws-credentials@v4
+        if: inputs.deploy
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy and verify
+        if: inputs.deploy
         run: |
           zip="target/lambda/$APP/bootstrap.zip"
           expected=$(openssl dgst -sha256 -binary "$zip" | base64)
           echo "Package sha256: $expected ($(du -h "$zip" | cut -f1))"
-          for function in $FUNCTIONS; do
-            echo "::group::$function"
-            aws lambda update-function-code --function-name "$function" \
+          deploy() {
+            aws lambda update-function-code --function-name "$1" \
               --zip-file "fileb://$zip" --query '{Sha256:CodeSha256,Status:LastUpdateStatus}'
-            aws lambda wait function-updated-v2 --function-name "$function"
+            aws lambda wait function-updated-v2 --function-name "$1"
             read -r sha status modified < <(aws lambda get-function-configuration \
-              --function-name "$function" \
+              --function-name "$1" \
               --query '[CodeSha256,LastUpdateStatus,LastModified]' --output text)
-            echo "$function: sha256=$sha status=$status modified=$modified"
-            echo "::endgroup::"
+            echo "$1: sha256=$sha status=$status modified=$modified"
             if [ "$sha" != "$expected" ] || [ "$status" != "Successful" ]; then
-              echo "::error::$function was not updated to this build"
-              exit 1
+              echo "::error::$1 was not updated to this build"
+              return 1
             fi
-            echo "- \`$function\` ← \`$GIT_SHA\` ($BRANCH), sha256 \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- \`$1\` ← \`$GIT_SHA\` ($BRANCH), sha256 \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+          }
+          # The app's Lambdas (api has two) are updated at once, each in a
+          # process of its own; its log is shown when it is done.
+          pids=()
+          for function in $FUNCTIONS; do
+            deploy "$function" > "$RUNNER_TEMP/deploy-$function.log" 2>&1 &
+            pids+=("$!")
           done
+          failed=0
+          set -- $FUNCTIONS
+          for pid in "${pids[@]}"; do
+            wait "$pid" || failed=1
+            echo "::group::$1"
+            cat "$RUNNER_TEMP/deploy-$1.log"
+            echo "::endgroup::"
+            shift
+          done
+          exit "$failed"

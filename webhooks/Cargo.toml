@@ -3,6 +3,12 @@ name = "webhooks"
 version = "0.1.0"
 edition = "2024"
 
+# The modules are the library; main.rs only starts the Lambda, so a new
+# `GIT_SHA` (read there) rebuilds the binary alone.
+[lib]
+# No doc tests; rustdoc would still compile the whole crate looking for them.
+doctest = false
+
 [dependencies]
 common = { path = "../common" }
 utoipa = { version = "5.5.0", features = ["axum_extras"] }

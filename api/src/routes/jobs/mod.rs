@@ -29,11 +29,8 @@ pub mod sms_followups;
 pub mod supplier_files;
 pub mod survey_notifications;
 
-use crate::error::ApiError;
+use crate::openapi::{OpenApiRouter, routes};
 use crate::state::AppState;
-use axum::extract::FromRequestParts;
-use axum::http::request::Parts;
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -47,32 +44,4 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(contact_sync::run))
         .routes(routes!(phone::run))
         .routes(routes!(posthog_autofix::run))
-}
-
-/// The `time-triggered` Lambda, by its key.
-pub struct JobCaller;
-
-impl FromRequestParts<AppState> for JobCaller {
-    type Rejection = ApiError;
-
-    #[allow(clippy::unused_async_trait_impl)] // the trait's signature
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        let sent = parts
-            .headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok());
-        match (&state.job_key, sent) {
-            (Some(key), Some(sent)) if constant_time_eq(key.as_bytes(), sent.as_bytes()) => {
-                Ok(Self)
-            }
-            _ => Err(ApiError::Unauthorized),
-        }
-    }
-}
-
-pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }

@@ -1,4 +1,4 @@
-// Refreshes the manual text in api/src/chat/crm_manual.json from the CRM
+// Refreshes the manual text in api/crates/ai/src/chat/crm_manual.json from the CRM
 // repo's docs/manual/*.md. The topic table (which keywords pick which
 // sections) and the clarify table (words of several features, asked back)
 // live in the JSON itself; edit them there. Also copies the CRM repo's test
@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const crm = process.argv[2] ?? '../general_datebase'
-const target = new URL('../api/src/chat/crm_manual.json', import.meta.url)
+const target = new URL('../api/crates/ai/src/chat/crm_manual.json', import.meta.url)
 const current = JSON.parse(fs.readFileSync(target, 'utf8'))
 const dir = path.join(crm, 'docs/manual')
 // A Windows checkout has CRLF line ends; the JSON keeps LF.
@@ -37,6 +37,6 @@ const manual = {
 }
 fs.writeFileSync(target, `${JSON.stringify(manual, null, 1)}\n`)
 fs.writeFileSync(
-  new URL('../api/src/chat/crm_manual_how_to_cases.json', import.meta.url),
+  new URL('../api/crates/ai/src/chat/crm_manual_how_to_cases.json', import.meta.url),
   `${read(path.join(crm, 'app/utils/crmManualHowToCases.json'))}\n`,
 )

@@ -1,9 +1,9 @@
+use crate::openapi::{IntoParams, ToSchema};
 use crate::routes::stones::schemas::SlabCounts;
 use crate::serde_helpers::js_date;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use utoipa::{IntoParams, ToSchema};
 
 /// A company of the showroom.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]

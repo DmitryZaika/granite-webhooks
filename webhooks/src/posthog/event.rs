@@ -134,7 +134,7 @@ where
     );
     extra.insert(
         "release".to_string(),
-        serde_json::Value::String(option_env!("GIT_SHA").unwrap_or("unknown").to_string()),
+        serde_json::Value::String(common::release::get().to_string()),
     );
     extra
 }

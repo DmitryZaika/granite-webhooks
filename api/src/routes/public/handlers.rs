@@ -18,7 +18,7 @@ use axum::extract::{Path, State};
 ///
 /// The name and logo of each live company among `ids`, by id, for the
 /// customer portal's company chooser. No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/companies",
     operation_id = "list_public_companies",
@@ -52,7 +52,7 @@ pub async fn companies(
 ///
 /// Returns the id of the company whose showroom lives at
 /// `<subdomain>.granite-manager.com`. No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/companies/by-subdomain/{subdomain}",
     operation_id = "get_public_company_by_subdomain",
@@ -80,7 +80,7 @@ pub async fn company_by_subdomain(
 /// available whole slab, by name, with slab counts and retail prices (never
 /// costs). Filters combine with AND; repeat list filters to match any value.
 /// No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/companies/{company_id}/stones",
     operation_id = "list_public_stones",
@@ -104,7 +104,7 @@ pub async fn stones(
 ///
 /// Same stones as the showroom list, filtered by name, best matches first
 /// (name starts with it, then contains it as a word). No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/companies/{company_id}/stones/search",
     operation_id = "search_public_stones",
@@ -128,7 +128,7 @@ pub async fn search_stones(
 ///
 /// Returns a displayed stone of the company (sold out included). Hidden,
 /// deleted and other companies' stones are 404. No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/companies/{company_id}/stones/{stone_id}",
     operation_id = "get_public_stone",
@@ -157,7 +157,7 @@ pub async fn stone(
 ///
 /// Returns the slabs of a displayed stone (and of the stones it draws from)
 /// that are in the yard and not sold, by id. No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/companies/{company_id}/stones/{stone_id}/slabs",
     operation_id = "list_public_stone_slabs",
@@ -189,7 +189,7 @@ pub async fn stone_slabs_handler(
 ///
 /// Returns project photos of a displayed stone, its own first, then those of
 /// the stones it shows photos from. No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/companies/{company_id}/stones/{stone_id}/images",
     operation_id = "list_public_stone_images",
@@ -221,7 +221,7 @@ pub async fn stone_images(
 ///
 /// Returns displayed sink models with a free unit or regular stock, by name.
 /// No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/companies/{company_id}/sinks",
     operation_id = "list_public_sinks",
@@ -247,7 +247,7 @@ pub async fn sinks(
 ///
 /// Returns displayed faucet models with a free unit or regular stock, by
 /// name. No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/companies/{company_id}/faucets",
     operation_id = "list_public_faucets",
@@ -273,7 +273,7 @@ pub async fn faucets(
 ///
 /// Every color a stone can be tagged with, by name, for the showroom color
 /// filter. No session needed.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/colors",
     operation_id = "list_public_colors",

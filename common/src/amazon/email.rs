@@ -1,6 +1,5 @@
-use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_sesv2::types::{Body, Content, Destination, EmailContent, Message};
-use aws_sdk_sesv2::{Client, Error, config::Region};
+use aws_sdk_sesv2::{Client, Error};
 
 pub const DEFAULT_NOREPLY_EMAIL_ADDRESS: &str = "noreply@granite-manager.com";
 pub const DEFAULT_SEND_EMAIL_ADDRESS: &str = "sales@granite-manager.com";
@@ -70,8 +69,7 @@ pub async fn send_message_from(
     message: &str,
     from: &str,
 ) -> Result<String, Error> {
-    let region_provider = RegionProviderChain::first_try(Region::new("us-east-2"));
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
+    let shared_config = crate::http::aws_config("us-east-2").await;
     let client = Client::new(&shared_config);
 
     let mut dest: Destination = Destination::builder().build();
@@ -127,8 +125,7 @@ pub const SES_REGION: &str = "us-east-2";
 /// not in the headers). Returns the message's `Message-ID` (see
 /// [`ses_message_id`]).
 pub async fn send_raw_message(raw: Vec<u8>, destinations: Vec<String>) -> Result<String, Error> {
-    let region_provider = RegionProviderChain::first_try(Region::new(SES_REGION));
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
+    let shared_config = crate::http::aws_config(SES_REGION).await;
     let client = Client::new(&shared_config);
     let destination = Destination::builder()
         .set_to_addresses(Some(destinations))
@@ -295,8 +292,7 @@ pub async fn domain_verified(domain: &str) -> Option<bool> {
         return Some(*verified);
     }
     let lookup = async {
-        let region_provider = RegionProviderChain::first_try(Region::new("us-east-2"));
-        let shared_config = aws_config::from_env().region(region_provider).load().await;
+        let shared_config = crate::http::aws_config("us-east-2").await;
         Client::new(&shared_config)
             .get_email_identity()
             .email_identity(&domain)
@@ -350,8 +346,7 @@ pub async fn identity_sets() -> Option<IdentitySets> {
         return Some(sets.clone());
     }
     let list = async {
-        let region_provider = RegionProviderChain::first_try(Region::new("us-east-2"));
-        let shared_config = aws_config::from_env().region(region_provider).load().await;
+        let shared_config = crate::http::aws_config("us-east-2").await;
         let client = Client::new(&shared_config);
         let mut verified = std::collections::HashSet::new();
         let mut pending = std::collections::HashSet::new();

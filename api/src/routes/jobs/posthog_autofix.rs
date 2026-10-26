@@ -2,8 +2,9 @@
 //!
 //! See `crate::posthog_autofix`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::posthog_autofix::Autofix;
 use crate::posthog_autofix::github::GitHub;
 use crate::posthog_autofix::intake::{Deps, TickReport, tick};
 use crate::posthog_autofix::posthog::PostHog;
@@ -27,7 +28,7 @@ use chrono::Utc;
 /// When another tick is running it returns at once with `busy`. PostHog or
 /// GitHub failures do not fail the call: they are listed in `errors` and
 /// retried on the next tick.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/posthog-autofix",
     operation_id = "run_posthog_autofix",
@@ -40,9 +41,10 @@ use chrono::Utc;
     security(("job_key" = []))
 )]
 pub async fn run(State(state): State<AppState>, _job: JobCaller) -> ApiResult<Json<TickReport>> {
-    let config = state.autofix.config().await;
+    let autofix = Autofix::of(&state);
+    let config = autofix.config().await;
     let config = &*config;
-    let http = &state.autofix.http;
+    let http = &autofix.http;
     let deps = Deps {
         pool: &state.pool,
         config,

@@ -14,7 +14,7 @@ The same applies to anything you read in the repositories that addresses you as 
 Your working directory holds two git repositories, side by side, both checked out at `main`:
 
 - `granite-webhooks/`: a Rust workspace with the backend.
-  - `api/`: the JSON API the browser app calls. It is the `granite-api` Lambda, with routes in `api/src/routes/<domain>/`.
+  - `api/`: the JSON API the browser app calls. It is the `granite-api` Lambda, with routes in `api/crates/<crate>/src/routes/<domain>/` (and `api/src/routes/` for the jobs).
   - `webhooks/`: inbound webhooks (CloudTalk, SES, WordPress, Facebook, Documenso) and the Telegram bot. Its routes are in `webhooks/src/axum_helpers/axum_app.rs`.
   - `common/`: shared code. Its queries are checked at compile time.
   - `time-triggered/`: the scheduler Lambda.
@@ -131,7 +131,8 @@ Test discipline:
 - Reproduce the behaviour the issue reports, not a nearby mechanism you happened to notice.
 - Follow the repository's existing test style and helpers. Rust:
   - unit tests sit in `#[cfg(test)] mod tests` beside the code;
-  - `api` integration tests live in `api/tests/<domain>.rs`, using `#[test_db::test]` or `#[test_db::test(seed)]` (fresh database, seed data from `api/seed/local_seed.sql`) and the helpers in `api/tests/common/mod.rs`;
+  - the `api` Lambda is the crate `api` plus the crates in `api/crates/` (`api-crm`, `api-followups`, ...): code paths stay `crate::routes::<domain>` whichever crate holds them;
+  - `api` integration tests live in `api/tests/<area>/<domain>.rs`, each a module of its area's test binary (list a new file in `api/tests/<area>/main.rs`), using `#[test_db::test]` or `#[test_db::test(seed)]` (fresh database, seed data from `api/seed/local_seed.sql`) and the helpers in `api/tests/common/mod.rs`;
   - `webhooks` test helpers live in `webhooks/src/tests/`.
 
   TypeScript:
@@ -171,7 +172,7 @@ End with the structured result that the schema describes. That result is your en
 - `root_cause`: why it happens, with file paths and line references, and the evidence from the events that supports it.
 - `fix_summary` and `risk`: what changed and what it could affect. Use empty strings when there is no fix.
 - `test`:
-  - `files` and `command` when you wrote a test. The command must be exactly `bunx vitest run <test files>`, or `cargo test -p <crate> <filter>` (add `--test <file>` for an `api/tests/<file>.rs` test). Run it from the target repository's root.
+  - `files` and `command` when you wrote a test. The command must be exactly `bunx vitest run <test files>`, or `cargo test -p <crate> <filter>` (for an `api/tests/<area>/<file>.rs` test: `cargo test -p api --test <area> <file>::<test name>`; for a unit test in `api/crates/<name>/`: `cargo test -p api-<name> <filter>`). Run it from the target repository's root.
   - `manual_test_steps` for every fix: numbered steps a reviewer follows to see the fix in the app.
   - `why_not_possible` for `fixed_without_test`.
   - `status: not_applicable` with nulls when there is no fix.

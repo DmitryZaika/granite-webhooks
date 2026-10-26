@@ -3,11 +3,11 @@
 //! Replaces the Remix `api.vcard` route.
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
+use crate::openapi::IntoParams;
 use axum::extract::Query;
 use axum::http::header;
 use axum::response::IntoResponse;
 use serde::Deserialize;
-use utoipa::IntoParams;
 
 /// Query of `GET /v1/public/vcard`; at least one contact field.
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -60,7 +60,7 @@ fn file_name(base: &str) -> String {
 /// Download a contact card
 ///
 /// A vCard 3.0 file with the given name, phone, email, company and address.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/vcard",
     operation_id = "download_vcard",

@@ -1,7 +1,7 @@
 # Built-in hold music
 
 What callers hear while a Granite Phone user has them on hold, unless the
-user uploaded their own track (`api/src/phone/hold_music.rs`). The API
+user uploaded their own track (`api/crates/crm/src/phone/hold_music.rs`). The API
 serves them at `GET /v1/public/hold-music/{track}.mp3`; Telnyx plays them
 from there in a loop.
 

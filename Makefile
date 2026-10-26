@@ -7,7 +7,9 @@ IAM_ROLE := arn:aws:iam::741448943665:role/cargo-lambda-role-2ed5069c-8882-460d-
 # cargo-lambda installed on the PATH when there is one (`cargo install
 # cargo-lambda`: Windows on ARM has no wheel for uvx), else through uvx.
 CARGO_LAMBDA ?= $(if $(shell command -v cargo-lambda 2>/dev/null),cargo-lambda,uvx cargo-lambda)
-BUILD_BASE := $(CARGO_LAMBDA) lambda build --release --x86-64
+# Dev (make build/deploy <app> dev) is a debug build, stripped to fit in a
+# Lambda, as in deploy-lambda.yml; the two variables only change the dev profile.
+BUILD_BASE = CARGO_PROFILE_DEV_DEBUG=false CARGO_PROFILE_DEV_STRIP=symbols $(CARGO_LAMBDA) lambda build $(if $(filter dev,$(ENV)),,--release) --x86-64
 
 # --- Build and deploy ---
 #   make build <app>          app: api, webhooks, time-triggered
@@ -45,20 +47,35 @@ build:
 
 # Deploy exports credentials because cargo-lambda does not support AWS login_session profiles.
 # It updates the code only: environment variables set on the Lambda are kept.
+# An app's Lambdas (api has two) are deployed at once, each from its own copy
+# of the binary: cargo-lambda zips the binary into its folder, and two deploys
+# writing one zip could upload it half-written. Each one's output is shown
+# when all are done.
 .PHONY: deploy
 deploy:
 	@test -n "$(APP)" -a -n "$(ENV)" || { echo "Usage: make deploy <$(APPS)> <$(ENVS)>" >&2; exit 1; }
 	@test -n "$(FUNCTION)" || { echo "$(APP) has no $(ENV) Lambda" >&2; exit 1; }
-	$(MAKE) build APP=$(APP)
+	$(MAKE) build APP=$(APP) ENV=$(ENV)
 	@eval "$$(aws configure export-credentials --profile $(AWS_DEPLOY_PROFILE) --format env)" && \
 	unset AWS_PROFILE && \
+	dir=$$(mktemp -d) && trap 'rm -rf "$$dir"' EXIT && \
+	echo "Deploying $(FUNCTION)" && \
+	pids= && \
 	for function in $(FUNCTION); do \
+		mkdir -p "$$dir/$$function/$(APP)" && \
+		cp -p "$${CARGO_TARGET_DIR:-target}/lambda/$(APP)/bootstrap" "$$dir/$$function/$(APP)/" && \
 		$(CARGO_LAMBDA) lambda deploy \
 			--iam-role $(IAM_ROLE) \
 			--region $(REGION) \
+			--lambda-dir "$$dir/$$function" \
 			--binary-name $(APP) \
-			$$function || exit 1; \
-	done
+			$$function > "$$dir/$$function.log" 2>&1 & \
+		pids="$$pids $$!"; \
+	done && \
+	status=0 && \
+	for pid in $$pids; do wait $$pid || status=1; done; \
+	for function in $(FUNCTION); do echo "$$function:" && cat "$$dir/$$function.log"; done; \
+	exit $$status
 
 # api and webhooks, each built and deployed to dev and prod.
 .PHONY: deploy-all
@@ -139,17 +156,22 @@ api-db-reset: api-db-up
 	DATABASE_URL=$(LOCAL_DB_URL) cargo sqlx migrate run --source migrations
 	$(LOCAL_MYSQL) --default-character-set=utf8mb4 $(LOCAL_DB_NAME) < api/seed/local_seed.sql
 
+# Every api crate's tests: the unit tests of api/crates/* and api's
+# integration tests (one binary per area, api/tests/<area>/main.rs).
 .PHONY: api-test
 api-test: api-db-up
-	DATABASE_URL=$(LOCAL_DB_URL) cargo test -p api
+	DATABASE_URL=$(LOCAL_DB_URL) cargo test -p 'api*'
 
 # Regenerates api/openapi.json from the route annotations (no database needed).
+# Only builds with the `openapi` feature run utoipa; the others serve this file.
 .PHONY: api-openapi
 api-openapi:
-	UPDATE_OPENAPI=1 cargo test -p api --test openapi spec_file_is_current
+	UPDATE_OPENAPI=1 cargo test -p api --features openapi --test app openapi::generated::spec_file_is_current
 
 # Serves http://localhost:9100/lambda-url/api/... through the Lambda runtime emulator.
+# A dev build, not --release: an edit rebuilds in seconds, not minutes (the
+# dependencies are optimized in the dev profile too, see Cargo.toml).
 .PHONY: api-local
 api-local:
 	test -f api/.env.local || cp api/.env.local.example api/.env.local
-	$(WATCH_BASE) -p api --bin api -P 9100 --env-file api/.env.local
+	$(CARGO_LAMBDA) lambda watch -p api --bin api -P 9100 --env-file api/.env.local

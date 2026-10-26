@@ -12,7 +12,7 @@ use axum::response::IntoResponse;
 ///
 /// The MP3 of a built-in hold music track (`calm.mp3`, `bright.mp3`,
 /// `ambient.mp3`; see `GET /v1/phone/hold-music`). 404 for any other name.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/hold-music/{file}",
     operation_id = "download_hold_music_track",

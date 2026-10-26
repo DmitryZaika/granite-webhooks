@@ -4,13 +4,13 @@
 //! (`CALENDLY_API_TOKEN`), else the Granite Manager demo page. Replaces the
 //! Remix `api.calendly.scheduling-url` route.
 
+use crate::openapi::ToSchema;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::State;
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Mutex;
-use utoipa::ToSchema;
 
 const DEFAULT_DEMO_URL: &str = "https://calendly.com/granite-manager/demo";
 static RESOLVED: Mutex<Option<String>> = Mutex::new(None);
@@ -87,7 +87,7 @@ async fn from_api(client: &reqwest::Client, token: &str) -> Option<String> {
 /// Get the demo booking page
 ///
 /// The Calendly page the marketing site opens to book a demo.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/public/calendly-url",
     operation_id = "get_calendly_url",

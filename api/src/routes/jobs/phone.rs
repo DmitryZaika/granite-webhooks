@@ -50,10 +50,11 @@
 //!    registered gets its campaign) and the number assignments still pending
 //!    (a few a run; Telnyx's 10DLC webhooks are the fast path).
 
-use super::JobCaller;
 use crate::ai::{AiError, Caller, Chat, MINI_MODEL};
+use crate::auth::job::JobCaller;
 use crate::call_notes;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::phone::calls::{CallDirection, CallStatus, NOT_TEST_CALL, TranscriptStatus};
 use crate::phone::customer_index;
 use crate::phone::outcomes::{CONVERSATION_SECS, move_out_of_first_stage};
@@ -72,7 +73,6 @@ use lambda_http::tracing;
 use serde::Serialize;
 use sqlx::{FromRow, MySqlPool};
 use std::time::{Duration, Instant};
-use utoipa::ToSchema;
 
 /// A run starts no new work after this long.
 const RUN_BUDGET: Duration = Duration::from_secs(20);
@@ -195,7 +195,7 @@ pub struct PhoneJobRun {
 /// texting registrations and pending number assignments again. Bounded work per run, and
 /// no new work after 20 seconds; the next run takes the rest. Returns what
 /// was done.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/phone",
     operation_id = "run_phone_job",

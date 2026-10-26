@@ -16,6 +16,8 @@ use crate::auth::EmployeeUser;
 use crate::auth::session::SessionUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::openapi::{IntoParams, ToSchema};
+use crate::openapi::{OpenApiRouter, routes};
 use crate::phone::calls::push_in_recents;
 use crate::state::AppState;
 use axum::Json;
@@ -24,8 +26,6 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{MySql, QueryBuilder};
-use utoipa::{IntoParams, ToSchema};
-use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -172,7 +172,7 @@ fn push_incoming(builder: &mut QueryBuilder<MySql>, user: &SessionUser) {
 /// read and the listed Granite Phone calls seen (for the caller only, as in
 /// the phone app). With `clear_all`, dismisses every one of them, marks all
 /// unread incoming mail read and the bell's Granite Phone calls seen.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/notifications/done",
     operation_id = "dismiss_notifications",
@@ -821,7 +821,7 @@ fn missed_call_item(call: &crate::routes::users::call_activity::CallActivity) ->
 /// that ring them; `telnyx-call-<id>`, `type_title` names the line), newest
 /// first. The onboarding tour's sample notifications are left out unless
 /// `samples` is set.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/notifications",
     operation_id = "list_notifications",
@@ -879,7 +879,7 @@ pub async fn list(
 /// The phone app reads it for a `notification` push, which names only the
 /// id. 404 for another user's, a dismissed one, or one `GET
 /// /v1/notifications` would not list.
-#[utoipa::path(
+#[crate::openapi::path(
     get,
     path = "/v1/notifications/{id}",
     operation_id = "get_notification",

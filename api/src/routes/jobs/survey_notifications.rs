@@ -10,8 +10,9 @@
 //! (`checklist-survey-<id>`, `checklist-survey-reminder-<n>-<id>`); a
 //! submitted survey leaves `checklist-survey-done-<id>`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::routes::events::notify::customer_phone;
 use crate::routes::sms::provider::{SmsProvider, phone10};
 use crate::state::AppState;
@@ -24,7 +25,6 @@ use lambda_http::tracing;
 use serde::Serialize;
 use sha2::Sha256;
 use std::fmt::Write;
-use utoipa::ToSchema;
 
 const SENT_PREFIX: &str = "checklist-survey-";
 const REMINDER_PREFIX: &str = "checklist-survey-reminder-";
@@ -516,7 +516,7 @@ pub async fn send_due(state: &AppState, now: DateTime<Utc>) -> Result<SurveyRun,
 ///
 /// Inside the send window, sends the survey invitations and reminders that
 /// are due.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/survey-notifications",
     operation_id = "run_survey_notifications",

@@ -27,9 +27,9 @@ api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
 | Piece | Path |
 |---|---|
 | Ledger table | `migrations/20261022120000_create-posthog-autofix-runs.sql` |
-| Intake, signatures, rules, emails | `api/src/posthog_autofix/` (start at `mod.rs`) |
+| Intake, signatures, rules, emails | `api/crates/admin/src/posthog_autofix/` (start at `mod.rs`) |
 | Intake job route | `api/src/routes/jobs/posthog_autofix.rs` |
-| Callbacks | `api/src/routes/posthog_autofix.rs` |
+| Callbacks | `api/crates/admin/src/routes/posthog_autofix.rs` |
 | Workflow | `.github/workflows/posthog-autofix.yml` |
 | Agent instructions, result schema, PostHog MCP | `fixer-prompt.md`, `result.schema.json`, `mcp.json` |
 | Guardrails (Claude Code settings, hook) | `settings.json`, `guard.py` |

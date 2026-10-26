@@ -1,0 +1,37 @@
+[package]
+name = "api-admin"
+version = "0.1.0"
+edition = "2024"
+description = "Admin and superuser screens, billing, integrations, marketing, questionnaires, the PostHog auto-fix."
+
+[lib]
+# No doc tests; rustdoc would still compile the whole crate looking for them.
+doctest = false
+
+[features]
+# See the api crate's `openapi` feature.
+openapi = ["dep:utoipa", "dep:utoipa-axum", "api-crm/openapi", "api-accounts/openapi", "api-schedule/openapi"]
+
+[dependencies]
+api-crm = { path = "../crm" }
+api-accounts = { path = "../accounts" }
+api-schedule = { path = "../schedule" }
+bcrypt = "0.17"
+common = { path = "../../../common" }
+axum = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+lambda_http = "1.1"
+regex = "1"
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+sha2 = "0.11"
+sqlx = { version = "0.9", features = ["runtime-tokio", "mysql", "chrono"] }
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "preserve_order", "preserve_path_order"], optional = true }
+utoipa-axum = { version = "0.3.0", optional = true }
+aws-credential-types = "1.3"
+url = "2"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }

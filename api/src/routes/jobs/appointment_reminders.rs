@@ -8,8 +8,9 @@
 //! Port of `processDueAppointmentReminders` and
 //! `processDueAppointmentRepReminders`.
 
-use super::JobCaller;
+use crate::auth::job::JobCaller;
 use crate::error::{ApiResult, ErrorBody};
+use crate::openapi::ToSchema;
 use crate::phone::crm_push::push_notification_logged;
 use crate::routes::events::notify::{Booking, NotifyKind, appointment_when, notify_booking};
 use crate::routes::schedule::notifications;
@@ -21,7 +22,6 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use lambda_http::tracing;
 use serde::Serialize;
 use sqlx::MySqlPool;
-use utoipa::ToSchema;
 
 /// What a run did.
 #[derive(Debug, Default, Serialize, ToSchema)]
@@ -307,7 +307,7 @@ async fn rep_reminders(state: &AppState, run: &mut ReminderRun) -> Result<(), sq
 /// Texts (else emails) customers their 24-hour and 1-hour reminders, and
 /// notifies reps the day before and an hour before. Reminders for
 /// appointments that already started are marked failed.
-#[utoipa::path(
+#[crate::openapi::path(
     post,
     path = "/v1/jobs/appointment-reminders",
     operation_id = "run_appointment_reminders",

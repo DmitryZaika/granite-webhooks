@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PostHog auto-fix result",
-  "description": "What the fixer agent concluded about one PostHog issue. Mirrors AgentResult in api/src/posthog_autofix/model.rs.",
+  "description": "What the fixer agent concluded about one PostHog issue. Mirrors AgentResult in api/crates/admin/src/posthog_autofix/model.rs.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -70,7 +70,7 @@
           "items": { "type": "string", "maxLength": 300 }
         },
         "command": {
-          "description": "Exactly `bunx vitest run <test files>` or `cargo test -p <crate> [--test <file>] <filter>`. null without a test.",
+          "description": "Exactly `bunx vitest run <test files>` or `cargo test -p <crate> [--test <target>] <filter>` (an `api/tests/<area>/<file>.rs` test: `cargo test -p api --test <area> <file>::<test name>`). null without a test.",
           "type": ["string", "null"],
           "maxLength": 500
         },
