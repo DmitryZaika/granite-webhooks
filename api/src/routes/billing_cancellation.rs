@@ -133,17 +133,19 @@ pub async fn request_billing_cancellation(
 /// "Keep my subscription" on the account page, for a Manager: the
 /// subscription renews again as before and every Manager and Granite Manager
 /// staff are emailed. Only while the request is scheduled and before it takes
-/// effect.
+/// effect. A repeat (the latest request is already withdrawn) answers 204 and
+/// changes nothing (no second email); with no request ever made, or after the
+/// cancellation took effect, answers 409.
 #[utoipa::path(
     delete,
     path = "/v1/billing/cancellation-request",
     operation_id = "withdraw_billing_cancellation",
     tag = "billing",
     responses(
-        (status = 204, description = "Withdrawn"),
+        (status = 204, description = "Withdrawn, or already withdrawn (nothing changed)"),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a Manager of the company", body = ErrorBody),
-        (status = 409, description = "Nothing scheduled, already taken effect, legacy plan, or no running subscription", body = ErrorBody),
+        (status = 409, description = "No request ever made, already taken effect, legacy plan, or no running subscription", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
         (status = 502, description = "Stripe failed; try again", body = ErrorBody),
         (status = 503, description = "Billing busy or not configured; try again", body = ErrorBody),

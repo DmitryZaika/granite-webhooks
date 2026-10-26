@@ -120,7 +120,8 @@ async fn company_paused(state: &AppState, company_id: i32) -> bool {
 
 /// Paths (and everything below them) that work while the company's access
 /// is paused for billing: paying, signing in and out, the app shell, the
-/// bell, superuser tools and the onboarding call / plan invites.
+/// bell, superuser tools, the onboarding call / plan invites, and the phone
+/// (calls, texts and 911 must keep working; homeowners still call in).
 const OPEN_WHILE_PAUSED: [&str; 8] = [
     "/v1/billing",
     "/v1/auth",

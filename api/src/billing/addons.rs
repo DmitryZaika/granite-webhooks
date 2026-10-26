@@ -33,6 +33,7 @@ use lambda_http::tracing;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::MySqlPool;
+use std::time::Duration;
 use utoipa::ToSchema;
 
 /// Invoices the page lists.
@@ -106,6 +107,11 @@ pub struct AccountSubscription {
     /// self-serve company with a running subscription (`trialing`, `active`
     /// or `past_due`), with Stripe configured and its prices readable.
     pub can_change: bool,
+    /// The subscription can be cancelled here
+    /// (`POST /v1/billing/cancellation-request`): a self-serve company with a
+    /// running subscription (`trialing`, `active` or `past_due`), even while
+    /// Stripe or its prices cannot be read.
+    pub can_cancel: bool,
 }
 
 impl AccountSubscription {
@@ -127,6 +133,7 @@ impl AccountSubscription {
             cancellation: None,
             invoices: Vec::new(),
             can_change: false,
+            can_cancel: false,
         }
     }
 }
@@ -454,21 +461,35 @@ fn has_row(rows: &[(String, String)], key: AddonKey, source: &str) -> bool {
         .any(|(addon, from)| addon == key.as_str() && from == source)
 }
 
+/// How long one Stripe read of the account page may take.
+const PAGE_STRIPE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The account page's Stripe client: a slow Stripe answers the page from the
+/// stored rows instead of holding it.
+fn page_stripe(stripe: &Stripe) -> Stripe {
+    let mut stripe = stripe.clone();
+    stripe.request_timeout = PAGE_STRIPE_TIMEOUT;
+    stripe
+}
+
 /// The subscription as Stripe has it now, raw and read; `None` when Stripe
-/// is off or cannot be read.
+/// is off or refuses the read, `Err` when Stripe cannot be reached (down,
+/// throttling or timing out).
 async fn live_subscription(
     stripe: &Stripe,
     company_id: i32,
     record: Option<&CompanyBilling>,
-) -> Option<(Value, SubscriptionSnapshot)> {
-    let id = record?.stripe_subscription_id.as_deref()?;
+) -> Result<Option<(Value, SubscriptionSnapshot)>, StripeError> {
+    let Some(id) = record.and_then(|r| r.stripe_subscription_id.as_deref()) else {
+        return Ok(None);
+    };
     if !stripe.is_enabled() {
-        return None;
+        return Ok(None);
     }
     match stripe.subscription(id).await {
         Ok(raw) => {
             let snapshot = subscription_snapshot(&raw);
-            Some((raw, snapshot))
+            Ok(Some((raw, snapshot)))
         }
         Err(err) => {
             tracing::warn!(
@@ -476,7 +497,11 @@ async fn live_subscription(
                 error = err.code(),
                 "account page: subscription read failed"
             );
-            None
+            if err.is_retryable() {
+                Err(err)
+            } else {
+                Ok(None)
+            }
         }
     }
 }
@@ -632,9 +657,12 @@ fn live_unit_cents(live: Option<&SubscriptionSnapshot>, lookup_key: &str) -> Opt
 }
 
 /// The account page of `company_id`. Stripe failures fall back to the
-/// stored rows; only database errors fail.
+/// stored rows; only database errors fail. Each Stripe read may take
+/// [`PAGE_STRIPE_TIMEOUT`]. The subscription, prices and invoices are read
+/// together, then the invoice preview and payment method, unless Stripe
+/// could not be reached for the subscription.
 pub async fn account_view(state: &AppState, company_id: i32) -> sqlx::Result<AccountSubscription> {
-    let (pool, stripe) = (&state.pool, &state.stripe);
+    let pool = &state.pool;
     let company = company(pool, company_id).await?;
     let company_name = company
         .as_ref()
@@ -650,9 +678,18 @@ pub async fn account_view(state: &AppState, company_id: i32) -> sqlx::Result<Acc
     }
     let now = super::now();
     let record = MySqlBillingStore(pool).by_company(company_id).await?;
-    let live = live_subscription(stripe, company_id, record.as_ref()).await;
+    let stripe = page_stripe(&state.stripe);
+    let (live, catalog, invoices) = tokio::join!(
+        live_subscription(&stripe, company_id, record.as_ref()),
+        Catalog::load(&stripe),
+        account::page_invoices(&stripe, pool, record.as_ref()),
+    );
+    // Stripe cannot be reached: the reads that need the subscription would
+    // only wait out their own timeouts, so they are skipped.
+    let reachable = live.is_ok();
+    let live = live.unwrap_or_default();
     let snapshot = live.as_ref().map(|(_, snapshot)| snapshot);
-    let catalog = match Catalog::load(stripe).await {
+    let catalog = match catalog {
         Ok(catalog) => Some(catalog),
         Err(err) => {
             if stripe.is_enabled() {
@@ -661,12 +698,35 @@ pub async fn account_view(state: &AppState, company_id: i32) -> sqlx::Result<Acc
             None
         }
     };
+    let invoices = invoices?
+        .into_iter()
+        .take(INVOICE_LIMIT)
+        .map(Invoice::from)
+        .collect();
     let billable = seats::billable_users(pool, company_id).await?;
     let rows = active_addons(pool, company_id).await?;
     let cancellation = cancellation::scheduled(pool, company_id)
         .await?
         .map(CancellationRequestBody::from);
     let timeline = read_timeline(snapshot, record.as_ref(), cancellation.is_some());
+    let customer = record
+        .as_ref()
+        .and_then(|r| r.stripe_customer_id.as_deref());
+    let (next_invoice, payment_method) = if reachable {
+        tokio::join!(
+            async {
+                match snapshot {
+                    Some(live) if !timeline.ended => {
+                        preview(&stripe, company_id, customer, &live.id).await
+                    }
+                    _ => None,
+                }
+            },
+            current_payment_method(&stripe, live.as_ref().map(|(raw, _)| raw), customer),
+        )
+    } else {
+        (None, None)
+    };
 
     let base_cents = live_unit_cents(snapshot, BASE_LOOKUP_KEY)
         .or_else(|| catalog.as_ref().map(|catalog| catalog.base.unit_cents));
@@ -677,27 +737,11 @@ pub async fn account_view(state: &AppState, company_id: i32) -> sqlx::Result<Acc
     });
     let extra = seats::extra_users(billable);
     let addons = addon_lines(snapshot, catalog.as_ref(), &rows, &timeline, now);
-    let customer = record
+    let has_subscription = record
         .as_ref()
-        .and_then(|r| r.stripe_customer_id.as_deref());
-    let next_invoice = match snapshot {
-        Some(live) if !timeline.ended => preview(stripe, company_id, customer, &live.id).await,
-        _ => None,
-    };
-    let payment_method =
-        current_payment_method(stripe, live.as_ref().map(|(raw, _)| raw), customer).await;
-    let invoices = account::page_invoices(stripe, pool, record.as_ref())
-        .await?
-        .into_iter()
-        .take(INVOICE_LIMIT)
-        .map(Invoice::from)
-        .collect();
-    let can_change = stripe.is_enabled()
-        && catalog.is_some()
-        && record
-            .as_ref()
-            .is_some_and(|r| r.stripe_subscription_id.is_some())
-        && is_running(&timeline.status);
+        .is_some_and(|r| r.stripe_subscription_id.is_some());
+    let can_cancel = has_subscription && is_running(&timeline.status);
+    let can_change = stripe.is_enabled() && catalog.is_some() && can_cancel;
 
     Ok(AccountSubscription {
         company_name,
@@ -733,6 +777,7 @@ pub async fn account_view(state: &AppState, company_id: i32) -> sqlx::Result<Acc
         cancellation,
         invoices,
         can_change,
+        can_cancel,
     })
 }
 

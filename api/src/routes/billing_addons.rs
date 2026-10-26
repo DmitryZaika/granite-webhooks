@@ -53,9 +53,10 @@ impl From<AddonError> for ApiError {
 /// the prorated estimate of changing it now, the monthly total, Stripe's
 /// draft of the next invoice, the payment method on file (brand or bank and
 /// last four digits only), a scheduled cancellation and the latest 12
-/// invoices. Read live from Stripe; when Stripe cannot be reached the
-/// stored subscription and add-ons are shown, `next_invoice` is null, and
-/// prices Stripe alone knows are null. A legacy company (`plan_source`
+/// invoices. Read live from Stripe, each read within 5 seconds; when Stripe
+/// cannot be reached the stored subscription and add-ons are shown,
+/// `next_invoice` and `payment_method` are null, and prices Stripe alone
+/// knows are null (`can_cancel` still holds). A legacy company (`plan_source`
 /// `legacy`, billed by Granite Manager) gets only its name and plan source:
 /// it manages billing on `/admin/billing` (`GET /v1/billing`). Change an
 /// add-on with `PUT /v1/billing/addons/{key}`; open the card form with

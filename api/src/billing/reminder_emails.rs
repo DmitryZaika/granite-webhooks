@@ -722,7 +722,8 @@ mod tests {
         assert!(pending.text.contains(
             "Onboarding: not booked yet. Complete it by November 20, 2026 to avoid the onboarding fee of $600.00."
         ));
-        assert_eq!(pending.html.matches("href=").count(), 1);
+        // The billing page button and the Request cancellation link.
+        assert_eq!(pending.html.matches("href=").count(), 2);
         let noticed = onboarding_text(Some(OnboardingLine::NoticeSent {
             charge_at: at("2026-11-28 02:00:00"),
             fee_cents: 60_000,

@@ -149,6 +149,7 @@ fn withdrawal_paragraphs(input: &WithdrawalInput<'_>, esc: fn(&str) -> String) -
     paragraphs.push(
         "If your plan has an onboarding commitment whose deadline has passed, the onboarding fee applies as if cancellation had not been requested.".to_string(),
     );
+    paragraphs.push("Questions? Reply to this email.".to_string());
     paragraphs
 }
 
@@ -317,6 +318,7 @@ mod tests {
         assert!(email.text.contains(
             "Before January 21, 2027, use Keep my subscription on your account page, or reply to this email or write to support@granite-manager.com."
         ));
+        assert!(email.html.contains("or reply to this email or write to"));
         assert!(
             email
                 .text
@@ -402,6 +404,8 @@ mod tests {
         assert!(email.text.contains(
             "The next charge is on January 21, 2027, and then every month on the same day."
         ));
+        assert!(email.text.contains("Questions? Reply to this email."));
+        assert!(email.html.contains("Questions? Reply to this email."));
         assert!(email.html.contains("Rock &amp; Co"));
         no_dashes(&email);
 

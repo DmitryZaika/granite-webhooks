@@ -10,28 +10,38 @@
 //! Webhooks never withdraw: an out-of-order event would undo a real request.
 //! The Managers and staff are emailed once per request and withdrawal, after
 //! the company lock is released (best effort, logged with the company id).
+//! `confirmation_sent_at` is set once the confirmation reached at least one
+//! Manager (there is no per-recipient record, and resending to all would
+//! repeat it to the ones who got it); while it is NULL the billing job resends
+//! it after 10 minutes ([`resend_confirmations`]). Staff notices are not
+//! resent. A second withdrawal is answered as done.
 
 use super::cancellation_emails::{
     ConfirmationInput, OnboardingFee, StaffEvent, StaffNoticeInput, WithdrawalInput,
     render_confirmation, render_staff_email, render_staff_telegram, render_withdrawal,
 };
 use super::lock::{CompanyLock, LockError};
-use super::reminder_emails::RenderedEmail;
+use super::reminder_emails::{RenderedEmail, SUPPORT_EMAIL};
 use super::stripe::{StripeError, subscription_snapshot};
 use super::{MANAGER_POSITION, payments_account_url};
 use crate::onboarding_call::commitment::{Commitment, Status};
 use crate::state::AppState;
 use crate::webhooks_client::{OutgoingEmail, SendFailure};
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, SubsecRound};
 use lambda_http::tracing;
 use sqlx::MySqlPool;
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Longest reason kept (`billing_cancellation_requests.reason`).
 pub const MAX_REASON_CHARS: usize = 1000;
 const FROM_ADDRESS: &str = "noreply@granite-manager.com";
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long after a request the billing job resends a confirmation that
+/// reached no Manager.
+pub const CONFIRMATION_RETRY_AFTER_MINUTES: i64 = 10;
+/// Confirmations the billing job resends per run.
+pub const CONFIRMATIONS_PER_TICK: u32 = 20;
 
 pub const LEGACY_MESSAGE: &str =
     "Your plan is managed by Granite Manager. To cancel, email support@granite-manager.com.";
@@ -310,7 +320,8 @@ struct Withdrawn {
 
 /// Withdraws the company's scheduled request ("Keep my subscription"):
 /// the Stripe subscription renews again, the row is `withdrawn`, and the
-/// Managers and staff are emailed.
+/// Managers and staff are emailed. When the latest request is already
+/// withdrawn, nothing is done (no Stripe call, no email).
 pub async fn withdraw(
     state: &AppState,
     company_id: i32,
@@ -326,18 +337,34 @@ pub async fn withdraw(
     let lock = CompanyLock::acquire(&state.pool, company_id).await?;
     let result = withdraw_locked(state, company_id, user_id).await;
     lock.release().await;
-    let withdrawn = result?;
-    notify_withdrawn(state, company_id, user_id, &withdrawn).await;
+    if let Some(withdrawn) = result? {
+        notify_withdrawn(state, company_id, user_id, &withdrawn).await;
+    }
     Ok(())
 }
 
+/// The status of the company's latest request, if it ever made one.
+async fn latest_status(pool: &MySqlPool, company_id: i32) -> sqlx::Result<Option<String>> {
+    sqlx::query_scalar(
+        "SELECT CAST(status AS CHAR) FROM billing_cancellation_requests
+          WHERE company_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(company_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// `None`: the latest request is already withdrawn (a repeat), nothing done.
 async fn withdraw_locked(
     state: &AppState,
     company_id: i32,
     user_id: i32,
-) -> Result<Withdrawn, CancellationError> {
+) -> Result<Option<Withdrawn>, CancellationError> {
     let pool = &state.pool;
     let Some(existing) = scheduled(pool, company_id).await? else {
+        if latest_status(pool, company_id).await?.as_deref() == Some("withdrawn") {
+            return Ok(None);
+        }
         return Err(CancellationError::Conflict(
             NOTHING_SCHEDULED_MESSAGE.into(),
         ));
@@ -388,10 +415,10 @@ async fn withdraw_locked(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    Ok(Withdrawn {
+    Ok(Some(Withdrawn {
         request: existing,
         next_charge_at,
-    })
+    }))
 }
 
 /// A Manager to email.
@@ -462,7 +489,7 @@ pub(crate) async fn send_rendered(
         subject: email.subject.clone(),
         body: email.html.clone(),
         signature: None,
-        reply_to: Vec::new(),
+        reply_to: vec![SUPPORT_EMAIL.into()],
         in_reply_to: None,
         references: Vec::new(),
         attachments: Vec::new(),
@@ -525,13 +552,19 @@ pub fn onboarding_fee(
     }
 }
 
-async fn notify_requested(
+/// Emails the confirmation to every Manager; true when it reached at least
+/// one (or the company has none to email), false when it must be resent.
+async fn send_confirmation(
     state: &AppState,
     company_id: i32,
+    company: &str,
     request: &CancellationRequest,
     free_period: bool,
-) {
-    let company = company_name(&state.pool, company_id).await;
+) -> bool {
+    let Ok(contacts) = manager_contacts(&state.pool, company_id).await else {
+        tracing::warn!(company_id, "cancellation email recipients not read");
+        return false;
+    };
     let account_url = payments_account_url();
     let commitment = crate::onboarding_call::store::load(&state.pool, company_id)
         .await
@@ -543,9 +576,10 @@ async fn notify_requested(
         commitment.as_ref().map(|stored| &stored.commitment),
         request.requested_at,
     );
-    for contact in managers_or_log(state, company_id).await {
+    let mut sent = 0;
+    for contact in &contacts {
         let email = render_confirmation(&ConfirmationInput {
-            company_name: &company,
+            company_name: company,
             user_name: contact.name.as_deref(),
             requested_by: &request.requested_by_name,
             requested_at: request.requested_at,
@@ -554,26 +588,29 @@ async fn notify_requested(
             onboarding_fee: fee,
             account_url: &account_url,
         });
-        if let Err(err) = send_rendered(state, &contact.email, &email).await {
-            tracing::warn!(
+        match send_rendered(state, &contact.email, &email).await {
+            Ok(()) => sent += 1,
+            Err(err) => tracing::warn!(
                 company_id,
                 kind = failure_kind(&err),
                 "cancellation confirmation email failed"
-            );
+            ),
         }
     }
-    notify_staff(
-        state,
-        &StaffNoticeInput {
-            event: StaffEvent::Requested,
-            company_name: &company,
-            company_id,
-            by: &request.requested_by_name,
-            effective_at: request.effective_at,
-            reason: request.reason.as_deref(),
-        },
+    sent > 0 || contacts.is_empty()
+}
+
+/// Records that the request's confirmation went out, unless already recorded.
+async fn mark_confirmed(pool: &MySqlPool, id: i64, at: NaiveDateTime) -> sqlx::Result<()> {
+    sqlx::query(
+        "UPDATE billing_cancellation_requests SET confirmation_sent_at = ?
+          WHERE id = ? AND confirmation_sent_at IS NULL",
     )
-    .await;
+    .bind(at)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map(|_| ())
 }
 
 async fn notify_withdrawn(state: &AppState, company_id: i32, user_id: i32, withdrawn: &Withdrawn) {
@@ -616,6 +653,158 @@ async fn notify_withdrawn(state: &AppState, company_id: i32, user_id: i32, withd
         },
     )
     .await;
+}
+
+async fn notify_requested(
+    state: &AppState,
+    company_id: i32,
+    request: &CancellationRequest,
+    free_period: bool,
+) {
+    let company = company_name(&state.pool, company_id).await;
+    if send_confirmation(state, company_id, &company, request, free_period).await
+        && let Err(err) = mark_confirmed(&state.pool, request.id, super::now()).await
+    {
+        tracing::warn!(company_id, error = %err, "cancellation confirmation not recorded");
+    }
+    notify_staff(
+        state,
+        &StaffNoticeInput {
+            event: StaffEvent::Requested,
+            company_name: &company,
+            company_id,
+            by: &request.requested_by_name,
+            effective_at: request.effective_at,
+            reason: request.reason.as_deref(),
+        },
+    )
+    .await;
+}
+
+/// Whether a request was made during the free period, from the company's
+/// trial end: it ends then, and was made before it.
+pub fn made_in_free_period(
+    trial_end: Option<NaiveDateTime>,
+    requested_at: NaiveDateTime,
+    effective_at: NaiveDateTime,
+) -> bool {
+    trial_end.is_some_and(|end| requested_at < end && effective_at <= end)
+}
+
+/// Resends, as of `now` (UTC), the confirmations of scheduled requests that
+/// reached no Manager, made at least 10 minutes ago, up to
+/// [`CONFIRMATIONS_PER_TICK`]; no new one is started after `deadline`. Each is
+/// claimed by setting `confirmation_sent_at` first (so overlapping runs do
+/// not both send) and given back when it reached no Manager again. Answers
+/// how many were resent. Errors are logged with the company id only.
+pub async fn resend_confirmations(
+    state: &AppState,
+    now: NaiveDateTime,
+    deadline: Instant,
+) -> usize {
+    let pool = &state.pool;
+    // The claim is compared to the stored DATETIME, which keeps whole seconds.
+    let now = now.trunc_subsecs(0);
+    let due = now - chrono::Duration::minutes(CONFIRMATION_RETRY_AFTER_MINUTES);
+    let rows: Vec<(i64, i32)> = match sqlx::query_as(
+        "SELECT id, company_id FROM billing_cancellation_requests
+          WHERE status = 'scheduled' AND confirmation_sent_at IS NULL AND requested_at <= ?
+          ORDER BY id
+          LIMIT ?",
+    )
+    .bind(due)
+    .bind(CONFIRMATIONS_PER_TICK)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::error!(error = %err, "cancellation confirmations not read");
+            return 0;
+        }
+    };
+    let mut resent = 0;
+    for (id, company_id) in rows {
+        if Instant::now() >= deadline {
+            break;
+        }
+        match resend_one(state, id, company_id, now).await {
+            Ok(true) => resent += 1,
+            Ok(false) => {}
+            Err(err) => {
+                tracing::warn!(company_id, error = %err, "cancellation confirmation not resent");
+            }
+        }
+    }
+    resent
+}
+
+/// One request; true when its confirmation reached a Manager this time.
+async fn resend_one(
+    state: &AppState,
+    id: i64,
+    company_id: i32,
+    now: NaiveDateTime,
+) -> sqlx::Result<bool> {
+    let pool = &state.pool;
+    let claimed = sqlx::query(
+        "UPDATE billing_cancellation_requests SET confirmation_sent_at = ?
+          WHERE id = ? AND status = 'scheduled' AND confirmation_sent_at IS NULL",
+    )
+    .bind(now)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    if claimed.rows_affected() != 1 {
+        return Ok(false);
+    }
+    let delivered = match request_and_trial_end(pool, id, company_id).await {
+        Ok((request, trial_end)) => {
+            let free_period =
+                made_in_free_period(trial_end, request.requested_at, request.effective_at);
+            let company = company_name(pool, company_id).await;
+            send_confirmation(state, company_id, &company, &request, free_period).await
+        }
+        Err(err) => {
+            give_back_confirmation(pool, id, now).await?;
+            return Err(err);
+        }
+    };
+    if !delivered {
+        give_back_confirmation(pool, id, now).await?;
+    }
+    Ok(delivered)
+}
+
+async fn request_and_trial_end(
+    pool: &MySqlPool,
+    id: i64,
+    company_id: i32,
+) -> sqlx::Result<(CancellationRequest, Option<NaiveDateTime>)> {
+    let request = by_id(pool, id).await?;
+    let trial_end: Option<Option<NaiveDateTime>> =
+        sqlx::query_scalar("SELECT trial_end_at FROM company_billing WHERE company_id = ?")
+            .bind(company_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok((request, trial_end.flatten()))
+}
+
+/// Undoes a resend's claim, so the next run tries again.
+async fn give_back_confirmation(
+    pool: &MySqlPool,
+    id: i64,
+    claimed_at: NaiveDateTime,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "UPDATE billing_cancellation_requests SET confirmation_sent_at = NULL
+          WHERE id = ? AND confirmation_sent_at = ?",
+    )
+    .bind(id)
+    .bind(claimed_at)
+    .execute(pool)
+    .await
+    .map(|_| ())
 }
 
 #[cfg(test)]
@@ -718,6 +907,24 @@ mod tests {
         assert_eq!(end_date(None, "active", trial, period), period);
         assert_eq!(end_date(None, "trialing", None, period), period);
         assert_eq!(end_date(None, "active", trial, None), None);
+    }
+
+    #[test]
+    fn a_request_ending_at_the_trial_end_before_it_was_made_in_the_free_period() {
+        let trial = Some(at("2027-01-21 05:00:00"));
+        let asked = at("2026-12-01 12:00:00");
+        assert!(made_in_free_period(trial, asked, at("2027-01-21 05:00:00")));
+        assert!(!made_in_free_period(
+            trial,
+            asked,
+            at("2027-02-21 05:00:00")
+        ));
+        assert!(!made_in_free_period(
+            trial,
+            at("2027-01-22 12:00:00"),
+            at("2027-02-21 05:00:00")
+        ));
+        assert!(!made_in_free_period(None, asked, at("2027-01-21 05:00:00")));
     }
 
     #[test]

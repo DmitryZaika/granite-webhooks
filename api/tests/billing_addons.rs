@@ -5,6 +5,8 @@
 mod common;
 
 use api::app;
+use api::billing::lock::CompanyLock;
+use api::billing::stripe::signature_header;
 use api::state::AppState;
 use axum::http::{Method, StatusCode};
 use axum_test::{TestResponse, TestServer};
@@ -13,6 +15,8 @@ use common::{ALLOWED_ORIGIN, SECRET, WithSession};
 use fake_stripe::{FailMode, FakeStripe, Shared, bank_account, card, price};
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
+use std::future::IntoFuture;
+use std::time::Duration;
 
 #[path = "support/fake_stripe.rs"]
 mod fake_stripe;
@@ -33,6 +37,7 @@ const TRIAL_END_ISO: &str = "2037-01-21T05:00:00Z";
 const ITEMS: &str = "/v1/subscription_items";
 const VIEW: &str = "/v1/billing/subscription";
 const DAY: i64 = 86_400;
+const WEBHOOK_SECRET: &str = "whsec_sb10_test";
 
 struct Fixture {
     pool: MySqlPool,
@@ -114,7 +119,8 @@ async fn fixture(pool: MySqlPool) -> Fixture {
         ];
     }
     let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
-        .with_stripe(fake_stripe::client(&stripe).await);
+        .with_stripe(fake_stripe::client(&stripe).await)
+        .with_stripe_webhook_secret(WEBHOOK_SECRET);
     let server = TestServer::new(app(state));
     Fixture {
         pool,
@@ -239,6 +245,24 @@ impl Fixture {
         .unwrap();
     }
 
+    /// Waits until a connection of this test's database waits in `GET_LOCK`.
+    async fn wait_for_lock_waiter(&self) {
+        for _ in 0..250 {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM information_schema.PROCESSLIST
+                  WHERE DB = DATABASE() AND STATE = 'User lock'",
+            )
+            .fetch_one(&self.pool)
+            .await
+            .unwrap();
+            if waiting > 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("nothing waited for the company lock");
+    }
+
     /// The subscription out of its free period, in a paid month.
     async fn make_active(&self) {
         self.set_subscription(SUBSCRIPTION, "status", json!("active"));
@@ -316,6 +340,7 @@ async fn a_trialing_company_sees_its_plan_users_addons_and_next_invoice(pool: My
     );
     assert_eq!(view["cancellation"], Value::Null);
     assert_eq!(view["can_change"], true);
+    assert_eq!(view["can_cancel"], true);
     // Newest first, drafts hidden, the shape of `GET /v1/billing`.
     let invoices = view["invoices"].as_array().unwrap();
     assert_eq!(invoices.len(), 2);
@@ -393,6 +418,7 @@ async fn a_legacy_company_gets_only_its_plan_source(pool: MySqlPool) {
             "next_charge_at": null, "base": null, "users": null, "addons": [],
             "monthly_total_cents": null, "next_invoice": null, "payment_method": null,
             "cancellation": null, "invoices": [], "can_change": false,
+            "can_cancel": false,
         })
     );
     assert!(f.stripe.lock().unwrap().requests.is_empty());
@@ -416,6 +442,68 @@ async fn the_page_falls_back_to_the_stored_rows_when_stripe_fails(pool: MySqlPoo
     assert_eq!(view["base"]["monthly_cents"], 30_000);
     assert_eq!(view["next_invoice"], Value::Null);
     assert!(f.calls("POST", "/v1/invoices/create_preview").is_empty());
+}
+
+#[test_db::test(seed)]
+async fn an_unreachable_stripe_skips_the_reads_that_need_the_subscription(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.stripe
+        .lock()
+        .unwrap()
+        .fail(Method::GET, "/v1/subscriptions/", FailMode::Before, 1);
+
+    let view = f.view().await;
+    assert_eq!(view["status"], "trialing");
+    assert_eq!(view["monthly_total_cents"], 37_500);
+    assert_eq!(addon(&view, "quotes")["status"], "active");
+    assert_eq!(view["next_invoice"], Value::Null);
+    assert_eq!(view["payment_method"], Value::Null);
+    assert_eq!(view["can_cancel"], true);
+    // The prices and invoices were read alongside the subscription; nothing
+    // was asked after its outage (no preview, payment method or customer).
+    let requests = f.stripe.lock().unwrap().requests.clone();
+    assert_eq!(
+        f.calls("GET", &format!("/v1/subscriptions/{SUBSCRIPTION}"))
+            .len(),
+        1
+    );
+    assert!(
+        requests.iter().all(|seen| seen.method == "GET"
+            && [
+                format!("/v1/subscriptions/{SUBSCRIPTION}").as_str(),
+                "/v1/prices",
+                "/v1/invoices",
+            ]
+            .contains(&seen.path.as_str())),
+        "{requests:?}"
+    );
+}
+
+#[test_db::test(seed)]
+async fn without_prices_the_subscription_can_still_be_cancelled(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.stripe
+        .lock()
+        .unwrap()
+        .fail(Method::GET, "/v1/prices", FailMode::Before, 1);
+
+    let view = f.view().await;
+    assert_eq!(view["status"], "trialing");
+    assert_eq!(view["can_change"], false);
+    assert_eq!(view["can_cancel"], true);
+}
+
+#[test_db::test(seed)]
+async fn an_ended_subscription_cannot_be_cancelled(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.set_subscription(SUBSCRIPTION, "status", json!("canceled"));
+    f.sql("UPDATE company_billing SET subscription_status = 'canceled' WHERE company_id = 20500")
+        .await;
+
+    let view = f.view().await;
+    assert_eq!(view["status"], "canceled");
+    assert_eq!(view["can_change"], false);
+    assert_eq!(view["can_cancel"], false);
 }
 
 #[test_db::test(seed)]
@@ -689,4 +777,58 @@ async fn another_companys_manager_only_touches_their_own_subscription(pool: MySq
         Some((Some("si_sb10_quotes".into()), None))
     );
     assert_eq!(f.addon_row(COMPANY, "quickbooks").await, None);
+}
+
+#[test_db::test(seed)]
+async fn a_webhook_reads_stripe_only_after_taking_the_company_lock(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    let path = format!("/v1/subscriptions/{SUBSCRIPTION}");
+    let lock = CompanyLock::acquire(&f.pool, COMPANY).await.unwrap();
+    // The event carries the subscription as it was: base + Quotes.
+    let object = f.stripe.lock().unwrap().subscriptions[SUBSCRIPTION].clone();
+    let payload = serde_json::to_vec(&json!({
+        "id": "evt_sb10_lock", "type": "customer.subscription.updated",
+        "data": { "object": object },
+    }))
+    .unwrap();
+    let header = signature_header(&payload, WEBHOOK_SECRET, Utc::now().timestamp());
+    let webhook = f
+        .server
+        .post("/v1/webhooks/stripe")
+        .add_header("stripe-signature", header)
+        .add_header("content-type", "application/json")
+        .bytes(payload.into());
+    let meanwhile = async {
+        f.wait_for_lock_waiter().await;
+        assert!(
+            f.calls("GET", &path).is_empty(),
+            "Stripe read before the lock"
+        );
+        // Under the lock, Quotes is swapped for QuickBooks.
+        f.set_subscription(
+            SUBSCRIPTION,
+            "items",
+            json!({ "object": "list", "data": [
+                item("si_sb10_base", base_price(), f.period_start, f.period_end),
+                item(
+                    "si_sb10_quickbooks",
+                    price("price_quickbooks", "addon_quickbooks_monthly_v1", 3_000),
+                    f.period_start,
+                    f.period_end,
+                ),
+            ] }),
+        );
+        lock.release().await;
+    };
+    let (res, ()) = tokio::join!(webhook.into_future(), meanwhile);
+    res.assert_status_ok();
+
+    assert_eq!(f.calls("GET", &path).len(), 1);
+    assert_eq!(
+        f.addon_row(COMPANY, "quickbooks").await,
+        Some((Some("si_sb10_quickbooks".into()), None))
+    );
+    let (item, ended) = f.addon_row(COMPANY, "quotes").await.unwrap();
+    assert_eq!(item.as_deref(), Some("si_sb10_quotes"));
+    assert!(ended.is_some(), "Quotes left the subscription");
 }

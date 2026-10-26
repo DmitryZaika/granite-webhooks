@@ -277,14 +277,12 @@ pub async fn stripe_webhook(
         return Ok(Json(WebhookReceived { received: true }));
     };
     let result = async {
-        let Some(latest) = latest_event(&state.stripe, normalized)
-            .await
-            .map_err(|err| err.to_string())?
-        else {
-            return Ok(());
-        };
         let store = MySqlBillingStore(&state.pool);
-        let company_id = event_company_id(&store, &latest)
+        // The payload's ids name the company; the lock comes before the read
+        // of Stripe's latest state, so a write applied meanwhile under the
+        // lock (an add-on, a cancellation) is never overwritten by an older
+        // read.
+        let company_id = event_company_id(&store, &normalized)
             .await
             .map_err(|err| err.to_string())?;
         let lock = match company_id {
@@ -296,6 +294,12 @@ pub async fn stripe_webhook(
             None => None,
         };
         let applied = async {
+            let Some(latest) = latest_event(&state.stripe, normalized)
+                .await
+                .map_err(|err| err.to_string())?
+            else {
+                return Ok(());
+            };
             apply_event(&store, &latest, billing::now())
                 .await
                 .map_err(|err| err.to_string())?;

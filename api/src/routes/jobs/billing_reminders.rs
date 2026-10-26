@@ -11,6 +11,7 @@ use super::JobCaller;
 use crate::billing::CompanyBilling;
 use crate::billing::account::{default_card, reconcile_batch};
 use crate::billing::amount_notice::process_amount_notices;
+use crate::billing::cancellation::resend_confirmations;
 use crate::billing::gate::settle_company_locked;
 use crate::billing::lock::{CompanyLock, LockError};
 use crate::billing::reminder_store::MySqlReminderStore;
@@ -48,6 +49,8 @@ const RECONCILE_BATCH: u32 = 50;
 const RECONCILE_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
 /// No amount-change notice is started after this much of the run.
 const AMOUNT_NOTICE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(45);
+/// No cancellation confirmation is resent after this much of the run.
+const CONFIRMATION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(50);
 
 /// What this run's batch of the Stripe reconciliation did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
@@ -82,14 +85,21 @@ pub struct BillingRemindersRun {
     pub reconciled: Option<ReconcileRun>,
     /// Self-serve companies whose Managers were emailed this run that their
     /// monthly total changed (at most one notice per company a day; up to 50
-    /// companies looked at per run).
+    /// companies looked at per run; a Manager whose email failed gets it the
+    /// next day, up to 3 tries).
     pub amount_notices: usize,
+    /// Cancellation requests whose confirmation email reached no Manager when
+    /// requested and was resent to their Managers this run (10 minutes after
+    /// the request at the earliest, up to 20 a run, retried every run until
+    /// one Manager gets it).
+    pub confirmations_resent: usize,
 }
 
 const fn run_of(
     tick: ReminderTickResult,
     reconciled: Option<ReconcileRun>,
     amount_notices: usize,
+    confirmations_resent: usize,
 ) -> BillingRemindersRun {
     BillingRemindersRun {
         processed: tick.processed,
@@ -100,6 +110,7 @@ const fn run_of(
         company_errors: tick.company_errors,
         reconciled,
         amount_notices,
+        confirmations_resent,
     }
 }
 
@@ -355,8 +366,13 @@ async fn reconcile(state: &AppState, now: NaiveDateTime) -> Option<ReconcileRun>
 /// and starts no new company after 40 seconds. Then the amount-change
 /// notices: when a self-serve company's monthly total changed (users or
 /// add-ons), its Managers get one email a day with the old and new totals and
-/// the charge the new total first applies to (`amount_notices`). Reminders and
-/// notices are skipped while the mail service is not configured.
+/// the charge the new total first applies to (`amount_notices`); a Manager
+/// whose email failed gets it the next day (up to 3 tries), and nothing is
+/// announced while a scheduled cancellation ends the subscription first. Last, the
+/// confirmation of a cancellation request that reached no Manager is resent
+/// to the company's Managers, 10 minutes after the request at the earliest
+/// (`confirmations_resent`). Reminders, notices and confirmations are skipped
+/// while the mail service is not configured.
 #[utoipa::path(
     post,
     path = "/v1/jobs/billing-reminders",
@@ -379,7 +395,12 @@ pub async fn run(
     if !state.webhooks.is_enabled() {
         // A send could never succeed and would turn every claim into unknown.
         tracing::warn!("billing reminders skipped: the mail service is not configured");
-        return Ok(Json(run_of(ReminderTickResult::default(), reconciled, 0)));
+        return Ok(Json(run_of(
+            ReminderTickResult::default(),
+            reconciled,
+            0,
+            0,
+        )));
     }
     let effects = LiveReminders {
         state: &state,
@@ -399,5 +420,12 @@ pub async fn run(
     .await;
     let amount_notices =
         process_amount_notices(&state, now, started + AMOUNT_NOTICE_DEADLINE).await;
-    Ok(Json(run_of(tick, reconciled, amount_notices)))
+    let confirmations_resent =
+        resend_confirmations(&state, now, started + CONFIRMATION_DEADLINE).await;
+    Ok(Json(run_of(
+        tick,
+        reconciled,
+        amount_notices,
+        confirmations_resent,
+    )))
 }

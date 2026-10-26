@@ -10,18 +10,20 @@ mod fake_stripe;
 mod fake_webhooks;
 
 use api::app;
+use api::billing::cancellation::resend_confirmations;
 use api::billing::stripe::signature_header;
 use api::signup::SignupConfig;
 use api::state::AppState;
 use axum::http::StatusCode;
 use axum_test::TestServer;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use common::{ALLOWED_ORIGIN, SECRET, WithSession};
 use fake_stripe::{FakeStripe, price};
 use fake_webhooks::Sink;
 use serde_json::{Value, json};
 use sqlx::MySqlPool;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 const WEBHOOK_SECRET: &str = "whsec_cancel_test";
 const COMPANY: i32 = 20540;
@@ -39,6 +41,7 @@ const OTHER_MANAGER: &str = "boss@other-cancel.test";
 const STAFF_USER: i32 = 101;
 const STAFF_EMAIL: &str = "dima@granite.test";
 const DAY: i64 = 86_400;
+const SUPPORT: &str = "support@granite-manager.com";
 
 /// How the company's subscription stands.
 #[derive(Clone, Copy)]
@@ -51,6 +54,7 @@ enum Plan {
 
 struct Fixture {
     pool: MySqlPool,
+    state: AppState,
     server: TestServer,
     stripe: fake_stripe::Shared,
     sink: fake_webhooks::Shared,
@@ -174,6 +178,7 @@ async fn fixture(pool: MySqlPool, plan: Plan) -> Fixture {
         .with_stripe_webhook_secret(WEBHOOK_SECRET);
     Fixture {
         pool,
+        state: state.clone(),
         server: TestServer::new(app(state)),
         stripe,
         sink,
@@ -232,6 +237,32 @@ impl Fixture {
         .fetch_all(&self.pool)
         .await
         .unwrap()
+    }
+
+    /// `(requested_at, confirmation_sent_at)` of the latest row.
+    async fn confirmation(&self) -> (NaiveDateTime, Option<NaiveDateTime>) {
+        sqlx::query_as(
+            "SELECT requested_at, confirmation_sent_at FROM billing_cancellation_requests
+              WHERE company_id = ? ORDER BY id DESC LIMIT 1",
+        )
+        .bind(COMPANY)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap()
+    }
+
+    /// One run of the confirmation resend, as of `now`.
+    async fn resend(&self, now: NaiveDateTime) -> usize {
+        resend_confirmations(
+            &self.state,
+            now,
+            Instant::now() + std::time::Duration::from_secs(60),
+        )
+        .await
+    }
+
+    fn fail_emails(&self, count: u32) {
+        self.sink.lock().unwrap().fail_emails = count;
     }
 
     async fn cancel_at(&self) -> Option<NaiveDateTime> {
@@ -307,7 +338,9 @@ async fn a_request_in_the_free_period_ends_at_the_trial_end_and_emails_once(pool
         );
         assert_eq!(emails[0]["transactional"], true);
         assert_eq!(emails[0]["from_address"], "noreply@granite-manager.com");
+        assert_eq!(emails[0]["reply_to"], json!([SUPPORT]));
         let confirmation = text(&emails[0]);
+        assert!(confirmation.contains("reply to this email"));
         assert!(confirmation.contains(
             "Dana Manager requested cancellation of the Granite Manager subscription for Cancel & Stone"
         ));
@@ -410,6 +443,8 @@ async fn withdrawing_keeps_the_subscription_and_a_new_request_gets_a_new_key(poo
         );
         assert!(text(&emails[1]).contains("Dana Manager withdrew the cancellation request"));
         assert!(text(&emails[1]).contains("The next charge is on"));
+        assert!(text(&emails[1]).contains("Questions? Reply to this email."));
+        assert_eq!(emails[1]["reply_to"], json!([SUPPORT]));
     }
     assert_eq!(f.emails_to(STAFF_EMAIL).len(), 2);
     let telegrams = f.telegrams();
@@ -421,11 +456,13 @@ async fn withdrawing_keeps_the_subscription_and_a_new_request_gets_a_new_key(poo
             .starts_with("Cancellation withdrawn\n")
     );
 
-    // Nothing is scheduled any more.
+    // A repeat is answered as done: no Stripe call, no email.
+    let emails = f.email_count();
     f.withdraw(MANAGER_SESSION)
         .await
-        .assert_status(StatusCode::CONFLICT);
+        .assert_status(StatusCode::NO_CONTENT);
     assert_eq!(f.subscription_calls().len(), 2);
+    assert_eq!(f.email_count(), emails);
 
     // A new request is a new one at Stripe too.
     let second = f.request(MANAGER_SESSION, json!({})).await;
@@ -453,11 +490,183 @@ async fn withdrawing_keeps_the_subscription_and_a_new_request_gets_a_new_key(poo
 #[test_db::test(seed)]
 async fn withdrawing_with_nothing_scheduled_is_a_conflict(pool: MySqlPool) {
     let f = fixture(pool, Plan::Active).await;
+    // Never requested.
     f.withdraw(MANAGER_SESSION)
         .await
         .assert_status(StatusCode::CONFLICT);
     assert!(f.stripe.lock().unwrap().requests.is_empty());
     assert_eq!(f.email_count(), 0);
+
+    // The latest request is completed, even after an earlier withdrawal.
+    sqlx::query(
+        "INSERT INTO billing_cancellation_requests
+           (company_id, requested_by, effective_at, status, requested_at)
+         VALUES (?, 20540, UTC_TIMESTAMP() - INTERVAL 40 DAY, 'withdrawn',
+                 UTC_TIMESTAMP() - INTERVAL 50 DAY),
+                (?, 20540, UTC_TIMESTAMP() - INTERVAL 1 DAY, 'completed',
+                 UTC_TIMESTAMP() - INTERVAL 20 DAY)",
+    )
+    .bind(COMPANY)
+    .bind(COMPANY)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    f.withdraw(MANAGER_SESSION)
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    assert!(f.stripe.lock().unwrap().requests.is_empty());
+    assert_eq!(f.email_count(), 0);
+}
+
+#[test_db::test(seed)]
+async fn withdrawing_twice_is_fine(pool: MySqlPool) {
+    let f = fixture(pool, Plan::Active).await;
+    f.request(MANAGER_SESSION, json!({}))
+        .await
+        .assert_status(StatusCode::CREATED);
+    f.withdraw(MANAGER_SESSION)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let emails = f.email_count();
+    let telegrams = f.telegrams().len();
+
+    f.withdraw(MANAGER_SESSION)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    assert_eq!(f.subscription_calls().len(), 2);
+    assert_eq!(f.email_count(), emails);
+    assert_eq!(f.telegrams().len(), telegrams);
+    let rows = f.rows().await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, "withdrawn");
+    assert_eq!(f.cancel_at().await, None);
+}
+
+#[test_db::test(seed)]
+async fn a_delivered_confirmation_is_recorded_at_once_and_never_resent(pool: MySqlPool) {
+    let f = fixture(pool, Plan::Active).await;
+    f.request(MANAGER_SESSION, json!({}))
+        .await
+        .assert_status(StatusCode::CREATED);
+
+    let (requested_at, sent_at) = f.confirmation().await;
+    assert!(sent_at.is_some_and(|at| at >= requested_at));
+
+    assert_eq!(f.resend(requested_at + Duration::hours(1)).await, 0);
+    for manager in [MANAGER_ONE, MANAGER_TWO] {
+        assert_eq!(f.emails_to(manager).len(), 1, "{manager}");
+    }
+}
+
+#[test_db::test(seed)]
+async fn a_confirmation_that_reached_no_manager_is_resent_once_after_ten_minutes(pool: MySqlPool) {
+    let f = fixture(pool, Plan::Trialing).await;
+    f.fail_emails(2);
+    f.request(MANAGER_SESSION, json!({ "reason": "Too expensive" }))
+        .await
+        .assert_status(StatusCode::CREATED);
+
+    let (requested_at, sent_at) = f.confirmation().await;
+    assert_eq!(sent_at, None);
+    assert!(f.emails_to(MANAGER_ONE).is_empty());
+    assert!(f.emails_to(MANAGER_TWO).is_empty());
+    assert_eq!(f.emails_to(STAFF_EMAIL).len(), 1);
+    assert_eq!(f.telegrams().len(), 1);
+
+    // Too soon: nothing is sent.
+    let soon = requested_at + Duration::minutes(9) + Duration::seconds(59);
+    assert_eq!(f.resend(soon).await, 0);
+    assert!(f.emails_to(MANAGER_ONE).is_empty());
+    assert_eq!(f.confirmation().await.1, None);
+
+    let due = requested_at + Duration::minutes(10);
+    assert_eq!(f.resend(due).await, 1);
+    for manager in [MANAGER_ONE, MANAGER_TWO] {
+        let emails = f.emails_to(manager);
+        assert_eq!(emails.len(), 1, "{manager}");
+        assert_eq!(
+            emails[0]["subject"],
+            "We received your cancellation request"
+        );
+        assert_eq!(emails[0]["reply_to"], json!([SUPPORT]));
+        let confirmation = text(&emails[0]);
+        assert!(confirmation.contains(
+            "Dana Manager requested cancellation of the Granite Manager subscription for Cancel & Stone"
+        ));
+        assert!(confirmation.contains("not charged at all"));
+        assert!(!confirmation.contains("Too expensive"));
+    }
+    assert_eq!(f.confirmation().await.1, Some(due));
+    // Staff are not told again.
+    assert_eq!(f.emails_to(STAFF_EMAIL).len(), 1);
+    assert_eq!(f.telegrams().len(), 1);
+
+    let emails = f.email_count();
+    assert_eq!(f.resend(due + Duration::minutes(1)).await, 0);
+    assert_eq!(f.email_count(), emails);
+}
+
+#[test_db::test(seed)]
+async fn a_resend_that_fails_again_is_retried_on_the_next_run(pool: MySqlPool) {
+    let f = fixture(pool, Plan::Active).await;
+    f.fail_emails(2);
+    f.request(MANAGER_SESSION, json!({}))
+        .await
+        .assert_status(StatusCode::CREATED);
+    let (requested_at, _) = f.confirmation().await;
+
+    f.fail_emails(2);
+    let due = requested_at + Duration::minutes(10);
+    assert_eq!(f.resend(due).await, 0);
+    assert_eq!(f.confirmation().await.1, None);
+    assert!(f.emails_to(MANAGER_ONE).is_empty());
+
+    assert_eq!(f.resend(due + Duration::minutes(1)).await, 1);
+    assert_eq!(f.emails_to(MANAGER_ONE).len(), 1);
+    assert_eq!(f.emails_to(MANAGER_TWO).len(), 1);
+    let confirmation = text(&f.emails_to(MANAGER_ONE)[0]);
+    assert!(confirmation.contains("No further subscription charges are made after"));
+}
+
+#[test_db::test(seed)]
+async fn a_confirmation_that_reached_one_manager_counts_as_sent(pool: MySqlPool) {
+    let f = fixture(pool, Plan::Active).await;
+    f.fail_emails(1);
+    f.request(MANAGER_SESSION, json!({}))
+        .await
+        .assert_status(StatusCode::CREATED);
+
+    let (requested_at, sent_at) = f.confirmation().await;
+    assert!(sent_at.is_some());
+    assert!(f.emails_to(MANAGER_ONE).is_empty());
+    assert_eq!(f.emails_to(MANAGER_TWO).len(), 1);
+    assert_eq!(f.resend(requested_at + Duration::hours(1)).await, 0);
+    assert_eq!(f.emails_to(MANAGER_TWO).len(), 1);
+}
+
+#[test_db::test(seed)]
+async fn a_withdrawn_request_is_never_resent(pool: MySqlPool) {
+    let f = fixture(pool, Plan::Trialing).await;
+    f.fail_emails(2);
+    f.request(MANAGER_SESSION, json!({}))
+        .await
+        .assert_status(StatusCode::CREATED);
+    let (requested_at, sent_at) = f.confirmation().await;
+    assert_eq!(sent_at, None);
+    f.withdraw(MANAGER_SESSION)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    assert_eq!(f.resend(requested_at + Duration::hours(1)).await, 0);
+    for manager in [MANAGER_ONE, MANAGER_TWO] {
+        let emails = f.emails_to(manager);
+        assert_eq!(emails.len(), 1, "{manager}");
+        assert_eq!(
+            emails[0]["subject"],
+            "Your Granite Manager subscription continues"
+        );
+    }
 }
 
 #[test_db::test(seed)]
