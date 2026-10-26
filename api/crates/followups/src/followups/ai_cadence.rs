@@ -210,7 +210,7 @@ fn pace_of(gathered: &GatheredContext, now: Instant) -> Option<ConversationPace>
         .iter()
         .map(super::prompt::FollowupTimelineMessage::to_timeline)
         .collect();
-    conversation_pace(&timeline, now)
+    Some(conversation_pace(&timeline, now))
 }
 
 /// The planned steps for the gathered customer (forced: holds ignored).

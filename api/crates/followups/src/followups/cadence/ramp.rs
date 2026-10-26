@@ -220,9 +220,9 @@ pub struct ConversationPace {
     pub days_since_last: f64,
 }
 
-/// The pace of an unanswered run of our messages; `None` when we have not
-/// written since the customer last did.
-pub fn conversation_pace(timeline: &[TimelineMessage], now: Instant) -> Option<ConversationPace> {
+/// The pace of the run of our messages since the customer last wrote (none
+/// yet: a conversation starting now).
+pub fn conversation_pace(timeline: &[TimelineMessage], now: Instant) -> ConversationPace {
     let mut messages: Vec<(Instant, Direction)> = timeline
         .iter()
         .filter_map(|m| parse_followup_timeline_at(&m.at).map(|at| (at, m.direction)))
@@ -242,16 +242,17 @@ pub fn conversation_pace(timeline: &[TimelineMessage], now: Instant) -> Option<C
             }
         }
     }
-    let last = *sends.last()?;
     let last_gap_days = match sends.as_slice() {
         [.., before, last] => days_between(*last, *before),
         _ => 0.0,
     };
-    Some(ConversationPace {
+    ConversationPace {
         sent: sends.len(),
         last_gap_days,
-        days_since_last: days_between(now, last).max(0.0),
-    })
+        days_since_last: sends
+            .last()
+            .map_or(0.0, |last| days_between(now, *last).max(0.0)),
+    }
 }
 
 impl ConversationPace {
@@ -259,6 +260,10 @@ impl ConversationPace {
     /// from our last message): next day, 3 days, a week… from where the
     /// conversation is, never faster than our last gap.
     pub fn floor_gap_days(&self, index: usize) -> f64 {
+        if self.sent + index == 0 {
+            // Nothing sent since they last wrote: the first may go now.
+            return 0.0;
+        }
         let ramp = NEW_CONVERSATION_GAPS[(self.sent + index)
             .saturating_sub(1)
             .min(NEW_CONVERSATION_GAPS.len() - 1)];
@@ -282,9 +287,9 @@ impl ConversationPace {
                 if index == 0 {
                     // Whole days from now, so the send keeps its clock.
                     let needed = ((floor - since) / MINUTES_PER_DAY).ceil() * MINUTES_PER_DAY;
-                    let kept = delay.max(needed).max(0.0);
-                    previous_gap = (since + kept) / MINUTES_PER_DAY;
-                    kept
+                    // The pace after it is the conversation's, not a hold's.
+                    previous_gap = self.floor_gap_days(0).max(self.days_since_last);
+                    delay.max(needed).max(0.0)
                 } else {
                     let kept = delay.max(floor);
                     previous_gap = kept / MINUTES_PER_DAY;
@@ -808,6 +813,11 @@ mod tests {
             days(&pace(6, 30.0, 3.0).keep(&asap[..3])),
             [27.0, 30.0, 30.0]
         );
+        // Nothing sent yet: now, then the next day, 3 days, a week…
+        assert_eq!(
+            days(&pace(0, 0.0, 0.0).keep(&asap)),
+            [0.0, 1.0, 3.0, 7.0, 14.0]
+        );
         // Longer planned waits stay.
         assert_eq!(
             days(&pace(1, 0.0, 0.0).keep(&[2.0 * DAY, 10.0 * DAY])),
@@ -827,15 +837,15 @@ mod tests {
             message("2026-10-12T18:28:56Z", Direction::Outbound),
             message("2026-10-24T22:41:27Z", Direction::Outbound),
         ];
-        let found = conversation_pace(&timeline, now).unwrap();
+        let found = conversation_pace(&timeline, now);
         assert_eq!(found.sent, 2);
         assert!((found.last_gap_days - 12.17).abs() < 0.01);
         assert!((found.days_since_last - 1.81).abs() < 0.01);
-        // They wrote last: no pace to keep.
+        // They wrote last: the conversation starts again.
         let replied = vec![
             message("2026-10-24T22:41:27Z", Direction::Outbound),
             message("2026-10-25T14:00:00Z", Direction::Inbound),
         ];
-        assert_eq!(conversation_pace(&replied, now), None);
+        assert_eq!(conversation_pace(&replied, now), pace(0, 0.0, 0.0));
     }
 }
