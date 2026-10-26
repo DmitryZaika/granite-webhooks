@@ -1,10 +1,12 @@
 //! Starting the fix workflow (`workflow_dispatch`).
 //!
-//! The dispatch carries only the ledger id and the PostHog issue id. The
-//! workflow reads everything else itself, so error text (user and third-party
-//! input) never reaches a workflow expression.
+//! The dispatch carries only the ledger id, the PostHog issue id and the id
+//! of the bug's latest event. The workflow reads everything else itself, so
+//! error text (user and third-party input) never reaches a workflow
+//! expression.
 
 use super::config::Config;
+use super::posthog::{is_event_uuid, is_issue_id};
 use serde_json::{Value, json};
 
 /// The inputs of one `posthog-autofix.yml` run.
@@ -13,6 +15,8 @@ pub struct Dispatch<'a> {
     /// The ledger row (`posthog_autofix_runs.id`).
     pub run_id: u64,
     pub issue_id: &'a str,
+    /// The bug's latest `$exception` event; `None` on rows of the issue intake.
+    pub event_id: Option<&'a str>,
 }
 
 /// GitHub refused or could not be reached; the row is retried later.
@@ -43,7 +47,7 @@ impl Dispatcher for GitHub<'_> {
             .github_token
             .as_deref()
             .ok_or_else(|| DispatchError("POSTHOG_AUTOFIX_GITHUB_TOKEN is not set".into()))?;
-        let (url, body) = dispatch_request(self.config, dispatch);
+        let (url, body) = dispatch_request(self.config, dispatch)?;
         let response = self
             .http
             .post(url)
@@ -72,8 +76,19 @@ impl Dispatcher for GitHub<'_> {
 const BODY_EXCERPT: usize = 200;
 
 /// The `workflow_dispatch` endpoint and body. Inputs are strings: GitHub
-/// rejects other JSON types.
-fn dispatch_request(config: &Config, dispatch: &Dispatch<'_>) -> (String, Value) {
+/// rejects other JSON types, so a row without an event sends `""`. Ids that
+/// are not lowercase UUIDs never leave the api.
+fn dispatch_request(
+    config: &Config,
+    dispatch: &Dispatch<'_>,
+) -> Result<(String, Value), DispatchError> {
+    if !is_issue_id(dispatch.issue_id) {
+        return Err(DispatchError("issue_id is not a lowercase UUID".into()));
+    }
+    let event_id = dispatch.event_id.unwrap_or_default();
+    if !event_id.is_empty() && !is_event_uuid(event_id) {
+        return Err(DispatchError("event_id is not a lowercase UUID".into()));
+    }
     let url = format!(
         "https://api.github.com/repos/{}/actions/workflows/{}/dispatches",
         config.github_repo, config.github_workflow
@@ -83,9 +98,10 @@ fn dispatch_request(config: &Config, dispatch: &Dispatch<'_>) -> (String, Value)
         "inputs": {
             "run_id": dispatch.run_id.to_string(),
             "issue_id": dispatch.issue_id,
+            "event_id": event_id,
         },
     });
-    (url, body)
+    Ok((url, body))
 }
 
 #[cfg(test)]
@@ -93,12 +109,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_dispatch_starts_the_workflow_with_the_run_and_issue_ids() {
+    fn a_dispatch_starts_the_workflow_with_the_run_issue_and_event_ids() {
         let dispatch = Dispatch {
             run_id: 42,
             issue_id: "01a158ec-b8d5-7002-bb99-07e4e724acee",
+            event_id: Some("01a17880-7a7a-740b-ac7c-30975f48657a"),
         };
-        let (url, body) = dispatch_request(&Config::default(), &dispatch);
+        let (url, body) = dispatch_request(&Config::default(), &dispatch).unwrap();
         assert_eq!(
             url,
             "https://api.github.com/repos/DmitryZaika/granite-webhooks/actions/workflows/posthog-autofix.yml/dispatches"
@@ -107,8 +124,34 @@ mod tests {
             body,
             json!({
                 "ref": "main",
-                "inputs": { "run_id": "42", "issue_id": "01a158ec-b8d5-7002-bb99-07e4e724acee" },
+                "inputs": {
+                    "run_id": "42",
+                    "issue_id": "01a158ec-b8d5-7002-bb99-07e4e724acee",
+                    "event_id": "01a17880-7a7a-740b-ac7c-30975f48657a",
+                },
             })
         );
+        let without_event = Dispatch {
+            event_id: None,
+            ..dispatch
+        };
+        let (_, body) = dispatch_request(&Config::default(), &without_event).unwrap();
+        assert_eq!(body["inputs"]["event_id"], "");
+    }
+
+    #[test]
+    fn ids_that_are_not_uuids_never_leave_the_api() {
+        let bad_event = Dispatch {
+            run_id: 1,
+            issue_id: "01a158ec-b8d5-7002-bb99-07e4e724acee",
+            event_id: Some("x' || true"),
+        };
+        assert!(dispatch_request(&Config::default(), &bad_event).is_err());
+        let bad_issue = Dispatch {
+            issue_id: "01A158EC-b8d5-7002-bb99-07e4e724acee",
+            event_id: None,
+            ..bad_event
+        };
+        assert!(dispatch_request(&Config::default(), &bad_issue).is_err());
     }
 }

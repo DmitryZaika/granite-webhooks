@@ -66,26 +66,44 @@ pub const DEFAULT_EXCLUDE: &[&str] = &[
     "Telephony 401",
     // A rate limit: the caller waits for retryAfterSecs and tries again.
     "Granite API 429 on",
+    // A marketing form posting with a wrong or missing bearer token.
+    "Failed to parse bearer UUID",
+    // CloudTalk and RingCentral refused a send (their 4xx, our account setup).
+    "cloudtalk_4",
+    "ringcentral_401",
+    // The SMS provider answered 502 to the api.
+    "answered 502",
+    // OpenAI unreachable.
+    "OpenAI request failed",
+    // A page kept from before a deploy asked for a route that is gone.
+    "No result found for routeId",
+    // Calendly's script blocked or down.
+    "Calendly widget failed to load",
+    // An expired or already used signing link.
+    "SigningError: This signing link is not valid",
+    // The SPA's rewrap of a failed request; the request reports itself.
+    "Failed to load notifications",
 ];
 
 #[derive(Clone)]
 pub struct Config {
     pub mode: Mode,
-    /// The cutover: issues created before it never start a run (the backlog).
+    /// The cutover: events before it are never read (the backlog).
     pub start_at: Option<DateTime<Utc>>,
     /// PostHog is read at most once per this many minutes.
     pub poll_minutes: i64,
-    /// An issue waits this long before it is read and judged, so its first
-    /// burst of events (and any duplicates) has arrived.
+    /// A bug waits this long after its first event before it is judged, so
+    /// its first burst of events (and the api error behind a web one) has
+    /// arrived.
     pub settle_minutes: i64,
     pub max_concurrent: u32,
     /// Runs dispatched in any rolling 24 hours.
     pub max_per_day: u32,
-    /// More new issues than this in one storm window sends one digest email.
+    /// More new bugs than this in one storm window sends one digest email.
     pub storm_threshold: u32,
     pub storm_window_minutes: i64,
-    /// A new issue with the signature of a run that ended this recently is a
-    /// duplicate of it.
+    /// Events of a bug whose row was discovered this recently count on that
+    /// row; after it, the bug gets a new row and is judged again.
     pub signature_window_days: i64,
     /// A dispatched or running run is given up after this long.
     pub run_timeout_minutes: i64,
@@ -119,7 +137,7 @@ impl Default for Config {
             poll_minutes: 5,
             settle_minutes: 30,
             max_concurrent: 2,
-            max_per_day: 3,
+            max_per_day: 8,
             storm_threshold: 20,
             storm_window_minutes: 30,
             signature_window_days: 14,
@@ -347,7 +365,7 @@ mod tests {
     fn nothing_set_is_off_with_safe_caps() {
         let config = config(&[]);
         assert_eq!(config.mode, Mode::Off);
-        assert_eq!((config.max_concurrent, config.max_per_day), (2, 3));
+        assert_eq!((config.max_concurrent, config.max_per_day), (2, 8));
         assert_eq!(config.missing_for_mode(), None);
         assert!(
             config
@@ -407,6 +425,16 @@ mod tests {
         };
         for noise in [
             "TypeError: Failed to fetch",
+            "Marketing Authorization Error: Failed to parse bearer UUID",
+            r#"HTTPError: {"error":"cloudtalk_400","ids":[],"unsent_s3_keys":[]}"#,
+            r#"HTTPError: {"error":"ringcentral_401","ids":[],"unsent_s3_keys":[]}"#,
+            "HttpError: POST /v1/sms/ringcentral/messages answered 502",
+            r#"ApiError: Upstream("Failed to generate AI reply: OpenAI request failed: error sending request")"#,
+            r#"GraniteApiError: Granite API 502 on /v1/ai/conversation-reply: {"error":"Failed to generate AI reply: OpenAI request failed: error sending request"}"#,
+            r#"Error: No result found for routeId "routes/employee.deals""#,
+            "Error: Calendly widget failed to load",
+            "SigningError: This signing link is not valid.",
+            "Error: Failed to load notifications",
             "Error: Invalid call to runtime.sendMessage(). Tab not found.",
             "UnhandledRejection: Non-Error promise rejection captured with value: Object Not Found Matching Id:2, MethodName:update, ParamCount:4",
             "DOMException: SecurityError: Failed to read the 'localStorage' property from 'Window': Access is denied for this document.",
@@ -426,6 +454,10 @@ mod tests {
             "TypeError: Cannot read properties of undefined (reading 'title')",
             "ApiError: Database(PoolTimedOut)",
             "HTTPError: Failed to build payload",
+            // Kept out on purpose: not known to be noise.
+            r#"HTTPError: {"error":"Email failed to send"}"#,
+            "HTTPError: Failed to sync CloudTalk contact",
+            r#"GraniteApiError: Granite API 500 on /v1/sms/cloudtalk/threads: {"error":"database error"}"#,
         ] {
             assert!(!excluded(bug), "{bug}");
         }

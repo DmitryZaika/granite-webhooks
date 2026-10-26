@@ -42761,7 +42761,7 @@
           "jobs"
         ],
         "summary": "Run one tick of the PostHog auto-fix intake",
-        "description": "Gives up on fix runs that never reported back, then (at most once per\npoll window, `POSTHOG_AUTOFIX_POLL_MINUTES`) records new PostHog error\nissues created since the cutover, emails one digest when they arrive in a\nstorm, judges issues that have settled (skipped as noise, folded into an\nearlier run of the same bug, or queued), emails when a fixed issue is\nreopened, and (with `POSTHOG_AUTOFIX_WRITE_KEY` and `_ASSIGNEE` set)\nassigns the issues of opened fixes in PostHog. Last, in live mode, it starts queued fix runs within the\nconcurrency and daily caps; in dry-run mode it emails the runs it would\nhave started instead. With `POSTHOG_AUTOFIX_MODE` off it does nothing.\nWhen another tick is running it returns at once with `busy`. PostHog or\nGitHub failures do not fail the call: they are listed in `errors` and\nretried on the next tick.",
+        "description": "Gives up on fix runs that never reported back, then (at most once per\npoll window, `POSTHOG_AUTOFIX_POLL_MINUTES`) reads the PostHog\n`$exception` events since the last read (never before the cutover) and\nrecords them as bugs, one per signature whatever issue they are in;\nemails one digest when new bugs arrive in a storm; judges bugs that have\nsettled (skipped as noise, a browser 5xx folded into the API error of the\nsame route, or queued); emails when a fixed issue is reopened; and (with\n`POSTHOG_AUTOFIX_WRITE_KEY` and `_ASSIGNEE` set) assigns the issues of\nopened fixes in PostHog. Last, in live mode, it starts queued fix runs\n(bugs seen in the last day first, then the most widespread) within the\nconcurrency and daily caps; in dry-run mode it emails the runs it would\nhave started instead. With `POSTHOG_AUTOFIX_MODE` off it does nothing.\nWhen another tick is running it returns at once with `busy`. PostHog or\nGitHub failures do not fail the call: they are listed in `errors` and\nretried on the next tick.",
         "operationId": "run_posthog_autofix",
         "responses": {
           "200": {
@@ -90817,22 +90817,22 @@
           },
           "discovered": {
             "type": "integer",
-            "description": "New issues recorded.",
+            "description": "New bugs recorded (a bug is one signature of `$exception` events).",
             "minimum": 0
           },
           "queued": {
             "type": "integer",
-            "description": "Issues judged eligible and queued.",
+            "description": "Bugs judged eligible and queued.",
             "minimum": 0
           },
           "skipped": {
             "type": "integer",
-            "description": "Issues skipped as noise, resolved, suppressed or not production.",
+            "description": "Bugs skipped as noise, resolved, suppressed or not production.",
             "minimum": 0
           },
           "duplicates": {
             "type": "integer",
-            "description": "Issues folded into an earlier run of the same bug.",
+            "description": "Browser errors folded into the API error of the same request.",
             "minimum": 0
           },
           "dispatched": {

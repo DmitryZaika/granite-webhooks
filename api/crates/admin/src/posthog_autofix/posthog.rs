@@ -1,5 +1,5 @@
-//! Reading error tracking issues and their events from PostHog (HogQL over
-//! the query API, with a personal API key that has `query:read`).
+//! Reading `$exception` events and error tracking issues from PostHog (HogQL
+//! over the query API, with a personal API key that has `query:read`).
 
 use super::config::Config;
 use chrono::{DateTime, Utc};
@@ -39,6 +39,38 @@ pub struct IssueEvents {
     pub request: Option<String>,
 }
 
+/// `$exception` events of one time span that share an issue, a first
+/// exception (type and message), a sender and the API call they failed on.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventGroup {
+    pub issue_id: String,
+    /// The first exception's type and message (cut to 300 characters).
+    pub exception_type: String,
+    pub message: String,
+    /// `granite-api`, `server-webhooks` or `server-time-triggered`; `None`
+    /// for a browser or anything else.
+    pub sender: Option<String>,
+    pub lib: Option<String>,
+    /// `api_status`: the HTTP status of the failed API call.
+    pub api_status: Option<u16>,
+    /// `api_route` (else `api_path`) of a server error, `api_path` of a
+    /// browser one.
+    pub route: Option<String>,
+    /// `error_source`: `toast`, `client`, `api`...
+    pub error_source: Option<String>,
+    pub occurrences: u64,
+    /// Distinct `distinct_id`s.
+    pub users: u64,
+    pub first_seen: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+    /// The latest event's `uuid`, `$host`, `$exception_list`, page and method.
+    pub event_uuid: Option<String>,
+    pub host: Option<String>,
+    pub exception_list: Option<Value>,
+    pub url: Option<String>,
+    pub method: Option<String>,
+}
+
 /// PostHog could not be read; the tick retries on the next poll.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceError(pub String);
@@ -51,12 +83,14 @@ impl std::fmt::Display for SourceError {
 
 #[allow(async_fn_in_trait)]
 pub trait IssueSource: Sync {
-    /// Issues created at or after `since`, oldest first, at most `limit`.
-    async fn issues_since(
+    /// `$exception` events with `from <= timestamp < to`, grouped, the most
+    /// frequent groups first, at most `limit` groups.
+    async fn event_groups(
         &self,
-        since: DateTime<Utc>,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
         limit: u32,
-    ) -> Result<Vec<Issue>, SourceError>;
+    ) -> Result<Vec<EventGroup>, SourceError>;
     /// The current rows of these issues.
     async fn issues(&self, ids: &[String]) -> Result<Vec<Issue>, SourceError>;
     /// Event aggregates of these issues, over events since `since`.
@@ -74,17 +108,15 @@ pub struct PostHog<'a> {
 }
 
 impl IssueSource for PostHog<'_> {
-    async fn issues_since(
+    async fn event_groups(
         &self,
-        since: DateTime<Utc>,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
         limit: u32,
-    ) -> Result<Vec<Issue>, SourceError> {
-        let hogql = format!(
-            "SELECT {ISSUE_COLUMNS} FROM system.error_tracking_issues \
-             WHERE created_at >= {} ORDER BY created_at, id LIMIT {limit}",
-            datetime_literal(since)
-        );
-        Ok(parse_issues(&self.query(&hogql).await?))
+    ) -> Result<Vec<EventGroup>, SourceError> {
+        Ok(parse_groups(
+            &self.query(&groups_query(from, to, limit)).await?,
+        ))
     }
 
     async fn issues(&self, ids: &[String]) -> Result<Vec<Issue>, SourceError> {
@@ -123,6 +155,35 @@ impl IssueSource for PostHog<'_> {
     }
 }
 
+/// The grouping [`parse_groups`] reads, in its SELECT order. A browser's
+/// `api_path` keeps its ids; groups of one bug merge by signature later.
+fn groups_query(from: DateTime<Utc>, to: DateTime<Utc>, limit: u32) -> String {
+    format!(
+        "SELECT issue_id, \
+         properties.$exception_types[1] AS exception_type, \
+         left(toString(properties.$exception_values[1]), {MESSAGE_CHARS}) AS message, \
+         multiIf(distinct_id IN ('granite-api', 'server-webhooks', 'server-time-triggered'), \
+                 distinct_id, '') AS sender, \
+         properties.$lib AS lib, \
+         properties.api_status AS api_status, \
+         if(sender = '', properties.api_path, \
+            coalesce(properties.api_route, properties.api_path)) AS route, \
+         properties.error_source AS error_source, \
+         count() AS occurrences, uniq(distinct_id), min(timestamp), max(timestamp), \
+         argMax(uuid, timestamp), argMax(properties.$host, timestamp), \
+         argMax(properties.$exception_list, timestamp), \
+         argMax(properties.$current_url, timestamp), \
+         argMax(properties.api_method, timestamp) \
+         FROM events WHERE event = '$exception' AND timestamp >= {} AND timestamp < {} \
+         GROUP BY issue_id, exception_type, message, sender, lib, api_status, route, error_source \
+         ORDER BY occurrences DESC LIMIT {limit}",
+        datetime_literal(from),
+        datetime_literal(to)
+    )
+}
+
+/// Characters of an exception message read.
+const MESSAGE_CHARS: usize = 300;
 /// The columns [`parse_issues`] reads, in this order.
 const ISSUE_COLUMNS: &str = "id, created_at, status, name, description";
 /// Characters of an error response kept in a [`SourceError`].
@@ -191,6 +252,11 @@ pub fn is_issue_id(id: &str) -> bool {
             8 | 13 | 18 | 23 => c == '-',
             _ => c.is_ascii_digit() || ('a'..='f').contains(&c),
         })
+}
+
+/// A PostHog event `uuid` has the same shape as an issue id.
+pub fn is_event_uuid(id: &str) -> bool {
+    is_issue_id(id)
 }
 
 /// `'id', 'id'` for an `IN (...)`, or `None` when no id is valid. Invalid ids
@@ -305,6 +371,58 @@ fn parse_events(body: &Value) -> Vec<IssueEvents> {
         .collect()
 }
 
+/// Rows of [`groups_query`]; a row without a valid issue id or timestamps is
+/// dropped and logged.
+fn parse_groups(body: &Value) -> Vec<EventGroup> {
+    rows(body)
+        .iter()
+        .filter_map(|row| {
+            let group = parse_group(row);
+            if group.is_none() {
+                tracing::warn!("unreadable PostHog event group row");
+            }
+            group
+        })
+        .collect()
+}
+
+fn parse_group(row: &Value) -> Option<EventGroup> {
+    let issue_id = row[0].as_str().filter(|id| is_issue_id(id))?.to_string();
+    Some(EventGroup {
+        issue_id,
+        exception_type: text(&row[1]).unwrap_or_default(),
+        message: text(&row[2]).unwrap_or_default(),
+        sender: text(&row[3]),
+        lib: text(&row[4]),
+        api_status: http_status(&row[5]),
+        route: text(&row[6]),
+        error_source: text(&row[7]),
+        occurrences: count(&row[8]),
+        users: count(&row[9]),
+        first_seen: timestamp(&row[10])?,
+        last_seen: timestamp(&row[11])?,
+        event_uuid: row[12]
+            .as_str()
+            .filter(|id| is_event_uuid(id))
+            .map(str::to_string),
+        host: text(&row[13]),
+        exception_list: json_cell(&row[14]),
+        url: text(&row[15]),
+        method: text(&row[16]),
+    })
+}
+
+/// `api_status` arrives as `500`, `500.0` or `"500"`.
+fn http_status(cell: &Value) -> Option<u16> {
+    let number = cell
+        .as_f64()
+        .or_else(|| cell.as_str().and_then(|text| text.trim().parse().ok()))?;
+    (100.0..600.0)
+        .contains(&number)
+        .then(|| format!("{number:.0}").parse().ok())
+        .flatten()
+}
+
 /// `GET /v1/customers/7` from the `api_method` and `api_path` cells; the
 /// path alone without a method.
 fn request(method: &Value, path: &Value) -> Option<String> {
@@ -395,6 +513,67 @@ mod tests {
                 + chrono::Duration::milliseconds(250)
         );
         assert!(parse_issues(&json!({ "error": "nope" })).is_empty());
+    }
+
+    #[test]
+    fn the_group_query_reads_a_half_open_span_of_formatted_times() {
+        let from = Utc.with_ymd_and_hms(2026, 10, 26, 13, 40, 0).unwrap();
+        let to = from + chrono::Duration::minutes(5);
+        let hogql = groups_query(from, to, 500);
+        assert!(hogql.contains(
+            "timestamp >= toDateTime64('2026-10-26 13:40:00.000', 3, 'UTC') \
+             AND timestamp < toDateTime64('2026-10-26 13:45:00.000', 3, 'UTC')"
+        ));
+        assert!(hogql.contains("properties.$exception_types[1] AS exception_type"));
+        assert!(hogql.contains("left(toString(properties.$exception_values[1]), 300)"));
+        assert!(hogql.ends_with("ORDER BY occurrences DESC LIMIT 500"));
+    }
+
+    #[test]
+    fn group_rows_decode_as_posthog_sends_them() {
+        let list = json!([{ "type": "ApiError", "value": "Database(PoolTimedOut)" }]);
+        let body = json!({
+            "results": [
+                [ISSUE, "ApiError", "Database(PoolTimedOut)", "granite-api", null, 500.0,
+                 "/v1/notifications/done", "api", 3, 1, "2026-10-26T13:45:26.569000Z",
+                 "2026-10-26T13:57:28.314000Z", "01a17880-7a7a-740b-ac7c-30975f48657a", null,
+                 list.to_string(), null, "GET"],
+                ["01a17875-818e-75f0-b2ec-3527a8bd5283", "GraniteApiError",
+                 "Granite API 404 on /v1/x: ", "", "web", "404", "/v1/x", "client", "2", "2",
+                 "2026-10-26 13:45:27.017", "2026-10-26 13:45:27.017", "NOT-A-UUID",
+                 "acme.granite-manager.com", null, "https://acme.granite-manager.com/x", null],
+                ["not-an-id", "TypeError", "x", "", "web", null, null, null, 1, 1,
+                 "2026-10-26T13:45:27Z", "2026-10-26T13:45:27Z", null, null, null, null, null],
+            ],
+        });
+        let groups = parse_groups(&body);
+        assert_eq!(groups.len(), 2);
+        let api = &groups[0];
+        assert_eq!(api.sender.as_deref(), Some("granite-api"));
+        assert_eq!(
+            (api.api_status, api.occurrences, api.users),
+            (Some(500), 3, 1)
+        );
+        assert_eq!(api.route.as_deref(), Some("/v1/notifications/done"));
+        assert_eq!(
+            api.event_uuid.as_deref(),
+            Some("01a17880-7a7a-740b-ac7c-30975f48657a")
+        );
+        assert_eq!(api.exception_list, Some(list));
+        assert_eq!(api.method.as_deref(), Some("GET"));
+        let web = &groups[1];
+        assert_eq!(
+            (web.sender.as_deref(), web.lib.as_deref()),
+            (None, Some("web"))
+        );
+        assert_eq!(
+            (web.api_status, web.occurrences, web.users),
+            (Some(404), 2, 2)
+        );
+        assert_eq!(web.event_uuid, None, "only a lowercase uuid is kept");
+        assert_eq!(web.first_seen, web.last_seen);
+        assert_eq!(http_status(&json!(42)), None);
+        assert_eq!(http_status(&json!("abc")), None);
     }
 
     #[test]

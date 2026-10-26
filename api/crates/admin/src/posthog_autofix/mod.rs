@@ -1,9 +1,12 @@
 //! PostHog auto-fix: each new, unique production error becomes one fix run.
 //!
-//! The intake job (`POST /v1/jobs/posthog-autofix`, every minute) reads new
-//! issues from PostHog into the `posthog_autofix_runs` ledger, lets them
-//! settle, folds duplicates by [`signature`], skips noise, and starts the
-//! GitHub workflow `posthog-autofix.yml` within the caps. The workflow's
+//! The intake job (`POST /v1/jobs/posthog-autofix`, every minute) reads the
+//! `$exception` events since its last read and records them in the
+//! `posthog_autofix_runs` ledger as bugs: one row per [`signature`], whatever
+//! PostHog issue the events landed in. A bug settles, is judged on its own
+//! events (noise skipped, a browser 5xx folded into the API error of the same
+//! request), and the GitHub workflow `posthog-autofix.yml` is started within
+//! the caps. The workflow's
 //! agent reproduces the error as a failing test, fixes it, and the workflow
 //! proves red/green before it opens a pull request. It reports back through
 //! `POST /v1/posthog-autofix/runs/{id}/started` and `.../result`, and the
