@@ -125,7 +125,7 @@ pub fn manual_user_message(question: &str) -> String {
     // The users' word for a special order, which the app doesn't use: the
     // model kept writing it back to them.
     let other_color = if re!(r"\bother colou?rs?\b", "i").is_match(question) {
-        "\n\nThe user writes \"other color\": in Granite Manager that is a special order, a color name typed in Color instead of picked from the list. Don't write the words \"other color\"."
+        "\n\nThe user writes \"other color\": they mean a special order, a color name typed in Color instead of picked from the list. Call it a special order. Never write the words \"other color\", not even to say there is no such option."
     } else {
         ""
     };
