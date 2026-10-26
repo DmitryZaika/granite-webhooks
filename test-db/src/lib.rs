@@ -16,11 +16,20 @@
 //!    runs, so no two tests share one, whatever process, test binary or
 //!    worktree they run in.
 //! 4. Before a test uses a copy, the copy is made to match the template again:
-//!    tables whose `CHECKSUM TABLE` or `AUTO_INCREMENT` differ from the
-//!    template's are refilled, and a copy whose tables were dropped or added
-//!    is made anew. The first failing tests of a process keep their copies
-//!    locked, as the tests left them, until the process ends, and print the
-//!    copies' names for inspection.
+//!    tables whose `CHECKSUM TABLE` differs from the template's are refilled,
+//!    tables a test dropped are created again, and the tables, views,
+//!    triggers, routines and events it created are dropped. Only a copy whose
+//!    foreign keys still differ after that is made anew (dropping a database
+//!    of ~200 tables and copying it again took seconds, on every run of a
+//!    test that drops a table). `AUTO_INCREMENT` counters are not reset: that
+//!    is an `ALTER TABLE`, DDL, which took half of the server's time in a run.
+//!    The template's counters start at [`ID_BASE`] instead, so the ids MySQL
+//!    gives a test's rows (which grow from run to run) are never ids a test
+//!    or the seed writes itself. A test reads the ids it inserted
+//!    (`last_insert_id()` of its insert) instead of assuming them. The first
+//!    failing tests of a process keep their copies locked, as the tests left
+//!    them, until the process ends, and print the copies' names for
+//!    inspection.
 //! 5. Templates no run has used for a week are dropped with their copies.
 //!
 //! ```ignore
@@ -66,6 +75,12 @@ const TABLE_CACHE: u32 = 20_000;
 /// Failed tests' copies a process keeps locked for inspection: each holds a
 /// connection, and a run where everything fails must not use them all up.
 const KEPT_FAILURES: usize = 8;
+/// Where every `AUTO_INCREMENT` counter of the template starts: above every
+/// id the seed and the tests write themselves (the seed's highest is
+/// 990000021), with room for a billion more in an `INT`.
+const ID_BASE: u64 = 1_000_000_000;
+/// Changes the template names when the way a template is made changes.
+const TEMPLATE_FORMAT: &[u8] = b"ids from ID_BASE";
 
 /// What the template database contains.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +94,7 @@ pub enum Template {
 impl Template {
     fn name(self) -> String {
         let mut hash = Sha256::new();
+        hash.update(TEMPLATE_FORMAT);
         for migration in MIGRATOR.iter() {
             hash.update(migration.version.to_le_bytes());
             hash.update(&*migration.checksum);
@@ -128,15 +144,12 @@ struct Plan {
     template: String,
     /// Creates every table and copies its rows into the current database.
     script: String,
-    tables: HashMap<String, TableState>,
-    /// Views, triggers, routines and events (a test may create a trigger).
-    other_objects: Vec<String>,
-}
-
-#[derive(PartialEq, Eq)]
-struct TableState {
-    checksum: Option<i64>,
-    auto_increment: Option<u64>,
+    /// Each table's `CHECKSUM TABLE`.
+    tables: HashMap<String, Option<i64>>,
+    /// Each table's `CREATE TABLE`, for a copy whose table a test dropped.
+    create_table: HashMap<String, String>,
+    /// `(table, constraint, referenced table)` of every foreign key, sorted.
+    foreign_keys: Vec<(String, String, String)>,
 }
 
 /// What the names of `template`'s copies start with.
@@ -282,24 +295,42 @@ async fn create(
 }
 
 /// Makes `database` match the template again. Returns false when it does not
-/// exist or its tables, views, triggers or routines are not the template's.
+/// exist, or when its foreign keys are not the template's once the tables a
+/// test dropped or created are back as they were.
 async fn restore(
     conn: &mut MySqlConnection,
     plan: &Plan,
     database: &str,
 ) -> Result<bool, sqlx::Error> {
-    let tables = table_states(conn, database).await?;
-    let same_tables =
-        tables.len() == plan.tables.len() && tables.keys().all(|t| plan.tables.contains_key(t));
-    if !same_tables || other_objects(conn, database).await? != plan.other_objects {
+    let tables = checksums(conn, database).await?;
+    if tables.is_empty() {
         return Ok(false);
     }
 
     let mut script = format!("USE `{database}`; SET FOREIGN_KEY_CHECKS = 0;");
     let mut dirty = false;
-    for (table, state) in &tables {
-        let expected = &plan.tables[table];
-        if state == expected {
+    // First, so that no trigger a test left fires while the tables are refilled.
+    let other_objects = other_objects(conn, database).await?;
+    let mut schema_changed = !other_objects.is_empty();
+    for (kind, name) in other_objects {
+        write!(script, "DROP {kind} IF EXISTS `{name}`;").expect("write to String");
+    }
+    for table in tables.keys().filter(|t| !plan.tables.contains_key(*t)) {
+        schema_changed = true;
+        write!(script, "DROP TABLE `{table}`;").expect("write to String");
+    }
+    for (table, expected) in &plan.tables {
+        let Some(checksum) = tables.get(table) else {
+            schema_changed = true;
+            write!(
+                script,
+                "{}; INSERT INTO `{table}` SELECT * FROM `{}`.`{table}`;",
+                plan.create_table[table], plan.template
+            )
+            .expect("write to String");
+            continue;
+        };
+        if checksum == expected {
             continue;
         }
         dirty = true;
@@ -309,36 +340,31 @@ async fn restore(
             plan.template
         )
         .expect("write to String");
-        // An ALTER is DDL, far slower than the refill: only when the counter moved.
-        if let Some(next) = expected.auto_increment
-            && state.auto_increment != expected.auto_increment
-        {
-            write!(script, "ALTER TABLE `{table}` AUTO_INCREMENT = {next};")
-                .expect("write to String");
-        }
     }
-    if dirty {
+    if dirty || schema_changed {
         script.push_str("SET FOREIGN_KEY_CHECKS = 1;");
-        sqlx::raw_sql(AssertSqlSafe(script)).execute(conn).await?;
+        sqlx::raw_sql(AssertSqlSafe(script)).execute(&mut *conn).await?;
     }
-    Ok(true)
+    // A renamed table takes the foreign keys that pointed to it along.
+    Ok(!schema_changed || foreign_keys(conn, database).await? == plan.foreign_keys)
 }
 
-/// Names of everything in `database` that is not a base table.
+/// Kind (`VIEW`, `TRIGGER`, `PROCEDURE`, `FUNCTION`, `EVENT`) and name of
+/// everything in `database` that is not a base table.
 async fn other_objects(
     conn: &mut MySqlConnection,
     database: &str,
-) -> Result<Vec<String>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT CONCAT('view ', table_name) FROM information_schema.tables \
+) -> Result<Vec<(String, String)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT 'VIEW', table_name FROM information_schema.tables \
            WHERE table_schema = ? AND table_type <> 'BASE TABLE' \
-         UNION ALL SELECT CONCAT('trigger ', trigger_name) FROM information_schema.triggers \
+         UNION ALL SELECT 'TRIGGER', trigger_name FROM information_schema.triggers \
            WHERE trigger_schema = ? \
-         UNION ALL SELECT CONCAT('routine ', routine_name) FROM information_schema.routines \
+         UNION ALL SELECT routine_type, routine_name FROM information_schema.routines \
            WHERE routine_schema = ? \
-         UNION ALL SELECT CONCAT('event ', event_name) FROM information_schema.events \
+         UNION ALL SELECT 'EVENT', event_name FROM information_schema.events \
            WHERE event_schema = ? \
-         ORDER BY 1",
+         ORDER BY 1, 2",
     )
     .bind(database)
     .bind(database)
@@ -348,32 +374,44 @@ async fn other_objects(
     .await
 }
 
-/// Checksum and next `AUTO_INCREMENT` of every table in `database`.
-async fn table_states(
+/// `(table, constraint, referenced table)` of every foreign key in `database`.
+async fn foreign_keys(
     conn: &mut MySqlConnection,
     database: &str,
-) -> Result<HashMap<String, TableState>, sqlx::Error> {
-    // information_schema caches AUTO_INCREMENT for a day by default.
-    conn.execute("SET SESSION information_schema_stats_expiry = 0")
-        .await?;
-    let rows: Vec<(String, Option<u64>)> = sqlx::query_as(
-        "SELECT table_name, auto_increment FROM information_schema.tables \
+) -> Result<Vec<(String, String, String)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT table_name, constraint_name, referenced_table_name \
+           FROM information_schema.referential_constraints \
+          WHERE constraint_schema = ? ORDER BY 1, 2",
+    )
+    .bind(database)
+    .fetch_all(conn)
+    .await
+}
+
+/// `CHECKSUM TABLE` of every table in `database`.
+async fn checksums(
+    conn: &mut MySqlConnection,
+    database: &str,
+) -> Result<HashMap<String, Option<i64>>, sqlx::Error> {
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT table_name FROM information_schema.tables \
          WHERE table_schema = ? AND table_type = 'BASE TABLE' AND table_name <> ?",
     )
     .bind(database)
     .bind(READY_TABLE)
     .fetch_all(&mut *conn)
     .await?;
-    if rows.is_empty() {
+    if tables.is_empty() {
         return Ok(HashMap::new());
     }
 
-    let list = rows
+    let list = tables
         .iter()
-        .map(|(table, _)| format!("`{database}`.`{table}`"))
+        .map(|table| format!("`{database}`.`{table}`"))
         .collect::<Vec<_>>()
         .join(", ");
-    let checksums: HashMap<String, Option<i64>> = conn
+    Ok(conn
         .fetch_all(AssertSqlSafe(format!("CHECKSUM TABLE {list}")))
         .await?
         .into_iter()
@@ -383,20 +421,6 @@ async fn table_states(
                 .split_once('.')
                 .map_or(qualified.clone(), |(_, table)| table.to_string());
             (table, row.get(1))
-        })
-        .collect();
-
-    Ok(rows
-        .into_iter()
-        .map(|(table, auto_increment)| {
-            let checksum = checksums.get(&table).copied().flatten();
-            (
-                table,
-                TableState {
-                    checksum,
-                    auto_increment,
-                },
-            )
         })
         .collect())
 }
@@ -410,17 +434,19 @@ async fn build_plan(server: &MySqlConnectOptions, template: Template) -> Result<
     ensure_template(&mut conn, template, &name).await?;
     drop_unused_templates(&mut conn).await?;
 
-    let tables = table_states(&mut conn, &name).await?;
+    let tables = checksums(&mut conn, &name).await?;
     let other_objects = other_objects(&mut conn, &name).await?;
     // The copy script only copies tables.
     assert!(
         other_objects.is_empty(),
         "migrations created {other_objects:?}; test-db copies only tables"
     );
+    let foreign_keys = foreign_keys(&mut conn, &name).await?;
     let mut names: Vec<&String> = tables.keys().collect();
     names.sort();
 
     let mut script = String::from("SET FOREIGN_KEY_CHECKS = 0;\n");
+    let mut create_table = HashMap::with_capacity(names.len());
     for table in names {
         let row = conn
             .fetch_one(AssertSqlSafe(format!(
@@ -434,6 +460,7 @@ async fn build_plan(server: &MySqlConnectOptions, template: Template) -> Result<
             "INSERT INTO `{table}` SELECT * FROM `{name}`.`{table}`;"
         )
         .expect("write to String");
+        create_table.insert(table.clone(), ddl);
     }
     script.push_str("SET FOREIGN_KEY_CHECKS = 1;\n");
     conn.close().await?;
@@ -442,7 +469,8 @@ async fn build_plan(server: &MySqlConnectOptions, template: Template) -> Result<
         template: name,
         script,
         tables,
-        other_objects,
+        create_table,
+        foreign_keys,
     })
 }
 
@@ -483,6 +511,20 @@ async fn ensure_template(
         if template == Template::Seeded {
             sqlx::raw_sql(SEED).execute(&mut *conn).await?;
         }
+        let counted: Vec<String> = sqlx::query_scalar(
+            "SELECT table_name FROM information_schema.columns \
+             WHERE table_schema = ? AND extra LIKE '%auto_increment%'",
+        )
+        .bind(name)
+        .fetch_all(&mut *conn)
+        .await?;
+        let script: String = counted
+            .iter()
+            .map(|table| format!("ALTER TABLE `{table}` AUTO_INCREMENT = {ID_BASE};"))
+            .collect();
+        sqlx::raw_sql(AssertSqlSafe(script))
+            .execute(&mut *conn)
+            .await?;
         conn.execute(AssertSqlSafe(format!(
             "CREATE TABLE `{READY_TABLE}` (id INT)"
         )))
