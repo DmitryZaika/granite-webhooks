@@ -15,7 +15,7 @@ use axum::extract::State;
 /// UTC day: did Dima's Calendly offer a bookable slot within the next 5
 /// business days; a day without one moves every open deadline by a day).
 /// Then takes up to 25 companies with an open onboarding commitment whose own
-/// run is due (every 23 hours) and starts no new company after 20 seconds.
+/// run is due (every 23 hours) and starts no new company after 15 seconds.
 /// Per company: refreshes the booked call from Calendly (rescheduled,
 /// cancelled, no-show) or finds one booked outside the app, completes the
 /// commitment 48 hours after the call, suspends or resumes it on a

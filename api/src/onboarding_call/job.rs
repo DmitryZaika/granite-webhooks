@@ -38,7 +38,7 @@ pub const COMPANIES_PER_RUN: u32 = 25;
 /// Each company's run is due this long after its last start.
 pub const COMPANY_EVERY_HOURS: i64 = 23;
 /// No Calendly, Stripe or mail work is started after this.
-pub const RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+pub const RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
 /// Calendly requests one company's run may make.
 pub const CALENDLY_CALLS_PER_COMPANY: u32 = 10;
 /// Calendly takes at most 7 days of slots per request.
@@ -107,6 +107,22 @@ impl CompanyError {
                 | Self::Fee(FeeError::Save(_) | FeeError::Database(_))
         )
     }
+}
+
+/// [`fee::charge`] within the run's time: stopped between Stripe calls, the
+/// company is left for the next tick.
+async fn charge(
+    state: &AppState,
+    stored: &Stored,
+    now: NaiveDateTime,
+    budget: &Budget,
+) -> Result<fee::Charged, CompanyError> {
+    fee::charge(state, stored, now, budget.deadline)
+        .await
+        .map_err(|err| match err {
+            FeeError::OutOfTime => CompanyError::OutOfTime,
+            err => CompanyError::Fee(err),
+        })
 }
 
 /// What one company's run may still spend: the run's time and its Calendly
@@ -667,7 +683,7 @@ async fn send_notice(
     let company_name = store::company_name(pool, company_id).await?;
     budget.check()?;
     let record = MySqlBillingStore(pool).by_company(company_id).await?;
-    let method = default_card(&state.stripe, record.as_ref())
+    let method = default_card(&fee::fee_stripe(state), record.as_ref())
         .await
         .map(|card| describe_card(&card));
     let mut sent = false;
@@ -731,7 +747,7 @@ async fn company(
         // An invoice a crash left unfinished (draft, or never attempted).
         budget.check()?;
         if matches!(
-            fee::charge(state, &stored, now).await?,
+            charge(state, &stored, now, budget).await?,
             fee::Charged::Paid | fee::Charged::Failed
         ) {
             run.invoices += 1;
@@ -775,7 +791,7 @@ async fn company(
             Due::Invoice => {
                 budget.check()?;
                 if !matches!(
-                    fee::charge(state, &stored, now).await?,
+                    charge(state, &stored, now, budget).await?,
                     fee::Charged::Withdrawn
                 ) {
                     run.invoices += 1;

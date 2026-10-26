@@ -163,6 +163,7 @@ pub fn render_notice(input: &NoticeInput<'_>) -> RenderedEmail {
     let company = company_or_default(input.company_name);
     let deadline = format_local_date(input.deadline_at);
     let charge_date = format_local_date(input.charge_at);
+    let charge_time = format_local_time(input.charge_at);
     let fee = format_money(input.fee_cents);
     let method = input
         .payment_method
@@ -185,12 +186,12 @@ pub fn render_notice(input: &NoticeInput<'_>) -> RenderedEmail {
                     e(method)
                 ),
                 format!(
-                    "To avoid the fee, complete an onboarding call before {charge_date} (we mark it complete once it has taken place), or request cancellation of your subscription before then."
+                    "To avoid the fee, have an onboarding call that has taken place by {charge_time} (we mark it complete), or request cancellation of your subscription before then."
                 ),
             ];
             if input.booked_before_charge {
                 paragraphs.push(format!(
-                    "You have an onboarding call booked. If your call has taken place before {charge_date}, the fee is not charged."
+                    "You have an onboarding call booked. If your call has taken place by {charge_time}, the fee is not charged."
                 ));
             }
             paragraphs.push(format!(
@@ -355,7 +356,7 @@ mod tests {
             "On November 27, 2026, the onboarding fee of $1,234.50 plus applicable sales tax will be charged to Visa ending in 4242."
         ));
         assert!(email.text.contains(
-            "complete an onboarding call before November 27, 2026 (we mark it complete once it has taken place), or request cancellation"
+            "have an onboarding call that has taken place by Fri, Nov 27 at 10:00 AM EST (we mark it complete), or request cancellation"
         ));
         assert!(
             email
@@ -451,10 +452,10 @@ mod tests {
             app_url: APP_URL,
         });
         assert!(email.text.contains(
-            "If your call has taken place before November 27, 2026, the fee is not charged."
+            "If your call has taken place by Fri, Nov 27 at 9:00 PM EST, the fee is not charged."
         ));
         assert!(email.html.contains(
-            "If your call has taken place before November 27, 2026, the fee is not charged."
+            "If your call has taken place by Fri, Nov 27 at 9:00 PM EST, the fee is not charged."
         ));
         assert!(!all(&email).contains("November 28"));
     }
@@ -468,7 +469,7 @@ mod tests {
                 .contains("will be charged to the payment method on file.")
         );
         assert!(email.text.contains(
-            "You have an onboarding call booked. If your call has taken place before November 27, 2026, the fee is not charged."
+            "You have an onboarding call booked. If your call has taken place by Fri, Nov 27 at 10:00 AM EST, the fee is not charged."
         ));
         assert_clean(&email);
         let escaped = notice(Some("<i>Card</i>"), false);

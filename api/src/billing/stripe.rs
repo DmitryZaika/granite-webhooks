@@ -95,6 +95,8 @@ pub struct Stripe {
     http: reqwest::Client,
     /// Pause between polls of a subscription that is not paid yet.
     pub poll_delay: Duration,
+    /// How long one request may take.
+    pub request_timeout: Duration,
 }
 
 impl Stripe {
@@ -124,6 +126,7 @@ impl Stripe {
             base: Arc::from(base.trim_end_matches('/')),
             http: reqwest::Client::new(),
             poll_delay: Duration::from_millis(1500),
+            request_timeout: Duration::from_secs(30),
         }
     }
 
@@ -163,7 +166,7 @@ impl Stripe {
             .request(method, &url)
             .bearer_auth(&**key)
             .header("Stripe-Version", API_VERSION)
-            .timeout(Duration::from_secs(30));
+            .timeout(self.request_timeout);
         let request = match idempotency_key {
             Some(key) => request.header("Idempotency-Key", key),
             None => request,
@@ -1298,6 +1301,22 @@ impl Stripe {
             reqwest::Method::DELETE,
             &format!("/v1/invoices/{}", path_part(id)),
             &[],
+        )
+        .await
+    }
+
+    /// Tags an invoice as withdrawn by us (`metadata[withdrawn]`) before it
+    /// is voided, so its `invoice.voided` event is known as ours.
+    pub async fn mark_invoice_withdrawn(
+        &self,
+        id: &str,
+        reason: &str,
+        idempotency_key: &str,
+    ) -> Result<Value, StripeError> {
+        self.post_keyed(
+            &format!("/v1/invoices/{}", path_part(id)),
+            &[("metadata[withdrawn]", reason.to_string())],
+            idempotency_key,
         )
         .await
     }
