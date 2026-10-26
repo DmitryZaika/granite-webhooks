@@ -379,7 +379,12 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
     ) -> Result<(), sqlx::Error> {
         let verdict = match issue_status {
             Some(status) => self.verdict(row, status).await?,
-            None => Verdict::Skipped(SkipReason::NoEvents),
+            None => Some(Verdict::Skipped(SkipReason::NoEvents)),
+        };
+        // Its API error is not judged yet: folding into a row that may still
+        // be skipped would lose the bug, so it waits for the next poll.
+        let Some(verdict) = verdict else {
+            return Ok(());
         };
         if !ledger::record_judgement(&mut *self.conn, row.id, verdict, issue_status, self.now)
             .await?
@@ -399,12 +404,13 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
     }
 
     /// The gates on the bug's own events, then the fold of a browser 5xx
-    /// into the API error of the same request.
+    /// into the API error of the same request; `None` while that API error
+    /// waits to be judged.
     async fn verdict(
         &mut self,
         row: &SettledRow,
         issue_status: &str,
-    ) -> Result<Verdict, sqlx::Error> {
+    ) -> Result<Option<Verdict>, sqlx::Error> {
         let source = row.source();
         let candidate = Candidate {
             issue_status,
@@ -418,7 +424,7 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
             api_status: row.api_status,
         };
         if let Err(reason) = policy::eligibility(&candidate, &self.deps.config.exclude) {
-            return Ok(Verdict::Skipped(reason));
+            return Ok(Some(Verdict::Skipped(reason)));
         }
         let path = policy::web_5xx_path(
             source,
@@ -429,15 +435,23 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         );
         let (Some(path), Some(first), Some(last)) = (path, row.first_seen_at, row.last_seen_at)
         else {
-            return Ok(Verdict::Queued);
+            return Ok(Some(Verdict::Queued));
         };
         let slack = Duration::minutes(LINK_SLACK_MINUTES);
         let api_rows =
             ledger::api_rows_seen_between(&mut *self.conn, first - slack, last + slack).await?;
-        Ok(api_rows
+        let matching: Vec<_> = api_rows
             .iter()
-            .find(|(_, route)| policy::route_matches(route, path))
-            .map_or(Verdict::Queued, |&(of, _)| Verdict::Duplicate { of }))
+            .filter(|(_, route, _)| policy::route_matches(route, path))
+            .collect();
+        if matching.iter().any(|&&(_, _, waiting)| waiting) {
+            return Ok(None);
+        }
+        Ok(Some(
+            matching
+                .first()
+                .map_or(Verdict::Queued, |&&(of, _, _)| Verdict::Duplicate { of }),
+        ))
     }
 
     /// Emails once when PostHog reopens an issue a run fixed.

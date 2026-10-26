@@ -734,6 +734,63 @@ async fn a_web_500_folds_into_the_api_error_of_its_route(pool: MySqlPool) {
 }
 
 #[test_db::test]
+async fn a_web_500_waits_for_its_api_error_to_be_judged(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let source = &world.source;
+    // The browser's 500s start 24 minutes before the api reports its error,
+    // so the browser's bug settles first.
+    let browser = web_api(500, "/v1/schedule/settings", DATABASE_ERROR);
+    source.event(10, minutes(1), &browser);
+    source.event(10, minutes(25), &browser);
+    source.event(
+        3,
+        minutes(25),
+        &api(UNKNOWN_COLUMN, "/v1/schedule/settings"),
+    );
+    // An api error that is skipped never absorbs the browser's bug.
+    let refused = web_api(500, "/v1/ai/design", DATABASE_ERROR);
+    source.event(11, minutes(1), &refused);
+    source.event(11, minutes(25), &refused);
+    source.event(
+        4,
+        minutes(25),
+        &api(
+            "Upstream(\"OpenAI request failed: error sending request\")",
+            "/v1/ai/design",
+        ),
+    );
+
+    world.tick(&pool, &config, minutes(30)).await;
+    world.tick(&pool, &config, minutes(35)).await;
+    let (_, status, _) = row_of(&pool, "Granite API 500 on /v1/schedule/settings").await;
+    assert_eq!(status, "discovered", "waits for its api error");
+    let (_, status, _) = row_of(&pool, "Granite API 500 on /v1/ai/design").await;
+    assert_eq!(status, "discovered");
+
+    world.tick(&pool, &config, minutes(60)).await;
+    let (api_row, _, _) = row_of(&pool, "Database(Database(").await;
+    let (web_row, status, _) = row_of(&pool, "Granite API 500 on /v1/schedule/settings").await;
+    assert_eq!(status, "duplicate");
+    assert_eq!(
+        count(
+            &pool,
+            &format!("id = {web_row} AND duplicate_of_run_id = {api_row}")
+        )
+        .await,
+        1
+    );
+    let (_, status, reason) = row_of(&pool, "Upstream(").await;
+    assert_eq!(
+        (status.as_str(), reason.as_deref()),
+        ("skipped", Some("excluded"))
+    );
+    let (_, status, _) = row_of(&pool, "Granite API 500 on /v1/ai/design").await;
+    assert_ne!(status, "duplicate", "judged on its own");
+    assert_ne!(status, "skipped");
+}
+
+#[test_db::test]
 async fn polls_count_each_event_once_and_a_failed_read_is_read_again(pool: MySqlPool) {
     let config = live();
     let world = World::default();

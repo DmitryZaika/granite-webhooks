@@ -59,6 +59,10 @@ pub const DEFAULT_EXCLUDE: &[&str] = &[
     "NotReadableError: The I/O read operation failed",
     "Failed to read the 'localStorage' property",
     "The database connection is closing",
+    // iOS closes IndexedDB under the offline checklist when it suspends a tab.
+    "[ChecklistDB] Database connection terminated",
+    // A deploy replaced the route's chunk; the SPA reloads the page itself.
+    "Error loading route module",
     // A signed-out session: the app sends the user to the login page.
     "Granite API 401 on",
     // The same 401, rewrapped by the SPA's SMS flows and call list.
@@ -439,6 +443,8 @@ mod tests {
             "UnhandledRejection: Non-Error promise rejection captured with value: Object Not Found Matching Id:2, MethodName:update, ParamCount:4",
             "DOMException: SecurityError: Failed to read the 'localStorage' property from 'Window': Access is denied for this document.",
             "DOMException: InvalidStateError: Failed to execute 'transaction' on 'IDBDatabase': The database connection is closing.",
+            "Error: [ChecklistDB] Database connection terminated unexpectedly",
+            "Error: Error loading route module `/assets/employee.deals-Bq3x.js`, reloading page...",
             "TypeError: Script https://granitedepotindy.granite-manager.com/service-worker.js load failed",
             r#"GraniteApiError: Granite API 401 on /v1/me: {"error":"unauthorized"}"#,
             "Error: Failed to fetch",

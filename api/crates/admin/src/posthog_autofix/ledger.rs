@@ -148,9 +148,11 @@ pub struct Sighting {
     pub last_seen: DateTime<Utc>,
 }
 
-/// The row that counts the events of the bug with `signature`: one discovered
-/// at or after `since`, or still waiting or in flight. A row folded into
-/// another is only taken when it is the bug's only row.
+/// The row that counts the events of the bug with `signature`.
+///
+/// It is one whose last event is at or after `since` (a bug that keeps
+/// happening keeps its row), or one still waiting or in flight. A row folded
+/// into another is only taken when it is the bug's only row.
 pub async fn bug_row(
     db: impl MySqlExecutor<'_>,
     signature: &str,
@@ -159,7 +161,8 @@ pub async fn bug_row(
     sqlx::query_scalar(
         "SELECT id FROM posthog_autofix_runs
           WHERE signature = ?
-            AND (discovered_at >= ? OR status IN ('discovered', 'queued', 'dispatched', 'running'))
+            AND (COALESCE(last_seen_at, discovered_at) >= ?
+                 OR status IN ('discovered', 'queued', 'dispatched', 'running'))
           ORDER BY status = 'duplicate', id DESC LIMIT 1",
     )
     .bind(signature)
@@ -379,15 +382,15 @@ pub async fn settled(
 }
 
 /// API rows (`granite-api`) not skipped or folded whose events span reaches
-/// into `[from, to]`, with their routes: where a browser 5xx of that time may
-/// come from.
+/// into `[from, to]`, with their routes and whether they still wait to be
+/// judged: where a browser 5xx of that time may come from.
 pub async fn api_rows_seen_between(
     db: impl MySqlExecutor<'_>,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
-) -> Result<Vec<(u64, String)>, sqlx::Error> {
+) -> Result<Vec<(u64, String, bool)>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT id, api_route FROM posthog_autofix_runs
+        "SELECT id, api_route, status = 'discovered' FROM posthog_autofix_runs
           WHERE source = 'granite-api' AND api_route IS NOT NULL
             AND status NOT IN ('skipped', 'duplicate')
             AND first_seen_at <= ? AND last_seen_at >= ?

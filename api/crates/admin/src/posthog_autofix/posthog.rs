@@ -157,11 +157,13 @@ impl IssueSource for PostHog<'_> {
 
 /// The grouping [`parse_groups`] reads, in its SELECT order. A browser's
 /// `api_path` keeps its ids; groups of one bug merge by signature later.
+/// `JSONExtractString` unescapes: `$exception_values[1]` reads `{\"error\"...`.
 fn groups_query(from: DateTime<Utc>, to: DateTime<Utc>, limit: u32) -> String {
     format!(
         "SELECT issue_id, \
-         properties.$exception_types[1] AS exception_type, \
-         left(toString(properties.$exception_values[1]), {MESSAGE_CHARS}) AS message, \
+         JSONExtractString(toString(properties.$exception_types), 1) AS exception_type, \
+         substringUTF8(JSONExtractString(toString(properties.$exception_values), 1), \
+                       1, {MESSAGE_CHARS}) AS message, \
          multiIf(distinct_id IN ('granite-api', 'server-webhooks', 'server-time-triggered'), \
                  distinct_id, '') AS sender, \
          properties.$lib AS lib, \
@@ -524,8 +526,13 @@ mod tests {
             "timestamp >= toDateTime64('2026-10-26 13:40:00.000', 3, 'UTC') \
              AND timestamp < toDateTime64('2026-10-26 13:45:00.000', 3, 'UTC')"
         ));
-        assert!(hogql.contains("properties.$exception_types[1] AS exception_type"));
-        assert!(hogql.contains("left(toString(properties.$exception_values[1]), 300)"));
+        assert!(hogql.contains(
+            "JSONExtractString(toString(properties.$exception_types), 1) AS exception_type"
+        ));
+        assert!(hogql.contains(
+            "substringUTF8(JSONExtractString(toString(properties.$exception_values), 1), \
+                       1, 300) AS message"
+        ));
         assert!(hogql.ends_with("ORDER BY occurrences DESC LIMIT 500"));
     }
 
