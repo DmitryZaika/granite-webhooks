@@ -38,7 +38,7 @@ Shell commands are limited to an allowlist. Anything else is refused, so don't s
 - Git: `git status|diff|log|show|add|commit|rev-parse`.
 - MySQL: `mysql -h 127.0.0.1 -P 3307 -uroot -pgranite ...` to inspect the local schema.
 
-Each part of a compound command (`a && b`) must itself be allowed.
+Each part of a compound command (`a && b`) must itself be allowed. Claude Code refuses `cd <dir> && git ...` outright, so change directory with a `cd <repository>` call of its own (the directory carries over to later calls), then run git.
 
 Never use `bun test`: it ignores the vitest config and mocks. Use `bunx vitest run <file>`.
 </tools_and_commands>
