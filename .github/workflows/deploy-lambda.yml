@@ -161,19 +161,34 @@ jobs:
           zip="target/lambda/$APP/bootstrap.zip"
           expected=$(openssl dgst -sha256 -binary "$zip" | base64)
           echo "Package sha256: $expected ($(du -h "$zip" | cut -f1))"
-          for function in $FUNCTIONS; do
-            echo "::group::$function"
-            aws lambda update-function-code --function-name "$function" \
+          deploy() {
+            aws lambda update-function-code --function-name "$1" \
               --zip-file "fileb://$zip" --query '{Sha256:CodeSha256,Status:LastUpdateStatus}'
-            aws lambda wait function-updated-v2 --function-name "$function"
+            aws lambda wait function-updated-v2 --function-name "$1"
             read -r sha status modified < <(aws lambda get-function-configuration \
-              --function-name "$function" \
+              --function-name "$1" \
               --query '[CodeSha256,LastUpdateStatus,LastModified]' --output text)
-            echo "$function: sha256=$sha status=$status modified=$modified"
-            echo "::endgroup::"
+            echo "$1: sha256=$sha status=$status modified=$modified"
             if [ "$sha" != "$expected" ] || [ "$status" != "Successful" ]; then
-              echo "::error::$function was not updated to this build"
-              exit 1
+              echo "::error::$1 was not updated to this build"
+              return 1
             fi
-            echo "- \`$function\` ← \`$GIT_SHA\` ($BRANCH), sha256 \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- \`$1\` ← \`$GIT_SHA\` ($BRANCH), sha256 \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+          }
+          # The app's Lambdas (api has two) are updated at once, each in a
+          # process of its own; its log is shown when it is done.
+          pids=()
+          for function in $FUNCTIONS; do
+            deploy "$function" > "$RUNNER_TEMP/deploy-$function.log" 2>&1 &
+            pids+=("$!")
           done
+          failed=0
+          set -- $FUNCTIONS
+          for pid in "${pids[@]}"; do
+            wait "$pid" || failed=1
+            echo "::group::$1"
+            cat "$RUNNER_TEMP/deploy-$1.log"
+            echo "::endgroup::"
+            shift
+          done
+          exit "$failed"

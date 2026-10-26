@@ -47,6 +47,10 @@ build:
 
 # Deploy exports credentials because cargo-lambda does not support AWS login_session profiles.
 # It updates the code only: environment variables set on the Lambda are kept.
+# An app's Lambdas (api has two) are deployed at once, each from its own copy
+# of the binary: cargo-lambda zips the binary into its folder, and two deploys
+# writing one zip could upload it half-written. Each one's output is shown
+# when all are done.
 .PHONY: deploy
 deploy:
 	@test -n "$(APP)" -a -n "$(ENV)" || { echo "Usage: make deploy <$(APPS)> <$(ENVS)>" >&2; exit 1; }
@@ -54,13 +58,24 @@ deploy:
 	$(MAKE) build APP=$(APP) ENV=$(ENV)
 	@eval "$$(aws configure export-credentials --profile $(AWS_DEPLOY_PROFILE) --format env)" && \
 	unset AWS_PROFILE && \
+	dir=$$(mktemp -d) && trap 'rm -rf "$$dir"' EXIT && \
+	echo "Deploying $(FUNCTION)" && \
+	pids= && \
 	for function in $(FUNCTION); do \
+		mkdir -p "$$dir/$$function/$(APP)" && \
+		cp -p "$${CARGO_TARGET_DIR:-target}/lambda/$(APP)/bootstrap" "$$dir/$$function/$(APP)/" && \
 		$(CARGO_LAMBDA) lambda deploy \
 			--iam-role $(IAM_ROLE) \
 			--region $(REGION) \
+			--lambda-dir "$$dir/$$function" \
 			--binary-name $(APP) \
-			$$function || exit 1; \
-	done
+			$$function > "$$dir/$$function.log" 2>&1 & \
+		pids="$$pids $$!"; \
+	done && \
+	status=0 && \
+	for pid in $$pids; do wait $$pid || status=1; done; \
+	for function in $(FUNCTION); do echo "$$function:" && cat "$$dir/$$function.log"; done; \
+	exit $$status
 
 # api and webhooks, each built and deployed to dev and prod.
 .PHONY: deploy-all
