@@ -923,8 +923,11 @@ async fn app_calls_must_be_signed_by_the_phone_that_places_them(pool: MySqlPool)
     )
     .await;
     assert_refused(&pool, &stubs, "v3:s-11").await;
-    // Her own phone, but signed 10 minutes and a second ago (or ahead).
-    for (ccid, time) in [("v3:s-3", now() - 601), ("v3:s-4", now() + 601)] {
+    // Her own phone, but signed 11 minutes ago (or ahead): outside the
+    // 10-minute window. Not a second past it: on a slow runner the server's
+    // clock moves on while the calls before are handled (the unit tests of
+    // `check_call_auth` cover the window's edge).
+    for (ccid, time) in [("v3:s-3", now() - 660), ("v3:s-4", now() + 660)] {
         let stale = call_auth(41, "960041", "+13175550142", "+13175550151", time);
         place(
             &server,
