@@ -338,6 +338,7 @@ async fn a_trialing_company_sees_its_plan_users_addons_and_next_invoice(pool: My
         json!({ "type": "card", "brand": "visa", "last4": "4242", "exp_month": 12,
                 "exp_year": 2030, "bank_name": null })
     );
+    assert_eq!(view["payment_method_known"], true);
     assert_eq!(view["cancellation"], Value::Null);
     assert_eq!(view["can_change"], true);
     assert_eq!(view["can_cancel"], true);
@@ -380,6 +381,35 @@ async fn a_bank_account_on_the_customer_is_summarized(pool: MySqlPool) {
 }
 
 #[test_db::test(seed)]
+async fn a_customer_without_a_payment_method_is_known_to_have_none(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.set_subscription(SUBSCRIPTION, "default_payment_method", Value::Null);
+
+    let view = f.view().await;
+    assert_eq!(view["payment_method"], Value::Null);
+    assert_eq!(view["payment_method_known"], true);
+}
+
+#[test_db::test(seed)]
+async fn a_payment_method_stripe_cannot_read_is_unknown_not_missing(pool: MySqlPool) {
+    let f = fixture(pool).await;
+    f.set_subscription(SUBSCRIPTION, "default_payment_method", Value::Null);
+    f.stripe.lock().unwrap().fail(
+        Method::GET,
+        &format!("/v1/customers/{CUSTOMER}"),
+        FailMode::Before,
+        1,
+    );
+
+    let view = f.view().await;
+    assert_eq!(view["payment_method"], Value::Null);
+    assert_eq!(view["payment_method_known"], false);
+    // The rest of the page still came from Stripe.
+    assert_eq!(view["status"], "trialing");
+    assert_ne!(view["next_invoice"], Value::Null);
+}
+
+#[test_db::test(seed)]
 async fn a_scheduled_cancellation_shows_and_clears_the_next_charge(pool: MySqlPool) {
     let f = fixture(pool).await;
     f.sql(
@@ -417,7 +447,7 @@ async fn a_legacy_company_gets_only_its_plan_source(pool: MySqlPool) {
             "payment_status": "none", "trial_end_at": null, "current_period_end": null,
             "next_charge_at": null, "base": null, "users": null, "addons": [],
             "monthly_total_cents": null, "next_invoice": null, "payment_method": null,
-            "cancellation": null, "invoices": [], "can_change": false,
+            "payment_method_known": false, "cancellation": null, "invoices": [], "can_change": false,
             "can_cancel": false,
         })
     );
@@ -458,6 +488,8 @@ async fn an_unreachable_stripe_skips_the_reads_that_need_the_subscription(pool: 
     assert_eq!(addon(&view, "quotes")["status"], "active");
     assert_eq!(view["next_invoice"], Value::Null);
     assert_eq!(view["payment_method"], Value::Null);
+    // Unknown, not "none on file".
+    assert_eq!(view["payment_method_known"], false);
     assert_eq!(view["can_cancel"], true);
     // The prices and invoices were read alongside the subscription; nothing
     // was asked after its outage (no preview, payment method or customer).

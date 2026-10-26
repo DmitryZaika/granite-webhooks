@@ -694,16 +694,16 @@ pub fn made_in_free_period(
 /// Resends, as of `now` (UTC), the confirmations of scheduled requests that
 /// reached no Manager, made at least 10 minutes ago, up to
 /// [`CONFIRMATIONS_PER_TICK`]; no new one is started after `deadline`. Each is
-/// claimed by setting `confirmation_sent_at` first (so overlapping runs do
-/// not both send) and given back when it reached no Manager again. Answers
-/// how many were resent. Errors are logged with the company id only.
+/// sent under the company lock and recorded (`confirmation_sent_at`) only
+/// once a Manager received it. Answers how many were resent. Errors are
+/// logged with the company id only.
 pub async fn resend_confirmations(
     state: &AppState,
     now: NaiveDateTime,
     deadline: Instant,
 ) -> usize {
     let pool = &state.pool;
-    // The claim is compared to the stored DATETIME, which keeps whole seconds.
+    // A DATETIME keeps whole seconds.
     let now = now.trunc_subsecs(0);
     let due = now - chrono::Duration::minutes(CONFIRMATION_RETRY_AFTER_MINUTES);
     let rows: Vec<(i64, i32)> = match sqlx::query_as(
@@ -740,40 +740,46 @@ pub async fn resend_confirmations(
 }
 
 /// One request; true when its confirmation reached a Manager this time.
+/// Under the company lock (so two runs never both send), the row is checked
+/// again, the confirmation sent, and `confirmation_sent_at` set only after a
+/// Manager received it: a crash before that leaves it to the next run.
 async fn resend_one(
     state: &AppState,
     id: i64,
     company_id: i32,
     now: NaiveDateTime,
-) -> sqlx::Result<bool> {
+) -> Result<bool, CancellationError> {
+    let lock = CompanyLock::acquire(&state.pool, company_id).await?;
+    let result = resend_locked(state, id, company_id, now).await;
+    lock.release().await;
+    result
+}
+
+async fn resend_locked(
+    state: &AppState,
+    id: i64,
+    company_id: i32,
+    now: NaiveDateTime,
+) -> Result<bool, CancellationError> {
     let pool = &state.pool;
-    let claimed = sqlx::query(
-        "UPDATE billing_cancellation_requests SET confirmation_sent_at = ?
+    let pending: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM billing_cancellation_requests
           WHERE id = ? AND status = 'scheduled' AND confirmation_sent_at IS NULL",
     )
-    .bind(now)
     .bind(id)
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
-    if claimed.rows_affected() != 1 {
+    if pending.is_none() {
         return Ok(false);
     }
-    let delivered = match request_and_trial_end(pool, id, company_id).await {
-        Ok((request, trial_end)) => {
-            let free_period =
-                made_in_free_period(trial_end, request.requested_at, request.effective_at);
-            let company = company_name(pool, company_id).await;
-            send_confirmation(state, company_id, &company, &request, free_period).await
-        }
-        Err(err) => {
-            give_back_confirmation(pool, id, now).await?;
-            return Err(err);
-        }
-    };
-    if !delivered {
-        give_back_confirmation(pool, id, now).await?;
+    let (request, trial_end) = request_and_trial_end(pool, id, company_id).await?;
+    let free_period = made_in_free_period(trial_end, request.requested_at, request.effective_at);
+    let company = company_name(pool, company_id).await;
+    if !send_confirmation(state, company_id, &company, &request, free_period).await {
+        return Ok(false);
     }
-    Ok(delivered)
+    mark_confirmed(pool, id, now).await?;
+    Ok(true)
 }
 
 async fn request_and_trial_end(
@@ -788,23 +794,6 @@ async fn request_and_trial_end(
             .fetch_optional(pool)
             .await?;
     Ok((request, trial_end.flatten()))
-}
-
-/// Undoes a resend's claim, so the next run tries again.
-async fn give_back_confirmation(
-    pool: &MySqlPool,
-    id: i64,
-    claimed_at: NaiveDateTime,
-) -> sqlx::Result<()> {
-    sqlx::query(
-        "UPDATE billing_cancellation_requests SET confirmation_sent_at = NULL
-          WHERE id = ? AND confirmation_sent_at = ?",
-    )
-    .bind(id)
-    .bind(claimed_at)
-    .execute(pool)
-    .await
-    .map(|_| ())
 }
 
 #[cfg(test)]
