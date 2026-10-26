@@ -35,6 +35,17 @@ const MIN_WORDS_PER_SPEAKER: usize = 5;
 const RECORDING_ATTEMPTS: usize = 4;
 const RECORDING_RETRY_DELAY: Duration = Duration::from_millis(2_500);
 
+/// The wait between two attempts: [`RECORDING_RETRY_DELAY`] unless set with
+/// `AppState::with_extension` (tests shorten it).
+#[derive(Clone, Copy, Debug)]
+pub struct RecordingRetryDelay(pub Duration);
+
+impl Default for RecordingRetryDelay {
+    fn default() -> Self {
+        Self(RECORDING_RETRY_DELAY)
+    }
+}
+
 /// The customer's phone, as digits or a number.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(untagged)]
@@ -177,7 +188,8 @@ async fn transcribe_with_retry(
             ) if attempt + 1 < attempts => {
                 tracing::info!(%err, attempt, "call recording not ready, retrying");
                 attempt += 1;
-                tokio::time::sleep(RECORDING_RETRY_DELAY).await;
+                let delay = state.extensions.get_or_default::<RecordingRetryDelay>().0;
+                tokio::time::sleep(delay).await;
             }
             Err(err) => return Err(err),
         }

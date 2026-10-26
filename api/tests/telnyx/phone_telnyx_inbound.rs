@@ -6,6 +6,7 @@
 
 use crate::phone_common;
 
+use api::phone::devices::PushBudget;
 use axum::body::Bytes;
 use axum::http::StatusCode;
 use chrono::{Datelike, Utc};
@@ -371,7 +372,11 @@ async fn a_slow_push_never_holds_the_callers_answer(pool: MySqlPool) {
         add_phone(&pool, n, 100, 100).await;
         sql(&pool, &format!("UPDATE phone_devices SET sip_username = NULL, telnyx_credential_id = NULL WHERE id = {}", 960_000 + n)).await;
     }
-    let (server, stubs) = phone_server(pool.clone()).await;
+    // The pushes may take 0.3 s here (2 s in production).
+    let (server, stubs) = phone_server_with(pool.clone(), |state| {
+        state.with_extension(PushBudget(std::time::Duration::from_millis(300)))
+    })
+    .await;
     stubs
         .slow_pushes
         .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -380,7 +385,7 @@ async fn a_slow_push_never_holds_the_callers_answer(pool: MySqlPool) {
     let res = inbound(&server, 100, "v3:slow-1", "+13175550100", "+13175550151").await;
     let took = started.elapsed();
     let id = call_id(&pool, "v3:slow-1").await;
-    // The TeXML comes once the pushes' 2 seconds are up, not after FCM's 5
+    // The TeXML comes once the pushes' 0.3 seconds are up, not after FCM's 5
     // (each).
     assert_eq!(
         res.text(),

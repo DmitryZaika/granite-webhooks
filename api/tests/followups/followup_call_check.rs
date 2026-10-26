@@ -4,6 +4,7 @@
 use crate::common;
 
 use api::app;
+use api::routes::followups::call_check::RecordingRetryDelay;
 use api::state::AppState;
 use api::transcribe::Transcriber;
 use axum::extract::Path;
@@ -75,7 +76,9 @@ async fn server(pool: &MySqlPool, utterances: Value) -> TestServer {
     let state = AppState::new(pool.clone(), SECRET, ALLOWED_ORIGIN)
         .with_cloudtalk_base(&base)
         .with_transcriber(Transcriber::new(Some("aai"), &base))
-        .with_job_key("job-secret");
+        .with_job_key("job-secret")
+        // A missing recording is tried 4 times, 2.5 s apart in production.
+        .with_extension(RecordingRetryDelay(std::time::Duration::from_millis(10)));
     TestServer::new(app(state))
 }
 

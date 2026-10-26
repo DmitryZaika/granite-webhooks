@@ -182,6 +182,17 @@ struct PushTarget {
 /// while Telnyx waits for our TeXML answer (or the app for its response).
 pub const PUSH_BUDGET: StdDuration = StdDuration::from_secs(2);
 
+/// [`PUSH_BUDGET`] unless set with `AppState::with_extension` (tests
+/// shorten it).
+#[derive(Clone, Copy, Debug)]
+pub struct PushBudget(pub StdDuration);
+
+impl Default for PushBudget {
+    fn default() -> Self {
+        Self(PUSH_BUDGET)
+    }
+}
+
 /// One push to one phone: whether FCM accepted it. A phone whose app is
 /// gone (`UNREGISTERED`) loses its token; other failures are logged.
 async fn push_one(state: &AppState, target: &PushTarget, data: &BTreeMap<String, String>) -> bool {
@@ -237,7 +248,8 @@ pub async fn push_to_users(
     query.push(" ORDER BY pd.id");
     let targets: Vec<PushTarget> = query.build_query_as().fetch_all(&state.pool).await?;
     let sends = join_all(targets.iter().map(|target| push_one(state, target, data)));
-    let sent = tokio::time::timeout(PUSH_BUDGET, sends).await.map_or_else(
+    let budget = state.extensions.get_or_default::<PushBudget>().0;
+    let sent = tokio::time::timeout(budget, sends).await.map_or_else(
         |_| {
             tracing::warn!(
                 phones = targets.len(),
