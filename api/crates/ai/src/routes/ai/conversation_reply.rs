@@ -9,13 +9,15 @@ use crate::ai::{AiError, Caller, Chat, LARGE_MODEL, MINI_MODEL};
 use crate::auth::EmployeeUser;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::extract::JsonBody;
+use crate::followups::crm_hold::parse_followup_timeline_at;
 use crate::followups::gather::{FollowupRequest, gather_followup_context};
-use crate::followups::greeting::{conversation_recency, greeting_instruction};
+use crate::followups::greeting::{conversation_recency, describe_ago, greeting_instruction};
 use crate::followups::js::{js_len, js_slice, trim};
 use crate::followups::prompt::FollowupTimelineMessage;
 use crate::followups::rep_voice::{RepVoice, format_voice_block};
 use crate::followups::send_window::FollowupChannel;
 use crate::followups::timeline::Direction;
+use crate::openapi::ToSchema;
 use crate::re;
 use crate::routes::ai::compose::format_rep_notes_block;
 use crate::routes::ai::reply_context;
@@ -25,7 +27,6 @@ use axum::extract::State;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use crate::openapi::ToSchema;
 
 /// The model when the main one is not available to the key.
 pub const REPLY_FALLBACK_MODEL: &str = "gpt-5.6-luna";
@@ -57,6 +58,11 @@ PRIMARY TASK — write the next message this conversation itself calls for:
 ## Be specific — use the facts you have
 - Build the message on concrete facts from QUOTES, CUSTOMER / PROJECT INFO and the thread: the stone/color they picked or are choosing between, the area (kitchen, island, vanity), the edge, the quote and whether they opened it, a measurement or install date, the open next step.
 - Sent quote NOT opened yet → offer to resend it or walk them through it. Opened it (especially more than once) → ask what they think or which option they lean toward. Accepted or signed → the next step (template/measure, deposit, scheduling), not more selling.
+- The rep already followed up on the sent quote and the customer went quiet (see a QUOTE ALREADY FOLLOWED UP note) → stop asking about the quote. They have it and have no questions. Ask one short question: is the project still on track / still moving forward? Do not repeat the quote's stones, address or options.
+- A contractor, builder or designer quoting for their own client (the client is named in the thread) → ask about that client by first name ("Is Maria still moving forward?"), never "what did Maria think of the quote".
+
+## Dates: read them
+Every message and quote shows its date and how long ago it was. Know how long the customer has had the quote and how long they have been quiet, and write for that moment. Never write as if an old message were recent.
 - Never invent prices, dates, availability, discounts, or promises. Mention a price only from QUOTES (never from a draft quote), and only when it helps.
 - With a FOCUS DEAL, prefer that deal's quote and facts.
 
@@ -70,7 +76,7 @@ Promised follow-up is the next message, not a new intro:
 Use "reaching out as we agreed" ONLY when the customer asked you to wait and you agreed ("10-12 days would be best" / "Great, will do").
 Then ask how that specific situation is going.
 If nobody agreed on a later check-in, never write "as we agreed", "reaching out as we agreed", or a generic "how is the project / renovation coming along?"
-Continue the open topic instead: the quote they have not answered, the slabs they are choosing between, the edge, or the discount.
+Continue the open topic instead: the quote they have not answered, the slabs they are choosing between, the edge, or the discount. Once the rep has already followed up on the quote with no answer, the open topic is whether the project is still on track.
 Do not re-introduce yourself. Do not invent an agreement. Do not write a first-contact "you reached out about countertops" message.
 
 NEPQ style when they just answered: curious, calm, conversational, non-pushy.
@@ -127,6 +133,10 @@ GOOD: "Here's the island quote in Calacatta Karmelo with the eased edge we talke
 Customer opened the quote three times but has not replied (QUOTES shows it):
 GOOD: "Saw you had a chance to look at the quote. Is the Viraldi option still the one you like for the kitchen, or should I price the island in it too?"
 
+A contractor asked for a quote for his client Maria. Quote emailed 26 days ago, he confirmed he got it, the rep asked 14 days ago "Have you had a chance to review the quote?", no reply since:
+BAD: "What did Maria think of the quote for the Calacatta Karmelo countertops and backsplash at 512 Elm St?"
+GOOD: "Is Maria still moving forward with the project?"
+
 Last message 4 months ago (GREETING: BY NAME):
 GOOD: "Hi Ahoura, are you still planning the kitchen this year? I can check if the Viraldi you liked is still in stock."
 
@@ -156,7 +166,22 @@ When REPLY MODE is Custom or Custom revision, the rep's instruction decides what
 
 Output ONLY valid JSON: {"body":"draft message"}"#;
 
-fn format_timeline(messages: &[FollowupTimelineMessage]) -> String {
+/// The rep's unanswered follow-up on a sent quote is this old before the
+/// next message checks the project is still on track.
+const QUOTE_FOLLOW_UP_QUIET_DAYS: i64 = 3;
+
+/// `2026-10-12 14:30, 14 days ago`; the bare time when it does not parse.
+fn dated(at: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+    parse_followup_timeline_at(at).map_or_else(
+        || at.to_string(),
+        |t| format!("{at}, {}", describe_ago((now - t).num_minutes().max(0))),
+    )
+}
+
+fn format_timeline(
+    messages: &[FollowupTimelineMessage],
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
     if messages.is_empty() {
         return "(no prior SMS or email)".into();
     }
@@ -170,7 +195,7 @@ fn format_timeline(messages: &[FollowupTimelineMessage]) -> String {
             };
             format!(
                 "[{}] {} {who}: {}",
-                m.at,
+                dated(&m.at, now),
                 m.channel.as_str().to_uppercase(),
                 m.text
             )
@@ -271,8 +296,25 @@ pub fn build_user_prompt(
     };
     let latest_inbound_note = latest_inbound.map_or_else(
         || "LATEST CUSTOMER MESSAGE: (none in thread — write a short re-engagement that invites a response without a dead-end closer)".to_string(),
-        |m| format!("LATEST CUSTOMER MESSAGE ({} at {}):\n{}", m.channel.as_str().to_uppercase(), m.at, m.text),
+        |m| format!("LATEST CUSTOMER MESSAGE ({} at {}):\n{}", m.channel.as_str().to_uppercase(), dated(&m.at, now), m.text),
     );
+    let quote_followed_up_note = match (
+        last.filter(|m| m.direction == Direction::Outbound)
+            .and_then(|m| parse_followup_timeline_at(&m.at)),
+        extras.last_quote_emailed,
+    ) {
+        (Some(nudged), Some(emailed))
+            if nudged - emailed >= chrono::Duration::hours(12)
+                && now - nudged >= chrono::Duration::days(QUOTE_FOLLOW_UP_QUIET_DAYS) =>
+        {
+            format!(
+                "\nNOTE: QUOTE ALREADY FOLLOWED UP. The customer got the quote {} and the rep's follow-up after it ({}) got no reply.\nDo NOT ask again whether they reviewed the quote, what they (or their client) think of it, or about its stones, options, price or address.\nAsk ONE short question: is the project still on track / still moving forward? If the customer quotes for their own client named in the thread, ask about that client by first name.",
+                describe_ago((now - emailed).num_minutes().max(0)),
+                describe_ago((now - nudged).num_minutes().max(0)),
+            )
+        }
+        _ => String::new(),
+    };
     let promised_note = if last.is_some_and(|m| m.direction == Direction::Outbound)
         && conversation_has_promised_follow_up(timeline)
     {
@@ -367,13 +409,13 @@ pub fn build_user_prompt(
     };
     let mode_note = mode_note(mode, custom);
     format!(
-        "Draft the next {channel_label} message for sales rep {user_name} to send to this customer.\n{deal_focus}\n{length_note}\n{greeting_note}\n{signature_note}\n\n{mode_note}\n\n{latest_inbound_note}\n{direction_note}\n{promised_note}\n{vague_note}\n{avoid_note}\n{style_section}\nCUSTOMER / PROJECT INFO:\n{}\n\n{quotes_block}\n\nCOMPANY ADMINISTRATIVE INSTRUCTIONS / GUARDRAILS:\n{instructions}\n\nFULL CONVERSATION — SMS and email combined, oldest first (times UTC):\n{}\n\nNOW: {} UTC\n\nUse the concrete facts above (chosen stone/color, quote, open next step). Return JSON with a single \"body\" field containing the draft message only. For email, that field is the body — never a Subject line.",
+        "Draft the next {channel_label} message for sales rep {user_name} to send to this customer.\n{deal_focus}\n{length_note}\n{greeting_note}\n{signature_note}\n\n{mode_note}\n\n{latest_inbound_note}\n{direction_note}\n{promised_note}{quote_followed_up_note}\n{vague_note}\n{avoid_note}\n{style_section}\nCUSTOMER / PROJECT INFO:\n{}\n\n{quotes_block}\n\nCOMPANY ADMINISTRATIVE INSTRUCTIONS / GUARDRAILS:\n{instructions}\n\nFULL CONVERSATION — SMS and email combined, oldest first (times UTC):\n{}\n\nNOW: {} UTC\n\nUse the concrete facts above (chosen stone/color, quote, open next step). Return JSON with a single \"body\" field containing the draft message only. For email, that field is the body — never a Subject line.",
         if trim(profile).is_empty() {
             "(none)"
         } else {
             trim(profile)
         },
-        format_timeline(timeline),
+        format_timeline(timeline, now),
         now.format("%Y-%m-%d %H:%M"),
     )
 }
@@ -383,6 +425,8 @@ pub fn build_user_prompt(
 pub struct ReplyExtras {
     /// The customer's quotes ([`reply_context::format_quotes`]).
     pub quotes: String,
+    /// When a quote was last emailed to the customer.
+    pub last_quote_emailed: Option<chrono::DateTime<chrono::Utc>>,
     /// The rep's learned writing notes.
     pub rep_notes: Vec<String>,
     /// The rep's own recent messages and signature habit.
@@ -401,7 +445,7 @@ pub struct CustomDraft {
 fn mode_note(mode: ReplyMode, custom: &CustomDraft) -> String {
     match mode {
         ReplyMode::FastReply => "REPLY MODE: Fast reply.\nPrefer a short, immediate reply to the latest customer message.\nKeep it tight. Acknowledge what they said, then one natural next step or question if needed.\nDo not write a long check-in or restart the conversation.".into(),
-        ReplyMode::FollowUp => "REPLY MODE: Follow up.\nThe customer has not answered the latest rep message. Continue that specific topic.\nUse facts already in the thread and in QUOTES: the quote (and whether they opened it), the stones they named, the edge they chose, a discount, or a visit they cannot make.\nAsk one question about that open decision.\nDo not invent an agreement to reconnect. Never write \"as we agreed\" or \"reaching out as we agreed\" unless the thread shows they asked you to wait and you agreed.\nDo not ask how the project or renovation is coming along when a concrete next step is already open.".into(),
+        ReplyMode::FollowUp => "REPLY MODE: Follow up.\nThe customer has not answered the latest rep message. Continue that specific topic.\nUse facts already in the thread and in QUOTES: the quote (and whether they opened it), the stones they named, the edge they chose, a discount, or a visit they cannot make.\nAsk one question about that open decision.\nDo not invent an agreement to reconnect. Never write \"as we agreed\" or \"reaching out as we agreed\" unless the thread shows they asked you to wait and you agreed.\nDo not ask how the project or renovation is coming along when a concrete next step is already open, unless a QUOTE ALREADY FOLLOWED UP note says the rep already chased it: then ask if the project is still on track.".into(),
         ReplyMode::Custom if !custom.previous_draft.is_empty() && !custom.revision_instruction.is_empty() => {
             let history: Vec<&str> = if custom.instruction_history.is_empty() {
                 if custom.request.is_empty() { Vec::new() } else { vec![custom.request.as_str()] }
@@ -538,23 +582,28 @@ async fn load_extras(
     customer_id: Option<i32>,
     deal_id: Option<i64>,
     gathered: &crate::followups::gather::GatheredContext,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> ReplyExtras {
-    let quotes = match customer_id {
+    let (quotes, last_quote_emailed) = match customer_id {
         Some(customer_id) => {
             match reply_context::load_quotes(&state.pool, user.company_id, customer_id, deal_id)
                 .await
             {
-                Ok(quotes) => reply_context::format_quotes(&quotes, deal_id),
+                Ok(quotes) => (
+                    reply_context::format_quotes(&quotes, deal_id, now),
+                    reply_context::last_quote_emailed(&quotes),
+                ),
                 Err(err) => {
                     tracing::warn!(error = %err, customer_id, "AI reply: quotes unavailable");
-                    String::new()
+                    (String::new(), None)
                 }
             }
         }
-        None => String::new(),
+        None => (String::new(), None),
     };
     ReplyExtras {
         quotes,
+        last_quote_emailed,
         rep_notes: gathered
             .style_profile
             .as_ref()
@@ -623,6 +672,7 @@ pub async fn conversation_reply(
         gathered.customer_id,
         input.deal_id,
         &gathered,
+        now,
     )
     .await;
     let user_prompt = build_user_prompt(
@@ -838,7 +888,10 @@ mod tests {
             text.contains("REPLY MODE: Custom.")
                 && text.contains("Ask about quartzite timing only")
         );
-        assert!(text.contains("Cover EVERY point") && !text.contains("1–3 short sentences. One main question"));
+        assert!(
+            text.contains("Cover EVERY point")
+                && !text.contains("1–3 short sentences. One main question")
+        );
         let revision = CustomDraft {
             request: "Price 1-2 white quartzite options".into(),
             previous_draft: "Hi! I can send pricing".into(),
@@ -926,6 +979,7 @@ mod tests {
                 has_email_signature: false,
                 email_name: Some("Dema Petrova".into()),
             },
+            last_quote_emailed: None,
         };
         let now = chrono::DateTime::parse_from_rfc3339("2026-10-13T15:00:00Z")
             .unwrap()
@@ -979,6 +1033,69 @@ mod tests {
             prompt(&lenora(), ReplyMode::FastReply, &CustomDraft::default())
                 .contains("SIGNATURE: none — texts never end")
         );
+    }
+
+    #[test]
+    fn a_quote_already_chased_asks_if_the_project_is_on_track() {
+        use Direction::{Inbound as I, Outbound as O};
+        let at = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().to_utc();
+        let timeline = vec![
+            message(
+                "2026-10-06 16:00",
+                O,
+                "The quote was sent on September 30th.",
+            ),
+            message(
+                "2026-10-07 11:13",
+                I,
+                "I see now that I received the quote.",
+            ),
+            message(
+                "2026-10-12 14:30",
+                O,
+                "Have you had a chance to review the quote?",
+            ),
+        ];
+        let extras = ReplyExtras {
+            last_quote_emailed: Some(at("2026-09-30T21:35:00Z")),
+            ..ReplyExtras::default()
+        };
+        let build = |now| {
+            build_user_prompt(
+                FollowupChannel::Email,
+                "Dema",
+                "",
+                "",
+                &timeline,
+                None,
+                ReplyMode::FollowUp,
+                &CustomDraft::default(),
+                &extras,
+                now,
+            )
+        };
+        let text = build(at("2026-10-26T19:45:00Z"));
+        assert!(text.contains("QUOTE ALREADY FOLLOWED UP"));
+        assert!(text.contains("got the quote 25 days ago") && text.contains("(14 days ago)"));
+        assert!(text.contains("still on track"));
+        // Every message shows how old it is.
+        assert!(text.contains("[2026-10-12 14:30, 14 days ago] SMS Sales Rep"));
+        assert!(text.contains("LATEST CUSTOMER MESSAGE (SMS at 2026-10-07 11:13, 19 days ago)"));
+        // A day after the nudge it is too early; without a sent quote there is none.
+        assert!(!build(at("2026-10-13T15:00:00Z")).contains("QUOTE ALREADY FOLLOWED UP"));
+        let no_quote = build_user_prompt(
+            FollowupChannel::Email,
+            "Dema",
+            "",
+            "",
+            &timeline,
+            None,
+            ReplyMode::FollowUp,
+            &CustomDraft::default(),
+            &ReplyExtras::default(),
+            at("2026-10-26T19:45:00Z"),
+        );
+        assert!(!no_quote.contains("QUOTE ALREADY FOLLOWED UP"));
     }
 
     #[test]

@@ -527,7 +527,7 @@ async fn load_context(
             match reply_context::load_quotes(&state.pool, user.company_id, customer_id, deal_id)
                 .await
             {
-                Ok(quotes) => reply_context::format_quotes(&quotes, deal_id),
+                Ok(quotes) => reply_context::format_quotes(&quotes, deal_id, Utc::now()),
                 Err(err) => {
                     tracing::warn!(error = %err, customer_id, "compose: quotes unavailable");
                     String::new()

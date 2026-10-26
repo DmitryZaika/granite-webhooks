@@ -5,8 +5,11 @@
 //!
 //! The block is capped so the prompt stays a sane size.
 
+use crate::followups::dates::parse_iso;
+use crate::followups::greeting::describe_ago;
 use crate::followups::js::{js_len, js_slice, trim};
 use crate::quote_pricing::doc::QuoteDoc;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sqlx::MySqlPool;
 
@@ -171,8 +174,33 @@ fn option_lines(doc: &QuoteDoc, totals: &[OptionTotal], accepted: Option<usize>)
         .collect()
 }
 
+/// `2026-09-30 21:35 UTC (26 days ago)`: the model sees how old it is.
+fn dated(at: &str, now: DateTime<Utc>) -> String {
+    parse_iso(at).map_or_else(
+        || format!("{at} UTC"),
+        |t| {
+            format!(
+                "{at} UTC ({})",
+                describe_ago((now - t).num_minutes().max(0))
+            )
+        },
+    )
+}
+
+/// When the newest of the quotes was last emailed to the customer.
+pub fn last_quote_emailed(quotes: &[QuoteRow]) -> Option<DateTime<Utc>> {
+    quotes
+        .iter()
+        .filter_map(|q| q.last_sent.as_deref().and_then(parse_iso))
+        .max()
+}
+
 /// The quotes block of the prompt; empty when there are none.
-pub fn format_quotes(quotes: &[QuoteRow], focus_deal_id: Option<i64>) -> String {
+pub fn format_quotes(
+    quotes: &[QuoteRow],
+    focus_deal_id: Option<i64>,
+    now: DateTime<Utc>,
+) -> String {
     let mut blocks: Vec<String> = Vec::new();
     for quote in quotes {
         let name = quote
@@ -232,7 +260,7 @@ pub fn format_quotes(quotes: &[QuoteRow], focus_deal_id: Option<i64>) -> String 
                 if quote.emails_sent == 1 { "" } else { "s" }
             );
             if let Some(last) = &quote.last_sent {
-                sent.push_str(&format!(", last {last} UTC"));
+                sent.push_str(&format!(", last {}", dated(last, now)));
             }
             if quote.views > 0 {
                 sent.push_str(&format!(
@@ -241,10 +269,10 @@ pub fn format_quotes(quotes: &[QuoteRow], focus_deal_id: Option<i64>) -> String 
                     if quote.views == 1 { "" } else { "s" }
                 ));
                 if let Some(first) = &quote.first_viewed {
-                    sent.push_str(&format!(", first {first} UTC"));
+                    sent.push_str(&format!(", first {}", dated(first, now)));
                 }
                 if let Some(last) = &quote.last_viewed {
-                    sent.push_str(&format!(", last {last} UTC"));
+                    sent.push_str(&format!(", last {}", dated(last, now)));
                 }
             } else {
                 sent.push_str(" · NOT opened yet");
@@ -310,12 +338,26 @@ mod tests {
             accepted_option: Some(1),
             ..QuoteRow::default()
         };
-        let text = format_quotes(&[quote], Some(7));
+        let text = format_quotes(std::slice::from_ref(&quote), Some(7), now());
         assert!(text.starts_with("Quote \"Smith kitchen\" (#12, status active, made 2026-10-01, revision 2, deal #7 — the deal this message is about)"));
         assert!(text.contains("  Areas: Kitchen, Island"));
         assert!(text.contains("  Option 1: Kitchen: Quartz Calacatta Karmelo (edge Eased); Island: Quartz Calacatta Karmelo (edge Ogee) · total $4,350.00"));
         assert!(text.contains("  Option 2 (ACCEPTED by the customer): Kitchen: Granite Viraldi · total $3,900.50 (some prices missing)"));
-        assert!(text.contains("Emailed to the customer 1 time, last 2026-10-02 15:00 UTC · customer opened it 3 times, first 2026-10-02 18:10 UTC, last 2026-10-04 09:00 UTC"));
+        assert!(text.contains("Emailed to the customer 1 time, last 2026-10-02 15:00 UTC (14 days ago) · customer opened it 3 times, first 2026-10-02 18:10 UTC (13 days ago), last 2026-10-04 09:00 UTC (12 days ago)"));
+        assert_eq!(
+            last_quote_emailed(&[quote]),
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-10-02T15:00:00Z")
+                    .unwrap()
+                    .to_utc()
+            )
+        );
+    }
+
+    fn now() -> DateTime<Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-10-16T15:00:00Z")
+            .unwrap()
+            .to_utc()
     }
 
     #[test]
@@ -326,7 +368,7 @@ mod tests {
             drawing: Some("not json".into()),
             ..QuoteRow::default()
         };
-        let text = format_quotes(&[draft], None);
+        let text = format_quotes(&[draft], None, now());
         assert!(text.starts_with("Quote \"Quote\" (#3, status draft)"));
         assert!(text.contains("Draft — never sent to the customer"));
         let unopened = QuoteRow {
@@ -337,9 +379,9 @@ mod tests {
             ..QuoteRow::default()
         };
         assert!(
-            format_quotes(&[unopened], None)
+            format_quotes(&[unopened], None, now())
                 .contains("Emailed to the customer 2 times · NOT opened yet")
         );
-        assert_eq!(format_quotes(&[], None), "");
+        assert_eq!(format_quotes(&[], None, now()), "");
     }
 }
