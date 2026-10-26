@@ -2826,6 +2826,48 @@
      ]
     }
    ]
+  },
+  {
+   "id": "special-order",
+   "keywords": [
+    "special order",
+    "special orders",
+    "special-order",
+    "special-orders"
+   ],
+   "question": "Do you mean a special-order slab in a quote, or the Special Order calculator?",
+   "with_company": "Do you mean a special-order slab in a quote, the Special Order calculator, or your company's own process?",
+   "choices": [
+    {
+     "label": "Special-order slab in a quote",
+     "keywords": [
+      "quote",
+      "quotes",
+      "drawing",
+      "price list",
+      "price lists",
+      "color list",
+      "in a quote"
+     ],
+     "sections": [
+      "quote-drawing-color-slab-layout"
+     ]
+    },
+    {
+     "label": "Special Order calculator",
+     "keywords": [
+      "calculator",
+      "calculate",
+      "calculation",
+      "operations",
+      "cost per sqft",
+      "total cost"
+     ],
+     "sections": [
+      "samples-special-order"
+     ]
+    }
+   ]
   }
  ]
 }

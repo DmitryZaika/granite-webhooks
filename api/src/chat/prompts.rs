@@ -121,9 +121,16 @@ pub fn instruction_user_message(query: &str) -> String {
 /// A how-to answered from the CRM manual: short steps, not the company
 /// instructions' complete checklist.
 pub fn manual_user_message(question: &str) -> String {
-    format!(
-        "Answer how to do this in Granite Manager from the CRM user manual: short numbered steps with the exact labels, only what the question needs.\n\nQuestion: {question}\n\nAnswer:"
-    )
+    format!("{MANUAL_QUESTION}\n\nQuestion: {question}\n\nAnswer:")
+}
+
+/// How [`manual_user_message`] starts.
+const MANUAL_QUESTION: &str = "Answer how to do this in Granite Manager from the CRM user manual: short numbered steps with the exact labels, only what the question needs.";
+
+/// Whether `message` is a question [`manual_user_message`] wrote: its answer
+/// came from the CRM manual.
+pub fn is_manual_question(message: &str) -> bool {
+    message.starts_with(MANUAL_QUESTION)
 }
 
 /// The question in a message [`instruction_user_message`] or

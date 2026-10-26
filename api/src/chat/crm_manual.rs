@@ -50,6 +50,10 @@ struct Topic {
 struct Ambiguity {
     keywords: Vec<String>,
     question: String,
+    /// The question when it can also be the company's own process (the
+    /// company has an instruction about it): one question, not two.
+    #[serde(default)]
+    with_company: Option<String>,
     choices: Vec<AmbiguousFeature>,
 }
 
@@ -455,6 +459,8 @@ pub struct Feature {
 pub struct Clarification {
     pub question: String,
     pub choices: Vec<Feature>,
+    /// The question with the company's own process as one more choice.
+    pub with_company: Option<String>,
 }
 
 /// What the clarify table makes of a question with one of its words.
@@ -488,6 +494,7 @@ pub fn features(query: &str) -> Option<Features> {
                 .iter()
                 .map(|choice| feature(&choice.label, choice.sections.clone()))
                 .collect(),
+            with_company: entry.with_company.clone(),
         }));
     }
     let mut sections: Vec<String> = Vec::new();
@@ -505,6 +512,16 @@ pub fn feature(label: &str, sections: Vec<String>) -> Feature {
         label: label.to_string(),
         source: Source::Manual,
         sections,
+    }
+}
+
+/// The company's own process as one of the choices: answered from its
+/// instructions, not from the manual.
+pub fn company_choice() -> Feature {
+    Feature {
+        label: CLARIFY_CHOICES[1].label.to_string(),
+        source: Source::Company,
+        sections: Vec::new(),
     }
 }
 
@@ -623,6 +640,7 @@ pub fn parse_pick(reply: &str) -> Option<Picked> {
             return Some(Picked::Ask(Clarification {
                 question: question.to_string(),
                 choices,
+                with_company: None,
             }));
         }
     }
@@ -679,27 +697,32 @@ pub async fn pick(
 /// questions), or the question to ask back: the clarify table's, else the
 /// model's pick (or question back, for a feature the topic table doesn't
 /// name) with the best section of the manual's own words in case it missed
-/// one, else the manual's own words alone.
+/// one, else the manual's own words alone. `None`: the model finds the
+/// question is not about using the app.
 pub async fn sections_for(
     state: &AppState,
     caller: Caller<'_>,
     question: &str,
     earlier: &[String],
     search: &str,
-) -> Result<Vec<String>, Clarification> {
+) -> Result<Option<Vec<String>>, Clarification> {
     match features(question) {
         Some(Features::Ask(clarification)) => return Err(clarification),
-        Some(Features::Named(ids)) => return Ok(ids),
+        Some(Features::Named(ids)) => return Ok(Some(ids)),
         None => {}
     }
     let fallback = section_ids_for(search);
+    let own_words = || -> Vec<String> {
+        fallback
+            .iter()
+            .filter(|id| !MANUAL.core.contains(*id))
+            .cloned()
+            .collect()
+    };
     match pick(state, caller, question, earlier).await {
         // A feature the topic table names is not one to ask about ("how to
         // make a layout" is the quote's slab layout): the manual's own words.
-        Some(Picked::Ask(_)) if matches_topic(question) => Ok(fallback
-            .into_iter()
-            .filter(|id| !MANUAL.core.contains(id))
-            .collect()),
+        Some(Picked::Ask(_)) if matches_topic(question) => Ok(Some(own_words())),
         Some(Picked::Ask(clarification)) => Err(clarification),
         Some(Picked::Sections(mut ids)) if !ids.is_empty() => {
             // The best of the manual's own words the model did not pick.
@@ -708,12 +731,11 @@ pub async fn sections_for(
             }) {
                 ids.push(backup.clone());
             }
-            Ok(ids)
+            Ok(Some(ids))
         }
-        _ => Ok(fallback
-            .into_iter()
-            .filter(|id| !MANUAL.core.contains(id))
-            .collect()),
+        // The model finds it is not about using the app.
+        Some(Picked::Sections(_)) => Ok(None),
+        None => Ok(Some(own_words())),
     }
 }
 
@@ -829,11 +851,22 @@ pub fn asks_how_to(query: &str) -> bool {
     .any(|p| p.is_match(&normalized))
 }
 
+/// Asks about the company's own process, rules or prices ("what is our
+/// special order policy", "how much do we charge"), not about the app.
+pub fn asks_about_company_process(query: &str) -> bool {
+    let normalized = normalize(&query.replace('\u{2019}', "'"));
+    asks_a_price(&normalized)
+        || re!(r"\b(?:our|my|company|company's)\b(?: \S+){0,4} (?:process|processes|policy|policies|procedure|procedures|rules|handbook)\b").is_match(&normalized)
+        || re!(r"\b(?:our|company|company's) instructions?\b").is_match(&normalized)
+}
+
 /// Asks what something costs ("what is the fabrication price"), not how to
-/// set a price in the app ("how do I change the price on one line").
+/// set a price in the app ("how do I change the price on one line"). A price
+/// list is a thing of the app, not a price asked.
 fn asks_a_price(normalized: &str) -> bool {
-    re!(r"\b(?:prices?|pricing|costs?|fees?|rates?|charges?|fabrication|sqft)\b").is_match(normalized)
-        && !re!(r"\b(?:change|set|edit|update|override|add|remove|enter|type|put|adjust|hide|show|apply|give)\b(?: \S+){0,4} (?:prices?|pricing|costs?|fees?|rates?|charges?)\b").is_match(normalized)
+    let normalized = re!(r"\bprice lists?\b").replace_all(normalized, "list");
+    re!(r"\b(?:prices?|pricing|costs?|fees?|rates?|charges?|fabrication|sqft)\b").is_match(&normalized)
+        && !re!(r"\b(?:change|set|edit|update|override|add|remove|enter|type|put|adjust|hide|show|apply|give)\b(?: \S+){0,4} (?:prices?|pricing|costs?|fees?|rates?|charges?)\b").is_match(&normalized)
 }
 
 /// What a how-to does in the CRM ("add", "make"...), before what it does it to.
@@ -1592,6 +1625,81 @@ mod tests {
             "how many deals did we win this month",
         ] {
             assert!(!asks_how_to(query), "{query}");
+        }
+    }
+    /// "How to make a special order?" is a special-order slab in a quote or
+    /// the Special Order calculator; the question names which, or is asked.
+    #[test]
+    fn a_special_order_is_asked_back_unless_the_question_says_which() {
+        for question in [
+            "How to make a special order?",
+            "how can I make a special order?",
+        ] {
+            let Some(Features::Ask(asked)) = features(question) else {
+                panic!("{question}")
+            };
+            let labels: Vec<&str> = asked.choices.iter().map(|c| c.label.as_str()).collect();
+            assert_eq!(
+                labels,
+                ["Special-order slab in a quote", "Special Order calculator"]
+            );
+            assert_eq!(
+                asked.question,
+                "Do you mean a special-order slab in a quote, or the Special Order calculator?"
+            );
+            assert_eq!(
+                asked.with_company.as_deref(),
+                Some(
+                    "Do you mean a special-order slab in a quote, the Special Order calculator, or your company's own process?"
+                )
+            );
+        }
+        for (question, id) in [
+            (
+                "How to add a specail order slab to quote",
+                "quote-drawing-color-slab-layout",
+            ),
+            (
+                "how to make a special order in quote",
+                "quote-drawing-color-slab-layout",
+            ),
+            (
+                "whats the special order calculator",
+                "samples-special-order",
+            ),
+        ] {
+            assert_eq!(
+                features(question),
+                Some(Features::Named(vec![id.to_string()])),
+                "{question}"
+            );
+        }
+        // The company's process is a choice too, answered from its instructions.
+        let company = company_choice();
+        assert_eq!(
+            (company.label.as_str(), company.source),
+            ("Our company's process", Source::Company)
+        );
+        assert!(company.sections.is_empty());
+    }
+
+    #[test]
+    fn the_company_s_own_process_is_told_from_the_app() {
+        for query in [
+            "what is our special order deposit policy",
+            "is that our company's process?",
+            "what do our instructions say about it",
+            "how much do we charge for that",
+        ] {
+            assert!(asks_about_company_process(query), "{query}");
+        }
+        for query in [
+            "what does it mean other color?? there is no such option",
+            "why are you sending me this page, there is no mention about other color??",
+            "no, in quotes",
+            "they don't have it in the price lists",
+        ] {
+            assert!(!asks_about_company_process(query), "{query}");
         }
     }
 }

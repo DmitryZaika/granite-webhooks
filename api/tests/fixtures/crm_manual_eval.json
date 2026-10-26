@@ -4,6 +4,9 @@
   { "question": "How to make a layout", "sections": ["quote-drawing-color-slab-layout"], "example": true },
   { "question": "How to send aquote to customer", "sections": ["employee-quotes-sending-and-selling"], "example": true },
   { "question": "How to turn off notifications", "sections": ["notifications"], "clarify": true, "example": true },
+  { "question": "How to make a special order?", "sections": ["quote-drawing-color-slab-layout", "samples-special-order"], "clarify": true },
+  { "question": "how can I make a special order?", "sections": ["quote-drawing-color-slab-layout", "samples-special-order"], "clarify": true },
+  { "question": "what does it mean other color?? there is no such option", "sections": ["quote-drawing-color-slab-layout"] },
 
   { "question": "how do i create a new quote", "sections": ["employee-quotes"] },
   { "question": "how to dupliacte a quote", "sections": ["employee-quotes"] },

@@ -1124,6 +1124,21 @@ pub fn matching_answer(
     (coverage >= 0.75).then(|| matched(&instructions[index]))
 }
 
+/// Whether the instruction has what `answer` says: two of the answer's
+/// words at least, and 30% of them, are in its title or body. A citation
+/// without that is no source.
+pub fn supports_answer(instruction: &Instruction, answer: &str) -> bool {
+    let said: HashSet<String> = match_tokens(answer).into_iter().collect();
+    let text = Text::of(instruction);
+    let has: HashSet<String> = match_tokens(&format!("{}\n{}", text.title, text.body))
+        .into_iter()
+        .collect();
+    let shared = said.iter().filter(|word| has.contains(*word)).count();
+    #[allow(clippy::cast_precision_loss)]
+    let share = shared as f64 / said.len().max(1) as f64;
+    shared >= 2 && share >= 0.3
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -344,12 +344,31 @@ fn picked_clarification(messages: &[Message]) -> Option<(String, Clarified)> {
     let question = markers::parse_clarify_marker(&asked.content)?;
     let offered: Vec<crm_manual::Feature> = markers::parse_clarify_choices(&asked.content)
         .into_iter()
-        .map(|(label, sections)| crm_manual::feature(&label, sections))
+        .map(|(label, sections)| {
+            if sections.is_empty() {
+                crm_manual::Feature {
+                    label,
+                    ..crm_manual::company_choice()
+                }
+            } else {
+                crm_manual::feature(&label, sections)
+            }
+        })
         .collect();
-    let picked = if offered.is_empty() {
-        Clarified::Source(crm_manual::clarify_choice(&reply.content)?)
-    } else {
-        Clarified::Feature(crm_manual::feature_choice(&reply.content, &offered)?.clone())
+    let offers_company = offered.is_empty()
+        || offered
+            .iter()
+            .any(|c| c.source == crm_manual::Source::Company);
+    let picked = match crm_manual::feature_choice(&reply.content, &offered) {
+        Some(choice) if choice.source == crm_manual::Source::Company => {
+            Clarified::Source(crm_manual::Source::Company)
+        }
+        Some(choice) => Clarified::Feature(choice.clone()),
+        // "app" or "company" typed to a question that offered the company's
+        // process: where the answer comes from (the manual then asks which
+        // feature, if it has to).
+        None if offers_company => Clarified::Source(crm_manual::clarify_choice(&reply.content)?),
+        None => return None,
     };
     Some((question, picked))
 }
@@ -396,6 +415,17 @@ fn request_messages(messages: &[Message]) -> Vec<Value> {
             json!({ "role": m.role, "content": content })
         })
         .collect()
+}
+
+/// Whether the answer before the last question came from the CRM manual:
+/// that question went to the model as `prompts::manual_user_message`.
+fn last_answer_from_manual(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .filter(|m| m.role == "user")
+        .rev()
+        .nth(1)
+        .is_some_and(|m| prompts::is_manual_question(&m.content))
 }
 
 /// The user's questions before the last message, as they asked them: not
@@ -677,8 +707,15 @@ async fn run(
         }
     }
 
-    let how_to = source.map_or_else(
-        || crm_manual::looks_like_how_to(&question),
+    // A follow-up to an answer from the manual ("what does it mean?", "there
+    // is no such option") stays on the manual, unless it asks about the
+    // company's own process (or the model finds it is not about the app).
+    let follows_manual = mode == Mode::Instructions
+        && source.is_none()
+        && last_answer_from_manual(&messages)
+        && !crm_manual::asks_about_company_process(&question);
+    let mut how_to = source.map_or_else(
+        || follows_manual || crm_manual::looks_like_how_to(&question),
         |picked| picked == crm_manual::Source::Manual,
     );
     if mode == Mode::Instructions {
@@ -691,7 +728,23 @@ async fn run(
                 instructions::has_title_match(all, &question),
             )
         {
-            ask_to_clarify(out, pool, user_id, history_id, messages, &question).await;
+            // A word of several features: the company's process is one more
+            // choice of the same question.
+            if let Some(crm_manual::Features::Ask(asked)) = crm_manual::features(&question)
+                && let Some(text) = asked.with_company
+            {
+                let mut choices = asked.choices;
+                choices.push(crm_manual::company_choice());
+                let asked = crm_manual::Clarification {
+                    question: text,
+                    choices,
+                    with_company: None,
+                };
+                ask_which_feature(out, pool, user_id, history_id, messages, &question, &asked)
+                    .await;
+            } else {
+                ask_to_clarify(out, pool, user_id, history_id, messages, &question).await;
+            }
             return Ok(());
         }
         if source != Some(crm_manual::Source::Company) {
@@ -711,7 +764,15 @@ async fn run(
                     company_id: Some(company_id),
                 };
                 match crm_manual::sections_for(state, caller, &question, &earlier, &search).await {
-                    Ok(ids) => ids,
+                    Ok(Some(ids)) => ids,
+                    // Not about the app (the model says): a follow-up to the
+                    // manual goes back to the company's instructions.
+                    Ok(None) => {
+                        if follows_manual {
+                            how_to = false;
+                        }
+                        crm_manual::section_ids_for(&search)
+                    }
                     Err(clarification) => {
                         ask_which_feature(
                             out,
@@ -865,18 +926,17 @@ async fn run(
     let has_info = markers::answer_has_usable_info(&clean);
     let mut images: Vec<String> = Vec::new();
     if has_info && mode == Mode::Instructions && !how_to {
-        let mut cited = instructions::used_for_reply(&selected, &answer, &question);
-        if cited.is_empty()
-            && markers::parse_instruction_indices(&answer) != Some(None)
-            && let Some(best) = instructions::best_matching(&selected, &question)
-        {
-            cited = vec![best];
-        }
-        if let Some(content) = instructions::matching_answer(&selected, &clean, &question)
-            && !cited.iter().any(|u| u.id == content.id)
-        {
-            cited = vec![content];
-        }
+        // Only an instruction the model cited whose text has what the answer
+        // says: no guess when it cited none, and none when unsure.
+        let cited: Vec<instructions::MatchedInstruction> =
+            instructions::used_for_reply(&selected, &answer, &question)
+                .into_iter()
+                .filter(|m| {
+                    selected
+                        .iter()
+                        .any(|i| i.id == m.id && instructions::supports_answer(i, &clean))
+                })
+                .collect();
         if !cited.is_empty() {
             out.json("instructions", &cited).await;
             images = instructions::images_for_used(&selected, &cited, &clean, &question);
@@ -1144,6 +1204,72 @@ mod tests {
         // Not one of the choices: a new question.
         assert!(picked_clarification(&asked_which("how do I add a customer?")).is_none());
         assert!(picked_clarification(&asked_which("company")).is_none());
+    }
+
+    /// One question of three: two features and the company's own process.
+    #[test]
+    fn the_company_s_process_is_a_choice_of_the_same_question() {
+        let asked = "how do I make a special order?";
+        let quote = vec!["quote-drawing-color-slab-layout".to_string()];
+        let calculator = vec!["samples-special-order".to_string()];
+        let company: Vec<String> = Vec::new();
+        let marker = markers::with_clarify_choices_marker(
+            "Which one?",
+            asked,
+            &[
+                ("Special-order slab in a quote", quote.as_slice()),
+                ("Special Order calculator", calculator.as_slice()),
+                ("Our company's process", company.as_slice()),
+            ],
+        );
+        assert!(marker.ends_with(
+            "[[CLARIFY:how do I make a special order?|Special-order slab in a quote=quote-drawing-color-slab-layout|Special Order calculator=samples-special-order|Our company's process]]"
+        ));
+        let with_reply = |reply: &str| {
+            vec![
+                Message::new("user", prompts::instruction_user_message(asked)),
+                Message::new("assistant", marker.clone()),
+                Message::new("user", reply),
+            ]
+        };
+        for (reply, picked) in [
+            ("Our company's process", Clarified::Source(Source::Company)),
+            ("company", Clarified::Source(Source::Company)),
+            ("In Granite Manager", Clarified::Source(Source::Manual)),
+            (
+                "Special Order calculator",
+                Clarified::Feature(super::crm_manual::feature(
+                    "Special Order calculator",
+                    calculator.clone(),
+                )),
+            ),
+        ] {
+            assert_eq!(
+                picked_clarification(&with_reply(reply)).map(|(_, p)| p),
+                Some(picked),
+                "{reply}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_follow_up_knows_the_answer_before_came_from_the_manual() {
+        let manual = vec![
+            Message::new("user", prompts::manual_user_message("how do I add a stone")),
+            Message::new("assistant", "Open Inventory > Stones."),
+            Message::new("user", "there is no such button"),
+        ];
+        assert!(super::last_answer_from_manual(&manual));
+        let company = vec![
+            Message::new(
+                "user",
+                prompts::instruction_user_message("what is our deposit"),
+            ),
+            Message::new("assistant", "50%."),
+            Message::new("user", "and for quartz?"),
+        ];
+        assert!(!super::last_answer_from_manual(&company));
+        assert!(!super::last_answer_from_manual(&manual[..1]));
     }
 
     #[test]
