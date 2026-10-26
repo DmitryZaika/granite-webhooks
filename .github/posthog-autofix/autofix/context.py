@@ -1,8 +1,8 @@
 """The run's identity and file locations, read from the environment.
 
-`RUN_ID` and `ISSUE_ID` come from `workflow_dispatch` inputs, so they are
-validated here before anything uses them (they reach the agent's prompt, the
-branch name and the callback URL).
+`RUN_ID`, `ISSUE_ID` and `EVENT_ID` come from `workflow_dispatch` inputs, so
+they are validated here before anything uses them (they reach the agent's
+prompt, the branch name and the callback URL).
 """
 
 import os
@@ -36,6 +36,13 @@ def validate_issue_id(value: str) -> str:
     return value
 
 
+def validate_event_id(value: str) -> str:
+    """The sample event's uuid; "" is allowed (older dispatches carry none)."""
+    if value and not _ISSUE_ID.fullmatch(value):
+        raise InputError("event_id must be empty or a lowercase UUID")
+    return value
+
+
 def is_sha(value: object) -> bool:
     return isinstance(value, str) and _SHA.fullmatch(value) is not None
 
@@ -50,6 +57,8 @@ class RunContext:
     # Files handed from step to step and uploaded as the run's artifact.
     out_dir: Path
     github_run_url: str
+    # uuid of a sample `$exception` event of the bug to fix; "" when not given.
+    event_id: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "RunContext":
@@ -67,6 +76,7 @@ class RunContext:
             ),
             out_dir=Path(env.get("RUNNER_TEMP", "/tmp")) / "autofix-out",
             github_run_url=run_url,
+            event_id=validate_event_id(env.get("EVENT_ID", "")),
         )
 
     def repo_dir(self, repo: str) -> Path:

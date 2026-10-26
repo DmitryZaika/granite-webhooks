@@ -127,10 +127,16 @@ def load_issue_context(run: RunContext) -> str:
 
 
 def kickoff(run: RunContext) -> str:
-    text = (
-        f"Investigate PostHog issue {run.issue_id} (auto-fix run {run.run_id}) "
-        "and follow your instructions."
-    )
+    if run.event_id:
+        text = (
+            f"Investigate the error in event {run.event_id} of PostHog issue "
+            f"{run.issue_id} (auto-fix run {run.run_id}) and follow your instructions."
+        )
+    else:
+        text = (
+            f"Investigate PostHog issue {run.issue_id} (auto-fix run {run.run_id}) "
+            "and follow your instructions."
+        )
     summary = load_issue_context(run)
     if not summary:
         return text
