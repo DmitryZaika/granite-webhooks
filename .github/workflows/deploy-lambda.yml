@@ -62,17 +62,6 @@ jobs:
       DEPLOY_ENV: ${{ inputs.environment }}
       BRANCH: ${{ github.ref_name }}
     steps:
-      # sqlx's query! macros check every query against this schema at compile
-      # time. .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local.
-      # Started in the background (not as a service container) so pulling and
-      # initializing MySQL overlaps with the setup steps below.
-      - name: Start build database
-        run: |
-          docker run -d --name mysql -p 3307:3306 \
-            -e MYSQL_ROOT_PASSWORD=granite -e MYSQL_DATABASE=granite_local \
-            mysql:8.0
-
-
       # The Lambdas of each app in each environment, as in the Makefile.
       - name: Resolve Lambda functions
         run: |
@@ -89,6 +78,30 @@ jobs:
           echo "Deploying $APP to: $functions"
 
       - uses: actions/checkout@v4
+
+      # sqlx's query! macros check every query against this schema at compile
+      # time. .cargo/config.toml pins DATABASE_URL to 127.0.0.1:3307/granite_local.
+      # As in the API tests: the image's entrypoint applies the migrations (in
+      # name order) on a tmpfs without fsyncs, and MySQL listens on TCP once
+      # they all applied. `docker run` is in the background so pulling the
+      # image overlaps with the setup steps below.
+      - name: Start the build database with the migrations
+        run: >-
+          docker run --detach --name mysql
+          --publish 3307:3306
+          --env MYSQL_ROOT_PASSWORD=granite
+          --env MYSQL_DATABASE=granite_local
+          --tmpfs /var/lib/mysql
+          --volume "$PWD/migrations:/docker-entrypoint-initdb.d:ro"
+          mysql:8.0
+          --default-authentication-plugin=mysql_native_password
+          --log-bin-trust-function-creators=1
+          --skip-log-bin
+          --innodb-flush-log-at-trx-commit=0
+          --sync-binlog=0
+          --innodb-doublewrite=0
+          --innodb-flush-method=nosync
+          > "$RUNNER_TEMP/mysql-start.log" 2>&1 &
 
       - name: Record commit
         run: |
@@ -117,15 +130,23 @@ jobs:
           uv tool install "cargo-lambda==$CARGO_LAMBDA_VERSION" --with "ziglang==$ZIGLANG_VERSION"
           echo "$(uv tool dir)/cargo-lambda/bin" >> "$GITHUB_PATH"
 
-      - name: Apply migrations to the build database
+      - name: Wait for the build database and the migrations
+        timeout-minutes: 5
         run: |
-          for _ in $(seq 120); do
-            docker exec mysql mysqladmin ping -h 127.0.0.1 -pgranite --silent 2>/dev/null && break
+          until docker exec mysql mysqladmin ping -h 127.0.0.1 -uroot -pgranite --silent 2>/dev/null; do
+            if ! docker inspect mysql >/dev/null 2>&1; then
+              # Still pulling the image, unless `docker run` gave up.
+              if ! pgrep -f "docker run --detach --name mysql" >/dev/null; then
+                cat "$RUNNER_TEMP/mysql-start.log"
+                echo "::error::MySQL did not start (see docker's output above)"
+                exit 1
+              fi
+            elif [ "$(docker inspect --format '{{.State.Running}}' mysql)" != true ]; then
+              docker logs mysql 2>&1 | tail -n 40
+              echo "::error::MySQL stopped: a migration failed (see its log above)"
+              exit 1
+            fi
             sleep 1
-          done
-          for f in migrations/*.sql; do
-            mysql -h 127.0.0.1 -P 3307 -uroot -pgranite granite_local < "$f" \
-              || { echo "::error::Migration $f failed"; exit 1; }
           done
 
       # Dev builds without --release. Its binary is stripped and has no debug

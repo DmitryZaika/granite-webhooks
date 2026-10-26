@@ -9,9 +9,11 @@ name: API tests
 #
 # MySQL is a plain container rather than a service, so it starts, and applies
 # the migrations, while the toolchain and the cache are set up instead of
-# before the job's first step. Its data is disposable: it lives on a tmpfs,
-# without the binlog or fsyncs (as in docker-compose.local.yml), which makes
-# the ~400 DDL statements of the migrations take seconds, not half a minute.
+# before the job's first step; `docker run` is in the background, so pulling
+# the image overlaps with that setup too. Its data is disposable: it lives on
+# a tmpfs, without the binlog or fsyncs (as in docker-compose.local.yml),
+# which makes the ~400 DDL statements of the migrations take seconds, not
+# half a minute.
 #
 # On demand from any branch, with optional cargo test arguments in place of the
 # fixed suites below:
@@ -71,6 +73,7 @@ jobs:
           --table-open-cache=20000
           --innodb-redo-log-capacity=1073741824
           --innodb-buffer-pool-size=1073741824
+          > "$RUNNER_TEMP/mysql-start.log" 2>&1 &
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -85,7 +88,14 @@ jobs:
         timeout-minutes: 5
         run: |
           until mysqladmin ping -h 127.0.0.1 -P 3307 -uroot -pgranite --silent 2>/dev/null; do
-            if [ "$(docker inspect --format '{{.State.Running}}' mysql)" != true ]; then
+            if ! docker inspect mysql >/dev/null 2>&1; then
+              # Still pulling the image, unless `docker run` gave up.
+              if ! pgrep -f "docker run --detach --name mysql" >/dev/null; then
+                cat "$RUNNER_TEMP/mysql-start.log"
+                echo "::error::MySQL did not start (see docker's output above)"
+                exit 1
+              fi
+            elif [ "$(docker inspect --format '{{.State.Running}}' mysql)" != true ]; then
               docker logs mysql 2>&1 | tail -n 40
               echo "::error::MySQL stopped: a migration failed (see its log above)"
               exit 1
