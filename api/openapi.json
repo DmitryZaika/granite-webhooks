@@ -42657,21 +42657,21 @@
         ]
       }
     },
-    "/v1/jobs/call-history": {
+    "/v1/jobs/call-points": {
       "post": {
         "tags": [
           "jobs"
         ],
-        "summary": "Save call history",
-        "description": "Saves the `CloudTalk` and `RingCentral` calls of every connected company,\nso they stay in its history after it changes provider.",
-        "operationId": "run_call_history",
+        "summary": "Sync and classify call points",
+        "description": "Pulls reps' outbound calls into the call points table, then transcribes\nand classifies a few of the calls long enough to need it.",
+        "operationId": "run_call_points",
         "responses": {
           "200": {
             "description": "What was done",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CallHistoryRun"
+                  "$ref": "#/components/schemas/CallPointsRun"
                 }
               }
             }
@@ -42704,21 +42704,21 @@
         ]
       }
     },
-    "/v1/jobs/call-points": {
+    "/v1/jobs/call-history": {
       "post": {
         "tags": [
           "jobs"
         ],
-        "summary": "Sync and classify call points",
-        "description": "Pulls reps' outbound calls into the call points table, then transcribes\nand classifies a few of the calls long enough to need it.",
-        "operationId": "run_call_points",
+        "summary": "Save call history",
+        "description": "Saves the `CloudTalk` and `RingCentral` calls of every connected company,\nso they stay in its history after it changes provider.",
+        "operationId": "run_call_history",
         "responses": {
           "200": {
             "description": "What was done",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CallPointsRun"
+                  "$ref": "#/components/schemas/CallHistoryRun"
                 }
               }
             }

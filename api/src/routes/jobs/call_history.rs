@@ -170,7 +170,8 @@ async fn read_from(
         return Ok(synced_to.and_utc() - Duration::hours(LOOKBACK_HOURS));
     }
     let first: Option<NaiveDateTime> = sqlx::query_scalar(
-        "SELECT MIN(created_date) FROM customers WHERE company_id = ? AND created_date > '2000-01-01'",
+        "SELECT CAST(MIN(created_date) AS DATETIME) FROM customers
+          WHERE company_id = ? AND created_date > '2000-01-01'",
     )
     .bind(company_id)
     .fetch_one(&state.pool)
