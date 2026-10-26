@@ -21,16 +21,12 @@ use axum::Json;
 use axum::extract::State;
 use lambda_http::tracing;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::time::Duration;
 
 /// Shorter calls are not checked.
 const MIN_TALKING_SECONDS: i64 = 30;
 /// Longer calls are a conversation without a transcript.
 const CONVERSATION_TALKING_SECONDS: i64 = 90;
-/// A voicemail is greeting → rep (one change); a conversation goes back and forth.
-const MIN_SPEAKER_CHANGES: usize = 3;
-const MIN_WORDS_PER_SPEAKER: usize = 5;
 /// The provider may still be writing the recording when the call ends.
 const RECORDING_ATTEMPTS: usize = 4;
 const RECORDING_RETRY_DELAY: Duration = Duration::from_millis(2_500);
@@ -122,23 +118,6 @@ pub struct CallCheckResult {
     pub transcript_preview: Option<String>,
 }
 
-fn back_and_forth(utterances: &[Utterance]) -> bool {
-    let changes = utterances
-        .windows(2)
-        .filter(|pair| pair[0].speaker != pair[1].speaker)
-        .count();
-    let mut words: HashMap<&str, usize> = HashMap::new();
-    for utterance in utterances {
-        *words.entry(utterance.speaker.as_str()).or_default() +=
-            utterance.text.split_whitespace().count();
-    }
-    let talkative = words
-        .values()
-        .filter(|count| **count >= MIN_WORDS_PER_SPEAKER)
-        .count();
-    changes >= MIN_SPEAKER_CHANGES && talkative >= 2
-}
-
 /// The customer talked back on the call (`isCustomerConversation`).
 pub fn is_customer_conversation(transcript: &Transcript, provider_says_voicemail: bool) -> bool {
     if provider_says_voicemail {
@@ -148,7 +127,7 @@ pub fn is_customer_conversation(transcript: &Transcript, provider_says_voicemail
         // No speaker turns (e.g. RingCentral's own voicemail text): the phrases only.
         None | Some([]) => !crate::voicemail::sounds_like_voicemail(&transcript.text),
         // Turn-taking beats phrases: "I'm not available Tuesday" is real talk.
-        Some(utterances) => back_and_forth(utterances),
+        Some(utterances) => crate::voicemail::back_and_forth(utterances),
     }
 }
 

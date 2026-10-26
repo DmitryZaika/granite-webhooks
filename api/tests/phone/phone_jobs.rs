@@ -1048,7 +1048,7 @@ async fn answered_outbound_calls_earn_call_points(pool: MySqlPool) {
         "UPDATE activity_points_sources SET counts_from = '2026-01-01' WHERE source = 'calls'",
     )
     .await;
-    answered_out(&pool, 981_201, 20, "ai_notes = 1").await;
+    answered_out(&pool, 981_201, 5, "ai_notes = 1").await;
     answered_out(
         &pool,
         981_202,
@@ -1140,7 +1140,7 @@ async fn answered_outbound_calls_earn_call_points(pool: MySqlPool) {
     assert_eq!(
         points().await,
         [
-            row("981201", 20, "attempt", true),
+            row("981201", 5, "attempt", true),
             row("981202", 120, "conversation", true),
             row("981203", 60, "voicemail", true),
             row("981204", 95, "pending", false),
@@ -1271,10 +1271,10 @@ async fn with_ai_notes_off_answered_outgoing_calls_are_still_scored(pool: MySqlP
     .await;
     sql(&pool, "INSERT INTO customers (id, name, phone, company_id, source, sales_rep) VALUES (931201, 'Quinn Talker', '317-555-0142', 100, 'leads', 100)").await;
     sql(&pool, "INSERT INTO deals (id, customer_id, title, status, list_id, position, user_id) VALUES (931301, 931201, 'Quinn kitchen', 'New', 100, 0, 100)").await;
-    // Rita has AI notes off; two recorded calls with Quinn, 45 and 20 seconds.
+    // Rita has AI notes off; two recorded calls with Quinn, 45 and 5 seconds.
     let extra = "ai_notes = 0, customer_id = 931201, deal_id = 931301";
     answered_out(&pool, 981_301, 45, extra).await;
-    answered_out(&pool, 981_302, 20, extra).await;
+    answered_out(&pool, 981_302, 5, extra).await;
     let (server, stubs, storage) = server(&pool).await;
     recorded(&storage, &pool, 981_301, "call", b"audio-981301").await;
     recorded(&storage, &pool, 981_302, "call", b"audio-981302").await;
@@ -1305,7 +1305,7 @@ async fn with_ai_notes_off_answered_outgoing_calls_are_still_scored(pool: MySqlP
     .await
     .unwrap();
     assert_eq!(deal_notes, 0);
-    // 20 seconds is an attempt whatever was said: not transcribed at all.
+    // 5 seconds is an attempt whatever was said: not transcribed at all.
     assert_eq!(note_state(&pool, 981_302).await.0, "none");
     assert_eq!(stubs.uploads(), [b"audio-981301".to_vec()]);
     let points: Vec<(String, String)> = sqlx::query_as(

@@ -270,7 +270,7 @@ async fn outbound_calls_become_call_points(pool: MySqlPool) {
             axum::routing::get(|| async {
                 Json(json!({ "responseData": { "data": [
                     { "Cdr": { "id": "1", "type": "outgoing", "user_id": "5106", "public_external": "+13175550100",
-                               "started_at": "2026-05-01 10:00:00", "talking_time": "12" } },
+                               "started_at": "2026-05-01 10:00:00", "talking_time": "5" } },
                     { "Cdr": { "id": "2", "type": "outgoing", "user_id": "5106", "public_external": "+13175550100",
                                "started_at": "2026-05-01 11:00:00", "talking_time": "95" } },
                     { "Cdr": { "id": "3", "type": "outgoing", "user_id": "9999", "public_external": "+13175550100",

@@ -1,8 +1,20 @@
 //! Telling a voicemail from a conversation by its transcript. Port of
 //! `app/lib/callAiHelpers.ts` (same patterns).
 
+use crate::transcribe::{Transcript, Utterance};
 use regex::Regex;
+use std::collections::HashMap;
 use std::sync::LazyLock;
+
+/// Talk time up to this is an attempt, never transcribed (the CRM's
+/// `CALL_ATTEMPT_MAX_TALK_SECONDS`): too short for a message.
+pub const ATTEMPT_MAX_TALK_SECONDS: i64 = 7;
+/// Talk time up to this is a conversation only with real back-and-forth: a
+/// "Hello?" and a hang-up has no mailbox greeting either.
+pub const SHORT_CALL_MAX_TALK_SECONDS: i64 = 30;
+/// A voicemail is greeting → rep (one change); a conversation goes back and forth.
+const MIN_SPEAKER_CHANGES: usize = 3;
+const MIN_WORDS_PER_SPEAKER: usize = 5;
 
 static GREETING: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\b(?:please\s+leave(?:\s+(?:your|a))?\s+message|leave\s+(?:us\s+)?(?:your\s+)?(?:a\s+)?message|after\s+the\s+(?:tone|beep)|at\s+the\s+(?:tone|beep)|voice\s*mail(?:\s*box)?|mailbox\s+is\s+full|unable\s+to\s+take\s+your\s+call|can't\s+take\s+your\s+call|not\s+available(?:\s+to\s+take\s+your\s+call)?|record\s+your\s+message)\b")
@@ -43,9 +55,64 @@ pub fn classify(provider_voicemail: bool, transcript: &str) -> &'static str {
     }
 }
 
+/// Both sides talked: a few turns, each side with a few words.
+pub fn back_and_forth(utterances: &[Utterance]) -> bool {
+    let changes = utterances
+        .windows(2)
+        .filter(|pair| pair[0].speaker != pair[1].speaker)
+        .count();
+    let mut words: HashMap<&str, usize> = HashMap::new();
+    for utterance in utterances {
+        *words.entry(utterance.speaker.as_str()).or_default() +=
+            utterance.text.split_whitespace().count();
+    }
+    let talkative = words
+        .values()
+        .filter(|count| **count >= MIN_WORDS_PER_SPEAKER)
+        .count();
+    changes >= MIN_SPEAKER_CHANGES && talkative >= 2
+}
+
+/// [`classify`] for a call of `talk_seconds`: up to
+/// [`SHORT_CALL_MAX_TALK_SECONDS`] a conversation needs [`back_and_forth`]
+/// in the transcript's speaker turns, else it is an attempt.
+pub fn classify_call(
+    talk_seconds: i64,
+    provider_voicemail: bool,
+    transcript: &Transcript,
+) -> &'static str {
+    let outcome = classify(provider_voicemail, &transcript.text);
+    let short = talk_seconds <= SHORT_CALL_MAX_TALK_SECONDS;
+    if outcome == "conversation"
+        && short
+        && !transcript.utterances.as_deref().is_some_and(back_and_forth)
+    {
+        "attempt"
+    } else {
+        outcome
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::classify;
+    use super::{classify, classify_call};
+    use crate::transcribe::Transcript;
+
+    #[test]
+    fn short_calls_need_both_sides() {
+        let hang_up = Transcript::from_labeled_text("Speaker A: Hello? Hello?");
+        assert_eq!(classify_call(12, false, &hang_up), "attempt");
+        let talk = Transcript::from_labeled_text(
+            "Speaker A: Hello, who is this?\nSpeaker B: Hi, it's Rita with Acme about your quartz quote.\nSpeaker A: Oh hi, I'm driving right now, sorry.\nSpeaker B: No problem, I'll call you tomorrow then.",
+        );
+        assert_eq!(classify_call(25, false, &talk), "conversation");
+        let message = Transcript::from_labeled_text(
+            "Speaker A: Please leave a message after the tone.\nSpeaker B: Hi, it's Rita about your quote, call me back.",
+        );
+        assert_eq!(classify_call(15, false, &message), "voicemail");
+        // Longer calls keep the phrases-only rule.
+        assert_eq!(classify_call(45, false, &hang_up), "conversation");
+    }
 
     #[test]
     fn calls_are_told_apart() {
