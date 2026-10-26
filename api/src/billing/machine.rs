@@ -212,11 +212,49 @@ fn replaced_by_another(
             .is_some_and(|current| Some(current) != subscription_id)
 }
 
-/// Applies a subscription's state; answers the managers notified.
+/// The subscription a plan invite made (`metadata.plan_invite_id`, not a
+/// legacy one it replaced) while the invite is not accepted: only its
+/// acceptance applies it.
+async fn awaits_acceptance<S: BillingStore>(
+    store: &S,
+    company_id: i32,
+    plan_invite_id: Option<&str>,
+    replaced_by: Option<&str>,
+) -> StoreResult<bool> {
+    let Some(invite_id) = plan_invite_id.filter(|_| replaced_by.is_none()) else {
+        return Ok(false);
+    };
+    Ok(store
+        .plan_invite_status(company_id, invite_id)
+        .await?
+        .is_some_and(|status| status != "accepted"))
+}
+
+/// Applies a subscription's state; answers the managers notified. A plan
+/// invite's subscription is ignored until the invite is accepted.
 pub async fn apply_subscription_change<S: BillingStore>(
     store: &S,
     snapshot: &SubscriptionSnapshot,
     now: NaiveDateTime,
+) -> StoreResult<Vec<i32>> {
+    apply_subscription(store, snapshot, now, false).await
+}
+
+/// [`apply_subscription_change`] for the acceptance of the plan invite that
+/// made the subscription, before it marks the invite accepted.
+pub async fn apply_invite_subscription<S: BillingStore>(
+    store: &S,
+    snapshot: &SubscriptionSnapshot,
+    now: NaiveDateTime,
+) -> StoreResult<Vec<i32>> {
+    apply_subscription(store, snapshot, now, true).await
+}
+
+async fn apply_subscription<S: BillingStore>(
+    store: &S,
+    snapshot: &SubscriptionSnapshot,
+    now: NaiveDateTime,
+    accepting: bool,
 ) -> StoreResult<Vec<i32>> {
     let Some(record) = load_record(
         store,
@@ -228,6 +266,17 @@ pub async fn apply_subscription_change<S: BillingStore>(
     else {
         return Ok(Vec::new());
     };
+    if !accepting
+        && awaits_acceptance(
+            store,
+            record.company_id,
+            snapshot.plan_invite_id.as_deref(),
+            snapshot.replaced_by.as_deref(),
+        )
+        .await?
+    {
+        return Ok(Vec::new());
+    }
     // A subscription a plan move replaced never takes the record back.
     if replaced_by_another(&record, snapshot.replaced_by.as_deref(), Some(&snapshot.id)) {
         return Ok(Vec::new());
@@ -308,8 +357,16 @@ pub async fn apply_invoice_change<S: BillingStore>(
             paid_at: paid.then(|| invoice.paid_at.unwrap_or(now)),
         })
         .await?;
-    // An invoice of a subscription a plan move replaced: recorded, nothing else.
-    if replaced_by_another(
+    // An invoice of a subscription a plan move replaced, or of an invite's
+    // subscription before its acceptance: recorded, nothing else.
+    if awaits_acceptance(
+        store,
+        record.company_id,
+        invoice.plan_invite_id.as_deref(),
+        invoice.replaced_by.as_deref(),
+    )
+    .await?
+        || replaced_by_another(
         &record,
         invoice.replaced_by.as_deref(),
         invoice.subscription_id.as_deref(),
@@ -523,6 +580,7 @@ mod tests {
                 trial_end: None,
                 cancel_at: None,
                 replaced_by: None,
+                plan_invite_id: None,
             },
         }
     }
@@ -545,6 +603,7 @@ mod tests {
                 paid_at: paid.then(|| at("2026-09-01 00:00:00")),
                 live_subscription_status: None,
                 replaced_by: None,
+                plan_invite_id: None,
             },
         }
     }
@@ -981,6 +1040,101 @@ mod tests {
         let record = store.record(1);
         assert_eq!(record.payment_status, PaymentStatus::Active);
         assert_eq!(record.stripe_subscription_id.as_deref(), Some("sub_new"));
+    }
+
+    /// Company 1 pays legacy `sub_old`; `sub_new` (`status`) is plan invite
+    /// `inv-1`'s, which is `invite_status`.
+    fn inviting(invite_status: &str, status: &str, deleted: bool) -> (Memory, BillingEvent) {
+        let store = Memory::default();
+        store.records.borrow_mut().insert(
+            1,
+            CompanyBilling {
+                stripe_subscription_id: Some("sub_old".into()),
+                ..active(1)
+            },
+        );
+        store
+            .plan_invites
+            .borrow_mut()
+            .insert("inv-1".into(), (1, invite_status.into()));
+        let mut event = subscription_event("evt_invite_sub", 1, status, deleted);
+        if let BillingEvent::Subscription { subscription, .. } = &mut event {
+            subscription.id = "sub_new".into();
+            subscription.plan_invite_id = Some("inv-1".into());
+        }
+        (store, event)
+    }
+
+    #[tokio::test]
+    async fn a_plan_invites_subscription_changes_nothing_until_the_invite_is_accepted() {
+        let now = at("2026-10-25 00:00:00");
+        for invite_status in ["open", "accepting", "revoked"] {
+            for (status, deleted) in [("trialing", false), ("canceled", true)] {
+                let (store, event) = inviting(invite_status, status, deleted);
+                let before = store.record(1);
+                apply_event(&store, &event, now).await.unwrap();
+                assert_eq!(store.record(1), before, "{invite_status} {status}");
+            }
+        }
+        let (store, event) = inviting("accepted", "trialing", false);
+        apply_event(&store, &event, now).await.unwrap();
+        let record = store.record(1);
+        assert_eq!(record.stripe_subscription_id.as_deref(), Some("sub_new"));
+        assert_eq!(record.subscription_status, "trialing");
+    }
+
+    #[tokio::test]
+    async fn a_plan_invites_trial_invoice_is_only_recorded_until_the_invite_is_accepted() {
+        let now = at("2026-10-25 00:00:00");
+        for invite_status in ["open", "accepting", "revoked"] {
+            // A legacy company without a live subscription of its own.
+            let (store, _) = inviting(invite_status, "trialing", false);
+            store.records.borrow_mut().insert(
+                1,
+                CompanyBilling {
+                    payment_status: PaymentStatus::Suspended,
+                    subscription_status: "canceled".into(),
+                    stripe_subscription_id: Some("sub_old".into()),
+                    ..active(1)
+                },
+            );
+            let before = store.record(1);
+            let mut event = invoice_event("evt_trial_invoice", 1, true, 0);
+            if let BillingEvent::Invoice { invoice, .. } = &mut event {
+                invoice.subscription_id = Some("sub_new".into());
+                invoice.plan_invite_id = Some("inv-1".into());
+            }
+            apply_event(&store, &event, now).await.unwrap();
+            assert_eq!(store.record(1), before, "{invite_status}");
+            assert_eq!(store.invoices.borrow().len(), 1, "{invite_status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_acceptance_applies_its_own_subscription_and_invites_are_per_company() {
+        let now = at("2026-10-25 00:00:00");
+        let (store, event) = inviting("accepting", "trialing", false);
+        let BillingEvent::Subscription { subscription, .. } = &event else {
+            unreachable!()
+        };
+        apply_invite_subscription(&store, subscription, now)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.record(1).stripe_subscription_id.as_deref(),
+            Some("sub_new")
+        );
+        // The invite id is looked up within the company only.
+        let (store, event) = inviting("accepting", "trialing", false);
+        store
+            .plan_invites
+            .borrow_mut()
+            .insert("inv-1".into(), (2, "accepting".into()));
+        apply_event(&store, &event, now).await.unwrap();
+        assert_eq!(
+            store.record(1).stripe_subscription_id.as_deref(),
+            Some("sub_new")
+        );
     }
 
     fn paid_with_live_status(id: &str, company_id: i32, live: &str) -> BillingEvent {

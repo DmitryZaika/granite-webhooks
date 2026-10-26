@@ -48,6 +48,9 @@ const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// What one run did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, ToSchema)]
 pub struct OnboardingRun {
+    /// Work done this run: `reminders` + `notices` + `invoices` + `tolled` +
+    /// `completed`; what the scheduler logs.
+    pub processed: usize,
     /// Companies whose daily run this run took.
     pub companies: usize,
     /// Reminder emails delivered to the mail service.
@@ -507,6 +510,10 @@ async fn gather_facts(
         availability,
         earlier_days: earlier_days(pool, commitment, now).await?,
         cancellation_requested_at: store::cancellation_requested_at(pool, company_id).await?,
+        withdrawn_cancellations: match commitment.notice_sent_at {
+            Some(sent) => store::withdrawn_cancellations_since(pool, company_id, sent).await?,
+            None => Vec::new(),
+        },
         subscription_ended: store::subscription_ended(pool, company_id).await?,
         charging_enabled: state.onboarding_call.fee_charging,
         consent_on_file: store::consent_on_file(pool, company_id).await?,
@@ -880,6 +887,7 @@ pub async fn run_at(state: &AppState, now: NaiveDateTime) -> OnboardingRun {
             tracing::warn!(error = %err, company_id, "onboarding run not recorded");
         }
     }
+    run.processed = run.reminders + run.notices + run.invoices + run.tolled + run.completed;
     run
 }
 

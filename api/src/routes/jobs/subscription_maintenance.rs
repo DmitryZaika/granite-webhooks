@@ -10,7 +10,7 @@ use axum::extract::State;
 
 /// Resume stuck signups and plan moves, expire abandoned signups and reconcile seats
 ///
-/// One run, which starts no new work after 40 seconds:
+/// One run, which starts no new work after 20 seconds:
 /// 1. Resumes up to 5 signups stuck in provisioning for 10 minutes or more
 ///    (oldest first; a signup is given up after 10 failed runs).
 /// 2. Resumes up to 5 plan invites whose acceptance stopped before the

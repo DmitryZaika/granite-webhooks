@@ -9,7 +9,7 @@
 //!    every run until a migration or the seed changes.
 //! 2. A test takes a database from a per-process pool of copies of the
 //!    template. A new copy is one multi-statement script (`CREATE TABLE`s and
-//!    `INSERT ... SELECT`s).
+//!    `INSERT ... SELECT`s of the stored, not generated, columns).
 //! 3. After a passing test the copy goes back to the pool once it matches the
 //!    template again: tables whose `CHECKSUM TABLE` or `AUTO_INCREMENT` differ
 //!    from the template's are refilled. A copy whose tables were dropped or
@@ -109,6 +109,8 @@ struct Plan {
     /// Creates every table and copies its rows into the current database.
     script: String,
     tables: HashMap<String, TableState>,
+    /// Per table, its stored (not generated) columns: the copy's column list.
+    columns: HashMap<String, String>,
     /// Views, triggers, routines and events (a test may create a trigger).
     other_objects: Vec<String>,
 }
@@ -224,8 +226,9 @@ async fn restore(
         dirty = true;
         write!(
             script,
-            "DELETE FROM `{table}`; INSERT INTO `{table}` SELECT * FROM `{}`.`{table}`;",
-            plan.template
+            "DELETE FROM `{table}`; INSERT INTO `{table}` ({columns}) SELECT {columns} FROM `{}`.`{table}`;",
+            plan.template,
+            columns = plan.columns[table],
         )
         .expect("write to String");
         if let Some(next) = expected.auto_increment {
@@ -338,6 +341,7 @@ async fn build_plan(server: &MySqlConnectOptions, template: Template) -> Result<
     names.sort();
 
     let mut script = String::from("SET FOREIGN_KEY_CHECKS = 0;\n");
+    let mut columns = HashMap::new();
     for table in names {
         let row = conn
             .fetch_one(AssertSqlSafe(format!(
@@ -346,11 +350,23 @@ async fn build_plan(server: &MySqlConnectOptions, template: Template) -> Result<
             .await?;
         let ddl: String = row.try_get(1)?;
         writeln!(script, "{ddl};").expect("write to String");
+        // A generated column cannot be inserted into.
+        let stored: Vec<String> = sqlx::query_scalar(
+            "SELECT CAST(CONCAT('`', COLUMN_NAME, '`') AS CHAR) FROM information_schema.COLUMNS
+              WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND GENERATION_EXPRESSION = ''
+              ORDER BY ORDINAL_POSITION",
+        )
+        .bind(&name)
+        .bind(table)
+        .fetch_all(&mut conn)
+        .await?;
+        let list = stored.join(", ");
         writeln!(
             script,
-            "INSERT INTO `{table}` SELECT * FROM `{name}`.`{table}`;"
+            "INSERT INTO `{table}` ({list}) SELECT {list} FROM `{name}`.`{table}`;"
         )
         .expect("write to String");
+        columns.insert(table.clone(), list);
     }
     script.push_str("SET FOREIGN_KEY_CHECKS = 1;\n");
     conn.close().await?;
@@ -359,6 +375,7 @@ async fn build_plan(server: &MySqlConnectOptions, template: Template) -> Result<
         template: name,
         script,
         tables,
+        columns,
         other_objects,
     })
 }

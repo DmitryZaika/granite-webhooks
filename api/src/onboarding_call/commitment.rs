@@ -12,9 +12,6 @@ pub const EXTENSION_DAYS: i64 = 14;
 pub const NO_SHOW_WINDOW_HOURS: i64 = 48;
 /// The fee is charged this long after its notice email.
 pub const NOTICE_DAYS: i64 = 7;
-/// A notice sent at most this long ago still holds when a suspension is
-/// withdrawn after the deadline: its charge date stands.
-pub const NOTICE_VALID_DAYS: i64 = 30;
 /// Reminder emails, in days after signup.
 pub const REMINDER_DAYS: [i64; 3] = [7, 21, 27];
 /// Tolling: a day tolls when no slot is bookable within this many business
@@ -115,8 +112,8 @@ pub struct Commitment {
     /// ones never count again.
     pub no_show_call_start_at: Option<NaiveDateTime>,
     pub suspended_at: Option<NaiveDateTime>,
-    /// Kept while suspended: a withdrawal within [`NOTICE_VALID_DAYS`] of it
-    /// resumes the notice with its charge date.
+    /// Kept while suspended: a withdrawal before `charge_after` resumes the
+    /// notice with its charge date.
     pub notice_sent_at: Option<NaiveDateTime>,
     /// When the current fee notice fell due (`daily` sets it): the notice
     /// emails are deduped per cycle, so a withdrawn and later resumed notice
@@ -299,6 +296,9 @@ pub struct DailyFacts {
     /// row that is not withdrawn (scheduled, or completed once the
     /// subscription ended), if any.
     pub cancellation_requested_at: Option<NaiveDateTime>,
+    /// `requested_at` and `withdrawn_at` of the company's requests withdrawn
+    /// after the stored notice was sent (none without a notice).
+    pub withdrawn_cancellations: Vec<(NaiveDateTime, NaiveDateTime)>,
     /// The subscription is cancelled for real, or the company is deleted.
     pub subscription_ended: bool,
     /// `ONBOARDING_FEE_CHARGING=1`.
@@ -740,29 +740,33 @@ fn auto_complete(out: &mut Outcome, now: NaiveDateTime) -> bool {
     true
 }
 
-/// A cancellation request made before this suspends: the deadline, or while
-/// a notice is out its charge date (the notice tells the customer that
-/// cancelling before the charge date avoids the fee).
-fn suspends_before(c: &Commitment) -> NaiveDateTime {
-    match (c.status, c.charge_after) {
-        (Status::NoticeSent, Some(charge_after)) => charge_after,
-        _ => c.deadline_at,
+/// Whether a cancellation request made at `requested` suspends (Terms
+/// 11.6): any request while no notice was sent (before or after the
+/// deadline), and one before the charge date while a notice is out (the
+/// notice tells the customer that cancelling before then avoids the fee).
+fn request_suspends(c: &Commitment, requested: NaiveDateTime) -> bool {
+    match c.status {
+        Status::Pending | Status::Booked => true,
+        Status::NoticeSent => c
+            .charge_after
+            .is_none_or(|charge_after| requested < charge_after),
+        _ => false,
     }
 }
 
-/// A withdrawn suspension resumes: before the deadline the countdown (a
-/// notice is dropped); after it a notice sent within [`NOTICE_VALID_DAYS`]
-/// with its charge date (due at once when that has passed, the customer was
-/// told more than 7 days ago); otherwise a new notice falls due.
-fn resume(c: &mut Commitment, now: NaiveDateTime) -> &'static str {
+/// A suspension withdrawn at `withdrawn_at` resumes: before the deadline
+/// the countdown (a notice is dropped); after it a notice sent after the
+/// deadline, when withdrawn before its charge date (the fee is due on it,
+/// at once when that has passed since); otherwise a new notice falls due,
+/// at least 7 days before any charge (Terms 11.6).
+fn resume(c: &mut Commitment, withdrawn_at: NaiveDateTime, now: NaiveDateTime) -> &'static str {
     c.suspended_at = None;
     c.notice_cycle_at = None;
     // Only a notice sent after the current deadline passed is about it.
     let notice_holds = now >= c.deadline_at
-        && c.charge_after.is_some()
-        && c.notice_sent_at.is_some_and(|sent| {
-            sent >= c.deadline_at && now - sent <= Duration::days(NOTICE_VALID_DAYS)
-        });
+        && c.charge_after
+            .is_some_and(|charge_after| withdrawn_at < charge_after)
+        && c.notice_sent_at.is_some_and(|sent| sent >= c.deadline_at);
     if notice_holds {
         c.status = Status::NoticeSent;
         return "notice_sent";
@@ -790,14 +794,60 @@ fn suspend(out: &mut Outcome, requested: NaiveDateTime, now: NaiveDateTime, mut 
     push(out, EventKind::Suspended, from, None, detail);
 }
 
-/// Step 4: a cancellation request made in time (`suspends_before`) suspends;
-/// its withdrawal resumes ([`resume`]). Returns whether the run goes on.
-fn suspension(out: &mut Outcome, requested_at: Option<NaiveDateTime>, now: NaiveDateTime) -> bool {
+/// When the latest withdrawn request was withdrawn, if one was since the
+/// notice.
+fn last_withdrawal(facts: &DailyFacts) -> Option<NaiveDateTime> {
+    facts
+        .withdrawn_cancellations
+        .iter()
+        .map(|(_, withdrawn)| *withdrawn)
+        .max()
+}
+
+/// A request made during the notice period and withdrawn on or after the
+/// charge date with no run in between (never suspended): the notice is
+/// dropped as [`resume`] drops it, and a new one falls due.
+fn withdrawn_late(out: &mut Outcome, facts: &DailyFacts) {
+    let c = &out.commitment;
+    let (Status::NoticeSent, Some(sent), Some(charge_after)) =
+        (c.status, c.notice_sent_at, c.charge_after)
+    else {
+        return;
+    };
+    let Some(&(requested, withdrawn)) =
+        facts
+            .withdrawn_cancellations
+            .iter()
+            .find(|(requested, withdrawn)| {
+                *requested < charge_after && *withdrawn >= charge_after && *withdrawn > sent
+            })
+    else {
+        return;
+    };
+    let c = &mut out.commitment;
+    c.notice_sent_at = None;
+    c.charge_after = None;
+    c.notice_cycle_at = None;
+    c.status = resting_status(c);
+    let detail = json!({
+        "resumes_at": "notice",
+        "charge_after": null,
+        "requested_at": ts(requested),
+        "withdrawn_at": ts(withdrawn),
+    });
+    push(out, EventKind::Resumed, Status::NoticeSent, None, detail);
+}
+
+/// Step 4: a cancellation request made in time ([`request_suspends`])
+/// suspends; its withdrawal resumes ([`resume`], at the latest withdrawal's
+/// time, else `now`). Returns whether the run goes on.
+fn suspension(out: &mut Outcome, facts: &DailyFacts, now: NaiveDateTime) -> bool {
     let from = out.commitment.status;
-    match (from, requested_at) {
+    match (from, facts.cancellation_requested_at) {
         (Status::Suspended, Some(_)) => false,
         (Status::Suspended, None) => {
-            let resumes_at = resume(&mut out.commitment, now);
+            let withdrawn_at = last_withdrawal(facts).unwrap_or(now);
+            let resumes_at = resume(&mut out.commitment, withdrawn_at, now);
             let c = &out.commitment;
             let detail = json!({
                 "resumes_at": resumes_at,
@@ -806,7 +856,7 @@ fn suspension(out: &mut Outcome, requested_at: Option<NaiveDateTime>, now: Naive
             push(out, EventKind::Resumed, from, None, detail);
             true
         }
-        (_, Some(requested)) if requested < suspends_before(&out.commitment) => {
+        (_, Some(requested)) if request_suspends(&out.commitment, requested) => {
             suspend(out, requested, now, json!({}));
             false
         }
@@ -921,7 +971,11 @@ fn run_daily(out: &mut Outcome, facts: &DailyFacts, now: NaiveDateTime) -> Vec<D
         return Vec::new();
     }
     refresh_booking(out, &facts.booking, now);
-    if auto_complete(out, now) || !suspension(out, facts.cancellation_requested_at, now) {
+    if auto_complete(out, now) {
+        return Vec::new();
+    }
+    withdrawn_late(out, facts);
+    if !suspension(out, facts, now) {
         return Vec::new();
     }
     toll(out, facts, now);
@@ -1270,6 +1324,7 @@ mod tests {
             availability: Availability::NotChecked,
             earlier_days: Vec::new(),
             cancellation_requested_at: None,
+            withdrawn_cancellations: Vec::new(),
             subscription_ended: false,
             charging_enabled: true,
             consent_on_file: true,
@@ -1813,18 +1868,43 @@ mod tests {
     }
 
     #[test]
-    fn before_the_notice_a_request_at_or_after_the_deadline_does_not_suspend() {
-        for c in [base(), booked("2026-11-03 15:00")] {
+    fn before_the_notice_a_request_after_the_deadline_suspends_and_no_notice_goes_out() {
+        // Deadline 10-31 10:00; the notice was due (or not yet) but not sent.
+        let due = cycle_started(&base(), "2026-10-31 11:00").commitment;
+        for c in [base(), booked("2026-11-03 15:00"), due] {
             for requested_at in ["2026-10-31 10:00", "2026-11-01 09:00"] {
                 let request = DailyFacts {
                     cancellation_requested_at: Some(at(requested_at)),
                     ..facts()
                 };
                 let day = run(&c, &request, "2026-11-01 10:00");
-                assert_eq!(day.outcome, cycle_started(&c, "2026-11-01 10:00"));
-                assert_eq!(day.due, [Due::Notice]);
+                let out = &day.outcome;
+                assert_eq!(out.commitment.status, Status::Suspended);
+                assert_eq!(out.commitment.notice_cycle_at, None);
+                assert_eq!(
+                    (out.commitment.notice_sent_at, out.commitment.charge_after),
+                    (None, None)
+                );
+                assert_eq!(kinds(out), [EventKind::Suspended]);
+                assert_eq!(out.events[0].detail["notice_held"], false);
+                assert!(day.due.is_empty());
             }
         }
+    }
+
+    #[test]
+    fn a_request_after_the_deadline_withdrawn_before_the_notice_gets_the_notice_then() {
+        let suspended = run(&base(), &requested("2026-11-01 09:00"), "2026-11-01 10:00")
+            .outcome
+            .commitment;
+        let day = run(&suspended, &facts(), "2026-11-03 10:00");
+        let c = &day.outcome.commitment;
+        assert_eq!(c.status, Status::Pending);
+        assert_eq!(day.outcome.events[0].detail["resumes_at"], "notice");
+        assert_eq!(c.notice_cycle_at, Some(at("2026-11-03 10:00")));
+        assert_eq!(day.due, [Due::Notice]);
+        let sent = notice_sent(c, at("2026-11-03 10:05")).commitment;
+        assert_eq!(sent.charge_after, Some(at("2026-11-10 10:05")));
     }
 
     #[test]
@@ -2021,54 +2101,121 @@ mod tests {
         .commitment;
         // As if the deadline had moved past the notice without clearing it.
         held.deadline_at = at("2026-11-05 10:00");
-        let day = run(&held, &facts(), "2026-11-20 10:00");
+        let day = run(&held, &facts(), "2026-11-06 10:00");
         assert_eq!(day.outcome.commitment.status, Status::Pending);
         assert_eq!(day.outcome.commitment.charge_after, None);
         assert_eq!(day.due, [Due::Notice]);
     }
 
-    #[test]
-    fn a_withdrawal_after_the_old_charge_date_makes_the_invoice_due_at_once() {
-        let suspended = run(
+    /// Notice 10-31 12:00 (charge after 11-07 12:00), suspended by a
+    /// request on 11-02.
+    fn suspended_in_the_notice_week() -> Commitment {
+        run(
             &noticed(&base()),
             &requested("2026-11-02 09:00"),
             "2026-11-02 10:00",
         )
         .outcome
-        .commitment;
-        let day = run(&suspended, &facts(), "2026-11-20 10:00");
-        assert_eq!(day.outcome.commitment.status, Status::NoticeSent);
-        assert_eq!(
-            day.outcome.commitment.charge_after,
-            Some(at("2026-11-07 12:00"))
-        );
-        assert_eq!(day.outcome.commitment.notice_cycle_at, None);
-        assert_eq!(day.due, [Due::Invoice]);
+        .commitment
+    }
+
+    /// The suspension withdrawn at `withdrawn` (requested 11-02 09:00).
+    fn withdrawn_at(withdrawn: &str) -> DailyFacts {
+        DailyFacts {
+            withdrawn_cancellations: vec![(at("2026-11-02 09:00"), at(withdrawn))],
+            ..facts()
+        }
     }
 
     #[test]
-    fn a_notice_older_than_30_days_gets_a_new_notice_cycle() {
-        let suspended = run(
-            &noticed(&base()),
-            &requested("2026-11-02 09:00"),
-            "2026-11-02 10:00",
-        )
-        .outcome
-        .commitment;
-        // Notice 10-31 12:00: 30 days on is 11-30 12:00.
-        let within = run(&suspended, &facts(), "2026-11-30 12:00");
-        assert_eq!(within.outcome.commitment.status, Status::NoticeSent);
-        assert_eq!(within.due, [Due::Invoice]);
-
-        let day = run(&suspended, &facts(), "2026-11-30 12:01");
+    fn a_withdrawal_in_the_notice_week_keeps_the_charge_date_and_one_after_it_needs_a_new_notice() {
+        let suspended = suspended_in_the_notice_week();
+        // Withdrawn before the charge date: the notice and its date stand.
+        let day = run(&suspended, &facts(), "2026-11-07 11:59");
         let c = &day.outcome.commitment;
-        assert_eq!(c.status, Status::Pending);
-        assert_eq!((c.notice_sent_at, c.charge_after), (None, None));
-        assert_eq!(c.notice_cycle_at, Some(at("2026-11-30 12:01")));
-        assert_eq!(day.outcome.events[0].detail["resumes_at"], "notice");
+        assert_eq!(c.status, Status::NoticeSent);
+        assert_eq!(c.charge_after, Some(at("2026-11-07 12:00")));
+        assert_eq!(day.outcome.events[0].detail["resumes_at"], "notice_sent");
+        assert!(day.due.is_empty());
+        assert_eq!(due_at(c, "2026-11-07 12:00"), [Due::Invoice]);
+
+        // Withdrawn on or after it: no invoice, a new notice first.
+        for now in ["2026-11-07 12:00", "2026-11-20 10:00", "2026-12-20 10:00"] {
+            let day = run(&suspended, &facts(), now);
+            let c = &day.outcome.commitment;
+            assert_eq!(c.status, Status::Pending);
+            assert_eq!((c.notice_sent_at, c.charge_after), (None, None));
+            assert_eq!(c.notice_cycle_at, Some(at(now)));
+            assert_eq!(kinds(&day.outcome), [EventKind::Resumed]);
+            assert_eq!(day.outcome.events[0].detail["resumes_at"], "notice");
+            assert_eq!(day.due, [Due::Notice]);
+            let resent = notice_sent(c, at(now) + Duration::minutes(5)).commitment;
+            assert_eq!(
+                resent.charge_after,
+                Some(at(now) + Duration::minutes(5) + Duration::days(7))
+            );
+        }
+    }
+
+    #[test]
+    fn the_withdrawal_time_not_the_run_decides_whether_the_notice_holds() {
+        let suspended = suspended_in_the_notice_week();
+        // Withdrawn just before the charge date, seen by a run after it.
+        let before = run(
+            &suspended,
+            &withdrawn_at("2026-11-07 11:00"),
+            "2026-11-08 10:00",
+        );
+        assert_eq!(before.outcome.commitment.status, Status::NoticeSent);
+        assert_eq!(
+            before.outcome.commitment.charge_after,
+            Some(at("2026-11-07 12:00"))
+        );
+        assert_eq!(before.due, [Due::Invoice]);
+
+        let after = run(
+            &suspended,
+            &withdrawn_at("2026-11-07 12:00"),
+            "2026-11-08 10:00",
+        );
+        assert_eq!(after.outcome.commitment.status, Status::Pending);
+        assert_eq!(after.due, [Due::Notice]);
+    }
+
+    #[test]
+    fn a_request_and_withdrawal_between_two_runs_across_the_charge_date_need_a_new_notice() {
+        // Notice 10-31 12:00, charge after 11-07 12:00; the run never saw the request.
+        let c = noticed(&base());
+        let across = DailyFacts {
+            withdrawn_cancellations: vec![(at("2026-11-06 09:00"), at("2026-11-07 12:00"))],
+            ..facts()
+        };
+        let day = run(&c, &across, "2026-11-07 14:00");
+        let out = &day.outcome;
+        assert_eq!(out.commitment.status, Status::Pending);
+        assert_eq!(
+            (out.commitment.notice_sent_at, out.commitment.charge_after),
+            (None, None)
+        );
+        assert_eq!(out.commitment.notice_cycle_at, Some(at("2026-11-07 14:00")));
+        assert_eq!(kinds(out), [EventKind::Resumed]);
+        assert_eq!(out.events[0].from, Some(Status::NoticeSent));
+        assert_eq!(out.events[0].detail["withdrawn_at"], "2026-11-07T12:00:00Z");
         assert_eq!(day.due, [Due::Notice]);
-        let resent = notice_sent(c, at("2026-11-30 12:05")).commitment;
-        assert_eq!(resent.charge_after, Some(at("2026-12-07 12:05")));
+
+        // Withdrawn before the charge date, or asked on or after it: the fee is due.
+        for (asked, withdrawn) in [
+            ("2026-11-06 09:00", "2026-11-07 11:59"),
+            ("2026-11-07 12:00", "2026-11-07 13:00"),
+        ] {
+            let facts = DailyFacts {
+                withdrawn_cancellations: vec![(at(asked), at(withdrawn))],
+                ..facts()
+            };
+            let day = run(&c, &facts, "2026-11-07 14:00");
+            assert_eq!(day.outcome, unchanged(&c));
+            assert_eq!(day.due, [Due::Invoice]);
+        }
     }
 
     #[test]
@@ -2846,7 +2993,7 @@ mod tests {
     }
 
     #[test]
-    fn a_request_before_the_charge_suspends_the_invoice_and_its_withdrawal_charges_again() {
+    fn a_request_before_the_charge_suspends_the_invoice_and_its_withdrawal_needs_a_new_notice() {
         let requested_at = at("2026-11-07 11:00");
         let out = invoice_withdrawn(
             &invoiced(),
@@ -2865,8 +3012,10 @@ mod tests {
 
         let still = run(c, &requested("2026-11-07 11:00"), "2026-11-08 10:00");
         assert_eq!(still.outcome, unchanged(c));
+        // Withdrawn after the charge date: a new notice before any charge.
         let resumed = run(c, &facts(), "2026-11-09 10:00");
-        assert_eq!(resumed.outcome.commitment.status, Status::NoticeSent);
-        assert_eq!(resumed.due, [Due::Invoice]);
+        assert_eq!(resumed.outcome.commitment.status, Status::Pending);
+        assert_eq!(resumed.outcome.commitment.charge_after, None);
+        assert_eq!(resumed.due, [Due::Notice]);
     }
 }

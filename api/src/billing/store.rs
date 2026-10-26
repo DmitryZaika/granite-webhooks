@@ -28,6 +28,15 @@ pub trait BillingStore {
     async fn billing_required(&self, company_id: i32) -> StoreResult<bool>;
     /// `company.billing_required_at`: when Stripe payment was last turned on.
     async fn billing_required_since(&self, company_id: i32) -> StoreResult<Option<NaiveDateTime>>;
+    /// `company.plan_source` is `subscription` (a self-serve plan).
+    async fn self_serve(&self, company_id: i32) -> StoreResult<bool>;
+    /// The status of the company's plan invite `invite_id` (`open`,
+    /// `accepting`, `accepted`, `revoked`); `None` when it has no such invite.
+    async fn plan_invite_status(
+        &self,
+        company_id: i32,
+        invite_id: &str,
+    ) -> StoreResult<Option<String>>;
 }
 
 /// The MySQL tables.
@@ -365,5 +374,29 @@ impl BillingStore for MySqlBillingStore<'_> {
                 .fetch_optional(self.0)
                 .await?;
         Ok(since.flatten())
+    }
+
+    async fn self_serve(&self, company_id: i32) -> StoreResult<bool> {
+        let self_serve: Option<bool> = sqlx::query_scalar(
+            "SELECT COALESCE(plan_source = 'subscription', 0) <> 0 FROM company WHERE id = ? LIMIT 1",
+        )
+        .bind(company_id)
+        .fetch_optional(self.0)
+        .await?;
+        Ok(self_serve.unwrap_or(false))
+    }
+
+    async fn plan_invite_status(
+        &self,
+        company_id: i32,
+        invite_id: &str,
+    ) -> StoreResult<Option<String>> {
+        sqlx::query_scalar(
+            "SELECT CAST(status AS CHAR) FROM plan_invites WHERE id = ? AND company_id = ? LIMIT 1",
+        )
+        .bind(invite_id)
+        .bind(company_id)
+        .fetch_optional(self.0)
+        .await
     }
 }

@@ -26,6 +26,9 @@ const PRICE_CACHE: Duration = Duration::from_mins(10);
 
 pub const NOT_CONFIGURED: &str = "Online billing is not set up yet. Please contact support.";
 const NO_BILLING_ACCOUNT: &str = "There is no billing account for this company yet.";
+/// Self-serve plans start again through a plan invite, never here.
+pub const SELF_SERVE_ENDED: &str =
+    "This company is on a self-serve plan. Contact Granite Manager to start again.";
 
 /// Monthly cents per (Stripe base, price id), `None` when Stripe could not
 /// say, with when the entry expires (per Lambda container).
@@ -191,26 +194,27 @@ fn refused(message: &str) -> ReactivationError {
 }
 
 /// The subscription billing should follow: a paying one of the customer
-/// (not one a plan move replaced), else the one on record.
+/// (not one a plan move replaced, nor a plan invite's before its acceptance
+/// put it on record), else the one on record.
 pub(super) async fn current_subscription(
     stripe: &Stripe,
     record: &CompanyBilling,
 ) -> Result<Option<Value>, StripeError> {
     if let Some(customer) = &record.stripe_customer_id {
         let subscriptions = stripe.list_subscriptions(customer).await?;
+        let on_record = |s: &Value| {
+            s["id"].as_str().is_some()
+                && s["id"].as_str() == record.stripe_subscription_id.as_deref()
+        };
         let paying = subscriptions.iter().position(|s| {
-            let replaced = s["metadata"]["replaced_by"]
-                .as_str()
-                .is_some_and(|id| !id.is_empty());
-            !replaced
+            let set = |key: &str| s["metadata"][key].as_str().is_some_and(|id| !id.is_empty());
+            !set("replaced_by")
+                && (!set("plan_invite_id") || on_record(s))
                 && s["status"]
                     .as_str()
                     .is_some_and(is_paying_subscription_status)
         });
-        let known = subscriptions.iter().position(|s| {
-            s["id"].as_str().is_some()
-                && s["id"].as_str() == record.stripe_subscription_id.as_deref()
-        });
+        let known = subscriptions.iter().position(on_record);
         if let Some(index) = paying.or(known) {
             return Ok(subscriptions.into_iter().nth(index));
         }
@@ -299,6 +303,9 @@ pub async fn start<S: BillingStore + CompanyLocking>(
 ) -> Result<Started, ReactivationError> {
     if !stripe.is_enabled() {
         return Err(refused(NOT_CONFIGURED));
+    }
+    if store.self_serve(company_id).await? {
+        return Err(refused(SELF_SERVE_ENDED));
     }
     locked(
         store,

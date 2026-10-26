@@ -9,6 +9,8 @@
 //! after it exists does the company switch to `plan_source = 'subscription'`.
 //! A live legacy subscription forces the first charge to its period end and
 //! is cancelled at that end, so nobody is billed twice or gets free months.
+//! A self-serve company whose subscription ended is invited the same way
+//! (it stays `subscription`).
 //!
 //! Tokens are bearer secrets: only their SHA-256 is stored, never logged.
 
@@ -25,6 +27,7 @@ use super::{
 };
 use crate::entitlements::AddonKey;
 use crate::error::{ApiError, ApiResult};
+use crate::onboarding_call::commitment::end_of_local_day;
 use crate::signup::consent::{long_date, sha256_hex};
 use crate::signup::payment;
 use crate::state::AppState;
@@ -364,6 +367,18 @@ pub fn first_charge_instant(day: NaiveDate) -> NaiveDateTime {
         .map_or(wall, |at| at.naive_utc())
 }
 
+/// The day an invite made at `now` for `days` days ends on: the local day of
+/// `now` ([`SIGNUP_TZ`]) plus `days`.
+pub fn expiry_day(now: NaiveDateTime, days: i64) -> NaiveDate {
+    local_day(now) + Duration::days(days)
+}
+
+/// When that invite's links stop working: the end (23:59:59 local) of its
+/// [`expiry_day`], in UTC.
+pub fn invite_expires_at(now: NaiveDateTime, days: i64) -> NaiveDateTime {
+    end_of_local_day(expiry_day(now, days))
+}
+
 fn coded(status: StatusCode, code: &'static str, message: &str) -> ApiError {
     ApiError::coded(status, code, message)
 }
@@ -399,6 +414,8 @@ const ALREADY_ON_PLAN: &str = "This company is already on a plan.";
 const NO_MANAGERS: &str = "This company has no Manager with an email. Add one first.";
 const LEGACY_OVERDUE: &str =
     "This company has an overdue payment. Settle it before moving them to a plan.";
+const ONBOARDING_FEE_OPEN: &str =
+    "This company's onboarding fee from its signup is still open. Try again once it is settled.";
 const INVITE_ACCEPTING: &str =
     "A Manager is accepting the current invite. Try again in a few minutes.";
 const INVITE_CLOSED: &str = "This invite is no longer open.";
@@ -510,10 +527,32 @@ pub fn owes(record: &CompanyBilling) -> bool {
     record.payment_status == PaymentStatus::Suspended || record.outstanding_balance_cents > 0
 }
 
-/// The latest an invite forced to a legacy `period_end` may expire, so that
-/// accepting it still leaves [`MIN_DAYS_BEFORE_FIRST_CHARGE`] days.
+/// The company owes money and cannot move: [`owes`]. An ended self-serve
+/// subscription pauses access by itself, so there only a balance due or a
+/// failed payment never paid counts.
+pub fn owes_for_move(record: &CompanyBilling, subscription_ended: bool) -> bool {
+    if subscription_ended {
+        record.outstanding_balance_cents > 0 || record.failed_payment_at.is_some()
+    } else {
+        owes(record)
+    }
+}
+
+/// A self-serve company (`plan_source = 'subscription'`) whose subscription
+/// has ended (`canceled`, `incomplete_expired`), as the billing record says.
+pub fn subscription_ended(plan_source: &str, record: Option<&CompanyBilling>) -> bool {
+    plan_source == "subscription"
+        && record.is_some_and(|record| {
+            record.stripe_subscription_id.is_some()
+                && is_ended_subscription_status(&record.subscription_status)
+        })
+}
+
+/// The latest an invite forced to a legacy `period_end` may expire: the end
+/// of the local day [`MIN_DAYS_BEFORE_FIRST_CHARGE`] days before the period
+/// end's, so accepting it still leaves that many days.
 pub fn latest_legacy_expiry(period_end: NaiveDateTime) -> NaiveDateTime {
-    period_end - Duration::days(MIN_DAYS_BEFORE_FIRST_CHARGE)
+    end_of_local_day(local_day(period_end) - Duration::days(MIN_DAYS_BEFORE_FIRST_CHARGE))
 }
 
 /// The subscription was deleted or has ended (`canceled`, `incomplete_expired`).
@@ -584,8 +623,13 @@ pub struct MoveFacts {
     pub company: CompanyPlan,
     pub managers: Vec<InviteManager>,
     pub legacy: Option<LegacySubscription>,
-    /// The billing record says the company owes money ([`owes`]).
+    /// A self-serve company whose subscription ended: it can be invited
+    /// (Stripe, else the billing record, has it ended).
+    pub subscription_ended: bool,
+    /// The billing record says the company owes money ([`owes_for_move`]).
     pub owes: bool,
+    /// Its onboarding commitment (from a signup) is not settled yet.
+    pub onboarding_open: bool,
     /// A Manager is accepting an invite right now.
     pub accepting: bool,
     /// A Manager can add a payment method on acceptance.
@@ -599,7 +643,7 @@ impl MoveFacts {
     pub fn blocked(&self) -> Option<(&'static str, String)> {
         let fixed = |code: &'static str, message: &str| Some((code, message.to_string()));
         let legacy = self.legacy.as_ref();
-        if self.company.plan_source == "subscription"
+        if (self.company.plan_source == "subscription" && !self.subscription_ended)
             || legacy.is_some_and(|legacy| legacy.self_serve)
         {
             fixed("already_on_plan", ALREADY_ON_PLAN)
@@ -612,6 +656,9 @@ impl MoveFacts {
             fixed("no_managers", NO_MANAGERS)
         } else if self.owes || legacy.is_some_and(LegacySubscription::is_overdue) {
             fixed("legacy_overdue", LEGACY_OVERDUE)
+        } else if self.onboarding_open {
+            // A moved company has no onboarding commitment.
+            fixed("onboarding_fee_open", ONBOARDING_FEE_OPEN)
         } else if let Some(legacy) = legacy.filter(|legacy| !legacy.is_supported()) {
             Some((
                 "legacy_subscription_unsupported",
@@ -656,19 +703,36 @@ pub async fn move_facts(state: &AppState, company_id: i32) -> ApiResult<MoveFact
     .bind(company_id)
     .fetch_one(pool)
     .await?;
+    let onboarding_open: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM company_onboarding_commitments
+                        WHERE company_id = ?
+                          AND status NOT IN ('completed', 'waived', 'fee_paid', 'fee_skipped', 'void'))",
+    )
+    .bind(company_id)
+    .fetch_one(pool)
+    .await?;
     let on_plan = company.plan_source == "subscription";
-    let record = if on_plan {
-        None
-    } else {
-        MySqlBillingStore(pool).by_company(company_id).await?
-    };
+    let record = MySqlBillingStore(pool).by_company(company_id).await?;
+    let live = legacy_subscription(state, record.as_ref()).await;
+    // Stripe's word on it (the stored row when Stripe cannot be read).
+    let subscription_ended = on_plan
+        && live.is_none()
+        && record
+            .as_ref()
+            .is_some_and(|record| record.stripe_subscription_id.is_some());
+    // A self-serve company's own subscription is never a legacy one.
+    let legacy = live.filter(|_| !on_plan);
     Ok(MoveFacts {
         managers: managers(pool, company_id).await?,
-        legacy: legacy_subscription(state, record.as_ref()).await,
-        owes: record.as_ref().is_some_and(owes),
+        owes: record
+            .as_ref()
+            .is_some_and(|record| owes_for_move(record, subscription_ended)),
+        legacy,
+        subscription_ended,
+        onboarding_open: onboarding_open != 0,
         accepting: accepting != 0,
         payment_ready: payment::is_test_mode(state),
-        catalog: if on_plan {
+        catalog: if on_plan && !subscription_ended {
             None
         } else {
             load_catalog(&state.stripe).await
@@ -875,7 +939,8 @@ fn new_invite(
     company_id: i32,
     superuser_id: i32,
 ) -> ApiResult<Invite> {
-    let requested_expiry = facts.now + Duration::days(request.expires_in_days);
+    // The end of the day the invite is stated to end on.
+    let requested_expiry = invite_expires_at(facts.now, request.expires_in_days);
     let (expires_at, first_charge_on, first_charge_at, legacy_subscription_id) =
         match facts.forcing_legacy() {
             // The link never outlives the last day it can be accepted on.
@@ -889,7 +954,7 @@ fn new_invite(
                 let day = check_first_charge(
                     request.first_charge_on.as_deref(),
                     signup_day(facts.now.and_utc()),
-                    local_day(requested_expiry),
+                    expiry_day(facts.now, request.expires_in_days),
                 )?;
                 (requested_expiry, day, first_charge_instant(day), None)
             }
@@ -1122,7 +1187,8 @@ pub struct PlanInviteView {
     /// The date is the company's legacy subscription's period end, which
     /// ends there on acceptance.
     pub forced_by_legacy_subscription: bool,
-    /// When the links stop working (ISO 8601, UTC).
+    /// When the links stop working (ISO 8601, UTC): the end (23:59:59 in
+    /// America/Indiana/Indianapolis) of the day the emails state.
     pub expires_at: DateTime<Utc>,
     /// When it was made (ISO 8601, UTC).
     pub created_at: DateTime<Utc>,
@@ -1246,19 +1312,23 @@ pub struct LegacySubscriptionView {
     /// date of an invite, which cannot be changed.
     pub first_charge_on: NaiveDate,
     /// The last day an invite can work (`YYYY-MM-DD`, company calendar): 8
-    /// days before the period end. A longer expiry is shortened to it.
+    /// days before the period end's day, until its end. A longer expiry is
+    /// shortened to it.
     pub latest_expiry_on: NaiveDate,
 }
 
 /// Why no invite can be made now.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MoveBlocked {
-    /// `already_on_plan`, `invite_accepting`, `payment_unavailable` (payment
-    /// collection is not live yet), `no_managers`, `legacy_overdue` (an
-    /// overdue legacy subscription, paused access or a balance due),
-    /// `legacy_subscription_unsupported` (its status is not active,
-    /// trialing, past_due or unpaid), `legacy_period_too_close` (it renews in
-    /// under 9 days: send the invite after it renews) or `catalog_unavailable`.
+    /// `already_on_plan` (a self-serve company whose subscription has not
+    /// ended), `invite_accepting`, `payment_unavailable` (payment collection
+    /// is not live yet), `no_managers`, `legacy_overdue` (an overdue legacy
+    /// subscription, paused access or a balance due), `onboarding_fee_open`
+    /// (the signup's onboarding fee of an ended self-serve company is not
+    /// settled yet), `legacy_subscription_unsupported` (its status is not
+    /// active, trialing, past_due or unpaid), `legacy_period_too_close` (it
+    /// renews in under 9 days: send the invite after it renews) or
+    /// `catalog_unavailable`.
     pub code: String,
     /// A sentence to show.
     pub message: String,
@@ -1466,7 +1536,9 @@ mod tests {
                 email: "mark@acme.test".into(),
             }],
             legacy,
+            subscription_ended: false,
             owes: false,
+            onboarding_open: false,
             accepting: false,
             payment_ready: true,
             catalog: None,
@@ -1532,6 +1604,102 @@ mod tests {
         assert_eq!(
             blocked_code(&facts(Some(legacy("active", 9)))),
             Some("catalog_unavailable")
+        );
+    }
+
+    #[test]
+    fn a_self_serve_company_is_invited_once_its_subscription_ended() {
+        let self_serve = |ended: bool| MoveFacts {
+            company: CompanyPlan {
+                name: "Acme Stone".into(),
+                plan_source: "subscription".into(),
+            },
+            subscription_ended: ended,
+            ..facts(None)
+        };
+        assert_eq!(blocked_code(&self_serve(false)), Some("already_on_plan"));
+        // Nothing else blocks: only the missing price list.
+        assert_eq!(blocked_code(&self_serve(true)), Some("catalog_unavailable"));
+        let onboarding = MoveFacts {
+            onboarding_open: true,
+            ..self_serve(true)
+        };
+        assert_eq!(blocked_code(&onboarding), Some("onboarding_fee_open"));
+    }
+
+    #[test]
+    fn an_ended_subscription_is_a_self_serve_record_whose_subscription_ended() {
+        let record = |subscription: Option<&str>, status: &str| CompanyBilling {
+            stripe_subscription_id: subscription.map(str::to_string),
+            subscription_status: status.into(),
+            ..CompanyBilling::empty(1)
+        };
+        let ended = record(Some("sub_1"), "canceled");
+        assert!(subscription_ended("subscription", Some(&ended)));
+        assert!(subscription_ended(
+            "subscription",
+            Some(&record(Some("sub_1"), "incomplete_expired"))
+        ));
+        assert!(!subscription_ended("legacy", Some(&ended)));
+        assert!(!subscription_ended(
+            "subscription",
+            Some(&record(Some("sub_1"), "past_due"))
+        ));
+        // Never subscribed yet (a signup being set up).
+        assert!(!subscription_ended("subscription", None));
+        assert!(!subscription_ended(
+            "subscription",
+            Some(&record(None, "none"))
+        ));
+    }
+
+    #[test]
+    fn an_ended_subscription_owes_only_a_balance_or_an_unpaid_failure() {
+        let mut record = CompanyBilling {
+            payment_status: PaymentStatus::Suspended,
+            ..CompanyBilling::empty(1)
+        };
+        assert!(!owes_for_move(&record, true));
+        assert!(owes_for_move(&record, false));
+        record.failed_payment_at = Some(day(2026, 10, 1).and_hms_opt(0, 0, 0).unwrap());
+        assert!(owes_for_move(&record, true));
+        record.failed_payment_at = None;
+        record.outstanding_balance_cents = 1;
+        assert!(owes_for_move(&record, true));
+    }
+
+    #[test]
+    fn an_invite_ends_at_the_end_of_its_local_day_across_dst() {
+        let at = |text: &str| NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M").unwrap();
+        // 11:00 EDT, 14 days: November 8, after the clocks went back (EST).
+        let now = at("2026-10-25 15:00");
+        assert_eq!(expiry_day(now, 14), day(2026, 11, 8));
+        assert_eq!(
+            invite_expires_at(now, 14).to_string(),
+            "2026-11-09 04:59:59"
+        );
+        assert_eq!(local_day(invite_expires_at(now, 14)), day(2026, 11, 8));
+        // 23:30 EDT on October 24: still that local day.
+        assert_eq!(expiry_day(at("2026-10-25 03:30"), 14), day(2026, 11, 7));
+        // Into EDT: March 15, and the change day itself.
+        let spring = at("2027-03-01 17:00");
+        assert_eq!(
+            invite_expires_at(spring, 14).to_string(),
+            "2027-03-16 03:59:59"
+        );
+        assert_eq!(
+            invite_expires_at(at("2027-03-13 06:00"), 1).to_string(),
+            "2027-03-15 03:59:59"
+        );
+        // A forced legacy date: 8 local days before the period end's day.
+        let period_end = at("2026-11-09 14:00");
+        assert_eq!(
+            latest_legacy_expiry(period_end).to_string(),
+            "2026-11-02 04:59:59"
+        );
+        assert_eq!(
+            local_day(period_end) - local_day(latest_legacy_expiry(period_end)),
+            Duration::days(MIN_DAYS_BEFORE_FIRST_CHARGE)
         );
     }
 

@@ -93,7 +93,9 @@ const PAID: ReactivationStarted = ReactivationStarted {
 /// otherwise the payment for the browser to confirm. A retry for the same
 /// plan confirms the first payment still open instead of creating another
 /// subscription. Stripe's refusals ("Your card was declined.") are 400s
-/// with Stripe's message.
+/// with Stripe's message. A self-serve company is refused with 400 ("This
+/// company is on a self-serve plan. Contact Granite Manager to start
+/// again."): it starts again through a plan invite.
 #[utoipa::path(
     post,
     path = "/v1/billing/reactivation",
@@ -102,7 +104,7 @@ const PAID: ReactivationStarted = ReactivationStarted {
     request_body = StartReactivation,
     responses(
         (status = 200, description = "Paid, or a payment to confirm", body = ReactivationStarted),
-        (status = 400, description = "No card, Stripe refused, or another payment of the company is in progress", body = ErrorBody),
+        (status = 400, description = "No card, Stripe refused, a self-serve company, or another payment of the company is in progress", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a manager of the company", body = ErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
@@ -230,7 +232,9 @@ pub struct WebhookReceived {
 /// Receive a Stripe event
 ///
 /// Stripe's webhook endpoint: checkout, subscription, invoice and payment
-/// method events update the company's billing (each event once). Events of
+/// method events update the company's billing (each event once); a plan
+/// invite's subscription (`metadata.plan_invite_id`) only once the invite
+/// is accepted. Events of
 /// the onboarding fee invoice (`metadata.kind = onboarding_fee`) only move
 /// the company's onboarding commitment. Needs a valid `Stripe-Signature` for
 /// `STRIPE_WEBHOOK_SECRET`; no session.

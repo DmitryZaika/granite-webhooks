@@ -113,22 +113,32 @@ async fn send_due_activity_deadline_reminders(pool: &MySqlPool) -> Result<usize,
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct JobError {
     message: String,
-    /// The api answered 5xx: it reported that error to `PostHog` itself.
+    /// The api answered 5xx on its own: it reported that error to `PostHog`.
     api_reported: bool,
 }
 
 impl JobError {
     fn transport(error: &reqwest::Error) -> Self {
+        let message = if error.is_timeout() {
+            "the api job timed out (no answer in time)".to_string()
+        } else {
+            error.to_string()
+        };
         Self {
-            message: error.to_string(),
+            message,
             api_reported: false,
         }
     }
 
-    /// `Err` for any non-success answer; 5xx ones are already reported by the api.
+    /// `Err` for any non-success answer; 5xx ones are already reported by the
+    /// api, except a 504: the gateway gave up, the api never saw the end.
     fn from_status(status: u16) -> Result<(), Self> {
         match status {
             200..=299 => Ok(()),
+            504 => Err(Self {
+                message: "the api job timed out (HTTP 504)".to_string(),
+                api_reported: false,
+            }),
             _ => Err(Self {
                 message: format!("the api answered HTTP {status}"),
                 api_reported: (500..=599).contains(&status),
@@ -157,9 +167,9 @@ async fn report_job(job: &str, result: Result<usize, JobError>) -> Result<usize,
     }
 }
 
-/// The API answers within its 30 s limit; a hung connection must not use up
-/// the whole run and starve the jobs after it.
-const API_JOB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
+/// The API Gateway cuts every request at 30 s, so no api job gets longer; a
+/// hung connection must not use up the whole run and starve the jobs after it.
+const API_JOB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Runs a scheduled job of the API (`POST <API_URL>/v1/jobs/<job>`).
 async fn post_api_job(job: &str, label: &str) -> Result<usize, JobError> {
@@ -247,14 +257,8 @@ async fn process_signature_reminders() -> Result<usize, JobError> {
     post_api_job("signature-reminders", "e-signature reminders").await
 }
 
-/// The api answers within its 30 s; a call that hangs must not hold the tick.
 async fn process_posthog_autofix() -> Result<usize, JobError> {
-    post_api_job_within(
-        "posthog-autofix",
-        "PostHog auto-fix",
-        std::time::Duration::from_secs(25),
-    )
-    .await
+    post_api_job("posthog-autofix", "PostHog auto-fix").await
 }
 
 async fn process_checklist_surveys() -> Result<usize, JobError> {
@@ -269,17 +273,8 @@ async fn process_billing_reminders() -> Result<usize, JobError> {
     post_api_job("billing-reminders", "billing reminders").await
 }
 
-/// The job stops starting work after 40 s; this leaves the tick (120 s) room
-/// for everything else.
-const SUBSCRIPTION_MAINTENANCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(55);
-
 async fn process_subscription_maintenance() -> Result<usize, JobError> {
-    post_api_job_within(
-        "subscription-maintenance",
-        "subscription maintenance",
-        SUBSCRIPTION_MAINTENANCE_TIMEOUT,
-    )
-    .await
+    post_api_job("subscription-maintenance", "subscription maintenance").await
 }
 
 /// Self-serve signups and seats; a failure never aborts the tick.
@@ -298,19 +293,10 @@ async fn run_subscription_maintenance() {
     }
 }
 
-/// The onboarding job starts no Calendly, Stripe or mail work after 15 s;
-/// 5 s more cover the call in flight (the api finishes it on its own).
-const ONBOARDING_COMMITMENTS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-
 /// Onboarding call reminders, tolling, the fee notice and invoice; a failure
 /// never aborts the tick.
 async fn run_onboarding_commitments() {
-    let result = post_api_job_within(
-        "onboarding-commitments",
-        "onboarding commitments",
-        ONBOARDING_COMMITMENTS_TIMEOUT,
-    )
-    .await;
+    let result = post_api_job("onboarding-commitments", "onboarding commitments").await;
     if let Err(error) = report_job("onboarding-commitments", result).await {
         tracing::error!(?error, "Failed to run onboarding commitments; continuing");
     }
@@ -735,6 +721,9 @@ mod tests {
             let error = JobError::from_status(status).expect_err("5xx fails");
             assert!(!error.should_report(), "{status}");
         }
+        let timeout = JobError::from_status(504).expect_err("504 fails");
+        assert!(timeout.should_report());
+        assert_eq!(timeout.to_string(), "the api job timed out (HTTP 504)");
         for status in [301, 400, 401, 404, 422, 429] {
             let error = JobError::from_status(status).expect_err("non-2xx fails");
             assert!(error.should_report(), "{status}");

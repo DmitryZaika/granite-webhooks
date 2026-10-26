@@ -439,6 +439,29 @@ pub async fn cancellation_requested_at(
     }
 }
 
+/// `requested_at` and `withdrawn_at` of the company's cancellation requests
+/// withdrawn after `since` (the notice), oldest first; none before
+/// `billing_cancellation_requests` exists.
+pub async fn withdrawn_cancellations_since(
+    pool: &MySqlPool,
+    company_id: i32,
+    since: NaiveDateTime,
+) -> sqlx::Result<Vec<(NaiveDateTime, NaiveDateTime)>> {
+    let withdrawn = sqlx::query_as(
+        "SELECT requested_at, withdrawn_at FROM billing_cancellation_requests
+          WHERE company_id = ? AND status = 'withdrawn' AND withdrawn_at > ?
+          ORDER BY withdrawn_at, id",
+    )
+    .bind(company_id)
+    .bind(since)
+    .fetch_all(pool)
+    .await;
+    match withdrawn {
+        Err(err) if is_missing_table(&err) => Ok(Vec::new()),
+        other => other,
+    }
+}
+
 /// The subscription is cancelled for real (`canceled`, or `incomplete_expired`:
 /// it never started), or the company is deleted.
 pub async fn subscription_ended(pool: &MySqlPool, company_id: i32) -> sqlx::Result<bool> {

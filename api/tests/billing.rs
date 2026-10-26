@@ -935,6 +935,7 @@ async fn the_billing_page_syncs_from_stripe(pool: MySqlPool) {
     assert_eq!(billing["restricted"], false);
     assert_eq!(billing["starts_checkout"], false);
     assert_eq!(billing["needs_new_subscription"], false);
+    assert_eq!(billing["subscription_ended"], false);
     assert_eq!(billing["billing_configured"], true);
 }
 
@@ -1020,6 +1021,7 @@ async fn a_suspended_company_gets_the_reactivation_quote(pool: MySqlPool) {
         .json();
     assert_eq!(billing["restricted"], true);
     assert_eq!(billing["needs_new_subscription"], true);
+    assert_eq!(billing["subscription_ended"], false);
     let quote: Value = server
         .get("/v1/billing/reactivation")
         .with_session(sessions::MANAGER)
@@ -1032,6 +1034,68 @@ async fn a_suspended_company_gets_the_reactivation_quote(pool: MySqlPool) {
     );
     assert_eq!(quote["cards"][0]["id"], "pm_saved");
     assert_eq!(quote["publishable_key"], Value::Null);
+}
+
+async fn self_serve(pool: &MySqlPool) {
+    sqlx::query("UPDATE company SET plan_source = 'subscription' WHERE id = 100")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+#[test_db::test(seed)]
+async fn a_self_serve_company_whose_subscription_ended_is_sent_to_granite_manager(pool: MySqlPool) {
+    let stripe = Shared::default();
+    suspended(&pool, &stripe).await;
+    self_serve(&pool).await;
+    let server = server(&pool, Some(&stripe)).await;
+    let billing: Value = server
+        .get("/v1/billing")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(billing["restricted"], true);
+    assert_eq!(billing["subscription_ended"], true);
+    // Never the legacy restore page.
+    assert_eq!(billing["needs_new_subscription"], false);
+    let quote: Value = server
+        .get("/v1/billing/reactivation")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(quote["needed"], false);
+    let refused = server
+        .post("/v1/billing/reactivation")
+        .with_session(sessions::MANAGER)
+        .json(&json!({ "payment_method_id": "pm_new" }))
+        .await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        refused.json::<Value>(),
+        json!({ "error": "This company is on a self-serve plan. Contact Granite Manager to start again." })
+    );
+    let posted = stripe
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .any(|r| r.0 == "POST");
+    assert!(!posted);
+}
+
+#[test_db::test(seed)]
+async fn a_running_self_serve_subscription_has_not_ended(pool: MySqlPool) {
+    let stripe = Shared::default();
+    subscribed(&pool, &stripe).await;
+    self_serve(&pool).await;
+    let server = server(&pool, Some(&stripe)).await;
+    let billing: Value = server
+        .get("/v1/billing")
+        .with_session(sessions::MANAGER)
+        .await
+        .json();
+    assert_eq!(billing["subscription_ended"], false);
+    assert_eq!(billing["needs_new_subscription"], false);
 }
 
 #[test_db::test(seed)]

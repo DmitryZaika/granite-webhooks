@@ -1139,6 +1139,7 @@ pub fn subscription_snapshot(subscription: &Value) -> SubscriptionSnapshot {
                 .flatten()
         }),
         replaced_by: non_empty(&subscription["metadata"]["replaced_by"]),
+        plan_invite_id: non_empty(&subscription["metadata"]["plan_invite_id"]),
     }
 }
 
@@ -1169,6 +1170,7 @@ pub fn invoice_snapshot(invoice: &Value) -> InvoiceSnapshot {
         paid_at: unix_date(&invoice["status_transitions"]["paid_at"]),
         live_subscription_status: None,
         replaced_by: non_empty(&details["metadata"]["replaced_by"]),
+        plan_invite_id: non_empty(&details["metadata"]["plan_invite_id"]),
     }
 }
 
@@ -1270,6 +1272,9 @@ pub async fn latest_event(
             invoice.replaced_by = invoice
                 .replaced_by
                 .or_else(|| non_empty(&live["metadata"]["replaced_by"]));
+            invoice.plan_invite_id = invoice
+                .plan_invite_id
+                .or_else(|| non_empty(&live["metadata"]["plan_invite_id"]));
             Ok(Some(BillingEvent::Invoice {
                 id,
                 paid: true,

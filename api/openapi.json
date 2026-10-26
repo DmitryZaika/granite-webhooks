@@ -39635,6 +39635,356 @@
         ]
       }
     },
+    "/v1/onboarding-call": {
+      "get": {
+        "tags": [
+          "onboarding-call"
+        ],
+        "summary": "Get the company's onboarding call",
+        "description": "The self-serve onboarding commitment of the company the request acts in\n(complete an onboarding call within 30 days of signup, or pay the\nonboarding fee), with where to book. `commitment` is null for companies\nwithout one. `booking_url` is set only for Managers and Admins of the\nacting company (never for Granite superusers) while the status is\npending, booked or notice_sent; open it in the Calendly widget, then send\nthe booked invitee to `POST /v1/onboarding-call/bookings`. When no page\ncan be had, `booking_unavailable` is true and\n`booking_unavailable_reason` says whether booking is not set up yet or\nCalendly is briefly unreachable (ask again in a few minutes).",
+        "operationId": "get_onboarding_call",
+        "responses": {
+          "200": {
+            "description": "The commitment and where to book",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingCall"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an employee or admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/onboarding-call/bookings": {
+      "post": {
+        "tags": [
+          "onboarding-call"
+        ],
+        "summary": "Record a booked onboarding call",
+        "description": "Call after the Calendly widget reports `calendly.event_scheduled`, with\nits `payload.invitee.uri`. The booking is read back from Calendly: it\nmust be active and carry this company's tag (`utm_campaign` and\n`utm_content` from `booking_url` of `GET /v1/onboarding-call`). A new\nbooking replaces the one stored (a reschedule). A call at or before a\nrecorded no-show is refused: book a new time. Managers and Admins of the\nacting company only (Granite superusers get 403). Returns the onboarding call as\n`GET /v1/onboarding-call` does.",
+        "operationId": "create_onboarding_call_booking",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewBooking"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Booking recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingCall"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a Calendly booking URI, or not this company's active onboarding call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager or Admin of the company, or is a Granite superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The company has no onboarding commitment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: the commitment is settled or invoiced, or the call is at or before a recorded no-show (book a new time)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Calendly is not set up or could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/onboarding-commitment": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Get a company's onboarding commitment",
+        "description": "The self-serve onboarding commitment of any company, with its full\ntimeline (who changed what, when; newest first, up to 100), the daily\nslot checks of the last 14 days and whether fee charging is on.\n`commitment` is null for a company without one. Change it with\n`PUT /v1/superuser/companies/{id}/onboarding-commitment`. Superusers only.",
+        "operationId": "get_company_onboarding_commitment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The commitment, timeline and slot checks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuperuserOnboardingCommitment"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Extend, waive, complete or mark a no-show on a company's onboarding commitment",
+        "description": "`extend`: the one 14-day extension (refused when used, or when the\ndeadline would still be in the past). `waive`: no fee. `complete`:\nonboarding done. `no_show`: the customer missed the booked call (only\nonce it started and within 48 hours after it ended). All are refused\nonce the commitment is settled or the fee is invoiced (void or refund in\nStripe instead). Each is stored on the timeline with the acting\nsuperuser and the time. Returns the commitment as\n`GET /v1/superuser/companies/{id}/onboarding-commitment` does.",
+        "operationId": "update_company_onboarding_commitment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitmentActionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuperuserOnboardingCommitment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The company has no onboarding commitment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: already extended or invoiced, settled, not booked, or the extension would leave the deadline in the past",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/v1/ai/improve": {
       "post": {
         "tags": [
@@ -42436,7 +42786,7 @@
           "jobs"
         ],
         "summary": "Run the billing upkeep and reminder emails",
-        "description": "Called by the `time-triggered` Lambda every minute with\n`Authorization: <LAMBDA_KEY>`. Three steps run in order and each fails on\nits own: it prunes Stripe webhook event ids older than 90 days (at most\nonce a day), reconciles Stripe-billed companies with Stripe (a pass every\n6 hours, at most 50 companies or 15 seconds per run), then sends the\nbilling reminder emails to each company's Managers. Reminders are a failed\nrenewal or a first payment asked for (day 0, three days left, paused\ntomorrow, paused, settled) and one notice 7 days before the first charge\nof a self-serve subscription (dated by Stripe's trial end; none when the\nsubscription is set to cancel by then). Each recipient gets each reminder\nonce; a refused email is retried up to 3 times, 5 minutes apart; an email\nwhose outcome is unknown is never resent. A run sends at most 20 emails\nand starts no new company after 40 seconds. Reminders are skipped while the mail service is not\nconfigured.",
+        "description": "Called by the `time-triggered` Lambda every minute with\n`Authorization: <LAMBDA_KEY>`. Three steps run in order and each fails on\nits own: it prunes Stripe webhook event ids older than 90 days (at most\nonce a day), reconciles Stripe-billed companies with Stripe (a pass every\n6 hours, at most 50 companies or 10 seconds per run), then sends the\nbilling reminder emails to each company's Managers. Reminders are a failed\nrenewal or a first payment asked for (day 0, three days left, paused\ntomorrow, paused, settled) and one notice 7 days before the first charge\nof a self-serve subscription (dated by Stripe's trial end; none when the\nsubscription is set to cancel by then). Each recipient gets each reminder\nonce; a refused email is retried up to 3 times, 5 minutes apart; an email\nwhose outcome is unknown is never resent. A run sends at most 20 emails\nand starts no new company after 14 seconds. Then the amount-change\nnotices (none started after 17 seconds): when a self-serve company's\nmonthly total changed (users or add-ons), its Managers get one email a day\nwith the old and new totals and the charge the new total first applies to\n(`amount_notices`); a Manager whose email failed gets it the next day (up\nto 3 tries), and nothing is announced while a scheduled cancellation ends\nthe subscription first. Last, the confirmation of a cancellation request\nthat reached no Manager is resent (none after 20 seconds, so the run ends\nby 25 s, inside the API Gateway's 30 s) to the company's Managers, 10 minutes after the request at the earliest\n(`confirmations_resent`). Reminders, notices and confirmations are skipped\nwhile the mail service is not configured.",
         "operationId": "run_billing_reminders",
         "responses": {
           "200": {
@@ -42472,8 +42822,8 @@
         "tags": [
           "jobs"
         ],
-        "summary": "Resume stuck signups, expire abandoned ones and reconcile seats",
-        "description": "One run, which starts no new work after 40 seconds:\n1. Resumes up to 5 signups stuck in provisioning for 10 minutes or more\n   (oldest first; a signup is given up after 10 failed runs).\n2. Expires up to 50 abandoned signups (24 hours after they started, or 11\n   days waiting for bank verification) and deletes their Stripe customers.\n3. Once every 23 hours, pushes each subscription company's extra-user\n   quantity to Stripe where it differs from its billable users.\n\nReturns the counts; `processed` is `resumed` + `expired`.",
+        "summary": "Resume stuck signups and plan moves, expire abandoned signups and reconcile seats",
+        "description": "One run, which starts no new work after 20 seconds:\n1. Resumes up to 5 signups stuck in provisioning for 10 minutes or more\n   (oldest first; a signup is given up after 10 failed runs).\n2. Resumes up to 5 plan invites whose acceptance stopped before the\n   company switched to its plan, with the same wait; after 26 hours staff\n   are alerted instead.\n3. Expires up to 50 abandoned signups (24 hours after they started, or 11\n   days waiting for bank verification) and deletes their Stripe customers.\n4. Once every 23 hours, pushes each subscription company's extra-user\n   quantity to Stripe where it differs from its billable users.\n\nReturns the counts; `processed` is `resumed` + `invites_resumed` +\n`expired`.",
         "operationId": "run_subscription_maintenance",
         "responses": {
           "200": {
@@ -42498,6 +42848,43 @@
           },
           "500": {
             "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "job_key": []
+          }
+        ]
+      }
+    },
+    "/v1/jobs/onboarding-commitments": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Run the onboarding commitments (reminders, tolling, fee notice and invoice)",
+        "description": "Called by the `time-triggered` Lambda every minute with\n`Authorization: <LAMBDA_KEY>`. First records today's slot check (once per\nUTC day: did Dima's Calendly offer a bookable slot within the next 5\nbusiness days; a day without one moves every open deadline by a day).\nThen takes up to 25 companies with an open onboarding commitment whose own\nrun is due (every 23 hours) and starts no new company after 15 seconds.\nPer company: refreshes the booked call from Calendly (rescheduled,\ncancelled, no-show) or finds one booked outside the app, completes the\ncommitment 48 hours after the call, suspends or resumes it on a\ncancellation request, voids it when the subscription ended, emails the\nday 7, 21 and 27 reminders and the fee notice to the company's Managers\n(each once), and creates the onboarding fee invoice 7 days after the\nnotice (only with `ONBOARDING_FEE_CHARGING=1`; otherwise the fee is\nskipped for good). Emails are skipped while the mail service is not\nconfigured. Returns the counts; `processed` is `reminders` + `notices` +\n`invoices` + `tolled` + `completed`.",
+        "operationId": "run_onboarding_commitments",
+        "responses": {
+          "200": {
+            "description": "What the run did",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong job key",
             "content": {
               "application/json": {
                 "schema": {
@@ -44235,7 +44622,7 @@
           "billing"
         ],
         "summary": "Get what restoring access costs",
-        "description": "For a suspended company: the plan and price to pay, the saved cards and\nthe Stripe.js key; then pay with `POST /v1/billing/reactivation`.",
+        "description": "For a suspended company: the plan and price to pay, the saved cards and\nthe Stripe.js key; then pay with `POST /v1/billing/reactivation`. Never\nneeded for a self-serve company (`subscription_ended` of `get_billing`).",
         "operationId": "get_billing_reactivation",
         "responses": {
           "200": {
@@ -44290,7 +44677,7 @@
           "billing"
         ],
         "summary": "Start paying to restore access",
-        "description": "For a company whose subscription ended unpaid: creates a new subscription\ncharged to the card (managers only). Answers `paid` when there is nothing\nto pay (the company is not restricted, or Stripe already has it paid),\notherwise the payment for the browser to confirm. A retry for the same\nplan confirms the first payment still open instead of creating another\nsubscription. Stripe's refusals (\"Your card was declined.\") are 400s\nwith Stripe's message.",
+        "description": "For a company whose subscription ended unpaid: creates a new subscription\ncharged to the card (managers only). Answers `paid` when there is nothing\nto pay (the company is not restricted, or Stripe already has it paid),\notherwise the payment for the browser to confirm. A retry for the same\nplan confirms the first payment still open instead of creating another\nsubscription. Stripe's refusals (\"Your card was declined.\") are 400s\nwith Stripe's message. A self-serve company is refused with 400 (\"This\ncompany is on a self-serve plan. Contact Granite Manager to start\nagain.\"): it starts again through a plan invite.",
         "operationId": "start_billing_reactivation",
         "requestBody": {
           "content": {
@@ -44314,7 +44701,7 @@
             }
           },
           "400": {
-            "description": "No card, Stripe refused, or another payment of the company is in progress",
+            "description": "No card, Stripe refused, a self-serve company, or another payment of the company is in progress",
             "content": {
               "application/json": {
                 "schema": {
@@ -44444,7 +44831,7 @@
           "billing"
         ],
         "summary": "Receive a Stripe event",
-        "description": "Stripe's webhook endpoint: checkout, subscription, invoice and payment\nmethod events update the company's billing (each event once). Needs a\nvalid `Stripe-Signature` for `STRIPE_WEBHOOK_SECRET`; no session.",
+        "description": "Stripe's webhook endpoint: checkout, subscription, invoice and payment\nmethod events update the company's billing (each event once); a plan\ninvite's subscription (`metadata.plan_invite_id`) only once the invite\nis accepted. Events of\nthe onboarding fee invoice (`metadata.kind = onboarding_fee`) only move\nthe company's onboarding commitment. Needs a valid `Stripe-Signature` for\n`STRIPE_WEBHOOK_SECRET`; no session.",
         "operationId": "receive_stripe_webhook",
         "parameters": [
           {
@@ -44555,7 +44942,7 @@
           "billing"
         ],
         "summary": "Get the company's billing",
-        "description": "The subscription (refreshed from Stripe at most every 5 minutes, or now\nwith `checkout=success`), the card on file, the plans with Stripe's\nprices and the invoices (read live from Stripe, else the stored copy).\nManagers only; other users read `GET /v1/billing/gate`.",
+        "description": "The subscription (refreshed from Stripe at most every 5 minutes, or now\nwith `checkout=success`), the card on file, the plans with Stripe's\nprices, the invoices (read live from Stripe, else the stored copy) and\nthe open plan invite (get its link with `create_billing_plan_invite_link`).\nManagers only; other users read `GET /v1/billing/gate`.",
         "operationId": "get_billing",
         "parameters": [
           {
@@ -44622,36 +45009,16 @@
         "tags": [
           "billing"
         ],
-        "summary": "Subscribe through Stripe Checkout",
-        "description": "A Stripe Checkout link that subscribes the company to the plan; Stripe\nreturns to `/admin/billing?checkout=success` (or `cancel`), whose page\nthen calls `GET /v1/billing?checkout=success`. Only while the company has\nno running subscription, here or at Stripe (400 otherwise: change the\nplan with `PUT /v1/billing/subscription`).",
+        "summary": "Subscribe through Stripe Checkout (retired)",
+        "description": "Always refused with 409 `plan_invite_required` (\"Contact Granite Manager\nto choose your plan.\"): the flat-price Checkout no longer starts\nsubscriptions. A company moves onto a plan by accepting a plan invite\n(`plan_invite` of `get_billing`, link from\n`create_billing_plan_invite_link`). Changing the plan of a running\nlegacy subscription (`PUT /v1/billing/subscription`) and restoring a\npaused company (`/v1/billing/reactivation`) still work.",
         "operationId": "create_billing_checkout",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PlanChoice"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
-            "description": "The Checkout link",
+            "description": "Never: the Checkout link is no longer made",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Redirect"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Unknown plan, already subscribed, or Stripe refused",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -44672,6 +45039,73 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Plans come through a plan invite (code plan_invite_required)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/billing/plan-invite/link": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Get my link to the open plan invite",
+        "description": "Makes a new link for the caller to the company's open plan invite (the\npayments app's `/upgrade/<token>`, where a Manager reviews and accepts\nthe plan). 404 `invite_not_found` when no invite is open.",
+        "operationId": "create_billing_plan_invite_link",
+        "responses": {
+          "200": {
+            "description": "The link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Redirect"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No open plan invite (code invite_not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
                 }
               }
             }
@@ -44700,7 +45134,7 @@
           "billing"
         ],
         "summary": "Open the Stripe billing portal",
-        "description": "A Stripe billing portal link for the company's customer, returning to\n`/admin/billing`. The portal updates cards and customer details and lists\ninvoices; it cannot cancel or change the plan.",
+        "description": "A Stripe billing portal link for the company's customer, returning to\n`/admin/billing`, or to the payments app's account page with\n`return_to: \"account\"`. The portal updates cards and customer details and\nlists invoices; it cannot cancel or change the plan.",
         "operationId": "create_billing_portal",
         "requestBody": {
           "content": {
@@ -44772,6 +45206,61 @@
       }
     },
     "/v1/billing/subscription": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Get the subscription for the account page",
+        "description": "The company's self-serve subscription as the payments app's account page\nshows it: status and free period, the base plan, billable users, each\nadd-on (`active`, `available`, or `included` free by Granite Manager) with\nthe prorated estimate of changing it now, the monthly total, Stripe's\ndraft of the next invoice, the payment method on file (brand or bank and\nlast four digits only), a scheduled cancellation and the latest 12\ninvoices. Read live from Stripe, each read within 5 seconds; when Stripe\ncannot be reached the stored subscription and add-ons are shown,\n`next_invoice` and `payment_method` are null, and prices Stripe alone\nknows are null (`can_cancel` still holds). A legacy company (`plan_source`\n`legacy`, billed by Granite Manager) gets only its name and plan source:\nit manages billing on `/admin/billing` (`GET /v1/billing`). Change an\nadd-on with `PUT /v1/billing/addons/{key}`; open the card form with\n`POST /v1/billing/portal` (`return_to: \"account\"`). Managers only.",
+        "operationId": "get_billing_subscription",
+        "responses": {
+          "200": {
+            "description": "The subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountSubscription"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
       "put": {
         "tags": [
           "billing"
@@ -44825,6 +45314,329 @@
           },
           "500": {
             "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/billing/addons/{key}": {
+      "put": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Add or remove an add-on",
+        "description": "Adds the add-on to the company's subscription (`enabled` true) or removes\nit (false), prorated: adding charges the rest of the current period on\nthe next invoice (nothing during the free period), removing credits it.\nThe add-on is usable (or gone) at once. Already in the asked state:\nnothing changes. Answers the account page as\n`GET /v1/billing/subscription` does, after the change. 409 when the plan\nis legacy, there is no running subscription, the add-on is included free\nby Granite Manager, or an add-on is added while a payment is overdue (pay\nthe open invoice first). Managers only.",
+        "operationId": "set_billing_addon",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "`signatures`, `quotes` or `quickbooks`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddonChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The subscription after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountSubscription"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stripe refused the change, or the body is malformed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown add-on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Legacy plan, no running subscription, included free, or a payment is overdue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Stripe could not be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Billing is busy or not set up, or prices are unavailable; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/billing/cancellation-request": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Request cancellation of the subscription",
+        "description": "\"Request cancellation\" on the account page, for a Manager of a self-serve\ncompany with a running subscription (trialing, active or past due). The\nsubscription ends at the end of the free period when requested during it\n(then nothing is charged), else at the end of the current paid month; the\ncompany keeps full access until then. Answers 201 with the new request,\nand emails a confirmation to every Manager and a notice to Granite Manager\nstaff (with the reason). When a request is already scheduled, answers 200\nwith it and changes nothing (no second email). Withdraw it before it takes\neffect with `DELETE /v1/billing/cancellation-request`; `GET\n/v1/billing/subscription` shows it as `cancellation`.",
+        "operationId": "request_billing_cancellation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancellationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Already scheduled: the existing request, unchanged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancellationRequestBody"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancellationRequestBody"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Reason longer than 1000 characters, or a malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Plan managed by Granite Manager staff (legacy), or no running subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Stripe failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Billing busy or not configured; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Withdraw the cancellation request",
+        "description": "\"Keep my subscription\" on the account page, for a Manager: the\nsubscription renews again as before and every Manager and Granite Manager\nstaff are emailed. Only while the request is scheduled and before it takes\neffect. A repeat (the latest request is already withdrawn) answers 204 and\nchanges nothing (no second email); with no request ever made, or after the\ncancellation took effect, answers 409.",
+        "operationId": "withdraw_billing_cancellation",
+        "responses": {
+          "204": {
+            "description": "Withdrawn, or already withdrawn (nothing changed)"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a Manager of the company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No request ever made, already taken effect, legacy plan, or no running subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Stripe failed; try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Billing busy or not configured; try again",
             "content": {
               "application/json": {
                 "schema": {
@@ -45713,7 +46525,7 @@
           "superuser"
         ],
         "summary": "List the companies",
-        "description": "Every live company, most users first: users counting toward the limit,\ntours progress, connected integrations, feature switches and whether\nStripe payment is required, plus its plan, usable and free add-ons, Manager\ncount and stored subscription. The slower checks are per company:\n`/domain-trust`, `/ses-inbound`, `/setup-checklist`.",
+        "description": "Every live company, most users first: users counting toward the limit,\ntours progress, connected integrations, feature switches and whether\nStripe payment is required, plus its plan, usable and free add-ons, Manager\ncount, stored subscription and live plan invite (details with\n`get_platform_company_plan_move`). The slower checks are per company:\n`/domain-trust`, `/ses-inbound`, `/setup-checklist`.",
         "operationId": "list_platform_companies",
         "responses": {
           "200": {
@@ -46816,6 +47628,639 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/plan-move": {
+      "get": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Get what moving a company onto a plan needs",
+        "description": "For the \"Move to plan\" dialog: the company's plan, billable users and\nManagers (the invite goes to each), its legacy Stripe subscription (when\nit runs, the first charge date is forced to its period end and cannot be\npicked, and the invite expires by `latest_expiry_on`), why no invite can\nbe made now (`blocked`), the price list, the dialog's defaults and\nallowed dates (a picked first charge day is at least\n`min_days_after_expiry` days after the invite expires), and its invites\n(newest first, at most 20). Then `create_plan_invite`.",
+        "operationId": "get_platform_company_plan_move",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the dialog needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanMove"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/plan-invites": {
+      "post": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Invite a company's Managers to a plan",
+        "description": "Makes an invite with the add-ons and first charge day (forced to the\nlegacy subscription's period end when one runs), replacing the company's\nopen invite, and emails every Manager of the company their own link to\nreview and accept it on the payments app. Nothing changes for the\ncompany until a Manager accepts. Once the invite is made the answer is\n201, with addresses that could not be emailed in `not_emailed`. 400\ncodes: `invalid_addon`, `invalid_first_charge`, `invalid_expiry`; 409:\nthe `blocked` codes of `get_platform_company_plan_move`\n(`already_on_plan`, `invite_accepting`, `payment_unavailable`,\n`no_managers`, `legacy_overdue`, `onboarding_fee_open`,\n`legacy_subscription_unsupported`, `legacy_period_too_close`); 503: `catalog_unavailable` (nothing made).",
+        "operationId": "create_platform_company_plan_invite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePlanInviteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Made; emailed except `not_emailed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedPlanInvite"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad add-on, date or expiry (codes invalid_addon, invalid_first_charge, invalid_expiry)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The company cannot be invited now (codes already_on_plan, invite_accepting, payment_unavailable, no_managers, legacy_overdue, onboarding_fee_open, legacy_subscription_unsupported, legacy_period_too_close)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Prices cannot be loaded now (code catalog_unavailable), or billing is busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/plan-invites/{invite_id}/emails": {
+      "post": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Email a plan invite again",
+        "description": "Emails every current Manager of the company a new link to the open\ninvite (links sent before keep working); addresses that could not be\nemailed are in `not_emailed`. 409 `invite_closed` when the invite is no\nlonger open (accepting, accepted, withdrawn or expired); 503\n`catalog_unavailable` before any new link is made.",
+        "operationId": "resend_platform_company_plan_invite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "invite_id",
+            "in": "path",
+            "description": "Invite id from `get_platform_company_plan_move`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Emailed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResentPlanInvite"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such invite in this company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The invite is not open (code invite_closed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Prices cannot be loaded now (code catalog_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/superuser/companies/{id}/plan-invites/{invite_id}": {
+      "delete": {
+        "tags": [
+          "superuser"
+        ],
+        "summary": "Withdraw a plan invite",
+        "description": "Its links stop working at once (410 `invite_revoked`). An open invite\n(expired ones too), or an acceptance that stopped being retried\n(`gave_up`) while Stripe has no subscription for it that has not ended\n(a cancelled one does not count). 409 `invite_accepting` while a\nManager's acceptance is being finished, `invite_has_subscription` when\nStripe still has an active subscription for a given-up acceptance\n(cancel it in Stripe, then withdraw again),\n`invite_closed` once accepted or withdrawn. 503 when Stripe cannot be\nread (nothing changed).",
+        "operationId": "revoke_platform_company_plan_invite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Company id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "invite_id",
+            "in": "path",
+            "description": "Invite id from `get_platform_company_plan_move`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Withdrawn"
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a superuser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such invite in this company",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Cannot be withdrawn (codes invite_accepting, invite_has_subscription, invite_closed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Stripe cannot be read now, or billing is busy; nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/plan-invites/{token}": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Read a plan invite",
+        "description": "The plan Granite Manager set up for the caller's company: the add-ons,\nthe price for its active users now (`quote`), the first charge, the\nlegacy plan it replaces (`current_plan`), when the link expires, and the\ncheckboxes to tick (`consents`, rendered by the server: show `text`\nverbatim and send `kind`, `version` and `sha256` back to\n`accept_plan_invite`). `status` `accepting` means an acceptance is being\nfinished (call `accept_plan_invite` again to resume); `accepted` means\nthe company is on the plan (go to `redirect_url`). Only a Manager of the\ninvited company, whatever company the session acts in: 403\n`not_invited` otherwise.",
+        "operationId": "get_plan_invite",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The token of the emailed `/upgrade/<token>` link",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The invite",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteOffer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a Manager of the invited company (code not_invited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown link (code invite_not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The invite expired or was withdrawn (codes invite_expired, invite_revoked)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Prices cannot be loaded now (code catalog_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/v1/plan-invites/{token}/acceptance": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Accept a plan invite",
+        "description": "Sends the checkboxes the Manager ticked (`kind`, `version`,\n`text_sha256` as `get_plan_invite` returned them); the server renders\nthem again and refuses with 409 `consents_changed` when anything differs\n(read the invite again). Then it sets up the payment method, makes the\ncompany's Stripe subscription with nothing charged before the first\ncharge, ends a legacy subscription at its period end, and only then moves\nthe company onto the plan (its add-ons follow the plan from now on). Safe\nto retry: one invite never makes two subscriptions, and an accepted\ninvite answers 200 again. 503 `acceptance_retry`: nothing was charged,\ncall again shortly. 503 `payment_setup_unavailable`: payment methods\ncannot be added yet (nothing changed). 409 `invite_needs_new_date`: the\nfirst charge is less than 8 days away, or the company's billing changed\nsince the invite was sent (ask for a new invite). 409 `legacy_overdue`:\nthe company has an overdue payment or a balance due. 409\n`invite_subscription_ended`: the invite's subscription was cancelled in\nStripe, so the switch stopped and the company stays on its current plan\n(ask Granite Manager to withdraw the invite and send a new one).",
+        "operationId": "accept_plan_invite",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The token of the emailed `/upgrade/<token>` link",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptanceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The company is on the plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptanceDone"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a Manager of the invited company (code not_invited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown link (code invite_not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Texts changed, the first charge is under 8 days away or the company's billing changed, the company owes money, or the invite's subscription was cancelled in Stripe (codes consents_changed, invite_needs_new_date, legacy_overdue, invite_subscription_ended)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The invite expired or was withdrawn (codes invite_expired, invite_revoked)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Try again shortly, or payment methods are not available yet (codes acceptance_retry, payment_setup_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorBody"
                 }
               }
             }
@@ -56504,6 +57949,40 @@
         },
         "additionalProperties": false
       },
+      "AcceptanceBody": {
+        "type": "object",
+        "description": "Body of `POST /v1/plan-invites/{token}/acceptance`.",
+        "required": [
+          "consents"
+        ],
+        "properties": {
+          "consents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsentAcceptance"
+            },
+            "description": "Every checkbox the Manager ticked, as `get_plan_invite` showed it."
+          }
+        }
+      },
+      "AcceptanceDone": {
+        "type": "object",
+        "description": "Answer of `POST /v1/plan-invites/{token}/acceptance`.",
+        "required": [
+          "status",
+          "redirect_url"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Always `accepted`: the company is on the plan."
+          },
+          "redirect_url": {
+            "type": "string",
+            "description": "Where the browser goes next (the main app's billing page)."
+          }
+        }
+      },
       "Account": {
         "type": "object",
         "description": "`GET /v1/me/account`.",
@@ -56606,6 +58085,75 @@
           }
         }
       },
+      "AccountAddon": {
+        "type": "object",
+        "description": "One add-on of the account page.",
+        "required": [
+          "key",
+          "label",
+          "description",
+          "status"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/AddonKey",
+            "description": "`signatures`, `quotes` or `quickbooks`."
+          },
+          "label": {
+            "type": "string",
+            "description": "Name to show."
+          },
+          "description": {
+            "type": "string",
+            "description": "What it does."
+          },
+          "monthly_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Monthly price in cents; null when Stripe's price cannot be read."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AddonStatus",
+            "description": "`active`, `available` or `included`."
+          },
+          "prorated_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Estimate for the next invoice if it changes now: the prorated charge\nfor the rest of the current period when added, the credit when\nremoved. Linear by the seconds left in the period, rounded to the\ncent; 0 during the free period and for `included`; null when the price\nis unknown."
+          }
+        }
+      },
+      "AccountBasePlan": {
+        "type": "object",
+        "description": "The base plan.",
+        "required": [
+          "label",
+          "monthly_cents",
+          "included_users"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Name to show (\"Base plan\")."
+          },
+          "monthly_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monthly price in cents."
+          },
+          "included_users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Users the base price covers (10)."
+          }
+        }
+      },
       "AccountInput": {
         "type": "object",
         "description": "Body of `PUT /v1/me/account`. A field left out keeps its value; an empty\none clears it.",
@@ -56674,6 +58222,123 @@
         },
         "additionalProperties": false
       },
+      "AccountInvoiceLine": {
+        "type": "object",
+        "description": "One line of the next invoice.",
+        "required": [
+          "description",
+          "amount_cents"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Stripe's description, e.g. \"Quotes (Jan 21 to Feb 21)\"."
+          },
+          "amount_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Amount in cents; negative for a credit."
+          }
+        }
+      },
+      "AccountNextInvoice": {
+        "type": "object",
+        "description": "Stripe's draft of the next invoice.",
+        "required": [
+          "subtotal_cents",
+          "tax_cents",
+          "total_cents",
+          "amount_due_cents",
+          "lines"
+        ],
+        "properties": {
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When Stripe will charge it; null when Stripe does not say."
+          },
+          "subtotal_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Before tax, in cents."
+          },
+          "tax_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sales tax, in cents (0 when none)."
+          },
+          "total_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "With tax, in cents."
+          },
+          "amount_due_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What will be charged after credits, in cents."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountInvoiceLine"
+            },
+            "description": "Its lines as Stripe words them (prorations included)."
+          }
+        }
+      },
+      "AccountPaymentMethod": {
+        "type": "object",
+        "description": "The payment method of the next charge (never the full number).",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "`card`, `us_bank_account`, or another Stripe payment method type\n(then only this field is set)."
+          },
+          "brand": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Card brand (`visa`, `mastercard`, ...); null for a bank account."
+          },
+          "last4": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last four digits of the card or account number."
+          },
+          "exp_month": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Card expiry month (1-12); null for a bank account."
+          },
+          "exp_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Card expiry year (e.g. 2030); null for a bank account."
+          },
+          "bank_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The bank's name; null for a card."
+          }
+        }
+      },
       "AccountSaved": {
         "type": "object",
         "description": "What a save did.",
@@ -56702,6 +58367,194 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "AccountSubscription": {
+        "type": "object",
+        "description": "`GET /v1/billing/subscription`: the company's subscription as the\npayments app's account page shows it. Money in cents, before sales tax;\ntimes are ISO 8601 UTC.",
+        "required": [
+          "company_name",
+          "plan_source",
+          "status",
+          "payment_status",
+          "addons",
+          "payment_method_known",
+          "invoices",
+          "can_change",
+          "can_cancel"
+        ],
+        "properties": {
+          "company_name": {
+            "type": "string",
+            "description": "The company's name."
+          },
+          "plan_source": {
+            "type": "string",
+            "description": "`subscription` (self-serve, managed on this page) or `legacy`\n(billed by Granite Manager: every other field is null, empty or\nfalse, `status` and `payment_status` are `none`; link to\n`/admin/billing` instead)."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stripe's subscription status: `trialing` (the free period), `active`,\n`past_due`, `unpaid`, `canceled`, `incomplete`, ...; `none` when the\ncompany has no subscription."
+          },
+          "payment_status": {
+            "type": "string",
+            "description": "`active` (paid up), `past_due` (a payment failed, the grace period\nruns), `suspended` (access paused until paid) or `none` (no payment\nyet)."
+          },
+          "trial_end_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the free period ends (or ended); null when there was none."
+          },
+          "current_period_end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "End of the current billing period; null when unknown."
+          },
+          "next_charge_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The next charge: the end of the free period while trialing, else the\nend of the current period. Null when a cancellation is scheduled or\nthe subscription ended."
+          },
+          "base": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountBasePlan",
+                "description": "The base plan; null for legacy, or when Stripe's price cannot be read."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "users": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountUsers",
+                "description": "Billable users against the included ones; null for legacy."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountAddon"
+            },
+            "description": "Every add-on (signatures, quotes, quickbooks) with its state; empty\nfor legacy."
+          },
+          "monthly_total_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Monthly total before tax: base, extra users and active add-ons as\nStripe bills them now (the stored total when Stripe cannot be read).\nNull when unknown or legacy."
+          },
+          "next_invoice": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountNextInvoice",
+                "description": "Stripe's draft of the next invoice; null when there is none (a\ncancellation is scheduled) or Stripe cannot be read."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payment_method": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountPaymentMethod",
+                "description": "What the next charge is paid with; null when none is saved or Stripe\ncannot be read (see `payment_method_known`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payment_method_known": {
+            "type": "boolean",
+            "description": "Stripe answered for the payment method: a null `payment_method` then\nmeans none is saved. False when Stripe could not be read: say it could\nnot be loaded, never that none is on file."
+          },
+          "cancellation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CancellationRequestBody",
+                "description": "The scheduled cancellation request; null when none is scheduled\n(`POST /v1/billing/cancellation-request` schedules one)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "invoices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Invoice"
+            },
+            "description": "The latest invoices (up to 12, no drafts), newest first; from Stripe,\nelse the stored copy."
+          },
+          "can_change": {
+            "type": "boolean",
+            "description": "Add-ons can be changed here (`PUT /v1/billing/addons/{key}`): a\nself-serve company with a running subscription (`trialing`, `active`\nor `past_due`), with Stripe configured and its prices readable."
+          },
+          "can_cancel": {
+            "type": "boolean",
+            "description": "The subscription can be cancelled here\n(`POST /v1/billing/cancellation-request`): a self-serve company with a\nrunning subscription (`trialing`, `active` or `past_due`), even while\nStripe or its prices cannot be read."
+          }
+        }
+      },
+      "AccountUsers": {
+        "type": "object",
+        "description": "Users the company is billed for.",
+        "required": [
+          "billable",
+          "included",
+          "extra"
+        ],
+        "properties": {
+          "billable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Active users that count (not Check-in-only, the Walk-in user or\nsuperusers)."
+          },
+          "included": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Users the base price covers (10)."
+          },
+          "extra": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Billable users above the included ones."
+          },
+          "extra_unit_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Monthly price of one extra user in cents; null when Stripe's price\ncannot be read."
+          },
+          "extra_monthly_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`extra` x `extra_unit_cents`; null when the price is unknown."
           }
         }
       },
@@ -57333,6 +59186,19 @@
         },
         "additionalProperties": false
       },
+      "AddonChange": {
+        "type": "object",
+        "description": "Body of `PUT /v1/billing/addons/{key}`.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "`true` adds the add-on to the subscription, `false` removes it."
+          }
+        }
+      },
       "AddonInfo": {
         "type": "object",
         "description": "A paid add-on of the catalog.",
@@ -57389,6 +59255,15 @@
             "description": "The add-on to add to the plan; absent for other refusals."
           }
         }
+      },
+      "AddonStatus": {
+        "type": "string",
+        "description": "Where an add-on stands.",
+        "enum": [
+          "active",
+          "available",
+          "included"
+        ]
       },
       "Address": {
         "type": "object",
@@ -58511,6 +60386,30 @@
           }
         }
       },
+      "AvailabilityCheck": {
+        "type": "object",
+        "description": "One day's slot check.",
+        "required": [
+          "checked_on",
+          "result",
+          "slots"
+        ],
+        "properties": {
+          "checked_on": {
+            "type": "string",
+            "description": "The UTC day, `YYYY-MM-DD`."
+          },
+          "result": {
+            "type": "string",
+            "description": "`available`, `no_slots`, `not_configured` or `error`; anything but\n`available` moved open deadlines by a day."
+          },
+          "slots": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Bookable slots found within the next 5 business days."
+          }
+        }
+      },
       "AvailabilityChoice": {
         "type": "string",
         "description": "What the user chooses: `available` or `dnd` (Do not disturb).",
@@ -58654,6 +60553,7 @@
           "restricted",
           "starts_checkout",
           "needs_new_subscription",
+          "subscription_ended",
           "billing_configured"
         ],
         "properties": {
@@ -58699,11 +60599,26 @@
           },
           "starts_checkout": {
             "type": "boolean",
-            "description": "The subscription ended (or never started): subscribing goes through\nCheckout (`POST /v1/billing/checkout`), not a plan change."
+            "description": "Always false: the flat-price Checkout no longer starts subscriptions.\nA company without a plan accepts a plan invite (`plan_invite`), or\ncontacts Granite Manager."
+          },
+          "plan_invite": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpenPlanInvite",
+                "description": "The plan invite a Manager can accept now, or null (then \"Contact\nGranite Manager to choose your plan\")."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "needs_new_subscription": {
             "type": "boolean",
-            "description": "Paused and without a running subscription: pay on the restore page\n(`GET /v1/billing/reactivation`)."
+            "description": "Paused and without a running subscription: pay on the restore page\n(`GET /v1/billing/reactivation`). Always false for a self-serve\ncompany (see `subscription_ended`)."
+          },
+          "subscription_ended": {
+            "type": "boolean",
+            "description": "A self-serve company whose subscription ended (cancelled, or never\npaid): it cannot restart on its own. Show \"Your subscription ended.\nContact Granite Manager to start again.\", or the plan invite to\naccept when `plan_invite` is set."
           },
           "billing_configured": {
             "type": "boolean",
@@ -58720,7 +60635,9 @@
           "failed",
           "unknown",
           "stuck",
-          "company_errors"
+          "company_errors",
+          "amount_notices",
+          "confirmations_resent"
         ],
         "properties": {
           "processed": {
@@ -58763,6 +60680,16 @@
                 "type": "null"
               }
             ]
+          },
+          "amount_notices": {
+            "type": "integer",
+            "description": "Self-serve companies whose Managers were emailed this run that their\nmonthly total changed (at most one notice per company a day; up to 50\ncompanies looked at per run; a Manager whose email failed gets it the\nnext day, up to 3 tries).",
+            "minimum": 0
+          },
+          "confirmations_resent": {
+            "type": "integer",
+            "description": "Cancellation requests whose confirmation email reached no Manager when\nrequested and was resent to their Managers this run (10 minutes after\nthe request at the earliest, up to 20 a run, retried every run until\none Manager gets it).",
+            "minimum": 0
           }
         }
       },
@@ -59004,6 +60931,14 @@
             "description": "`sms` or `email`; null when the confirmation could not be sent."
           }
         }
+      },
+      "BookingUnavailableReason": {
+        "type": "string",
+        "description": "Why the caller cannot book right now although they may.",
+        "enum": [
+          "not_configured",
+          "temporary"
+        ]
       },
       "Bootstrap": {
         "type": "object",
@@ -60111,6 +62046,57 @@
         },
         "additionalProperties": false
       },
+      "CancellationInput": {
+        "type": "object",
+        "description": "Body of `POST /v1/billing/cancellation-request`.",
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the company is leaving, optional, at most 1000 characters. Trimmed;\nempty counts as none. Only Granite Manager staff see it."
+          }
+        }
+      },
+      "CancellationRequestBody": {
+        "type": "object",
+        "description": "The company's scheduled cancellation request.",
+        "required": [
+          "id",
+          "requested_at",
+          "effective_at",
+          "requested_by"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Request id."
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was requested (ISO 8601 UTC)."
+          },
+          "effective_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the subscription ends (ISO 8601 UTC): the end of the free period\nwhen requested during it (nothing is charged then), else the end of\nthe current paid month. Everything keeps working until then."
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "Name of the Manager who requested it (their email when they have no\nname)."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reason given, or null."
+          }
+        }
+      },
       "Cancelled": {
         "type": "object",
         "description": "A cancelled request, when the customer was to be told.",
@@ -60261,6 +62247,29 @@
           }
         }
       },
+      "CatalogAddon": {
+        "type": "object",
+        "description": "An add-on of the price list.",
+        "required": [
+          "key",
+          "label",
+          "unit_cents"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/AddonKey"
+          },
+          "label": {
+            "type": "string",
+            "description": "Name to show, e.g. `QuickBooks`."
+          },
+          "unit_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monthly price in cents, before sales tax."
+          }
+        }
+      },
       "CatalogExtra": {
         "type": "object",
         "description": "A catalog extra.",
@@ -60277,6 +62286,40 @@
           "item": {
             "type": "object",
             "description": "The extra (`OtherItem`: name, category, options or per-unit tiers)."
+          }
+        }
+      },
+      "CatalogView": {
+        "type": "object",
+        "description": "The price list (before sales tax).",
+        "required": [
+          "base_cents",
+          "included_users",
+          "extra_user_cents",
+          "addons"
+        ],
+        "properties": {
+          "base_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The base plan per month, in cents."
+          },
+          "included_users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Active users the base plan covers."
+          },
+          "extra_user_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Each active user above them per month, in cents."
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogAddon"
+            },
+            "description": "Every add-on."
           }
         }
       },
@@ -61190,6 +63233,29 @@
           }
         }
       },
+      "CommitmentAction": {
+        "type": "string",
+        "description": "What a superuser does to a commitment.",
+        "enum": [
+          "extend",
+          "waive",
+          "complete",
+          "no_show"
+        ]
+      },
+      "CommitmentActionBody": {
+        "type": "object",
+        "description": "`PUT /v1/superuser/companies/{id}/onboarding-commitment`.",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/CommitmentAction",
+            "description": "`extend`, `waive`, `complete` or `no_show`."
+          }
+        }
+      },
       "CompanyBillingSummary": {
         "type": "object",
         "description": "A company's stored Stripe subscription state.",
@@ -61584,6 +63650,25 @@
           }
         }
       },
+      "CompanyPlanInvite": {
+        "type": "object",
+        "description": "A company's live plan invite.",
+        "required": [
+          "status",
+          "expires_at"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "`open` (waiting for a Manager) or `accepting` (a Manager accepted;\nbeing finished)."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When its links stop working (ISO 8601, UTC)."
+          }
+        }
+      },
       "CompanyRow": {
         "allOf": [
           {
@@ -61838,6 +63923,17 @@
               {
                 "$ref": "#/components/schemas/CompanyBillingSummary",
                 "description": "Its stored Stripe subscription, or null when it never had one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan_invite": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CompanyPlanInvite",
+                "description": "Its live plan invite (open and not expired, or being accepted), or\nnull."
               },
               {
                 "type": "null"
@@ -62754,6 +64850,34 @@
           }
         }
       },
+      "CreatePlanInviteBody": {
+        "type": "object",
+        "description": "Body of `POST /v1/superuser/companies/{id}/plan-invites`.",
+        "properties": {
+          "addons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The plan's add-ons: `signatures`, `quotes`, `quickbooks` (none for the\nbase plan only)."
+          },
+          "first_charge_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first charge day (`YYYY-MM-DD`): within today + 730 days, and at\nleast 8 days after the day the invite expires. Ignored (may be null)\nwhen the company has a running legacy subscription: its period end is\nused."
+          },
+          "expires_in_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Days the links work, 1 to 30 (default 14): until 23:59:59\nIndianapolis time on that day. With a running legacy subscription the\ninvite ends no later than the end of the day 8 days before its period\nend's day (`latest_expiry_on`)."
+          }
+        }
+      },
       "CreateSignupBody": {
         "type": "object",
         "description": "Body of `POST /v1/public/signups`.",
@@ -62970,6 +65094,32 @@
           }
         }
       },
+      "CreatedPlanInvite": {
+        "type": "object",
+        "description": "Answer of `POST /v1/superuser/companies/{id}/plan-invites`.",
+        "required": [
+          "invite",
+          "emailed",
+          "not_emailed"
+        ],
+        "properties": {
+          "invite": {
+            "$ref": "#/components/schemas/PlanInviteView"
+          },
+          "emailed": {
+            "type": "integer",
+            "description": "Managers the link was emailed to.",
+            "minimum": 0
+          },
+          "not_emailed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Addresses the email could not be sent to (resend later). Every\naddress when sending failed altogether: the invite is still made."
+          }
+        }
+      },
       "CreatedSale": {
         "type": "object",
         "description": "Response of `POST /v1/sales`.",
@@ -63123,6 +65273,35 @@
           "state": {
             "$ref": "#/components/schemas/OnboardingState",
             "description": "The saved state after the credit."
+          }
+        }
+      },
+      "CurrentPlan": {
+        "type": "object",
+        "description": "The legacy plan a Manager leaves.",
+        "required": [
+          "ends_on"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name, or null."
+          },
+          "monthly_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "What it charges per month, in cents, or null when unknown."
+          },
+          "ends_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The day it ends (`YYYY-MM-DD`): the new plan's first charge."
           }
         }
       },
@@ -69887,6 +72066,187 @@
           }
         }
       },
+      "InviteManager": {
+        "type": "object",
+        "description": "A Manager an invite goes to.",
+        "required": [
+          "id",
+          "name",
+          "email"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "User id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name (the email when the user has no name)."
+          },
+          "email": {
+            "type": "string",
+            "description": "Where the invite is emailed."
+          }
+        }
+      },
+      "InviteOffer": {
+        "type": "object",
+        "description": "`GET /v1/plan-invites/{token}`.",
+        "required": [
+          "status",
+          "company_name",
+          "addons",
+          "quote",
+          "first_charge_at",
+          "expires_at",
+          "consents",
+          "payment_mode",
+          "redirect_url"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/InviteStatus",
+            "description": "`open` (accept it), `accepting` (being finished: accept again to\nresume) or `accepted` (done: go to `redirect_url`)."
+          },
+          "company_name": {
+            "type": "string",
+            "description": "The invited company."
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddonKey"
+            },
+            "description": "The plan's add-ons, in a fixed order."
+          },
+          "quote": {
+            "$ref": "#/components/schemas/InviteQuote"
+          },
+          "first_charge_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the first charge happens (ISO 8601, UTC)."
+          },
+          "current_plan": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CurrentPlan",
+                "description": "The legacy plan that ends when this one starts, or null."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the link stops working (ISO 8601, UTC)."
+          },
+          "consents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RenderedConsent"
+            },
+            "description": "The checkboxes to tick, in order (terms, auto_renewal,\nper_user_pricing); empty unless `status` is `open`."
+          },
+          "payment_mode": {
+            "$ref": "#/components/schemas/InvitePaymentMode"
+          },
+          "redirect_url": {
+            "type": "string",
+            "description": "Where to go once accepted (the main app's billing page)."
+          }
+        }
+      },
+      "InvitePaymentMode": {
+        "type": "string",
+        "description": "How the payment method is collected.",
+        "enum": [
+          "test",
+          "unavailable"
+        ]
+      },
+      "InviteQuote": {
+        "type": "object",
+        "description": "The price of an invite's plan (before sales tax).",
+        "required": [
+          "users",
+          "included_users",
+          "extra_users",
+          "lines",
+          "base_and_addons_cents",
+          "monthly_cents",
+          "due_today_cents",
+          "first_charge_on"
+        ],
+        "properties": {
+          "users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The company's active users now (what the first charge counts)."
+          },
+          "included_users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Users the base price covers (10)."
+          },
+          "extra_users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Users above the included ones."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteLine"
+            },
+            "description": "Base, then extra users (when any), then each add-on."
+          },
+          "base_and_addons_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Base + add-ons, without extra users, in cents."
+          },
+          "monthly_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The monthly total with the extra users, in cents."
+          },
+          "due_today_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Always 0: nothing is charged before the first charge day."
+          },
+          "first_charge_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The first charge day (`YYYY-MM-DD`)."
+          }
+        }
+      },
+      "InviteState": {
+        "type": "string",
+        "description": "An invite as people see it: `expired` is an open invite past its time.",
+        "enum": [
+          "open",
+          "accepting",
+          "accepted",
+          "revoked",
+          "expired"
+        ]
+      },
+      "InviteStatus": {
+        "type": "string",
+        "description": "Where an invite is.",
+        "enum": [
+          "open",
+          "accepting",
+          "accepted",
+          "revoked"
+        ]
+      },
       "Invoice": {
         "type": "object",
         "description": "An invoice of the company.",
@@ -70684,6 +73044,52 @@
           }
         }
       },
+      "LegacySubscriptionView": {
+        "type": "object",
+        "description": "The company's legacy subscription (not ended), as the dialog shows it.",
+        "required": [
+          "status",
+          "current_period_end",
+          "first_charge_on",
+          "latest_expiry_on"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Stripe's status: `active`, `trialing`, `past_due`, `unpaid`, or one\nthat blocks a move (e.g. `paused`, `incomplete`)."
+          },
+          "plan_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The plan's name, or null."
+          },
+          "monthly_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "What it charges per month, in cents, or null when unknown."
+          },
+          "current_period_end": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When its current period ends (ISO 8601, UTC): the new plan's first\ncharge."
+          },
+          "first_charge_on": {
+            "type": "string",
+            "format": "date",
+            "description": "That day in the company's calendar (`YYYY-MM-DD`): the first charge\ndate of an invite, which cannot be changed."
+          },
+          "latest_expiry_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The last day an invite can work (`YYYY-MM-DD`, company calendar): 8\ndays before the period end's day, until its end. A longer expiry is\nshortened to it."
+          }
+        }
+      },
       "Letterhead": {
         "type": "object",
         "description": "The company header a form prints (`loadFormCompany`).",
@@ -71223,12 +73629,15 @@
           "customers_deleted",
           "seat_companies",
           "seat_errors",
-          "errors"
+          "errors",
+          "invites_resumed",
+          "invites_accepted",
+          "invites_given_up"
         ],
         "properties": {
           "processed": {
             "type": "integer",
-            "description": "`resumed` + `expired` (what the scheduler logs).",
+            "description": "`resumed` + `invites_resumed` + `expired` (what the scheduler logs).",
             "minimum": 0
           },
           "resumed": {
@@ -71269,6 +73678,21 @@
           "errors": {
             "type": "integer",
             "description": "Resumes that failed and Stripe customers that could not be deleted\n(retried on a later run).",
+            "minimum": 0
+          },
+          "invites_resumed": {
+            "type": "integer",
+            "description": "Plan invites stuck in acceptance whose switch was run again.",
+            "minimum": 0
+          },
+          "invites_accepted": {
+            "type": "integer",
+            "description": "Resumed plan invites this run finished (the company is on its plan).",
+            "minimum": 0
+          },
+          "invites_given_up": {
+            "type": "integer",
+            "description": "Plan invite acceptances given up on (staff were alerted).",
             "minimum": 0
           }
         }
@@ -71684,6 +74108,62 @@
           }
         }
       },
+      "MoveBlocked": {
+        "type": "object",
+        "description": "Why no invite can be made now.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "`already_on_plan` (a self-serve company whose subscription has not\nended), `invite_accepting`, `payment_unavailable` (payment collection\nis not live yet), `no_managers`, `legacy_overdue` (an overdue legacy\nsubscription, paused access or a balance due), `onboarding_fee_open`\n(the signup's onboarding fee of an ended self-serve company is not\nsettled yet), `legacy_subscription_unsupported` (its status is not\nactive, trialing, past_due or unpaid), `legacy_period_too_close` (it\nrenews in under 9 days: send the invite after it renews) or\n`catalog_unavailable`."
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence to show."
+          }
+        }
+      },
+      "MoveDefaults": {
+        "type": "object",
+        "description": "What the dialog starts with, and the dates it allows.",
+        "required": [
+          "first_charge_on",
+          "expires_in_days",
+          "min_first_charge_on",
+          "min_days_after_expiry",
+          "max_first_charge_on"
+        ],
+        "properties": {
+          "first_charge_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The first charge day offered (`YYYY-MM-DD`): 30 days from today."
+          },
+          "expires_in_days": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Days the invite works: 14 (1 to 30 allowed)."
+          },
+          "min_first_charge_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The earliest first charge day: today + 9 (the shortest invite, 1 day,\nplus `min_days_after_expiry`)."
+          },
+          "min_days_after_expiry": {
+            "type": "integer",
+            "format": "int64",
+            "description": "A picked first charge day is at least this many days (8) after the\nday the invite expires."
+          },
+          "max_first_charge_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The latest first charge day: today + 730 days."
+          }
+        }
+      },
       "MovedExtras": {
         "type": "object",
         "description": "How many catalog extras the move made.",
@@ -71800,6 +74280,19 @@
           }
         },
         "additionalProperties": false
+      },
+      "NewBooking": {
+        "type": "object",
+        "description": "A call booked in the Calendly widget.",
+        "required": [
+          "invitee_uri"
+        ],
+        "properties": {
+          "invitee_uri": {
+            "type": "string",
+            "description": "`payload.invitee.uri` of Calendly's `calendly.event_scheduled`\nmessage: `https://api.calendly.com/scheduled_events/<id>/invitees/<id>`."
+          }
+        }
       },
       "NewBugReport": {
         "type": "object",
@@ -73042,6 +75535,215 @@
           "days"
         ]
       },
+      "OnboardingCall": {
+        "type": "object",
+        "description": "The onboarding call as the signed-in user sees it.",
+        "required": [
+          "can_book",
+          "booking_unavailable"
+        ],
+        "properties": {
+          "commitment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OnboardingCommitment",
+                "description": "Null: the company has no commitment (a legacy company, or one moved\nonto a plan by staff)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "booking_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Calendly page to book on, with `name`, `email`,\n`utm_campaign=granite-onboarding` and `utm_content=company-<id>` in\nthe query. Null when the caller cannot book, the status does not allow\nbooking (only pending, booked and notice_sent do), or no page can be\nresolved."
+          },
+          "can_book": {
+            "type": "boolean",
+            "description": "The caller is a Manager (position 5) or an Admin of the acting\ncompany, so may book. Always false for Granite superusers (they mark\nthe call completed on the superuser page instead)."
+          },
+          "booking_unavailable": {
+            "type": "boolean",
+            "description": "No booking page could be had right now (see\n`booking_unavailable_reason`). Only meaningful when `can_book` and\nthe status allows booking."
+          },
+          "booking_unavailable_reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BookingUnavailableReason",
+                "description": "Why `booking_unavailable`: `not_configured` (booking is not set up\nyet) or `temporary` (Calendly could not be reached; try again in a\nfew minutes). Null when booking is available or not offered."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "OnboardingCallStatus": {
+        "type": "string",
+        "description": "Where an onboarding commitment stands.",
+        "enum": [
+          "pending",
+          "booked",
+          "completed",
+          "waived",
+          "suspended",
+          "notice_sent",
+          "fee_invoiced",
+          "fee_paid",
+          "fee_failed",
+          "fee_skipped",
+          "void"
+        ]
+      },
+      "OnboardingCommitment": {
+        "type": "object",
+        "description": "The company's onboarding commitment. Times are UTC ISO strings\n(`2026-11-20T14:00:00.000Z`).",
+        "required": [
+          "status",
+          "deadline_at",
+          "original_deadline_at",
+          "tolled_days",
+          "extension_used",
+          "fee_cents"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/OnboardingCallStatus",
+            "description": "Where it stands."
+          },
+          "deadline_at": {
+            "type": "string",
+            "description": "The deadline as moved (tolling, the extension, a call Granite\ncancelled or moved)."
+          },
+          "original_deadline_at": {
+            "type": "string",
+            "description": "Signup + 30 days."
+          },
+          "tolled_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Days added because no slot was bookable."
+          },
+          "extension_used": {
+            "type": "boolean",
+            "description": "The one 14-day extension was granted."
+          },
+          "fee_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The fee in cents (2 x base plan + add-ons at signup, before tax)."
+          },
+          "booked_start_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Start of the booked call; null when none is booked."
+          },
+          "booked_end_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "End of the booked call; null when none is booked."
+          },
+          "reschedule_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Calendly's page to reschedule the booked call; null when none."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When onboarding was completed; null until then."
+          },
+          "notice_sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the fee notice went out; null before."
+          },
+          "charge_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the fee is charged (notice + 7 days); null before the notice."
+          }
+        }
+      },
+      "OnboardingCommitmentEvent": {
+        "type": "object",
+        "description": "One timeline entry: who changed what, when (the evidence if the fee is\ndisputed).",
+        "required": [
+          "id",
+          "kind",
+          "to_status",
+          "deadline_at",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Entry id (increasing)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`created`, `booked`, `rescheduled`, `booking_cancelled`, `no_show`,\n`tolled`, `extended`, `waived`, `completed`, `suspended`, `resumed`,\n`notice_sent`, `invoiced`, `fee_paid`, `fee_failed`, `fee_skipped`,\n`voided`."
+          },
+          "from_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The status before; null for `created`."
+          },
+          "to_status": {
+            "type": "string",
+            "description": "The status after (same values as `OnboardingCallStatus`)."
+          },
+          "deadline_at": {
+            "type": "string",
+            "description": "The deadline after the change."
+          },
+          "actor_user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The superuser who acted; null for the customer or the system."
+          },
+          "actor_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That superuser's name; null for the customer or the system."
+          },
+          "detail": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The facts behind it (reason, old and new deadline, call times,\ninvoice id); null when none."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it happened (UTC ISO)."
+          }
+        }
+      },
       "OnboardingFeedback": {
         "type": "object",
         "description": "Body of `POST /v1/me/onboarding-feedback`.",
@@ -73157,6 +75859,62 @@
           "has_row": {
             "type": "boolean",
             "description": "A journey row exists (an empty but dated one counts)."
+          }
+        }
+      },
+      "OnboardingRun": {
+        "type": "object",
+        "description": "What one run did.",
+        "required": [
+          "processed",
+          "companies",
+          "reminders",
+          "notices",
+          "invoices",
+          "tolled",
+          "completed",
+          "errors"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer",
+            "description": "Work done this run: `reminders` + `notices` + `invoices` + `tolled` +\n`completed`; what the scheduler logs.",
+            "minimum": 0
+          },
+          "companies": {
+            "type": "integer",
+            "description": "Companies whose daily run this run took.",
+            "minimum": 0
+          },
+          "reminders": {
+            "type": "integer",
+            "description": "Reminder emails delivered to the mail service.",
+            "minimum": 0
+          },
+          "notices": {
+            "type": "integer",
+            "description": "Fee notices recorded as sent (one per company).",
+            "minimum": 0
+          },
+          "invoices": {
+            "type": "integer",
+            "description": "Fee invoices created or finished in Stripe.",
+            "minimum": 0
+          },
+          "tolled": {
+            "type": "integer",
+            "description": "Deadlines moved by a day without a bookable slot.",
+            "minimum": 0
+          },
+          "completed": {
+            "type": "integer",
+            "description": "Commitments completed by their call (48 hours after it, no no-show).",
+            "minimum": 0
+          },
+          "errors": {
+            "type": "integer",
+            "description": "Failures (Calendly, Stripe, mail, database); each was reported and is\nretried by a later run.",
+            "minimum": 0
           }
         }
       },
@@ -73861,6 +76619,26 @@
           "stage": {
             "type": "string",
             "description": "Its stage, e.g. \"Got a Quote\"."
+          }
+        }
+      },
+      "OpenPlanInvite": {
+        "type": "object",
+        "description": "A plan invite waiting for the company's Managers.",
+        "required": [
+          "expires_at",
+          "first_charge_on"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When its links stop working (ISO 8601, UTC)."
+          },
+          "first_charge_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The plan's first charge day (`YYYY-MM-DD`)."
           }
         }
       },
@@ -75314,6 +78092,185 @@
           }
         }
       },
+      "PlanInviteView": {
+        "type": "object",
+        "description": "An invite on the company screen.",
+        "required": [
+          "id",
+          "status",
+          "addons",
+          "first_charge_on",
+          "first_charge_at",
+          "forced_by_legacy_subscription",
+          "expires_at",
+          "created_at",
+          "gave_up"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Invite id (UUID)."
+          },
+          "status": {
+            "$ref": "#/components/schemas/InviteState"
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddonKey"
+            },
+            "description": "The add-ons of the plan, in a fixed order."
+          },
+          "first_charge_on": {
+            "type": "string",
+            "format": "date",
+            "description": "The first charge day shown to the Managers (`YYYY-MM-DD`)."
+          },
+          "first_charge_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the first charge happens (ISO 8601, UTC): the free period's end."
+          },
+          "forced_by_legacy_subscription": {
+            "type": "boolean",
+            "description": "The date is the company's legacy subscription's period end, which\nends there on acceptance."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the links stop working (ISO 8601, UTC): the end (23:59:59 in\nAmerica/Indiana/Indianapolis) of the day the emails state."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was made (ISO 8601, UTC)."
+          },
+          "created_by_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The superuser who made it, or null when unknown."
+          },
+          "accepted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the company switched to the plan (ISO 8601, UTC), or null."
+          },
+          "accepted_by_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Manager who accepted, or null."
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was withdrawn or replaced (ISO 8601, UTC), or null."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last attempt to finish the switch failed (an error code), or\nnull."
+          },
+          "gave_up": {
+            "type": "boolean",
+            "description": "The acceptance stopped being retried (`accepting` only): staff finish\nor withdraw it by hand."
+          }
+        }
+      },
+      "PlanMove": {
+        "type": "object",
+        "description": "`GET /v1/superuser/companies/{id}/plan-move`.",
+        "required": [
+          "company_id",
+          "company_name",
+          "plan_source",
+          "billable_users",
+          "managers",
+          "defaults",
+          "invites"
+        ],
+        "properties": {
+          "company_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Company id."
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name."
+          },
+          "plan_source": {
+            "type": "string",
+            "description": "`legacy` or `subscription`."
+          },
+          "billable_users": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Active users the plan would bill now."
+          },
+          "managers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InviteManager"
+            },
+            "description": "The Managers an invite is emailed to."
+          },
+          "legacy_subscription": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LegacySubscriptionView",
+                "description": "The company's legacy Stripe subscription that has not ended, or null."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "blocked": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MoveBlocked",
+                "description": "Why no invite can be made now, or null."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "catalog": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CatalogView",
+                "description": "The price list, or null when it cannot be loaded (or the company is\nalready on a plan)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/MoveDefaults"
+          },
+          "invites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanInviteView"
+            },
+            "description": "Its invites, newest first (at most 20)."
+          }
+        }
+      },
       "PlansResponse": {
         "type": "object",
         "description": "The catalog and a quote for one choice.",
@@ -76534,6 +79491,13 @@
               "null"
             ],
             "description": "`payment_method` (the card form, the default) or `manage` (the whole\nsubscription)."
+          },
+          "return_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the portal sends the manager back: `account` (the payments\napp's account page), else `/admin/billing` (the default)."
           }
         }
       },
@@ -79613,7 +82577,7 @@
         "properties": {
           "needed": {
             "type": "boolean",
-            "description": "The company is paused without a running subscription: paying restores\nit. False: go back to `/admin/billing`."
+            "description": "The company is paused without a running subscription: paying restores\nit. False (always for a self-serve company): go back to\n`/admin/billing`."
           },
           "cards": {
             "type": "array",
@@ -79869,7 +82833,7 @@
         "properties": {
           "url": {
             "type": "string",
-            "description": "Stripe's page."
+            "description": "Stripe's page, or the payments app's plan invite page."
           }
         }
       },
@@ -80313,6 +83277,28 @@
             "type": "integer",
             "format": "int64",
             "description": "Seconds until another code can be requested."
+          }
+        }
+      },
+      "ResentPlanInvite": {
+        "type": "object",
+        "description": "Answer of `POST .../plan-invites/{invite_id}/emails`.",
+        "required": [
+          "emailed",
+          "not_emailed"
+        ],
+        "properties": {
+          "emailed": {
+            "type": "integer",
+            "description": "Managers a new link was emailed to.",
+            "minimum": 0
+          },
+          "not_emailed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Addresses the email could not be sent to."
           }
         }
       },
@@ -85127,6 +88113,101 @@
           "text": {
             "type": "string",
             "description": "e.g. `11378 Gammel Pl, Fishers, IN, USA`."
+          }
+        }
+      },
+      "SuperuserCommitment": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OnboardingCommitment"
+          },
+          {
+            "type": "object",
+            "required": [
+              "company_id",
+              "created_at"
+            ],
+            "properties": {
+              "company_id": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The company it belongs to."
+              },
+              "completed_by": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "The superuser who marked it complete; null when the call completed it."
+              },
+              "no_show_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "When the last no-show was recorded; null without one."
+              },
+              "suspended_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "When it was suspended by a cancellation request; null when not."
+              },
+              "stripe_invoice_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The fee invoice in Stripe (`in_...`); null before it exists."
+              },
+              "created_at": {
+                "type": "string",
+                "description": "Signup (when the commitment was created)."
+              }
+            }
+          }
+        ],
+        "description": "The commitment with what only superusers see."
+      },
+      "SuperuserOnboardingCommitment": {
+        "type": "object",
+        "description": "A company's onboarding commitment for the superuser page.",
+        "required": [
+          "events",
+          "availability",
+          "charging_enabled"
+        ],
+        "properties": {
+          "commitment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SuperuserCommitment",
+                "description": "Null: the company has no commitment."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnboardingCommitmentEvent"
+            },
+            "description": "The timeline, newest first (up to 100)."
+          },
+          "availability": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AvailabilityCheck"
+            },
+            "description": "The slot checks of the last 14 days, newest first."
+          },
+          "charging_enabled": {
+            "type": "boolean",
+            "description": "`ONBOARDING_FEE_CHARGING=1`: a passed deadline leads to the fee."
           }
         }
       },
@@ -90080,6 +93161,10 @@
     {
       "name": "billing",
       "description": "The company's Granite Manager subscription (Stripe)"
+    },
+    {
+      "name": "onboarding-call",
+      "description": "The self-serve onboarding call: complete it within 30 days of signup or pay the onboarding fee (Terms section 11)"
     },
     {
       "name": "jobs",

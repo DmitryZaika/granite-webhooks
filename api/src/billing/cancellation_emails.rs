@@ -5,8 +5,9 @@
 
 use super::reminder_emails::{
     RenderedEmail, SUPPORT_EMAIL, company_or_default, escape_html, footer, format_local_date,
-    greeting, html_button, html_footer, html_paragraph, wrap_html,
+    format_local_time, greeting, html_button, html_footer, html_paragraph, wrap_html,
 };
+use crate::onboarding_call::commitment::NOTICE_DAYS;
 use chrono::NaiveDateTime;
 
 pub const CONFIRMATION_SUBJECT: &str = "We received your cancellation request";
@@ -34,11 +35,14 @@ pub struct ConfirmationInput<'a> {
     pub account_url: &'a str,
 }
 
-/// Why a cancellation request avoids the onboarding fee (Terms 11.6).
+/// Why a cancellation request avoids the onboarding fee, and what keeping
+/// the subscription means for it (Terms 11.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnboardingFee {
     /// Requested before the onboarding deadline.
     BeforeDeadline(NaiveDateTime),
+    /// Requested after the deadline, before the fee notice was sent.
+    BeforeNotice,
     /// Requested after the fee notice, before the fee's charge date.
     BeforeChargeDate(NaiveDateTime),
 }
@@ -47,12 +51,54 @@ impl OnboardingFee {
     fn sentence(self) -> String {
         match self {
             Self::BeforeDeadline(at) => format!(
-                "You requested cancellation before your onboarding deadline of {}, so the onboarding fee is not charged.",
+                "You requested cancellation before your onboarding deadline of {}, so the onboarding fee is not charged. If you keep your subscription, the usual onboarding rules apply again, and any onboarding fee comes with a notice at least {NOTICE_DAYS} days before it is charged.",
                 format_local_date(at)
             ),
-            Self::BeforeChargeDate(at) => format!(
-                "You requested cancellation before the charge date of the onboarding fee, {}, so the fee is not charged.",
+            Self::BeforeNotice => format!(
+                "You requested cancellation before we sent the onboarding fee notice, so the onboarding fee is not charged. If you keep your subscription, we first send that notice, at least {NOTICE_DAYS} days before any onboarding fee is charged."
+            ),
+            Self::BeforeChargeDate(at) => {
+                let date = format_local_date(at);
+                format!(
+                    "You requested cancellation before the charge date of the onboarding fee, {date}, so the fee is not charged. If you keep your subscription before {}, the fee is charged on {date}. If you keep it later, we first send a new notice at least {NOTICE_DAYS} days before any charge.",
+                    format_local_time(at)
+                )
+            }
+        }
+    }
+}
+
+/// The onboarding fee once a request is withdrawn (Terms 11.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WithdrawalFee {
+    /// The deadline is ahead: completing onboarding by then avoids the fee.
+    Deadline(NaiveDateTime),
+    /// Withdrawn before the charge date of the notice sent: the fee is
+    /// charged on it.
+    ChargedOn(NaiveDateTime),
+    /// Withdrawn after the deadline with no notice out, or on or after the
+    /// notice's charge date: a notice comes first.
+    NewNotice,
+    /// The commitment could not be read.
+    Unknown,
+}
+
+impl WithdrawalFee {
+    fn sentence(self) -> String {
+        match self {
+            Self::Deadline(at) => format!(
+                "The onboarding fee is not charged if onboarding is completed by your onboarding deadline of {}.",
                 format_local_date(at)
+            ),
+            Self::ChargedOn(at) => format!(
+                "You kept your subscription before the charge date in our onboarding fee notice, so the onboarding fee is charged on {}.",
+                format_local_date(at)
+            ),
+            Self::NewNotice => format!(
+                "Your onboarding deadline has passed, so the onboarding fee applies again. We first send an onboarding fee notice, at least {NOTICE_DAYS} days before the fee is charged."
+            ),
+            Self::Unknown => format!(
+                "If your plan has an onboarding commitment whose deadline has passed, the onboarding fee applies as if cancellation had not been requested, after a notice at least {NOTICE_DAYS} days before it is charged."
             ),
         }
     }
@@ -67,6 +113,8 @@ pub struct WithdrawalInput<'a> {
     pub withdrawn_by: &'a str,
     /// The next charge, when known.
     pub next_charge_at: Option<NaiveDateTime>,
+    /// What the onboarding fee does now; `None` when no fee is pending.
+    pub onboarding_fee: Option<WithdrawalFee>,
     pub account_url: &'a str,
 }
 
@@ -146,9 +194,7 @@ fn withdrawal_paragraphs(input: &WithdrawalInput<'_>, esc: fn(&str) -> String) -
             )
         },
     ));
-    paragraphs.push(
-        "If your plan has an onboarding commitment whose deadline has passed, the onboarding fee applies as if cancellation had not been requested.".to_string(),
-    );
+    paragraphs.extend(input.onboarding_fee.map(WithdrawalFee::sentence));
     paragraphs.push("Questions? Reply to this email.".to_string());
     paragraphs
 }
@@ -349,6 +395,27 @@ mod tests {
     }
 
     #[test]
+    fn keeping_the_subscription_before_the_deadline_brings_back_the_usual_rules() {
+        let email = render_confirmation(&confirmation(false));
+        assert!(email.text.contains(
+            "If you keep your subscription, the usual onboarding rules apply again, and any onboarding fee comes with a notice at least 7 days before it is charged."
+        ));
+    }
+
+    #[test]
+    fn a_request_after_the_deadline_before_the_notice_avoids_the_fee() {
+        let email = render_confirmation(&ConfirmationInput {
+            onboarding_fee: Some(OnboardingFee::BeforeNotice),
+            ..confirmation(false)
+        });
+        assert!(email.text.contains(
+            "You requested cancellation before we sent the onboarding fee notice, so the onboarding fee is not charged. If you keep your subscription, we first send that notice, at least 7 days before any onboarding fee is charged."
+        ));
+        assert!(!email.text.contains("onboarding deadline"));
+        no_dashes(&email);
+    }
+
+    #[test]
     fn the_fee_sentence_names_the_charge_date_after_the_notice_and_is_left_out_without_a_fee() {
         let notice = render_confirmation(&ConfirmationInput {
             onboarding_fee: Some(OnboardingFee::BeforeChargeDate(at("2026-12-01 15:00:00"))),
@@ -356,6 +423,9 @@ mod tests {
         });
         assert!(notice.text.contains(
             "You requested cancellation before the charge date of the onboarding fee, December 1, 2026, so the fee is not charged."
+        ));
+        assert!(notice.text.contains(
+            "If you keep your subscription before Tue, Dec 1 at 10:00 AM EST, the fee is charged on December 1, 2026. If you keep it later, we first send a new notice at least 7 days before any charge."
         ));
         assert!(!notice.text.contains("onboarding deadline"));
         let none = render_confirmation(&ConfirmationInput {
@@ -393,6 +463,7 @@ mod tests {
             user_name: None,
             withdrawn_by: "Dana",
             next_charge_at: Some(at("2027-01-21 05:00:00")),
+            onboarding_fee: None,
             account_url: ACCOUNT,
         };
         let email = render_withdrawal(&input);
@@ -407,6 +478,7 @@ mod tests {
         assert!(email.text.contains("Questions? Reply to this email."));
         assert!(email.html.contains("Questions? Reply to this email."));
         assert!(email.html.contains("Rock &amp; Co"));
+        assert!(!email.text.contains("onboarding"));
         no_dashes(&email);
 
         let unknown = render_withdrawal(&WithdrawalInput {
@@ -420,6 +492,42 @@ mod tests {
                 .contains("Charges continue every month as before.")
         );
         assert!(unknown.text.contains("A Manager withdrew"));
+    }
+
+    #[test]
+    fn the_withdrawal_says_when_the_onboarding_fee_is_charged_or_that_a_notice_comes_first() {
+        let input = |fee| WithdrawalInput {
+            company_name: "Rock & Co",
+            user_name: None,
+            withdrawn_by: "Dana",
+            next_charge_at: None,
+            onboarding_fee: Some(fee),
+            account_url: ACCOUNT,
+        };
+        let cases = [
+            (
+                WithdrawalFee::ChargedOn(at("2026-12-01 15:00:00")),
+                "You kept your subscription before the charge date in our onboarding fee notice, so the onboarding fee is charged on December 1, 2026.",
+            ),
+            (
+                WithdrawalFee::NewNotice,
+                "Your onboarding deadline has passed, so the onboarding fee applies again. We first send an onboarding fee notice, at least 7 days before the fee is charged.",
+            ),
+            (
+                WithdrawalFee::Deadline(at("2026-11-24 04:59:59")),
+                "The onboarding fee is not charged if onboarding is completed by your onboarding deadline of November 23, 2026.",
+            ),
+            (
+                WithdrawalFee::Unknown,
+                "If your plan has an onboarding commitment whose deadline has passed, the onboarding fee applies as if cancellation had not been requested, after a notice at least 7 days before it is charged.",
+            ),
+        ];
+        for (fee, sentence) in cases {
+            let email = render_withdrawal(&input(fee));
+            assert!(email.text.contains(sentence), "{fee:?}");
+            assert!(email.html.contains(sentence), "{fee:?}");
+            no_dashes(&email);
+        }
     }
 
     fn staff(reason: Option<&str>) -> StaffNoticeInput<'_> {

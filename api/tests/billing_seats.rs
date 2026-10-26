@@ -259,11 +259,14 @@ async fn seat_pushes_follow_the_billable_count(pool: MySqlPool) {
     assert_eq!(all.len(), 3, "every push has its own key");
 
     // Back to 10: the item is deleted and forgotten.
-    let two: Vec<i32> =
-        sqlx::query_scalar("SELECT id FROM users WHERE id > 20300 AND is_deleted = 0 LIMIT 2")
-            .fetch_all(&f.pool)
-            .await
-            .unwrap();
+    let two: Vec<i32> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE company_id = ? AND id > 20300 AND is_deleted = 0
+          ORDER BY id LIMIT 2",
+    )
+    .bind(COMPANY)
+    .fetch_all(&f.pool)
+    .await
+    .unwrap();
     f.deactivate(&two).await;
     f.changed().await;
     assert_eq!(f.extra_quantity(), None);

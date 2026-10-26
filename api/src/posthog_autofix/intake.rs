@@ -77,10 +77,10 @@ const REGRESSION_BATCH: u32 = 100;
 const ASSIGN_DAYS: i64 = 7;
 const ASSIGN_BATCH: u32 = 20;
 const PREVIEW_BATCH: u32 = 20;
-/// The api answers within 30 s (its Lambda timeout): no new PostHog or GitHub
-/// call starts after this, and the rest waits for the next tick.
+/// The API Gateway cuts the request at 30 s: no new PostHog or GitHub call
+/// (10 s at most) starts after this, and the rest waits for the next tick.
 const OUT_OF_TIME: &str = "tick time budget reached";
-const TICK_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+const TICK_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
 
 // Per database: dev and production share one MySQL server, and so do tests.
 const LOCK: &str = "SELECT GET_LOCK(CONCAT('posthog_autofix_tick:', DATABASE()), 0)";

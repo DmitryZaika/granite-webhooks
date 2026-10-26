@@ -17,7 +17,7 @@
 //! resent. A second withdrawal is answered as done.
 
 use super::cancellation_emails::{
-    ConfirmationInput, OnboardingFee, StaffEvent, StaffNoticeInput, WithdrawalInput,
+    ConfirmationInput, OnboardingFee, StaffEvent, StaffNoticeInput, WithdrawalFee, WithdrawalInput,
     render_confirmation, render_staff_email, render_staff_telegram, render_withdrawal,
 };
 use super::lock::{CompanyLock, LockError};
@@ -315,6 +315,7 @@ async fn request_locked(
 /// What a withdrawal did.
 struct Withdrawn {
     request: CancellationRequest,
+    withdrawn_at: NaiveDateTime,
     next_charge_at: Option<NaiveDateTime>,
 }
 
@@ -417,6 +418,7 @@ async fn withdraw_locked(
     tx.commit().await?;
     Ok(Some(Withdrawn {
         request: existing,
+        withdrawn_at: now,
         next_charge_at,
     }))
 }
@@ -532,9 +534,11 @@ async fn notify_staff(state: &AppState, notice: &StaffNoticeInput<'_>) {
     }
 }
 
-/// Why a request made at `requested_at` avoids the onboarding fee: before
-/// the fee's charge date once its notice went out, else before the deadline.
-/// `None` when no fee is pending (done, waived, already invoiced or void).
+/// Why a request made at `requested_at` avoids the onboarding fee (Terms
+/// 11.6, as the daily run suspends): once its notice went out, before the
+/// fee's charge date; before that any request, before or after the
+/// deadline. `None` when no fee is pending (done, waived, already invoiced
+/// or void) or the charge date has come.
 pub fn onboarding_fee(
     commitment: Option<&Commitment>,
     requested_at: NaiveDateTime,
@@ -545,11 +549,60 @@ pub fn onboarding_fee(
             .charge_after
             .filter(|charge| *charge > requested_at)
             .map(OnboardingFee::BeforeChargeDate),
-        Status::Pending | Status::Booked | Status::Suspended => (commitment.deadline_at
-            > requested_at)
-            .then_some(OnboardingFee::BeforeDeadline(commitment.deadline_at)),
+        Status::Pending | Status::Booked | Status::Suspended => {
+            Some(if commitment.deadline_at > requested_at {
+                OnboardingFee::BeforeDeadline(commitment.deadline_at)
+            } else {
+                OnboardingFee::BeforeNotice
+            })
+        }
         _ => None,
     }
+}
+
+/// The onboarding fee once a request made at `requested_at` is withdrawn at
+/// `withdrawn_at` (Terms 11.6, as the daily run resumes): a notice sent
+/// stands when withdrawn before its charge date, else a new notice comes
+/// first; with no notice the deadline decides. `None` when no fee is
+/// pending or the request was made on or after the charge date.
+pub fn fee_after_withdrawal(
+    commitment: Option<&Commitment>,
+    requested_at: NaiveDateTime,
+    withdrawn_at: NaiveDateTime,
+) -> Option<WithdrawalFee> {
+    let commitment = commitment?;
+    match (commitment.status, commitment.charge_after) {
+        (Status::NoticeSent | Status::Suspended, Some(charge))
+            if commitment.notice_sent_at.is_some() =>
+        {
+            if requested_at >= charge {
+                None
+            } else if withdrawn_at < charge {
+                Some(WithdrawalFee::ChargedOn(charge))
+            } else {
+                Some(WithdrawalFee::NewNotice)
+            }
+        }
+        (Status::Pending | Status::Booked | Status::Suspended, _) => {
+            Some(if withdrawn_at < commitment.deadline_at {
+                WithdrawalFee::Deadline(commitment.deadline_at)
+            } else {
+                WithdrawalFee::NewNotice
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The company's onboarding commitment, `None` without one; `Err` (logged)
+/// when it cannot be read.
+async fn load_commitment(state: &AppState, company_id: i32) -> Result<Option<Commitment>, ()> {
+    crate::onboarding_call::store::load(&state.pool, company_id)
+        .await
+        .map(|stored| stored.map(|stored| stored.commitment))
+        .map_err(|err| {
+            tracing::warn!(company_id, error = %err, "cancellation: onboarding commitment not read");
+        })
 }
 
 /// Emails the confirmation to every Manager; true when it reached at least
@@ -566,16 +619,8 @@ async fn send_confirmation(
         return false;
     };
     let account_url = payments_account_url();
-    let commitment = crate::onboarding_call::store::load(&state.pool, company_id)
-        .await
-        .unwrap_or_else(|err| {
-            tracing::warn!(company_id, error = %err, "cancellation: onboarding commitment not read");
-            None
-        });
-    let fee = onboarding_fee(
-        commitment.as_ref().map(|stored| &stored.commitment),
-        request.requested_at,
-    );
+    let commitment = load_commitment(state, company_id).await.ok().flatten();
+    let fee = onboarding_fee(commitment.as_ref(), request.requested_at);
     let mut sent = 0;
     for contact in &contacts {
         let email = render_confirmation(&ConfirmationInput {
@@ -625,12 +670,21 @@ async fn notify_withdrawn(state: &AppState, company_id: i32, user_id: i32, withd
     .flatten()
     .unwrap_or_default();
     let account_url = payments_account_url();
+    let onboarding_fee = match load_commitment(state, company_id).await {
+        Ok(commitment) => fee_after_withdrawal(
+            commitment.as_ref(),
+            withdrawn.request.requested_at,
+            withdrawn.withdrawn_at,
+        ),
+        Err(()) => Some(WithdrawalFee::Unknown),
+    };
     for contact in managers_or_log(state, company_id).await {
         let email = render_withdrawal(&WithdrawalInput {
             company_name: &company,
             user_name: contact.name.as_deref(),
             withdrawn_by: &by,
             next_charge_at: withdrawn.next_charge_at,
+            onboarding_fee,
             account_url: &account_url,
         });
         if let Err(err) = send_rendered(state, &contact.email, &email).await {
@@ -826,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn the_fee_is_avoided_before_the_deadline_or_after_the_notice_before_the_charge() {
+    fn the_fee_is_avoided_before_the_notice_or_after_it_before_the_charge() {
         let before = at("2026-11-01 12:00:00");
         let deadline = OnboardingFee::BeforeDeadline(at("2026-11-24 04:59:59"));
         for status in [Status::Pending, Status::Booked, Status::Suspended] {
@@ -834,14 +888,12 @@ mod tests {
                 onboarding_fee(Some(&commitment(status)), before),
                 Some(deadline)
             );
+            // After the deadline, the notice not sent yet.
+            assert_eq!(
+                onboarding_fee(Some(&commitment(status)), at("2026-11-25 12:00:00")),
+                Some(OnboardingFee::BeforeNotice)
+            );
         }
-        assert_eq!(
-            onboarding_fee(
-                Some(&commitment(Status::Pending)),
-                at("2026-11-25 12:00:00")
-            ),
-            None
-        );
         let noticed = Commitment {
             notice_sent_at: Some(at("2026-11-24 15:00:00")),
             charge_after: Some(at("2026-12-01 15:00:00")),
@@ -868,6 +920,66 @@ mod tests {
             assert_eq!(onboarding_fee(Some(&commitment(status)), before), None);
         }
         assert_eq!(onboarding_fee(None, before), None);
+    }
+
+    #[test]
+    fn a_withdrawal_before_the_charge_date_keeps_it_and_one_after_it_gets_a_new_notice() {
+        let asked = at("2026-11-27 12:00:00");
+        let noticed = Commitment {
+            notice_sent_at: Some(at("2026-11-24 15:00:00")),
+            charge_after: Some(at("2026-12-01 15:00:00")),
+            ..commitment(Status::Suspended)
+        };
+        for c in [
+            noticed.clone(),
+            Commitment {
+                status: Status::NoticeSent,
+                ..noticed.clone()
+            },
+        ] {
+            assert_eq!(
+                fee_after_withdrawal(Some(&c), asked, at("2026-12-01 14:59:59")),
+                Some(WithdrawalFee::ChargedOn(at("2026-12-01 15:00:00")))
+            );
+            for withdrawn in [at("2026-12-01 15:00:00"), at("2026-12-20 12:00:00")] {
+                assert_eq!(
+                    fee_after_withdrawal(Some(&c), asked, withdrawn),
+                    Some(WithdrawalFee::NewNotice)
+                );
+            }
+        }
+        // Asked on or after the charge date: the request changed nothing.
+        let late = Commitment {
+            status: Status::NoticeSent,
+            ..noticed
+        };
+        assert_eq!(
+            fee_after_withdrawal(
+                Some(&late),
+                at("2026-12-01 15:00:00"),
+                at("2026-12-02 12:00:00")
+            ),
+            None
+        );
+        // No notice: the deadline decides.
+        for status in [Status::Pending, Status::Booked, Status::Suspended] {
+            let c = commitment(status);
+            assert_eq!(
+                fee_after_withdrawal(Some(&c), asked, at("2026-11-20 12:00:00")),
+                Some(WithdrawalFee::Deadline(at("2026-11-24 04:59:59")))
+            );
+            assert_eq!(
+                fee_after_withdrawal(Some(&c), asked, at("2026-11-24 04:59:59")),
+                Some(WithdrawalFee::NewNotice)
+            );
+        }
+        for status in [Status::Completed, Status::FeeInvoiced, Status::Void] {
+            assert_eq!(
+                fee_after_withdrawal(Some(&commitment(status)), asked, asked),
+                None
+            );
+        }
+        assert_eq!(fee_after_withdrawal(None, asked, asked), None);
     }
 
     #[test]

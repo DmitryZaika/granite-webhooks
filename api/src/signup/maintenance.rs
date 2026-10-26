@@ -19,8 +19,9 @@ use serde::Serialize;
 use std::time::Instant;
 use utoipa::ToSchema;
 
-/// No new work starts after this long.
-const TIME_BUDGET: std::time::Duration = std::time::Duration::from_secs(40);
+/// No new work starts after this long; calls in flight end inside the API
+/// Gateway's 30 s.
+const TIME_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 /// The first wait before a stuck signup is resumed; it doubles with every
 /// failed run, up to [`MAX_RESUME_WAIT_MINUTES`].
 const RESUME_AFTER_MINUTES: i64 = 10;

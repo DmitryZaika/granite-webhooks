@@ -797,3 +797,55 @@ async fn the_subscription_ending_completes_the_request(pool: MySqlPool) {
         .await
         .assert_status(StatusCode::CONFLICT);
 }
+
+/// Company 20540 in its onboarding notice week: the deadline passed two
+/// days ago, the fee notice went out a day ago and charges in 6 days.
+async fn in_the_notice_week(pool: &MySqlPool) {
+    let now = naive(Utc::now().timestamp());
+    sqlx::query(
+        "INSERT INTO company_onboarding_commitments
+           (company_id, status, deadline_at, original_deadline_at, fee_cents, notice_sent_at,
+            notice_cycle_at, charge_after, created_at, updated_at)
+         VALUES (?, 'notice_sent', ?, ?, 60000, ?, ?, ?, ?, ?)",
+    )
+    .bind(COMPANY)
+    .bind(now - Duration::days(2))
+    .bind(now - Duration::days(2))
+    .bind(now - Duration::days(1))
+    .bind(now - Duration::days(1))
+    .bind(now + Duration::days(6))
+    .bind(now - Duration::days(32))
+    .bind(now - Duration::days(1))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[test_db::test(seed)]
+async fn in_the_notice_week_the_emails_say_what_keeping_the_subscription_does_to_the_fee(
+    pool: MySqlPool,
+) {
+    let f = fixture(pool.clone(), Plan::Active).await;
+    in_the_notice_week(&pool).await;
+
+    f.request(MANAGER_SESSION, json!({}))
+        .await
+        .assert_status(StatusCode::CREATED);
+    let confirmation = text(&f.emails_to(MANAGER_ONE)[0]);
+    assert!(
+        confirmation
+            .contains("You requested cancellation before the charge date of the onboarding fee, ")
+    );
+    assert!(confirmation.contains("If you keep your subscription before "));
+    assert!(confirmation.contains(
+        "If you keep it later, we first send a new notice at least 7 days before any charge."
+    ));
+
+    f.withdraw(MANAGER_SESSION)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let withdrawal = text(&f.emails_to(MANAGER_ONE)[1]);
+    assert!(withdrawal.contains(
+        "You kept your subscription before the charge date in our onboarding fee notice, so the onboarding fee is charged on "
+    ));
+}

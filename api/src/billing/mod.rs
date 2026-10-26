@@ -32,7 +32,7 @@ pub mod stripe;
 #[cfg(test)]
 mod test_store;
 
-use chrono::{DateTime, Duration, NaiveDateTime, SubsecRound, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, SubsecRound, TimeZone, Utc};
 use serde::Serialize;
 
 pub const GRACE_PERIOD_DAYS: i64 = 7;
@@ -199,6 +199,9 @@ pub struct SubscriptionSnapshot {
     /// `metadata.replaced_by`: a legacy subscription a plan move replaced
     /// with this subscription id (it ends at its period end).
     pub replaced_by: Option<String>,
+    /// `metadata.plan_invite_id`: the plan invite that made this subscription
+    /// (a legacy subscription it replaced carries it too, with `replaced_by`).
+    pub plan_invite_id: Option<String>,
 }
 
 /// One item of a Stripe subscription.
@@ -232,6 +235,8 @@ pub struct InvoiceSnapshot {
     pub live_subscription_status: Option<String>,
     /// The subscription's `metadata.replaced_by` (a plan move replaced it).
     pub replaced_by: Option<String>,
+    /// The subscription's `metadata.plan_invite_id`.
+    pub plan_invite_id: Option<String>,
 }
 
 /// The Stripe events billing acts on.
@@ -410,9 +415,12 @@ pub fn days_remaining(grace_ends_at: NaiveDateTime, now: NaiveDateTime) -> i64 {
     (remaining + day - 1) / day
 }
 
-/// `September 11, 2026`.
+/// `September 11, 2026`: the business day ([`catalog::SIGNUP_TZ`]) of a UTC time.
 pub fn format_billing_date(date: NaiveDateTime) -> String {
-    date.format("%B %-d, %Y").to_string()
+    catalog::SIGNUP_TZ
+        .from_utc_datetime(&date)
+        .format("%B %-d, %Y")
+        .to_string()
 }
 
 pub fn payment_required_message(grace_ends_at: NaiveDateTime) -> String {
@@ -572,6 +580,22 @@ mod tests {
             "Your Granite Manager subscription payment was unsuccessful. Please update your payment method or complete the payment. Your account will remain active until September 11, 2026."
         );
         assert_eq!(iso(at("2026-09-01 12:00:00")), "2026-09-01T12:00:00.000Z");
+    }
+
+    #[test]
+    fn billing_dates_are_the_indianapolis_day_of_a_utc_time() {
+        assert_eq!(
+            format_billing_date(at("2026-09-11 03:30:00")),
+            "September 10, 2026"
+        );
+        assert_eq!(
+            format_billing_date(at("2026-09-11 04:00:00")),
+            "September 11, 2026"
+        );
+        assert_eq!(
+            format_billing_date(at("2026-01-01 04:59:59")),
+            "December 31, 2025"
+        );
     }
 
     #[test]

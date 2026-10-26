@@ -24,7 +24,8 @@ use axum::extract::State;
 /// (each once), and creates the onboarding fee invoice 7 days after the
 /// notice (only with `ONBOARDING_FEE_CHARGING=1`; otherwise the fee is
 /// skipped for good). Emails are skipped while the mail service is not
-/// configured. Returns the counts.
+/// configured. Returns the counts; `processed` is `reminders` + `notices` +
+/// `invoices` + `tolled` + `completed`.
 #[utoipa::path(
     post,
     path = "/v1/jobs/onboarding-commitments",

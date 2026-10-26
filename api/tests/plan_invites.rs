@@ -13,6 +13,7 @@ use api::app;
 use api::billing::catalog::signup_day;
 use api::billing::invites::{local_day, token_hash};
 use api::billing::stripe::signature_header;
+use api::onboarding_call::commitment::end_of_local_day;
 use api::signup::SignupConfig;
 use api::state::AppState;
 use axum::http::{Method, StatusCode};
@@ -344,6 +345,93 @@ impl Env {
             .unwrap()
     }
 
+    /// Stripe sends event `id` of `kind` about `object`.
+    async fn webhook(&self, id: &str, kind: &str, object: Value) {
+        let event =
+            json!({ "id": id, "object": "event", "type": kind, "data": { "object": object } });
+        let payload = serde_json::to_vec(&event).unwrap();
+        let header = signature_header(&payload, WEBHOOK_SECRET, Utc::now().timestamp());
+        self.server
+            .post("/v1/webhooks/stripe")
+            .add_header("stripe-signature", header)
+            .add_header("content-type", "application/json")
+            .bytes(payload.into())
+            .await
+            .assert_status_ok();
+    }
+
+    /// The subscription `id` as Stripe has it now.
+    fn subscription(&self, id: &str) -> Value {
+        self.stripe.lock().unwrap().subscriptions[id].clone()
+    }
+
+    /// Company 100 is a self-serve company paying `sub_self` (base + Quotes,
+    /// `status`) of the Stripe customer `cus_self`.
+    async fn self_serve(&self, status: &str) {
+        sqlx::query(
+            "UPDATE company SET plan_source = 'subscription', billing_required = 1,
+                    billing_required_at = UTC_TIMESTAMP() - INTERVAL 90 DAY
+              WHERE id = 100",
+        )
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        {
+            let mut stripe = self.stripe.lock().unwrap();
+            stripe.customers.insert(
+                "cus_self".into(),
+                json!({ "id": "cus_self", "object": "customer", "name": "Acme Stone",
+                        "metadata": { "company_id": "100" },
+                        "invoice_settings": { "default_payment_method": null } }),
+            );
+            let items = vec![
+                stripe.item("price_base", 1, "sub_self"),
+                stripe.item("price_quotes", 1, "sub_self"),
+            ];
+            stripe.subscriptions.insert(
+                "sub_self".into(),
+                json!({ "id": "sub_self", "object": "subscription", "customer": "cus_self",
+                        "status": status, "metadata": { "company_id": "100", "plan": "self_serve_v1" },
+                        "items": { "object": "list", "data": items } }),
+            );
+        }
+        sqlx::query(
+            "INSERT INTO company_billing (company_id, stripe_customer_id, stripe_subscription_id,
+                                          subscription_status, payment_status)
+             VALUES (100, 'cus_self', 'sub_self', ?, 'active')",
+        )
+        .bind(status)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+    }
+
+    /// `sub_self` was cancelled: it ended, which paused access.
+    async fn end_self_serve(&self) {
+        self.cancel_in_stripe("sub_self");
+        sqlx::query(
+            "UPDATE company_billing SET subscription_status = 'canceled', payment_status = 'suspended'
+              WHERE company_id = 100",
+        )
+        .execute(&self.pool)
+        .await
+        .unwrap();
+    }
+
+    /// Company 100's onboarding commitment from its signup, in `status`.
+    async fn commitment(&self, status: &str) {
+        sqlx::query(
+            "INSERT INTO company_onboarding_commitments
+               (company_id, status, deadline_at, original_deadline_at, fee_cents, created_at, updated_at)
+             VALUES (100, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP(), 60000, UTC_TIMESTAMP(), UTC_TIMESTAMP())
+             ON DUPLICATE KEY UPDATE status = VALUES(status)",
+        )
+        .bind(status)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+    }
+
     async fn plan_source(&self, company_id: i32) -> String {
         sqlx::query_scalar("SELECT CAST(plan_source AS CHAR) FROM company WHERE id = ?")
             .bind(company_id)
@@ -433,13 +521,10 @@ async fn superusers_invite_every_manager_and_only_token_hashes_are_kept(pool: My
         first_charge.format("%H:%M").to_string().as_str(),
         "13:00" | "14:00"
     ));
-    let expires = instant(&invite["expires_at"]);
-    assert!(
-        (expires - Utc::now() - Duration::days(14))
-            .num_minutes()
-            .abs()
-            <= 1
-    );
+    // Until the end of the day 14 days on, in Indianapolis.
+    let expires = instant(&invite["expires_at"]).naive_utc();
+    assert_eq!(local_day(expires).to_string(), day_in(14));
+    assert_eq!(expires, end_of_local_day(local_day(expires)));
 
     // One email per Manager, each with its own link.
     let emails = env.emails(INVITE_SUBJECT);
@@ -1123,7 +1208,7 @@ async fn a_legacy_subscription_ends_exactly_where_the_plan_starts(pool: MySqlPoo
     assert_eq!(legacy["first_charge_on"], local_day(end).to_string());
     assert_eq!(
         legacy["latest_expiry_on"],
-        local_day(end - Duration::days(8)).to_string()
+        (local_day(end) - Duration::days(8)).to_string()
     );
     assert_eq!(moving["blocked"], Value::Null);
 
@@ -1142,10 +1227,11 @@ async fn a_legacy_subscription_ends_exactly_where_the_plan_starts(pool: MySqlPoo
         instant(&created["invite"]["first_charge_at"]).timestamp(),
         period_end
     );
-    // 14 days asked; the link stops 8 days before the period end.
+    // 14 days asked; the link stops at the end of the day 8 days before
+    // the period end's.
     assert_eq!(
-        instant(&created["invite"]["expires_at"]).timestamp(),
-        period_end - 8 * 86_400
+        instant(&created["invite"]["expires_at"]).naive_utc(),
+        end_of_local_day(local_day(end) - Duration::days(8))
     );
     let emails = env.emails(INVITE_SUBJECT);
     let email = &emails[0];
@@ -1217,17 +1303,8 @@ async fn a_legacy_subscription_ends_exactly_where_the_plan_starts(pool: MySqlPoo
 
     // A late webhook of the old subscription (still paid, now cancelling)
     // does not take the company back to it.
-    let event = json!({ "id": "evt_old_update", "object": "event",
-                        "type": "customer.subscription.updated", "data": { "object": old } });
-    let payload = serde_json::to_vec(&event).unwrap();
-    let header = signature_header(&payload, WEBHOOK_SECRET, Utc::now().timestamp());
-    env.server
-        .post("/v1/webhooks/stripe")
-        .add_header("stripe-signature", header)
-        .add_header("content-type", "application/json")
-        .bytes(payload.into())
-        .await
-        .assert_status_ok();
+    env.webhook("evt_old_update", "customer.subscription.updated", old)
+        .await;
     assert_eq!(
         billing_row(&pool).await,
         (Some(new_id), "trialing".into(), Some(end), None)
@@ -1491,7 +1568,7 @@ async fn a_legacy_renewal_too_close_blocks_the_move_and_its_late_acceptance(pool
     assert_eq!(code(&refused), "legacy_period_too_close");
     assert_eq!(env.invite_count().await, 0);
 
-    // Renewed: the invite works until 8 days before the new period end.
+    // Renewed: the invite works until the day 8 days before the new period end's.
     let renewed = Utc::now().timestamp() + 15 * 86_400;
     env.move_legacy_period_end(renewed);
     let created = env
@@ -1500,13 +1577,14 @@ async fn a_legacy_renewal_too_close_blocks_the_move_and_its_late_acceptance(pool
     created.assert_status(StatusCode::CREATED);
     let created: Value = created.json();
     let id = created["invite"]["id"].as_str().unwrap().to_string();
+    let last_day = local_day(at(renewed)) - Duration::days(8);
     assert_eq!(
-        instant(&created["invite"]["expires_at"]).timestamp(),
-        renewed - 8 * 86_400
+        instant(&created["invite"]["expires_at"]).naive_utc(),
+        end_of_local_day(last_day)
     );
     assert_eq!(
         env.plan_move(COMPANY).await["legacy_subscription"]["latest_expiry_on"],
-        local_day(at(renewed - 8 * 86_400)).to_string()
+        last_day.to_string()
     );
 
     // The period end moved closer since: accepting would leave under 8 days.
@@ -1830,4 +1908,190 @@ async fn the_seeded_dev_invite_opens_for_its_manager_only(pool: MySqlPool) {
     env.offer("sb11-dev-invite-token-0001", rob)
         .await
         .assert_status(StatusCode::FORBIDDEN);
+}
+
+#[test_db::test(seed)]
+async fn a_self_serve_company_whose_subscription_ended_is_moved_onto_a_new_plan(pool: MySqlPool) {
+    let env = Env::new(&pool).await;
+    env.self_serve("active").await;
+    // While its subscription runs it is on a plan already.
+    let moving = env.plan_move(COMPANY).await;
+    assert_eq!(moving["blocked"]["code"], "already_on_plan");
+    assert_eq!(moving["legacy_subscription"], Value::Null);
+    let refused = env.create_response().await;
+    refused.assert_status(StatusCode::CONFLICT);
+    assert_eq!(code(&refused), "already_on_plan");
+
+    // Cancelled, its signup's onboarding fee not settled yet.
+    env.end_self_serve().await;
+    env.commitment("pending").await;
+    let refused = env.create_response().await;
+    refused.assert_status(StatusCode::CONFLICT);
+    assert_eq!(code(&refused), "onboarding_fee_open");
+    env.commitment("void").await;
+    let moving = env.plan_move(COMPANY).await;
+    assert_eq!(moving["plan_source"], "subscription");
+    assert_eq!(moving["blocked"], Value::Null);
+    assert_eq!(moving["legacy_subscription"], Value::Null);
+    assert_eq!(moving["catalog"]["base_cents"], 30_000);
+
+    let created = env.create().await;
+    let id = created["invite"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["invite"]["forced_by_legacy_subscription"], false);
+    let token = env.token_for("manager@acme.test");
+    env.accept(&token, MANAGER).await.assert_status_ok();
+    assert_eq!(env.invite_row(&id).await.0, "accepted");
+    assert_eq!(env.plan_source(COMPANY).await, "subscription");
+
+    // Its Stripe customer is reused and nothing old is ended.
+    assert!(env.calls("POST", "/v1/customers").is_empty());
+    let creates = env.calls("POST", "/v1/subscriptions");
+    assert_eq!(creates.len(), 1);
+    assert_eq!(creates[0].field("customer").as_deref(), Some("cus_self"));
+    assert!(env.calls("POST", "/v1/subscriptions/sub_self").is_empty());
+
+    // Its one billing row follows the new subscription, paid up.
+    let new_id = env.stored_subscription(&id).await.unwrap();
+    let first_charge_at: NaiveDateTime =
+        sqlx::query_scalar("SELECT first_charge_at FROM plan_invites WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        billing_row(&pool).await,
+        (Some(new_id), "trialing".into(), Some(first_charge_at), None)
+    );
+    let payments: Vec<String> =
+        sqlx::query_scalar("SELECT payment_status FROM company_billing WHERE company_id = 100")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(payments, ["active"]);
+    // A move brings no onboarding commitment.
+    let commitments: Vec<String> = sqlx::query_scalar(
+        "SELECT CAST(status AS CHAR) FROM company_onboarding_commitments WHERE company_id = 100",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(commitments, ["void"]);
+    let consent: String = sqlx::query_scalar(
+        "SELECT CAST(amounts_and_dates AS CHAR) FROM consent_records
+          WHERE plan_invite_id = ? AND kind = 'auto_renewal'",
+    )
+    .bind(&id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let amounts: Value = serde_json::from_str(&consent).unwrap();
+    assert_eq!(amounts["legacy_subscription_replaced"], false);
+    assert!(amounts.get("onboarding_fee_cents").is_none());
+
+    // Running again: on a plan.
+    assert_eq!(
+        env.plan_move(COMPANY).await["blocked"]["code"],
+        "already_on_plan"
+    );
+}
+
+#[test_db::test(seed)]
+async fn events_of_an_unaccepted_invites_subscription_leave_the_legacy_billing_alone(
+    pool: MySqlPool,
+) {
+    let env = Env::new(&pool).await;
+    env.legacy_customer();
+    env.bill_legacy("active", Utc::now().timestamp() + 20 * 86_400)
+        .await;
+    let before = billing_row(&pool).await;
+    let created = env
+        .invite_for(COMPANY, &json!({ "addons": ["quotes"] }))
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let id = created.json::<Value>()["invite"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let token = env.token_for("manager@acme.test");
+    let addons_before = env.addon_rows().await;
+    // The subscription is made, then ending the legacy one fails.
+    env.stripe.lock().unwrap().fail(
+        Method::POST,
+        "/v1/subscriptions/sub_legacy",
+        FailMode::Before,
+        1,
+    );
+    env.accept(&token, MANAGER)
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let made = env.stored_subscription(&id).await.unwrap();
+    assert_eq!(
+        env.subscription(&made)["metadata"]["plan_invite_id"],
+        id.as_str()
+    );
+    let untouched = async || {
+        assert_eq!(billing_row(&pool).await, before);
+        let payment: String =
+            sqlx::query_scalar("SELECT payment_status FROM company_billing WHERE company_id = 100")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(payment, "active");
+        assert_eq!(env.plan_source(COMPANY).await, "legacy");
+        assert_eq!(env.addon_rows().await, addons_before);
+    };
+
+    // Its created and deleted events change nothing.
+    env.webhook(
+        "evt_invite_created",
+        "customer.subscription.created",
+        env.subscription(&made),
+    )
+    .await;
+    untouched().await;
+    env.cancel_in_stripe(&made);
+    env.webhook(
+        "evt_invite_deleted",
+        "customer.subscription.deleted",
+        env.subscription(&made),
+    )
+    .await;
+    untouched().await;
+
+    // Given up and withdrawn; the next invite is accepted.
+    let stopped = env.accept_with(&token, MANAGER, &json!([])).await;
+    assert_eq!(code(&stopped), "invite_subscription_ended");
+    env.revoke(&id).await.assert_status(StatusCode::NO_CONTENT);
+    untouched().await;
+    let created = env
+        .invite_for(COMPANY, &json!({ "addons": ["quotes"] }))
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let id = created.json::<Value>()["invite"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let token = env.token_for("manager@acme.test");
+    env.accept(&token, MANAGER).await.assert_status_ok();
+    let accepted = env.stored_subscription(&id).await.unwrap();
+    assert_eq!(billing_row(&pool).await.0, Some(accepted.clone()));
+
+    // Accepted: its events apply like any subscription's.
+    env.stripe
+        .lock()
+        .unwrap()
+        .subscriptions
+        .get_mut(&accepted)
+        .unwrap()["status"] = json!("past_due");
+    env.webhook(
+        "evt_accepted_updated",
+        "customer.subscription.updated",
+        env.subscription(&accepted),
+    )
+    .await;
+    let (subscription, status, ..) = billing_row(&pool).await;
+    assert_eq!(
+        (subscription, status.as_str()),
+        (Some(accepted), "past_due")
+    );
 }

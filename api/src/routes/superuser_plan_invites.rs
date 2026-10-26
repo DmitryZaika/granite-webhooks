@@ -85,9 +85,10 @@ pub struct CreatePlanInviteBody {
     /// used.
     #[serde(default)]
     pub first_charge_on: Option<String>,
-    /// Days the links work, 1 to 30 (default 14). With a running legacy
-    /// subscription the invite expires no later than 8 days before its
-    /// period end (`latest_expiry_on`).
+    /// Days the links work, 1 to 30 (default 14): until 23:59:59
+    /// Indianapolis time on that day. With a running legacy subscription the
+    /// invite ends no later than the end of the day 8 days before its period
+    /// end's day (`latest_expiry_on`).
     #[serde(default)]
     pub expires_in_days: Option<i64>,
 }
@@ -114,8 +115,8 @@ pub struct CreatedPlanInvite {
 /// codes: `invalid_addon`, `invalid_first_charge`, `invalid_expiry`; 409:
 /// the `blocked` codes of `get_platform_company_plan_move`
 /// (`already_on_plan`, `invite_accepting`, `payment_unavailable`,
-/// `no_managers`, `legacy_overdue`, `legacy_subscription_unsupported`,
-/// `legacy_period_too_close`); 503: `catalog_unavailable` (nothing made).
+/// `no_managers`, `legacy_overdue`, `onboarding_fee_open`,
+/// `legacy_subscription_unsupported`, `legacy_period_too_close`); 503: `catalog_unavailable` (nothing made).
 #[utoipa::path(
     post,
     path = "/v1/superuser/companies/{id}/plan-invites",
@@ -129,7 +130,7 @@ pub struct CreatedPlanInvite {
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a superuser", body = ErrorBody),
         (status = 404, description = "No such company", body = ErrorBody),
-        (status = 409, description = "The company cannot be invited now (codes already_on_plan, invite_accepting, payment_unavailable, no_managers, legacy_overdue, legacy_subscription_unsupported, legacy_period_too_close)", body = CodedErrorBody),
+        (status = 409, description = "The company cannot be invited now (codes already_on_plan, invite_accepting, payment_unavailable, no_managers, legacy_overdue, onboarding_fee_open, legacy_subscription_unsupported, legacy_period_too_close)", body = CodedErrorBody),
         (status = 500, description = "Database error", body = ErrorBody),
         (status = 503, description = "Prices cannot be loaded now (code catalog_unavailable), or billing is busy", body = CodedErrorBody),
     ),

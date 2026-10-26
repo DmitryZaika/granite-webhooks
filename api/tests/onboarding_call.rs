@@ -964,11 +964,19 @@ async fn the_job_needs_the_job_key(pool: MySqlPool) {
         .post("/v1/jobs/onboarding-commitments")
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
-    h.server
+    let res = h
+        .server
         .post("/v1/jobs/onboarding-commitments")
         .add_header("Authorization", "job-secret")
-        .await
-        .assert_status_ok();
+        .await;
+    res.assert_status_ok();
+    // time-triggered logs `processed` from every job.
+    let body: Value = res.json();
+    let work = ["reminders", "notices", "invoices", "tolled", "completed"]
+        .iter()
+        .map(|key| body[key].as_u64().unwrap())
+        .sum::<u64>();
+    assert_eq!(body["processed"].as_u64(), Some(work));
 }
 
 #[test_db::test(seed)]
@@ -1642,6 +1650,78 @@ async fn a_cancellation_during_the_notice_and_its_withdrawal_keep_the_charge_dat
     assert_eq!(run.invoices, 1);
     assert_eq!(status(&pool, PENDING).await, "fee_paid");
     assert_eq!(h.stripe.lock().unwrap().creates, 1);
+}
+
+#[test_db::test(seed)]
+async fn a_request_after_the_deadline_before_the_notice_suspends_and_no_notice_goes_out(
+    pool: MySqlPool,
+) {
+    only_pending(&pool).await;
+    let h = harness(&pool, ON).await;
+    let (_, deadline) = clock(&pool).await;
+    request_cancellation(&pool, deadline + Duration::hours(1)).await;
+
+    let run = h.run(deadline + Duration::hours(2)).await;
+
+    assert_eq!(run.notices, 0);
+    assert_eq!(status(&pool, PENDING).await, "suspended");
+    assert!(h.notices_to("manager@onboarding.test").is_empty());
+
+    // Withdrawn: the notice goes out first, the charge 7 days after it.
+    settle_cancellation(&pool, "withdrawn", deadline + Duration::days(1)).await;
+    let resumed_at = deadline + Duration::days(1) + Duration::hours(3);
+    assert_eq!(h.run(resumed_at).await.notices, 1);
+    let c = commitment(&pool, PENDING).await;
+    assert_eq!(c.status.as_str(), "notice_sent");
+    assert_eq!(c.charge_after, Some(resumed_at + Duration::days(7)));
+}
+
+#[test_db::test(seed)]
+async fn a_withdrawal_after_the_charge_date_sends_a_new_notice_before_any_charge(pool: MySqlPool) {
+    only_pending(&pool).await;
+    let h = harness(&pool, ON).await;
+    let (_, deadline) = clock(&pool).await;
+    let noticed_at = deadline + Duration::hours(1);
+    assert_eq!(h.run(noticed_at).await.notices, 1);
+    request_cancellation(&pool, deadline + Duration::days(2)).await;
+    h.run(deadline + Duration::days(2) + Duration::hours(2))
+        .await;
+    assert_eq!(status(&pool, PENDING).await, "suspended");
+
+    settle_cancellation(&pool, "withdrawn", noticed_at + Duration::days(8)).await;
+    let resumed_at = noticed_at + Duration::days(8) + Duration::hours(1);
+    let run = h.run(resumed_at).await;
+
+    assert_eq!((run.notices, run.invoices), (1, 0));
+    let c = commitment(&pool, PENDING).await;
+    assert_eq!(c.status.as_str(), "notice_sent");
+    assert_eq!(c.charge_after, Some(resumed_at + Duration::days(7)));
+    assert_eq!(h.notices_to("manager@onboarding.test").len(), 2);
+    assert_eq!(h.stripe.lock().unwrap().creates, 0);
+}
+
+#[test_db::test(seed)]
+async fn a_request_and_withdrawal_between_two_runs_across_the_charge_date_send_a_new_notice(
+    pool: MySqlPool,
+) {
+    only_pending(&pool).await;
+    let h = harness(&pool, ON).await;
+    let (_, deadline) = clock(&pool).await;
+    let noticed_at = deadline + Duration::hours(1);
+    assert_eq!(h.run(noticed_at).await.notices, 1);
+    let charge_after = noticed_at + Duration::days(7);
+    // No run sees the request: asked before the charge date, withdrawn after it.
+    request_cancellation(&pool, charge_after - Duration::hours(2)).await;
+    settle_cancellation(&pool, "withdrawn", charge_after + Duration::hours(1)).await;
+
+    let rerun_at = charge_after + Duration::hours(2);
+    let run = h.run(rerun_at).await;
+
+    assert_eq!((run.notices, run.invoices), (1, 0));
+    let c = commitment(&pool, PENDING).await;
+    assert_eq!(c.status.as_str(), "notice_sent");
+    assert_eq!(c.charge_after, Some(rerun_at + Duration::days(7)));
+    assert_eq!(h.stripe.lock().unwrap().creates, 0);
 }
 
 /// Company 20400 as a run left it: `fee_invoiced` with invoice `in_fee_left`

@@ -46,11 +46,12 @@ const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const DEFAULT_FROM_ADDRESS: &str = "noreply@granite-manager.com";
 /// Companies re-read from Stripe per run, and the time they may take.
 const RECONCILE_BATCH: u32 = 50;
-const RECONCILE_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+const RECONCILE_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 /// No amount-change notice is started after this much of the run.
-const AMOUNT_NOTICE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(45);
-/// No cancellation confirmation is resent after this much of the run.
-const CONFIRMATION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(50);
+const AMOUNT_NOTICE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(17);
+/// No cancellation confirmation is resent after this much of the run. With
+/// `SEND_TIMEOUT` the run ends by 25 s, inside the gateway's 30 s.
+const CONFIRMATION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// What this run's batch of the Stripe reconciliation did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
@@ -355,7 +356,7 @@ async fn reconcile(state: &AppState, now: NaiveDateTime) -> Option<ReconcileRun>
 /// `Authorization: <LAMBDA_KEY>`. Three steps run in order and each fails on
 /// its own: it prunes Stripe webhook event ids older than 90 days (at most
 /// once a day), reconciles Stripe-billed companies with Stripe (a pass every
-/// 6 hours, at most 50 companies or 15 seconds per run), then sends the
+/// 6 hours, at most 50 companies or 10 seconds per run), then sends the
 /// billing reminder emails to each company's Managers. Reminders are a failed
 /// renewal or a first payment asked for (day 0, three days left, paused
 /// tomorrow, paused, settled) and one notice 7 days before the first charge
@@ -363,14 +364,15 @@ async fn reconcile(state: &AppState, now: NaiveDateTime) -> Option<ReconcileRun>
 /// subscription is set to cancel by then). Each recipient gets each reminder
 /// once; a refused email is retried up to 3 times, 5 minutes apart; an email
 /// whose outcome is unknown is never resent. A run sends at most 20 emails
-/// and starts no new company after 40 seconds. Then the amount-change
-/// notices: when a self-serve company's monthly total changed (users or
-/// add-ons), its Managers get one email a day with the old and new totals and
-/// the charge the new total first applies to (`amount_notices`); a Manager
-/// whose email failed gets it the next day (up to 3 tries), and nothing is
-/// announced while a scheduled cancellation ends the subscription first. Last, the
-/// confirmation of a cancellation request that reached no Manager is resent
-/// to the company's Managers, 10 minutes after the request at the earliest
+/// and starts no new company after 14 seconds. Then the amount-change
+/// notices (none started after 17 seconds): when a self-serve company's
+/// monthly total changed (users or add-ons), its Managers get one email a day
+/// with the old and new totals and the charge the new total first applies to
+/// (`amount_notices`); a Manager whose email failed gets it the next day (up
+/// to 3 tries), and nothing is announced while a scheduled cancellation ends
+/// the subscription first. Last, the confirmation of a cancellation request
+/// that reached no Manager is resent (none after 20 seconds, so the run ends
+/// by 25 s, inside the API Gateway's 30 s) to the company's Managers, 10 minutes after the request at the earliest
 /// (`confirmations_resent`). Reminders, notices and confirmations are skipped
 /// while the mail service is not configured.
 #[utoipa::path(

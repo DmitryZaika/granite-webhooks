@@ -222,8 +222,14 @@ pub struct BillingOverview {
     /// Granite Manager to choose your plan").
     pub plan_invite: Option<OpenPlanInvite>,
     /// Paused and without a running subscription: pay on the restore page
-    /// (`GET /v1/billing/reactivation`).
+    /// (`GET /v1/billing/reactivation`). Always false for a self-serve
+    /// company (see `subscription_ended`).
     pub needs_new_subscription: bool,
+    /// A self-serve company whose subscription ended (cancelled, or never
+    /// paid): it cannot restart on its own. Show "Your subscription ended.
+    /// Contact Granite Manager to start again.", or the plan invite to
+    /// accept when `plan_invite` is set.
+    pub subscription_ended: bool,
     /// Stripe is configured on the server.
     pub billing_configured: bool,
 }
@@ -296,6 +302,7 @@ pub async fn overview(
     };
     let invoices = account::page_invoices(&state.stripe, &state.pool, record.as_ref()).await?;
     let card = account::default_card(&state.stripe, record.as_ref()).await;
+    let plan_source = plan_source(&state, user.company_id).await?;
     let plan_invite = invites::open_for_company(&state.pool, user.company_id)
         .await?
         .map(|invite| OpenPlanInvite {
@@ -310,9 +317,20 @@ pub async fn overview(
         restricted: gate.restricted,
         starts_checkout: false,
         plan_invite,
-        needs_new_subscription: gate.restricted && needs_new_subscription(record.as_ref()),
+        needs_new_subscription: gate.restricted
+            && plan_source != "subscription"
+            && needs_new_subscription(record.as_ref()),
+        subscription_ended: invites::subscription_ended(&plan_source, record.as_ref()),
         billing_configured: state.stripe.is_enabled(),
     }))
+}
+
+/// `company.plan_source`: `legacy` or `subscription` (empty when unknown).
+async fn plan_source(state: &AppState, company_id: i32) -> ApiResult<String> {
+    Ok(invites::company(&state.pool, company_id)
+        .await?
+        .map(|company| company.plan_source)
+        .unwrap_or_default())
 }
 
 /// The billing page on the host the request came from (the company's
@@ -512,7 +530,8 @@ pub struct ReactivationPlan {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ReactivationQuote {
     /// The company is paused without a running subscription: paying restores
-    /// it. False: go back to `/admin/billing`.
+    /// it. False (always for a self-serve company): go back to
+    /// `/admin/billing`.
     pub needed: bool,
     /// Saved cards, the default first.
     pub cards: Vec<Card>,
@@ -525,7 +544,8 @@ pub struct ReactivationQuote {
 /// Get what restoring access costs
 ///
 /// For a suspended company: the plan and price to pay, the saved cards and
-/// the Stripe.js key; then pay with `POST /v1/billing/reactivation`.
+/// the Stripe.js key; then pay with `POST /v1/billing/reactivation`. Never
+/// needed for a self-serve company (`subscription_ended` of `get_billing`).
 #[utoipa::path(
     get,
     path = "/v1/billing/reactivation",
@@ -557,7 +577,10 @@ pub async fn reactivation_quote(
         user.id,
     ))
     .await;
-    let needed = gate.restricted && needs_new_subscription(record.as_ref());
+    // A self-serve company starts again through a plan invite.
+    let needed = gate.restricted
+        && needs_new_subscription(record.as_ref())
+        && plan_source(&state, user.company_id).await? != "subscription";
     if !needed {
         return Ok(Json(ReactivationQuote {
             needed,

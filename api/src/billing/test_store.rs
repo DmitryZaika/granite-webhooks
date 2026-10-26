@@ -20,6 +20,10 @@ pub struct Memory {
     pub required_since: RefCell<HashMap<i32, NaiveDateTime>>,
     /// Reading a company's record fails (the database is down).
     pub fail_reads: Cell<bool>,
+    /// Companies with `plan_source = 'subscription'`.
+    pub self_serve: RefCell<HashSet<i32>>,
+    /// Plan invites by id: (company id, status).
+    pub plan_invites: RefCell<HashMap<String, (i32, String)>>,
 }
 
 fn read_failed() -> sqlx::Error {
@@ -123,6 +127,21 @@ impl BillingStore for Memory {
     }
     async fn billing_required_since(&self, company_id: i32) -> StoreResult<Option<NaiveDateTime>> {
         Ok(self.required_since.borrow().get(&company_id).copied())
+    }
+    async fn self_serve(&self, company_id: i32) -> StoreResult<bool> {
+        Ok(self.self_serve.borrow().contains(&company_id))
+    }
+    async fn plan_invite_status(
+        &self,
+        company_id: i32,
+        invite_id: &str,
+    ) -> StoreResult<Option<String>> {
+        Ok(self
+            .plan_invites
+            .borrow()
+            .get(invite_id)
+            .filter(|(company, _)| *company == company_id)
+            .map(|(_, status)| status.clone()))
     }
 }
 

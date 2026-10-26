@@ -11,13 +11,13 @@
 
 use super::emails::{self, Summary};
 use super::{
-    Invite, InviteStatus, MIN_DAYS_BEFORE_FIRST_CHARGE, has_ended, legacy_subscription, load,
-    load_catalog, local_day, not_found, owes,
+    CompanyPlan, Invite, InviteStatus, MIN_DAYS_BEFORE_FIRST_CHARGE, has_ended,
+    legacy_subscription, load, load_catalog, local_day, not_found, owes_for_move,
 };
 use crate::auth::session::{SessionUser, UserPositionRow};
 use crate::billing::catalog::{Catalog, PlanChoice, Quote, QuoteLine, signup_day};
 use crate::billing::lock::{CompanyLock, LockError};
-use crate::billing::machine::apply_subscription_change;
+use crate::billing::machine::apply_invite_subscription;
 use crate::billing::store::{BillingStore, MySqlBillingStore};
 use crate::billing::stripe::{
     InviteCustomer, NewSubscription, SetupPurpose, StripeError, SubscriptionOrigin, stripe_id,
@@ -125,13 +125,13 @@ impl Caller<'_> {
     }
 }
 
-/// The invite behind `token` and its company's name, for a Manager of it:
-/// 404 `invite_not_found`, 403 `not_invited`.
+/// The invite behind `token` and its company, for a Manager of it: 404
+/// `invite_not_found`, 403 `not_invited`.
 async fn invite_for(
     state: &AppState,
     token: &str,
     caller: Caller<'_>,
-) -> ApiResult<(Invite, String)> {
+) -> ApiResult<(Invite, CompanyPlan)> {
     let invite = super::by_token(&state.pool, token)
         .await?
         .ok_or_else(not_found)?;
@@ -145,7 +145,7 @@ async fn invite_for(
             &format!("Only a Manager of {} can accept this plan.", company.name),
         ));
     }
-    Ok((invite, company.name))
+    Ok((invite, company))
 }
 
 /// When the plan's first charge happens.
@@ -334,7 +334,8 @@ fn redirect_url(state: &AppState) -> String {
 
 /// The invite as the upgrade page shows it.
 pub async fn offer(state: &AppState, token: &str, caller: Caller<'_>) -> ApiResult<InviteOffer> {
-    let (invite, company_name) = invite_for(state, token, caller).await?;
+    let (invite, company) = invite_for(state, token, caller).await?;
+    let company_name = company.name;
     match invite.status {
         InviteStatus::Revoked => return Err(revoked()),
         InviteStatus::Open if invite.is_expired(billing::now()) => return Err(expired()),
@@ -416,7 +417,7 @@ pub async fn accept(
     let done = Accepted {
         redirect_url: redirect_url(state),
     };
-    let (mut invite, company_name) = invite_for(state, token, caller).await?;
+    let (mut invite, company) = invite_for(state, token, caller).await?;
     // A lost race reloads and handles the new status.
     let mut tries = 0;
     loop {
@@ -427,7 +428,7 @@ pub async fn accept(
             InviteStatus::Open if invite.is_expired(billing::now()) => return Err(expired()),
             InviteStatus::Open if tries < 2 => {
                 tries += 1;
-                let begun = begin(state, &invite, &company_name, caller, accepted, meta).await;
+                let begun = begin(state, &invite, &company, caller, accepted, meta).await;
                 let current = load(&state.pool, &invite.id).await?.ok_or_else(not_found)?;
                 match begun {
                     Ok(true) => {
@@ -467,7 +468,7 @@ pub async fn accept(
 async fn begin(
     state: &AppState,
     invite: &Invite,
-    company_name: &str,
+    company: &CompanyPlan,
     caller: Caller<'_>,
     accepted: &[ConsentAcceptance],
     meta: &RequestMeta,
@@ -494,7 +495,13 @@ async fn begin(
             "The company's billing changed since this invite was sent. Ask Granite Manager for a new invite.",
         ));
     }
-    if charge.overdue || record.as_ref().is_some_and(owes) {
+    // A self-serve company here has no live subscription (checked above).
+    let ended = company.plan_source == "subscription";
+    if charge.overdue
+        || record
+            .as_ref()
+            .is_some_and(|record| owes_for_move(record, ended))
+    {
         return Err(coded(
             StatusCode::CONFLICT,
             "legacy_overdue",
@@ -514,7 +521,7 @@ async fn begin(
     let users = seats::billable_users(&state.pool, invite.company_id).await?;
     let facts = facts(
         &catalog,
-        company_name,
+        &company.name,
         users,
         &invite.addons,
         charge.at,
@@ -529,7 +536,7 @@ async fn begin(
         ));
     }
     let known = record.and_then(|record| record.stripe_customer_id);
-    let customer = customer_id(state, invite, company_name, known).await?;
+    let customer = customer_id(state, invite, &company.name, known).await?;
     let payment = payment_method(state, invite, &customer).await?;
     let price_ids = serde_json::to_string(&catalog.subscription_price_ids(&invite.addons))
         .map_err(|err| ApiError::Internal(err.to_string()))?;
@@ -782,7 +789,7 @@ async fn run_locked(state: &AppState, invite_id: &str) -> ApiResult<RunOutcome> 
         replace_legacy(state, &invite, legacy_id, &snapshot.id).await?;
     }
     let now = billing::now();
-    apply_subscription_change(&MySqlBillingStore(pool), &snapshot, now).await?;
+    apply_invite_subscription(&MySqlBillingStore(pool), &snapshot, now).await?;
     let mut tx = pool.begin().await?;
     items::sync_items_in(&mut tx, company_id, &snapshot, now).await?;
     // As the superuser switch: a newly required company starts its window now.

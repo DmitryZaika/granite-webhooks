@@ -34,9 +34,9 @@ pub const RECOVERED_NOTICE_WINDOW_DAYS: i64 = 2;
 /// A claim still `sending` after this crashed between send and record.
 pub const STUCK_SENDING_MINUTES: i64 = 15;
 pub const REMINDER_EMAILS_PER_TICK: usize = 20;
-/// No new company is started after this, so a tick ends well inside the
-/// one-minute schedule and the Lambda timeout.
-pub const REMINDER_TICK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(40);
+/// No new company is started after this (counted from the start of the run),
+/// so the run and its notices end inside the API Gateway's 30 s.
+pub const REMINDER_TICK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(14);
 /// The first-charge email goes out this many days before `trial_end_at`.
 pub const FIRST_CHARGE_NOTICE_DAYS: i64 = 7;
 /// A first-charge cycle Stripe says needs no email is asked again after this.
@@ -1562,6 +1562,7 @@ mod tests {
                 paid_at: None,
                 live_subscription_status: paid.then(|| "active".to_string()),
                 replaced_by: None,
+                plan_invite_id: None,
             },
         }
     }
@@ -1589,6 +1590,7 @@ mod tests {
                 trial_end: None,
                 cancel_at: None,
                 replaced_by: None,
+                plan_invite_id: None,
             },
         }
     }
