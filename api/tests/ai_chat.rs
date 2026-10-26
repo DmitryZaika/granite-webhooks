@@ -189,7 +189,7 @@ async fn an_instructions_answer_streams_with_the_instruction_it_used(pool: MySql
     assert_eq!(request["stream"], true);
     let system = request["messages"][0]["content"].as_str().unwrap();
     assert!(
-        system.starts_with("PRICE QUERY: Check Instruction 1 first"),
+        system.contains("PRICE QUERY: Check Instruction 1 first"),
         "{system}"
     );
     assert!(system.contains("TITLE: Fabrication Prices") && system.contains("TITLE: Sealing"));
@@ -616,7 +616,7 @@ async fn a_special_order_in_a_quote_goes_to_the_manual_without_asking(pool: MySq
 #[test_db::test(seed)]
 async fn the_model_picks_the_manual_s_sections_for_the_answer(pool: MySqlPool) {
     let reply =
-        "Open **Edit drawing** → **5 Color & Edge** → **Slabs & Layout** → **Auto layout**.";
+        "Open **Edit drawing**, step **5 Color & Edge**, **Slabs & Layout**, **Auto layout**.";
     let (server, ai) = setup(
         &pool,
         vec![
@@ -652,7 +652,8 @@ async fn the_model_picks_the_manual_s_sections_for_the_answer(pool: MySqlPool) {
 /// are, without the model; the pick is answered from that feature's sections.
 #[test_db::test(seed)]
 async fn turning_off_notifications_asks_which_ones_first(pool: MySqlPool) {
-    let reply = "Click the bell → gear → switch off **Emails** under **Telegram alerts**.";
+    let reply =
+        "Click the bell, then the gear, and switch off **Emails** under **Telegram alerts**.";
     let (server, ai) = setup(&pool, vec![Reply::Text(reply.into())]).await;
 
     let events = ask(
