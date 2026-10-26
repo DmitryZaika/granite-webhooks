@@ -79,6 +79,62 @@ impl<'a> Chat<'a> {
     }
 }
 
+/// Sending an OpenAI request, once more when the connection failed before any answer.
+///
+/// The Lambda is frozen between invocations; a pooled connection the server
+/// closed meanwhile fails the next request at once ("error sending request").
+/// A request that timed out is not sent again.
+trait SendRetrying {
+    async fn send_retrying(self) -> Result<reqwest::Response, AiError>;
+}
+
+impl SendRetrying for reqwest::RequestBuilder {
+    async fn send_retrying(self) -> Result<reqwest::Response, AiError> {
+        let again = self.try_clone();
+        match self.send().await {
+            Ok(response) => Ok(response),
+            Err(err) if err.is_timeout() => Err(request_failed(err)),
+            Err(err) => {
+                let error = request_failed_text(&err);
+                tracing::warn!(%error, "OpenAI request failed; sending it once more");
+                match again {
+                    Some(request) => request.send().await.map_err(request_failed),
+                    None => Err(request_failed(err)),
+                }
+            }
+        }
+    }
+}
+
+/// reqwest's error with its causes, without the URL: "error sending request:
+/// connection reset by peer", "timed out", "error decoding response body: ...".
+fn request_failed_text(err: &reqwest::Error) -> String {
+    let mut text = if err.is_timeout() {
+        "timed out"
+    } else if err.is_decode() {
+        "error decoding response body"
+    } else if err.is_body() {
+        "error reading response body"
+    } else {
+        "error sending request"
+    }
+    .to_string();
+    let mut source = std::error::Error::source(err);
+    while let Some(cause) = source {
+        let cause_text = cause.to_string();
+        if !text.contains(&cause_text) {
+            text.push_str(": ");
+            text.push_str(&cause_text);
+        }
+        source = cause.source();
+    }
+    text
+}
+
+fn request_failed(err: reqwest::Error) -> AiError {
+    AiError::Request(request_failed_text(&err))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AiError {
     #[error("OPEN_AI_SECRET_KEY is not set")]
@@ -235,9 +291,8 @@ impl Ai {
                 .bearer_auth(&**key)
                 .timeout(chat.timeout)
                 .json(&body)
-                .send()
-                .await
-                .map_err(|err| AiError::Request(err.without_url().to_string()))?;
+                .send_retrying()
+                .await?;
             let status = response.status();
             if !status.is_success() {
                 let text = response.text().await.unwrap_or_default();
@@ -249,7 +304,7 @@ impl Ai {
             let reply: Reply = response
                 .json()
                 .await
-                .map_err(|err| AiError::Request(err.without_url().to_string()))?;
+                .map_err(request_failed)?;
             let usage = reply.usage;
             let first = reply.choices.into_iter().next();
             let finish_reason = first
@@ -312,9 +367,8 @@ impl Ai {
                 .bearer_auth(&**key)
                 .timeout(timeout)
                 .json(body)
-                .send()
-                .await
-                .map_err(|err| AiError::Request(err.without_url().to_string()))?;
+                .send_retrying()
+                .await?;
             let status = response.status();
             if !status.is_success() {
                 let text = response.text().await.unwrap_or_default();
@@ -326,7 +380,7 @@ impl Ai {
             let reply: Value = response
                 .json()
                 .await
-                .map_err(|err| AiError::Request(err.without_url().to_string()))?;
+                .map_err(request_failed)?;
             let usage: Option<Usage> = reply
                 .get("usage")
                 .cloned()
@@ -387,9 +441,8 @@ impl Ai {
                 .bearer_auth(&**key)
                 .timeout(chat.timeout)
                 .json(&body)
-                .send()
-                .await
-                .map_err(|err| AiError::Request(err.without_url().to_string()))?;
+                .send_retrying()
+                .await?;
             let status = response.status();
             if !status.is_success() {
                 let text = response.text().await.unwrap_or_default();
@@ -403,7 +456,7 @@ impl Ai {
             while let Some(chunk) = response
                 .chunk()
                 .await
-                .map_err(|err| AiError::Request(err.without_url().to_string()))?
+                .map_err(request_failed)?
             {
                 pending.extend_from_slice(&chunk);
                 while let Some(end) = pending.iter().position(|b| *b == b'\n') {
@@ -514,9 +567,8 @@ impl Ai {
                     format!("multipart/form-data; boundary={boundary}"),
                 )
                 .body(body)
-                .send()
-                .await
-                .map_err(|err| AiError::Request(err.without_url().to_string()))?;
+                .send_retrying()
+                .await?;
             let status = response.status();
             if !status.is_success() {
                 let text = response.text().await.unwrap_or_default();
@@ -528,7 +580,7 @@ impl Ai {
             let reply: Value = response
                 .json()
                 .await
-                .map_err(|err| AiError::Request(err.without_url().to_string()))?;
+                .map_err(request_failed)?;
             let image = reply["data"][0]["b64_json"].as_str().map(|b64| {
                 format!(
                     "data:image/{};base64,{b64}",
