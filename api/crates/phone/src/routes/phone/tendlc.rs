@@ -34,6 +34,7 @@ use crate::phone::tendlc::{
     self as form, Row, TenDlcDraft, TenDlcFeedback, TenDlcProblem, TenDlcStatus, UseCase, audit,
     locked_fields_changed, move_status,
 };
+use crate::phone::tendlc_check::{self as ai_check, TenDlcAiCheck};
 use crate::phone::tendlc_registry::{self as registry, APPEAL_CHARS, RegistryError};
 use crate::serde_helpers::js_date;
 use crate::state::AppState;
@@ -64,7 +65,8 @@ pub struct TenDlcActions {
     /// it.
     pub edit: bool,
     /// Mark it ready for a superuser (`POST .../ready`): a saved draft, or
-    /// one Telnyx refused once it is fixed (`problems` must be empty).
+    /// one Telnyx refused once it is fixed (`problems` must be empty); not
+    /// while its AI check waits or runs.
     pub mark_ready: bool,
 }
 
@@ -121,6 +123,12 @@ pub struct TenDlcRegistration {
     /// When it was last refused; null when never.
     #[serde(serialize_with = "js_date")]
     pub rejected_at: Option<DateTime<Utc>>,
+    /// The AI check that runs when a Manager marks it ready (the form and
+    /// the quote form, privacy policy and terms pages, as the carriers
+    /// check them): waiting, running, passed (it went to the superusers),
+    /// changes (what to change) or failed (it went on unchecked); null when
+    /// never asked for.
+    pub ai_check: Option<TenDlcAiCheck>,
     /// What the company's Managers may do now.
     pub actions: TenDlcActions,
 }
@@ -147,6 +155,7 @@ fn registration_view(row: Option<&Row>, suggestion: TenDlcDraft) -> TenDlcRegist
             sent_at: None,
             approved_at: None,
             rejected_at: None,
+            ai_check: None,
             actions: TenDlcActions {
                 edit: true,
                 mark_ready: false,
@@ -173,9 +182,11 @@ fn registration_view(row: Option<&Row>, suggestion: TenDlcDraft) -> TenDlcRegist
         sent_at: row.sent_at,
         approved_at: row.approved_at,
         rejected_at: row.rejected_at,
+        ai_check: ai_check::view(row),
         actions: TenDlcActions {
             edit: row.status.editable(),
-            mark_ready: matches!(row.status, TenDlcStatus::Draft | TenDlcStatus::Rejected),
+            mark_ready: matches!(row.status, TenDlcStatus::Draft | TenDlcStatus::Rejected)
+                && !ai_check::checking(row),
         },
         draft,
     }
@@ -199,19 +210,22 @@ fn api_error(err: RegistryError) -> ApiError {
 /// Saves the form for the company (Managers and superusers): 400 for a
 /// field longer than Telnyx takes or a change Telnyx no longer takes, 409
 /// once it is with Telnyx. A ready registration that is no longer complete
-/// goes back to draft.
+/// goes back to draft, and so does one a Manager changed while the AI
+/// checks forms (`by_manager`): it is checked again when marked ready.
 async fn save(
     state: &AppState,
     company_id: i32,
     input: &TenDlcDraft,
     actor: i32,
+    by_manager: bool,
 ) -> ApiResult<Row> {
     let pool = &state.pool;
     let draft = form::normalized(input);
     if let Some(message) = form::too_long(&draft) {
         return Err(ApiError::BadRequest(message));
     }
-    if let Some(row) = form::load(pool, company_id).await? {
+    let before = form::load(pool, company_id).await?;
+    if let Some(row) = &before {
         if !row.status.editable() {
             return Err(ApiError::Conflict(
                 "The registration is with Telnyx: it can't change now.".into(),
@@ -233,7 +247,12 @@ async fn save(
         .await?
         .ok_or_else(|| ApiError::Internal("the registration was not saved".into()))?;
     let problems = form::problems(&draft);
-    if row.status == TenDlcStatus::Ready && !problems.is_empty() {
+    let changed = before
+        .as_ref()
+        .is_some_and(|before| before.draft() != draft);
+    if row.status == TenDlcStatus::Ready
+        && (!problems.is_empty() || (by_manager && changed && state.ai.is_enabled()))
+    {
         move_status(pool, row.id, TenDlcStatus::Ready, TenDlcStatus::Draft, None).await?;
     }
     audit(
@@ -320,25 +339,30 @@ pub async fn save_tendlc_registration(
     CompanyManager(user): CompanyManager,
     JsonBody(input): JsonBody<TenDlcDraft>,
 ) -> ApiResult<Json<TenDlcRegistration>> {
-    let row = save(&state, user.company_id, &input, user.id).await?;
+    let row = save(&state, user.company_id, &input, user.id, true).await?;
     Ok(Json(registration_view(Some(&row), TenDlcDraft::default())))
 }
 
 /// Mark the texting registration (10DLC) ready
 ///
-/// Says the company's registration is complete: the superusers are told
-/// (bell) and one of them reviews it and sends it to Telnyx; the company
-/// never sends it. Also after a rejection, once it is fixed. 400 when
-/// nothing is saved yet or it is not complete (the first of `problems`);
-/// 409 once it is with Telnyx. Marking a ready one again changes nothing.
-/// Audited. The company's Managers only.
+/// Says the company's registration is complete. An AI checks it first
+/// (`aiCheck`, within minutes: the form and the quote form, privacy policy
+/// and terms pages, as the carriers check them) and emails the Manager the
+/// result: what to change (it stays a draft), or that it passed, and then
+/// it is ready: the superusers are told (bell and email) and one of them
+/// sends it to Telnyx; the company never sends it. Without an AI on the
+/// server it is ready at once. Also after a rejection, once it is fixed.
+/// 400 when nothing is saved yet or it is not complete (the first of
+/// `problems`); 409 once it is with Telnyx. Marking a ready one, or one
+/// being checked, again changes nothing. Audited. The company's Managers
+/// only.
 #[crate::openapi::path(
     post,
     path = "/v1/phone/admin/tendlc/ready",
     operation_id = "mark_tendlc_registration_ready",
     tag = "phone",
     responses(
-        (status = 200, description = "The registration, ready", body = TenDlcRegistration),
+        (status = 200, description = "The registration, being checked or ready", body = TenDlcRegistration),
         (status = 400, description = "Nothing saved yet, or not complete", body = ErrorBody),
         (status = 401, description = "No valid session", body = ErrorBody),
         (status = 403, description = "Caller is not a Manager of the company", body = ErrorBody),
@@ -362,7 +386,20 @@ pub async fn mark_tendlc_registration_ready(
             ));
         }
         registry::complete(&row.draft()).map_err(api_error)?;
-        if move_status(pool, row.id, row.status, TenDlcStatus::Ready, Some(user.id)).await? {
+        if state.ai.is_enabled() {
+            // The job checks it (`tendlc_check`) and moves it on.
+            if ai_check::request(pool, row.id, user.id).await? {
+                audit(
+                    pool,
+                    user.company_id,
+                    Some(user.id),
+                    "tendlc_ai_check_requested",
+                    row.id,
+                    &json!({ "from": row.status.as_str() }),
+                )
+                .await?;
+            }
+        } else if move_status(pool, row.id, row.status, TenDlcStatus::Ready, Some(user.id)).await? {
             let by = user
                 .name
                 .as_deref()
@@ -750,7 +787,7 @@ pub async fn save_company_tendlc(
 ) -> ApiResult<Json<TenDlcReview>> {
     superuser(&user)?;
     company_exists(&state, id).await?;
-    save(&state, id, &input, user.id).await?;
+    save(&state, id, &input, user.id, false).await?;
     Ok(Json(review(&state, id).await?))
 }
 

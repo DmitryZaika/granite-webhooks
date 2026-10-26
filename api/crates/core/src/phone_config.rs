@@ -34,6 +34,9 @@ pub struct PhoneConfig {
     /// `PHONE_MIN_APP_VERSION`: the oldest app version allowed to call, for
     /// companies that set none.
     pub min_app_version: Option<Arc<str>>,
+    /// The 10DLC AI check may read pages on private and loopback addresses
+    /// (the tests' stand-in websites); never from the environment.
+    pub allow_private_pages: bool,
 }
 
 impl Default for PhoneConfig {
@@ -46,6 +49,7 @@ impl Default for PhoneConfig {
             public_key: None,
             allow_unsigned_webhooks: false,
             min_app_version: None,
+            allow_private_pages: false,
         }
     }
 }
@@ -74,6 +78,7 @@ impl PhoneConfig {
             public_key: var("TELNYX_PUBLIC_KEY").map(Arc::from),
             allow_unsigned_webhooks: var("PHONE_ALLOW_UNSIGNED_WEBHOOKS").as_deref() == Some("1"),
             min_app_version: var("PHONE_MIN_APP_VERSION").map(Arc::from),
+            allow_private_pages: false,
         }
     }
 }

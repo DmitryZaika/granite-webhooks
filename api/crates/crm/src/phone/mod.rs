@@ -58,6 +58,8 @@ pub mod revoke;
 pub mod routing;
 pub mod settings;
 pub mod tendlc;
+pub mod tendlc_check;
+pub mod tendlc_pages;
 pub mod tendlc_registry;
 pub mod texting;
 pub mod texts;

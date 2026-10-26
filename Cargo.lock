@@ -285,6 +285,7 @@ dependencies = [
 name = "api-crm"
 version = "0.1.0"
 dependencies = [
+ "ammonia",
  "api-core",
  "api-media",
  "axum",
