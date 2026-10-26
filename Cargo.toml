@@ -28,6 +28,11 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+# Dependencies build once per target directory. Optimized, the tests spend
+# less time in serde, sqlx, axum and bcrypt (on GitHub's 4 cores the API
+# tests run in less than half the time) and the test binaries are a fifth
+# smaller, so they link and start faster.
+opt-level = 1
 
 # Proc macros (serde, sqlx, utoipa) and build scripts, optimized: they run on
 # every rebuild of the crates that use them.

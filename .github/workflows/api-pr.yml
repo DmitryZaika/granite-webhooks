@@ -72,9 +72,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # rust-cache's key leaves out Cargo.toml's [profile] sections, and a run
+      # that restored its exact key never saves: renamed when a profile
+      # changes, or every run would rebuild the dependencies.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: api-tests
+          shared-key: api-tests-o1
 
       - name: Wait for MySQL and the migrations
         timeout-minutes: 5

@@ -155,7 +155,7 @@ api-openapi:
 
 # Serves http://localhost:9100/lambda-url/api/... through the Lambda runtime emulator.
 # A dev build, not --release: an edit rebuilds in seconds, not minutes (the
-# image and PDF crates are optimized in the dev profile too, see Cargo.toml).
+# dependencies are optimized in the dev profile too, see Cargo.toml).
 .PHONY: api-local
 api-local:
 	test -f api/.env.local || cp api/.env.local.example api/.env.local

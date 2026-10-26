@@ -100,9 +100,11 @@ jobs:
       # One cache per build profile, prod's under its old name. rust-cache only
       # saves when its key missed, so with one key for both, the profile that
       # did not save it would build every dependency from scratch on each run.
+      # Its key leaves out Cargo.toml's [profile] sections: a profile's cache
+      # is renamed when the profile changes (dev: dependencies at opt-level 1).
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: lambda-${{ inputs.project }}${{ inputs.environment == 'dev' && '-dev' || '' }}
+          shared-key: lambda-${{ inputs.project }}${{ inputs.environment == 'dev' && '-dev-o1' || '' }}
           key: cargo-lambda-${{ env.CARGO_LAMBDA_VERSION }}-zig-${{ env.ZIGLANG_VERSION }}
 
       - uses: astral-sh/setup-uv@v6

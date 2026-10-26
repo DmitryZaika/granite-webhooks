@@ -84,7 +84,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: /srv/autofix/work/granite-webhooks
-          shared-key: posthog-autofix
+          shared-key: posthog-autofix-o1
 
       - name: Apply migrations
         working-directory: /srv/autofix/tools
@@ -204,7 +204,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: /srv/autofix/work/granite-webhooks
-          shared-key: posthog-autofix
+          shared-key: posthog-autofix-o1
           save-if: false
 
       - uses: oven-sh/setup-bun@v2
