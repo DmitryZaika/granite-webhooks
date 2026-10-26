@@ -9,7 +9,9 @@ description = "Lead forms, the Telegram bot that hands leads to sales reps, the 
 doctest = false
 
 [features]
-# See the webhooks crate's `openapi` feature.
+# Generates the OpenAPI document of the lead form route with utoipa
+# (`openapi`), for `make webhooks-openapi` and its test. Builds without it
+# serve the checked-in webhooks/openapi.json.
 openapi = ["dep:utoipa", "webhooks-core/openapi"]
 # See webhooks-core's `test-support`.
 test-support = ["webhooks-phone/test-support"]
@@ -35,4 +37,5 @@ webhooks-core = { path = "../core", features = ["test-support"] }
 webhooks-phone = { path = "../phone", features = ["test-support"] }
 test-db = { path = "../../../test-db" }
 axum-test = "19"
+http-body-util = "0.1"
 tracing-test = "0.2.6"

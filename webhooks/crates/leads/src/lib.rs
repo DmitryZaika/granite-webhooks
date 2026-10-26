@@ -20,6 +20,7 @@ use sqlx::MySqlPool;
 pub use webhooks_phone::*;
 
 pub mod libs;
+pub mod openapi;
 pub mod telegram;
 pub mod template;
 #[cfg(test)]
@@ -66,4 +67,5 @@ pub fn router() -> Router<MySqlPool> {
             "/template/complete/{company_id}/{user_id}",
             post(template::receive::get_complete_template),
         )
+        .route("/api-docs/openapi.json", get(openapi::openapi_spec))
 }

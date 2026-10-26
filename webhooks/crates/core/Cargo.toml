@@ -9,7 +9,7 @@ description = "The webhooks Lambda's foundation: database code, schemas, auth ex
 doctest = false
 
 [features]
-# See the webhooks crate's `openapi` feature.
+# See webhooks-leads' `openapi` feature.
 openapi = ["dep:utoipa"]
 # The test helpers (`tests`) and the code's test stand-ins (placeholder bot
 # tokens), for the tests of the crates above: their dev-dependencies turn it on.

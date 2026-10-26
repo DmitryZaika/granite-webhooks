@@ -18,7 +18,7 @@ webhooks/
     main.rs             Lambda entry
     lib.rs              run(): serves the router on the Lambda runtime
     axum_helpers/axum_app.rs   new_main_app(): every crate's routes, the
-                        request logger, CORS, /api-docs/openapi.json
+                        request logger, CORS
   crates/               bottom to top; a crate may use only the crates below it
     core/   webhooks-core   database code (crud), request schemas, auth
                             extractors and the Telegram bots (axum_helpers),
@@ -28,7 +28,8 @@ webhooks/
     phone/  webhooks-phone  CloudTalk, RingCentral, Telnyx, POST /sms/send
                             (outbound::sms), Google address lookups
     leads/  webhooks-leads  lead forms (webhooks), the Telegram bot (telegram),
-                            lead and referral logic (libs), templates (template)
+                            lead and referral logic (libs), templates (template),
+                            the lead form route's OpenAPI document (openapi)
   openapi.json          the lead form route's spec, served at /api-docs/openapi.json
 ```
 
@@ -56,4 +57,5 @@ stand-ins (stub URLs, placeholder bot tokens) apply when another crate's
 tests call it. The Lambda is never built with it.
 
 `make webhooks-openapi` regenerates `openapi.json` after a change to the lead
-form route's annotations (utoipa only runs with the `openapi` feature).
+form route's annotations (utoipa only runs with webhooks-leads' `openapi`
+feature).

@@ -8,17 +8,13 @@ edition = "2024"
 [lib]
 # No doc tests; rustdoc would still compile the whole crate looking for them.
 doctest = false
+# The tests are in the crates' own: one test binary less to link and start.
+test = false
 
 [[bin]]
 name = "webhooks"
 path = "src/main.rs"
 test = false
-
-[features]
-# Generates the OpenAPI document of the lead form route with utoipa, for
-# `make webhooks-openapi` and its test (`--features openapi`). Builds without
-# it serve the checked-in webhooks/openapi.json.
-openapi = ["dep:utoipa", "webhooks-core/openapi", "webhooks-leads/openapi"]
 
 [dependencies]
 webhooks-core = { path = "crates/core" }
@@ -31,8 +27,3 @@ lambda_http = "1.1"
 sqlx = { version = "0.9", features = ["runtime-tokio", "mysql", "chrono"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tower-http = { version = "0.6", features = ["cors"] }
-utoipa = { version = "5.5.0", features = ["axum_extras"], optional = true }
-
-[dev-dependencies]
-http-body-util = "0.1"
-serde_json = "1.0"
