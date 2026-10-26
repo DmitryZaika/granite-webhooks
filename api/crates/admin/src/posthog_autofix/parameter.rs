@@ -6,7 +6,6 @@
 //! parameter, read once at cold start; a variable set in the environment wins.
 
 use crate::sigv4::Signer;
-use aws_credential_types::provider::ProvideCredentials;
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
@@ -39,17 +38,8 @@ pub fn lookup<S: BuildHasher>(
 /// The decrypted value of the SecureString parameter `name` (SSM
 /// `GetParameter`, in the Lambda's region).
 pub async fn fetch(name: &str) -> Result<String, String> {
-    let region = ["AWS_REGION", "AWS_DEFAULT_REGION"]
-        .into_iter()
-        .find_map(|name| std::env::var(name).ok().filter(|v| !v.trim().is_empty()))
-        .unwrap_or_else(|| "us-east-2".to_string());
-    let config = common::http::aws_config(region.clone()).await;
-    let credentials = config
-        .credentials_provider()
-        .ok_or("no AWS credentials")?
-        .provide_credentials()
-        .await
-        .map_err(|error| error.to_string())?;
+    let region = common::amazon::region();
+    let credentials = common::amazon::credentials::credentials().await?;
     let url = format!("https://ssm.{region}.amazonaws.com/");
     let body = serde_json::json!({ "Name": name, "WithDecryption": true }).to_string();
     let headers = [

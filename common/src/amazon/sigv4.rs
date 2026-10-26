@@ -1,6 +1,6 @@
-//! AWS Signature Version 4 for the few AWS calls the API makes itself (S3
-//! objects, one SSM parameter), sent with `reqwest`: whole SDK crates for
-//! them cost far more build time than the calls are worth.
+//! AWS Signature Version 4 for the AWS calls the apps make (SES, S3 objects,
+//! one SSM parameter), sent with `reqwest`: the SDK crates for them cost far
+//! more build time than the calls are worth.
 
 use aws_credential_types::Credentials;
 use aws_sigv4::http_request::{

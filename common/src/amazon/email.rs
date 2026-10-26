@@ -1,5 +1,9 @@
-use aws_sdk_sesv2::types::{Body, Content, Destination, EmailContent, Message};
-use aws_sdk_sesv2::{Client, Error};
+//! Email through SES (v2 API), and the SES identities of the account.
+
+use super::sigv4::{AWS_PATH, Signer};
+use base64::Engine as _;
+use percent_encoding::utf8_percent_encode;
+use serde_json::{Value, json};
 
 pub const DEFAULT_NOREPLY_EMAIL_ADDRESS: &str = "noreply@granite-manager.com";
 pub const DEFAULT_SEND_EMAIL_ADDRESS: &str = "sales@granite-manager.com";
@@ -63,45 +67,29 @@ pub async fn send_message(to: &[&str], subject: &str, message: &str) -> Result<(
         .map(|_| ())
 }
 
+/// Sends an HTML email from `from`; returns SES's message id.
 pub async fn send_message_from(
     to: &[&str],
     subject: &str,
     message: &str,
     from: &str,
 ) -> Result<String, Error> {
-    let shared_config = crate::http::aws_config("us-east-2").await;
-    let client = Client::new(&shared_config);
-
-    let mut dest: Destination = Destination::builder().build();
-    dest.to_addresses = Some(to.iter().map(|s| (*s).to_string()).collect());
-    let subject_content = Content::builder()
-        .data(subject)
-        .charset("UTF-8")
-        .build()
-        .expect("building Content");
-    let body_content = Content::builder()
-        .data(message)
-        .charset("UTF-8")
-        .build()
-        .expect("building Content");
-    let body = Body::builder().html(body_content).build();
-
-    let msg = Message::builder()
-        .subject(subject_content)
-        .body(body)
-        .build();
-
-    let email_content = EmailContent::builder().simple(msg).build();
-
-    let output = client
-        .send_email()
-        .from_email_address(from)
-        .destination(dest)
-        .content(email_content)
-        .send()
-        .await?;
-
-    Ok(output.message_id().unwrap_or("").to_string())
+    let request = json!({
+        "FromEmailAddress": from,
+        "Destination": { "ToAddresses": to },
+        "Content": { "Simple": {
+            "Subject": { "Data": subject, "Charset": "UTF-8" },
+            "Body": { "Html": { "Data": message, "Charset": "UTF-8" } },
+        } },
+    });
+    let output = ses(
+        "SendEmail",
+        reqwest::Method::POST,
+        "/v2/email/outbound-emails",
+        Some(&request),
+    )
+    .await?;
+    Ok(output["MessageId"].as_str().unwrap_or_default().to_string())
 }
 
 /// The `Message-ID` SES gives a message it sent: `<id>@<region>.amazonses.com`
@@ -125,29 +113,122 @@ pub const SES_REGION: &str = "us-east-2";
 /// not in the headers). Returns the message's `Message-ID` (see
 /// [`ses_message_id`]).
 pub async fn send_raw_message(raw: Vec<u8>, destinations: Vec<String>) -> Result<String, Error> {
-    let shared_config = crate::http::aws_config(SES_REGION).await;
-    let client = Client::new(&shared_config);
-    let destination = Destination::builder()
-        .set_to_addresses(Some(destinations))
-        .build();
-    let content = EmailContent::builder()
-        .raw(
-            aws_sdk_sesv2::types::RawMessage::builder()
-                .data(aws_sdk_sesv2::primitives::Blob::new(raw))
-                .build()
-                .expect("raw message has data"),
-        )
-        .build();
-    let output = client
-        .send_email()
-        .destination(destination)
-        .content(content)
-        .send()
-        .await?;
+    let request = json!({
+        "Destination": { "ToAddresses": destinations },
+        "Content": { "Raw": { "Data": base64::engine::general_purpose::STANDARD.encode(raw) } },
+    });
+    let output = ses(
+        "SendEmail",
+        reqwest::Method::POST,
+        "/v2/email/outbound-emails",
+        Some(&request),
+    )
+    .await?;
     Ok(ses_message_id(
-        output.message_id().unwrap_or(""),
+        output["MessageId"].as_str().unwrap_or_default(),
         SES_REGION,
     ))
+}
+
+/// A failed SES call: SES's answer, or why SES could not be asked.
+#[derive(Debug)]
+pub struct Error {
+    operation: &'static str,
+    /// The HTTP status SES answered with; `None` when it was not reached.
+    status: Option<u16>,
+    /// SES's error code (`MessageRejected`, `NotFoundException`, ...).
+    code: String,
+    message: String,
+}
+
+impl Error {
+    fn unsent(operation: &'static str, message: String) -> Self {
+        Self {
+            operation,
+            status: None,
+            code: String::new(),
+            message,
+        }
+    }
+
+    fn is_not_found(&self) -> bool {
+        self.status == Some(404) || self.code == "NotFoundException"
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SES {}", self.operation)?;
+        if let Some(status) = self.status {
+            write!(f, " {status}")?;
+        }
+        if !self.code.is_empty() {
+            write!(f, " {}", self.code)?;
+        }
+        write!(f, ": {}", self.message)
+    }
+}
+
+impl std::error::Error for Error {}
+
+/// One call of the SES v2 API in [`SES_REGION`] (`path_and_query` starts
+/// with `/v2/email`), with `body` as its JSON; SES's JSON answer.
+async fn ses(
+    operation: &'static str,
+    method: reqwest::Method,
+    path_and_query: &str,
+    body: Option<&Value>,
+) -> Result<Value, Error> {
+    let credentials = super::credentials::credentials()
+        .await
+        .map_err(|message| Error::unsent(operation, message))?;
+    let url = format!("https://email.{SES_REGION}.amazonaws.com{path_and_query}");
+    let body = body.map(Value::to_string).unwrap_or_default();
+    let headers: &[(&str, &str)] = if body.is_empty() {
+        &[]
+    } else {
+        &[("content-type", "application/json")]
+    };
+    let response = super::send(
+        &Signer::new(credentials, SES_REGION, "ses"),
+        method,
+        &url,
+        headers,
+        body.into(),
+        true,
+    )
+    .await
+    .map_err(|message| Error::unsent(operation, message))?;
+    let status = response.status();
+    // `x-amzn-ErrorType: MessageRejected:http://internal.amazon.com/...`
+    let code = response
+        .headers()
+        .get("x-amzn-errortype")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(':').next().unwrap_or_default().to_string());
+    let text = response
+        .text()
+        .await
+        .map_err(|error| Error::unsent(operation, error.without_url().to_string()))?;
+    let answer: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    if status.is_success() {
+        return Ok(answer);
+    }
+    let message = answer["message"]
+        .as_str()
+        .or_else(|| answer["Message"].as_str())
+        .map_or_else(|| text.trim().to_string(), str::to_string);
+    let code = code.unwrap_or_else(|| {
+        // `{"__type": "com.amazonaws.sesv2#NotFoundException"}`
+        let kind = answer["__type"].as_str().unwrap_or_default();
+        kind.rsplit('#').next().unwrap_or_default().to_string()
+    });
+    Err(Error {
+        operation,
+        status: Some(status.as_u16()),
+        code,
+        message,
+    })
 }
 
 #[cfg(test)]
@@ -291,21 +372,15 @@ pub async fn domain_verified(domain: &str) -> Option<bool> {
     {
         return Some(*verified);
     }
-    let lookup = async {
-        let shared_config = crate::http::aws_config("us-east-2").await;
-        Client::new(&shared_config)
-            .get_email_identity()
-            .email_identity(&domain)
-            .send()
-            .await
-    };
+    let path = format!(
+        "/v2/email/identities/{}",
+        utf8_percent_encode(&domain, AWS_PATH)
+    );
+    let lookup = ses("GetEmailIdentity", reqwest::Method::GET, &path, None);
     let verified = match tokio::time::timeout(std::time::Duration::from_secs(5), lookup).await {
-        Ok(Ok(identity)) => identity.verified_for_sending_status(),
+        Ok(Ok(identity)) => identity["VerifiedForSendingStatus"].as_bool() == Some(true),
         Ok(Err(error)) => {
-            let not_found = error
-                .as_service_error()
-                .is_some_and(aws_sdk_sesv2::operation::get_email_identity::GetEmailIdentityError::is_not_found_exception);
-            if !not_found {
+            if !error.is_not_found() {
                 tracing::warn!(domain, %error, "SES GetEmailIdentity failed");
                 return None;
             }
@@ -346,43 +421,43 @@ pub async fn identity_sets() -> Option<IdentitySets> {
         return Some(sets.clone());
     }
     let list = async {
-        let shared_config = crate::http::aws_config("us-east-2").await;
-        let client = Client::new(&shared_config);
         let mut verified = std::collections::HashSet::new();
         let mut pending = std::collections::HashSet::new();
         let mut next: Option<String> = None;
         loop {
-            let page = client
-                .list_email_identities()
-                .page_size(100)
-                .set_next_token(next.take())
-                .send()
-                .await?;
-            for identity in page.email_identities() {
-                let Some(name) = identity.identity_name().map(|n| n.trim().to_lowercase()) else {
+            let mut path = "/v2/email/identities?PageSize=100".to_string();
+            if let Some(token) = next.take() {
+                path.push_str("&NextToken=");
+                path.extend(utf8_percent_encode(&token, super::sigv4::AWS_QUERY));
+            }
+            let page = ses("ListEmailIdentities", reqwest::Method::GET, &path, None).await?;
+            let identities = page["EmailIdentities"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            for identity in identities {
+                let Some(name) = identity["IdentityName"]
+                    .as_str()
+                    .map(|n| n.trim().to_lowercase())
+                else {
                     continue;
                 };
-                match identity.verification_status() {
-                    Some(aws_sdk_sesv2::types::VerificationStatus::Success) => {
+                match identity["VerificationStatus"].as_str() {
+                    Some("SUCCESS") => {
                         verified.insert(name);
                     }
-                    Some(aws_sdk_sesv2::types::VerificationStatus::Pending) => {
+                    Some("PENDING") => {
                         pending.insert(name);
                     }
                     _ => {}
                 }
             }
-            match page.next_token() {
-                Some(token) => next = Some(token.to_string()),
-                None => break,
+            match page["NextToken"].as_str() {
+                Some(token) if !token.is_empty() => next = Some(token.to_string()),
+                _ => break,
             }
         }
-        Ok::<
-            _,
-            aws_sdk_sesv2::error::SdkError<
-                aws_sdk_sesv2::operation::list_email_identities::ListEmailIdentitiesError,
-            >,
-        >((verified, pending))
+        Ok::<_, Error>((verified, pending))
     };
     match tokio::time::timeout(std::time::Duration::from_secs(5), list).await {
         Ok(Ok(sets)) => {
