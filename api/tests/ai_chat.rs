@@ -646,6 +646,19 @@ async fn the_model_picks_the_manual_s_sections_for_the_answer(pool: MySqlPool) {
     // Not the portals' overviews the manual falls back to.
     assert!(!manual.contains("## Shop portal (`/shop`)"));
     assert!(!manual.contains("## Employee portal (`/employee`) — feature map"));
+    // Short steps, with room to write them: reasoning took the 1024 tokens.
+    let answering = &requests[1];
+    assert_eq!(answering["reasoning_effort"], "low");
+    assert_eq!(answering["max_completion_tokens"], 2000);
+    assert!(contents(answering).last().unwrap().starts_with(
+        "Answer how to do this in Granite Manager from the CRM user manual: short numbered steps"
+    ));
+    assert!(
+        contents(answering)
+            .last()
+            .unwrap()
+            .ends_with("Question: How to make a layout\n\nAnswer:")
+    );
 }
 
 /// A question that fits several features is asked back with the ones there

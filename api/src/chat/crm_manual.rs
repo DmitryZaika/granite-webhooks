@@ -684,13 +684,13 @@ pub async fn sections_for(
         None => {}
     }
     let fallback = section_ids_for(search);
-    let backup = fallback
-        .iter()
-        .find(|id| !MANUAL.core.contains(*id) && !MANUAL.fallback.contains(*id));
     match pick(state, caller, question, earlier).await {
         Some(Picked::Ask(clarification)) => Err(clarification),
         Some(Picked::Sections(mut ids)) if !ids.is_empty() => {
-            if let Some(backup) = backup.filter(|id| !ids.contains(*id)) {
+            // The best of the manual's own words the model did not pick.
+            if let Some(backup) = fallback.iter().find(|id| {
+                !MANUAL.core.contains(*id) && !MANUAL.fallback.contains(*id) && !ids.contains(*id)
+            }) {
                 ids.push(backup.clone());
             }
             Ok(ids)

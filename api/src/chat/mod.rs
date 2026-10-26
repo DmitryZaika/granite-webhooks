@@ -410,11 +410,15 @@ fn earlier_questions(messages: &[Message]) -> Vec<String> {
 
 /// `completeChatAnswer`: the answer streamed as it is written, holding back
 /// the last 64 characters so a marker is never shown half-written.
+/// `manual`: a how-to answered from the CRM manual, where the model's own
+/// reasoning used up the 1024 tokens and left step lists cut off or empty
+/// (the manual eval, `api/tests/crm_manual_eval.rs`).
 async fn complete(
     state: &AppState,
     user: &SessionUser,
     messages: &[Message],
     out: &Sender,
+    manual: bool,
 ) -> Result<String, AiError> {
     const HOLDBACK: usize = 64;
     let caller = Caller {
@@ -440,9 +444,12 @@ async fn complete(
         }
     };
     let run = async {
-        let mut chat = Chat::new(MINI_MODEL).max_tokens(Some(1024));
+        let mut chat = Chat::new(MINI_MODEL).max_tokens(Some(if manual { 2000 } else { 1024 }));
         chat.messages = request_messages(messages);
         chat.timeout = Duration::from_secs(120);
+        if manual {
+            chat.reasoning_effort = Some("low");
+        }
         let first = state.ai.chat_stream(&state.pool, caller, &chat, |t| {
             let _ = tx.send(t.to_string());
         });
@@ -727,6 +734,11 @@ async fn run(
             if how_to {
                 // The browser offers the manual's feedback on this answer.
                 out.json("crmManual", &true).await;
+                // Short steps from the manual, not the instructions' checklist.
+                if let Some(last) = messages.iter_mut().rev().find(|m| m.role == "user") {
+                    last.content =
+                        prompts::manual_user_message(prompts::asked_question(&last.content));
+                }
             }
             if let Some(quick) = quick {
                 finish_with(out, pool, user_id, history_id, messages, &quick).await;
@@ -785,7 +797,8 @@ async fn run(
         return Ok(());
     }
 
-    let mut answer = complete(state, user, &messages, out).await?;
+    let manual = mode == Mode::Instructions && how_to;
+    let mut answer = complete(state, user, &messages, out, manual).await?;
 
     if mode == Mode::Instructions
         && !how_to
@@ -805,7 +818,7 @@ async fn run(
             out.send(Event::Replace).await;
             messages = with_instruction_context(messages, &leftover, &question);
             selected = leftover;
-            answer = complete(state, user, &messages, out).await?;
+            answer = complete(state, user, &messages, out, false).await?;
         }
     }
 
