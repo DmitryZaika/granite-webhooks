@@ -476,7 +476,7 @@ fn contents(request: &Value) -> Vec<String> {
         .collect()
 }
 
-/// "How do I make a special order?" is the app's Other color or the
+/// "How do I make a special order?" is the app's typed color or the
 /// company's own process: the chat asks instead of guessing.
 async fn asked_back(server: &TestServer, pool: &MySqlPool, ai: &OpenAi) {
     let events = ask(
@@ -541,7 +541,7 @@ async fn picking_granite_manager_answers_the_question_from_the_manual(pool: MySq
     let request = ai.requests.lock().unwrap()[1].clone();
     let sent = contents(&request);
     assert!(sent.iter().any(|c| c.contains("CRM USER MANUAL:")
-        && c.contains("#### Other color (a color not in the price list)")));
+        && c.contains("#### Special order (a color not in the list)")));
     assert!(
         sent.iter()
             .all(|c| !c.contains("Here are the instructions you can use"))
@@ -607,7 +607,7 @@ async fn a_special_order_in_a_quote_goes_to_the_manual_without_asking(pool: MySq
     assert!(
         contents(&request)
             .iter()
-            .any(|c| c.contains("#### Other color (a color not in the price list)"))
+            .any(|c| c.contains("#### Special order (a color not in the list)"))
     );
 }
 
