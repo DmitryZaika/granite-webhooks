@@ -53,6 +53,7 @@ fn retrieval_and_routing_report() {
         }
         if mode_for(Some("instructions"), &case.question, true) == Mode::Assistant {
             to_assistant += 1;
+            misses.push(format!("{} -> the assistant", case.question));
         }
         extra_sections += ids.len().saturating_sub(4);
         chars += ids
