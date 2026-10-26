@@ -66,8 +66,8 @@ where
         // The template, not the concrete path: null for an unmatched route.
         "api_route": route,
         "api_status": status,
-        // The git short sha baked in at build time (`GIT_SHA`).
-        "release": option_env!("GIT_SHA").unwrap_or("unknown"),
+        // The git short sha `main` was built with (`GIT_SHA`).
+        "release": common::release::get(),
         "lambda_function": lookup("AWS_LAMBDA_FUNCTION_NAME"),
         "lambda_version": lookup("AWS_LAMBDA_FUNCTION_VERSION"),
     })
@@ -129,10 +129,7 @@ mod tests {
         assert_eq!(props["$exception_list"][0]["value"], "boom");
         assert_eq!(props["lambda_function"], "granite-api");
         assert_eq!(props["lambda_version"], "42");
-        assert_eq!(
-            props["release"],
-            option_env!("GIT_SHA").unwrap_or("unknown")
-        );
+        assert_eq!(props["release"], common::release::get());
     }
 
     #[test]
