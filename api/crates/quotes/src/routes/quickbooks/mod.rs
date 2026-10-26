@@ -558,7 +558,9 @@ async fn class_id(state: &AppState, access: &Access, name: &str) -> ApiResult<St
         .ok_or_else(|| ApiError::BadRequest(format!("QuickBooks has no class named \"{name}\"")))
 }
 
-/// The access token, once the invoice is known to be the customer's.
+/// The access token, once the invoice is known to be the customer's: billed
+/// to their QuickBooks customer, or made from one of their quotes (it stays
+/// theirs when it is moved to another QuickBooks customer, e.g. a contractor).
 async fn owned_invoice(
     state: &AppState,
     company_id: i32,
@@ -592,8 +594,23 @@ async fn owned_invoice(
     let owner = rows
         .first()
         .and_then(|row| text(&row["CustomerRef"]["value"]));
-    if owner.as_deref() != Some(expected.as_str()) {
+    if owner.is_none() {
         return Err(ApiError::Forbidden);
+    }
+    if owner.as_deref() != Some(expected.as_str()) {
+        let from_quote: Option<i32> = sqlx::query_scalar(
+            "SELECT id FROM quotes
+              WHERE company_id = ? AND customer_id = ? AND qbo_invoice_id = ? AND deleted_at IS NULL
+              LIMIT 1",
+        )
+        .bind(company_id)
+        .bind(customer_id)
+        .bind(invoice_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        if from_quote.is_none() {
+            return Err(ApiError::Forbidden);
+        }
     }
     Ok(access)
 }
