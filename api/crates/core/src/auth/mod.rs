@@ -24,7 +24,8 @@
 //! over every provider, a pushed CRM notification), on
 //! `/v1/sms/{provider}/messages` with `POST`
 //! (sending those texts), on [`DEVICE_ACTIONS`] with `POST` (an
-//! attachment upload, Improve message, AI reply, filling a template) and on
+//! attachment upload, Improve message, AI reply, the typing suggestion and
+//! what it learns, filling a template) and on
 //! the Deals tab's changes (`deal_write`: a deal, its to-dos, notes and
 //! files; not deleting a deal or the board setup) the
 //! cookie extractors above (`CurrentUser` through `ShopOrEmployeeUser`) also take the
@@ -98,13 +99,16 @@ pub const DEVICE_READ_ROUTES: [&str; 15] = [
 
 /// CRM actions the app's composer calls with its device token: exactly these
 /// paths, `POST` only (an attachment's upload URL, a text's files made ready
-/// to send, Improve message, AI reply, and a template's `{{variables}}`
-/// filled for Use Template).
-pub const DEVICE_ACTIONS: [&str; 5] = [
+/// to send, Improve message, AI reply, the suggestion that continues what the
+/// rep types and what it learns from the text they sent instead, and a
+/// template's `{{variables}}` filled for Use Template).
+pub const DEVICE_ACTIONS: [&str; 7] = [
     "/v1/uploads",
     "/v1/sms/attachments",
     "/v1/ai/improve",
     "/v1/ai/conversation-reply",
+    "/v1/ai/compose/autocomplete",
+    "/v1/ai/compose/learn",
     "/v1/templates/fill",
 ];
 
@@ -548,6 +552,8 @@ mod tests {
             "/v1/sms/attachments",
             "/v1/ai/improve",
             "/v1/ai/conversation-reply",
+            "/v1/ai/compose/autocomplete",
+            "/v1/ai/compose/learn",
             "/v1/templates/fill",
         ] {
             assert!(device_route(&Method::POST, path), "{path}");
@@ -558,6 +564,8 @@ mod tests {
             "/v1/ai",
             "/v1/ai/email-template",
             "/v1/ai/agentic-questions",
+            "/v1/ai/compose",
+            "/v1/ai/compose/autocompletex",
             "/v1/templates",
             "/v1/sms/other/messages",
             "/v1/sms/ringcentral/messages/1",
