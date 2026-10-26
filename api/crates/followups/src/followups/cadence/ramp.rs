@@ -18,17 +18,18 @@ pub const MINUTES_PER_DAY: f64 = 24.0 * 60.0;
 /// The monthly follow-up rhythm, in days: no wait between two messages is
 /// longer (only a hold may push the first send further out).
 pub const MAX_CADENCE_GAP_DAYS: f64 = 30.0;
-/// The second message goes 2–4 days after the first: replies come after the
-/// first, so a customer who did not answer hears again while it is fresh.
-pub const SECOND_MESSAGE_MIN_GAP_DAYS: f64 = 2.0;
-pub const SECOND_MESSAGE_MAX_GAP_DAYS: f64 = 4.0;
+/// An automated follow-up is never just 1–2 messages.
+pub const MIN_AI_FOLLOWUP_MESSAGES: usize = 5;
 /// A spread-out plan's last send is at least this many days from now.
 pub const MIN_AI_FOLLOWUP_SPAN_DAYS: f64 = 30.0;
 /// The longest regular AI cadence gap (`AI_MAX_DELAY_MINUTES`).
 pub const AI_MAX_DELAY_MINUTES: f64 = 90.0 * 24.0 * 60.0;
 
-/// Days before each SMS, from the previous one: now, +1, +2, +4, +7, +14, +30.
-pub const SMS_RAMP_GAP_DAYS: [f64; 8] = [0.0, 1.0, 2.0, 4.0, 7.0, 14.0, 30.0, 30.0];
+/// Days before each SMS, from the previous one: now, then the next day, 3
+/// days, a week, two weeks, monthly.
+pub const SMS_RAMP_GAP_DAYS: [f64; 8] = [0.0, 1.0, 3.0, 7.0, 14.0, 30.0, 30.0, 30.0];
+/// The gap after our 1st, 2nd, 3rd… message of a conversation.
+pub const NEW_CONVERSATION_GAPS: [f64; 5] = [1.0, 3.0, 7.0, 14.0, 30.0];
 const LONG_TERM_GAP_DAYS: [f64; 2] = [30.0, 30.0];
 /// Existing customers with a real conversation: not the new-lead ramp.
 pub const ESTABLISHED_CONVERSATION_GAPS: [f64; 5] = [14.0, 21.0, 30.0, 30.0, 30.0];
@@ -37,8 +38,6 @@ pub const MONTHLY_RAMP_POSITION: f64 = 6.0;
 const PLANNED_SMS_COUNT: usize = 8;
 
 pub const UNTESTED_SMS_GAPS: [f64; 8] = [4.0, 8.0, 18.0, 30.0, 45.0, 60.0, 90.0, 90.0];
-/// One recent unanswered SMS: do not pile 1–2 day touches.
-pub const RECENT_UNANSWERED_GAPS: [f64; 8] = [0.0, 4.0, 9.0, 18.0, 30.0, 45.0, 60.0, 90.0];
 pub const UNTESTED_SMS_URGENT_GAPS: [f64; 8] = [2.0, 7.0, 14.0, 21.0, 30.0, 45.0, 60.0, 90.0];
 const UNTESTED_SMS_CHANNELS: [FollowupChannel; 8] = {
     use FollowupChannel::{Email, Sms};
@@ -205,23 +204,95 @@ pub fn resolve_cadence_preview_delay_minutes(params: &PreviewDelayInputs) -> f64
     bound_cadence_gap_minutes(chosen_preview_delay_minutes(params), params)
 }
 
-/// No wait is over 30 days, and the second message goes 2–4 days after the
-/// first unless the company instruction sets the gap.
-pub fn bound_cadence_gap_minutes(delay_minutes: f64, params: &PreviewDelayInputs) -> f64 {
-    let delay = delay_minutes.min(MAX_CADENCE_GAP_DAYS * MINUTES_PER_DAY);
-    let second = !params.is_first_message
-        && params
-            .message_index
-            .is_some_and(|index| (index - 1.0).abs() < f64::EPSILON);
-    let instruction_gap = params
-        .instruction_gap_minutes
-        .is_some_and(|g| g.is_finite() && g >= 0.0);
-    if !second || instruction_gap {
-        return delay;
+/// No wait is over 30 days.
+pub fn bound_cadence_gap_minutes(delay_minutes: f64, _params: &PreviewDelayInputs) -> f64 {
+    delay_minutes.min(MAX_CADENCE_GAP_DAYS * MINUTES_PER_DAY)
+}
+
+/// How fast we have been writing to the customer since they last wrote.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConversationPace {
+    /// Our messages since their last one (a burst within half a day is one).
+    pub sent: usize,
+    /// Days between our last two of them; 0 with only one.
+    pub last_gap_days: f64,
+    /// Days since our last message.
+    pub days_since_last: f64,
+}
+
+/// The pace of an unanswered run of our messages; `None` when we have not
+/// written since the customer last did.
+pub fn conversation_pace(timeline: &[TimelineMessage], now: Instant) -> Option<ConversationPace> {
+    let mut messages: Vec<(Instant, Direction)> = timeline
+        .iter()
+        .filter_map(|m| parse_followup_timeline_at(&m.at).map(|at| (at, m.direction)))
+        .collect();
+    messages.sort_by_key(|(at, _)| *at);
+    let mut sends: Vec<Instant> = Vec::new();
+    for (at, direction) in messages {
+        match direction {
+            Direction::Inbound => sends.clear(),
+            Direction::Outbound => {
+                if sends
+                    .last()
+                    .is_none_or(|last| days_between(at, *last) >= 0.5)
+                {
+                    sends.push(at);
+                }
+            }
+        }
     }
-    delay
-        .max(SECOND_MESSAGE_MIN_GAP_DAYS * MINUTES_PER_DAY)
-        .min(SECOND_MESSAGE_MAX_GAP_DAYS * MINUTES_PER_DAY)
+    let last = *sends.last()?;
+    let last_gap_days = match sends.as_slice() {
+        [.., before, last] => days_between(*last, *before),
+        _ => 0.0,
+    };
+    Some(ConversationPace {
+        sent: sends.len(),
+        last_gap_days,
+        days_since_last: days_between(now, last).max(0.0),
+    })
+}
+
+impl ConversationPace {
+    /// The shortest wait in days before follow-up `index` (the first counted
+    /// from our last message): next day, 3 days, a week… from where the
+    /// conversation is, never faster than our last gap.
+    pub fn floor_gap_days(&self, index: usize) -> f64 {
+        let ramp = NEW_CONVERSATION_GAPS[(self.sent + index)
+            .saturating_sub(1)
+            .min(NEW_CONVERSATION_GAPS.len() - 1)];
+        ramp.max(self.last_gap_days).min(MAX_CADENCE_GAP_DAYS)
+    }
+
+    /// Waits in minutes (the first from now, the rest from the previous
+    /// send) pushed out to keep the pace: none shorter than its floor or than
+    /// the wait before it (up to 30 days).
+    pub fn keep(&self, delays: &[f64]) -> Vec<f64> {
+        let since = self.days_since_last * MINUTES_PER_DAY;
+        let mut previous_gap = 0.0_f64;
+        delays
+            .iter()
+            .enumerate()
+            .map(|(index, &delay)| {
+                let floor = self
+                    .floor_gap_days(index)
+                    .max(previous_gap.min(MAX_CADENCE_GAP_DAYS))
+                    * MINUTES_PER_DAY;
+                if index == 0 {
+                    // Whole days from now, so the send keeps its clock.
+                    let needed = ((floor - since) / MINUTES_PER_DAY).ceil() * MINUTES_PER_DAY;
+                    let kept = delay.max(needed).max(0.0);
+                    previous_gap = (since + kept) / MINUTES_PER_DAY;
+                    kept
+                } else {
+                    let kept = delay.max(floor);
+                    previous_gap = kept / MINUTES_PER_DAY;
+                    kept
+                }
+            })
+            .collect()
+    }
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -654,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn no_wait_is_over_thirty_days_and_the_second_message_comes_in_two_to_four() {
+    fn no_wait_is_over_thirty_days() {
         // The model, the planner and the old-customer doubling are all capped.
         let later = PreviewDelayInputs {
             generated_delay_minutes: Some(60.0 * DAY),
@@ -673,29 +744,19 @@ mod tests {
             widen_old_customer_followup_gap_minutes(25.0 * DAY),
             30.0 * DAY
         );
-        // A stale conversation's 14-day second gap, a 30-day old-customer gap
-        // and a model's next-day touch all land in the window.
+        // A stale conversation's 14-day second gap and a 30-day old-customer
+        // gap stay as they are.
         let stale = PreviewDelayInputs {
             stale_gap_days: Some(vec![0.0, 14.0, 30.0]),
             ..second()
         };
-        assert_eq!(resolve_cadence_preview_delay_minutes(&stale), 4.0 * DAY);
+        assert_eq!(resolve_cadence_preview_delay_minutes(&stale), 14.0 * DAY);
         let thirty = PreviewDelayInputs {
             use_thirty_day_gap: true,
             ..second()
         };
-        assert_eq!(resolve_cadence_preview_delay_minutes(&thirty), 4.0 * DAY);
-        let soon = PreviewDelayInputs {
-            generated_delay_minutes: Some(DAY),
-            ..second()
-        };
-        assert_eq!(resolve_cadence_preview_delay_minutes(&soon), 2.0 * DAY);
-        let fits = PreviewDelayInputs {
-            generated_delay_minutes: Some(3.0 * DAY),
-            ..second()
-        };
-        assert_eq!(resolve_cadence_preview_delay_minutes(&fits), 3.0 * DAY);
-        // The company's gap wins over the window, not over the cap.
+        assert_eq!(resolve_cadence_preview_delay_minutes(&thirty), 30.0 * DAY);
+        // The company's gap wins, not over the cap.
         let instructed = PreviewDelayInputs {
             instruction_gap_minutes: Some(7.0 * DAY),
             ..second()
@@ -712,5 +773,69 @@ mod tests {
         // The planner's gaps are capped too.
         assert_eq!(cap_cadence_gap_days(90.0), 30.0);
         assert_eq!(cap_cadence_gap_days(-1.0), 0.0);
+    }
+
+    fn pace(sent: usize, last_gap_days: f64, days_since_last: f64) -> ConversationPace {
+        ConversationPace {
+            sent,
+            last_gap_days,
+            days_since_last,
+        }
+    }
+
+    fn days(delays: &[f64]) -> Vec<f64> {
+        delays.iter().map(|d| d / DAY).collect()
+    }
+
+    #[test]
+    fn follow_ups_keep_the_conversation_pace() {
+        let asap = [0.0; 5];
+        // Just started: the next day, then 3 days, a week, two weeks, monthly.
+        assert_eq!(
+            days(&pace(1, 0.0, 0.0).keep(&asap)),
+            [1.0, 3.0, 7.0, 14.0, 30.0]
+        );
+        // One text a week ago: now, then never sooner than a week.
+        assert_eq!(days(&pace(1, 0.0, 7.0).keep(&asap[..3])), [0.0, 7.0, 7.0]);
+        // Two texts 12 days apart, the last 2 days ago: 12 days after it,
+        // then no faster.
+        assert_eq!(
+            days(&pace(2, 12.0, 2.0).keep(&asap[..4])),
+            [10.0, 12.0, 14.0, 30.0]
+        );
+        // Monthly stays monthly.
+        assert_eq!(
+            days(&pace(6, 30.0, 3.0).keep(&asap[..3])),
+            [27.0, 30.0, 30.0]
+        );
+        // Longer planned waits stay.
+        assert_eq!(
+            days(&pace(1, 0.0, 0.0).keep(&[2.0 * DAY, 10.0 * DAY])),
+            [2.0, 10.0]
+        );
+    }
+
+    #[test]
+    fn the_pace_counts_our_messages_since_the_customer_last_wrote() {
+        let now = super::super::super::dates::parse_iso("2026-10-26T18:00:00Z").unwrap();
+        let message = |at: &str, direction| TimelineMessage::new(at, direction, "Hi");
+        let timeline = vec![
+            message("2026-09-01T15:00:00Z", Direction::Outbound),
+            message("2026-09-02T15:00:00Z", Direction::Inbound),
+            message("2026-10-12T18:28:56Z", Direction::Outbound),
+            // The same text through a second provider is one message.
+            message("2026-10-12T18:28:56Z", Direction::Outbound),
+            message("2026-10-24T22:41:27Z", Direction::Outbound),
+        ];
+        let found = conversation_pace(&timeline, now).unwrap();
+        assert_eq!(found.sent, 2);
+        assert!((found.last_gap_days - 12.17).abs() < 0.01);
+        assert!((found.days_since_last - 1.81).abs() < 0.01);
+        // They wrote last: no pace to keep.
+        let replied = vec![
+            message("2026-10-24T22:41:27Z", Direction::Outbound),
+            message("2026-10-25T14:00:00Z", Direction::Inbound),
+        ];
+        assert_eq!(conversation_pace(&replied, now), None);
     }
 }

@@ -417,8 +417,9 @@ async fn a_preview_keeps_the_gaps_signs_the_texts_and_knows_the_offer(pool: MySq
         .iter()
         .map(|m| m["delay_minutes"].as_i64().unwrap())
         .collect();
-    // The second message comes 2–4 days after the first; no wait is over 30 days.
-    assert!((2 * 1440..=4 * 1440).contains(&delays[1]), "{delays:?}");
+    // The model's long second wait is kept, only capped: no wait is over 30
+    // days.
+    assert!(delays[1] >= 29 * 1440, "{delays:?}");
     assert!(delays.iter().skip(1).all(|d| *d <= 30 * 1440), "{delays:?}");
     for message in &preview {
         if message["channel"] == "sms" {

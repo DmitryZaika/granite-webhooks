@@ -7,8 +7,8 @@
 //! edits teach the writer their style. Port of `smsFlowAiCadence.server.ts`.
 
 use super::cadence::ramp::{
-    PreviewDelayInputs, bound_cadence_gap_minutes, classify_ai_cadence_mode,
-    first_outbound_at_from_timeline, is_email_only_outbound_history,
+    ConversationPace, PreviewDelayInputs, bound_cadence_gap_minutes, classify_ai_cadence_mode,
+    conversation_pace, first_outbound_at_from_timeline, is_email_only_outbound_history,
     is_established_conversation_customer, is_old_followup_customer, last_outbound_at_from_timeline,
     never_tried_sms_yet, old_customer_uses_thirty_day_gap, ramp_outbound_count,
     resolve_cadence_preview_delay_minutes, should_force_first_message_today,
@@ -195,6 +195,24 @@ fn request_for(
     request
 }
 
+/// How fast we have been writing to them; none when they named a contact
+/// date (that date wins).
+fn pace_of(gathered: &GatheredContext, now: Instant) -> Option<ConversationPace> {
+    if gathered
+        .contact_pressure
+        .customer_requested_followup_at
+        .is_some()
+    {
+        return None;
+    }
+    let timeline: Vec<_> = gathered
+        .timeline
+        .iter()
+        .map(super::prompt::FollowupTimelineMessage::to_timeline)
+        .collect();
+    conversation_pace(&timeline, now)
+}
+
 /// The planned steps for the gathered customer (forced: holds ignored).
 fn plan(
     gathered: &GatheredContext,
@@ -231,6 +249,7 @@ fn plan(
         } else {
             pressure.clone()
         }),
+        pace: pace_of(gathered, now),
     };
     (
         plan_ai_followup_cadence(last_outbound_at_from_timeline(&timeline), now, &options),
@@ -280,6 +299,7 @@ struct ScheduleOptions {
     stale_gap_days: Option<Vec<f64>>,
     send_first_message_today: bool,
     days_since_last_contact: Option<f64>,
+    pace: Option<ConversationPace>,
 }
 
 /// Days since the last message either way; `None` when the customer asked
@@ -317,6 +337,7 @@ fn schedule_options(gathered: &GatheredContext, force: bool, now: Instant) -> Sc
         ),
         instruction_gap_minutes,
         days_since_last_contact: days_since_last_contact(&gathered.contact_pressure),
+        pace: pace_of(gathered, now),
         allow_sunday_on: if force {
             None
         } else {
@@ -333,26 +354,32 @@ fn with_delay(message: &AiCadencePreviewMessage, delay_minutes: f64) -> AiCadenc
     }
 }
 
-/// The gap bounds again after Sundays moved: a send pulled in onto a Sunday
-/// goes the Saturday before, one pushed out onto a Sunday the Monday after
-/// (the second message's window still holds either way).
+/// The gap bounds again after Sundays moved: no wait over 30 days and the
+/// conversation's pace kept. A send pulled in onto a Sunday goes the
+/// Saturday before, one pushed out onto a Sunday the Monday after.
 fn keep_gap_bounds(
     preview: Vec<AiCadencePreviewMessage>,
     now: Instant,
+    pace: Option<&ConversationPace>,
 ) -> Vec<AiCadencePreviewMessage> {
+    let capped: Vec<f64> = preview
+        .iter()
+        .enumerate()
+        .map(|(index, message)| {
+            if index == 0 {
+                message.delay_minutes
+            } else {
+                bound_cadence_gap_minutes(message.delay_minutes, &PreviewDelayInputs::default())
+            }
+        })
+        .collect();
+    let kept = pace.map_or_else(|| capped.clone(), |pace| pace.keep(&capped));
     let mut cursor = now;
     preview
         .into_iter()
-        .enumerate()
-        .map(|(index, message)| {
-            #[allow(clippy::cast_precision_loss)]
-            let params = PreviewDelayInputs {
-                is_first_message: index == 0,
-                message_index: Some(index as f64),
-                ..PreviewDelayInputs::default()
-            };
-            let bounded = bound_cadence_gap_minutes(message.delay_minutes, &params);
-            let message = if index == 0 || (bounded - message.delay_minutes).abs() < f64::EPSILON {
+        .zip(kept)
+        .map(|(message, bounded)| {
+            let message = if (bounded - message.delay_minutes).abs() < f64::EPSILON {
                 message
             } else {
                 // A bound is whole store days, so it keeps the clock (and
@@ -474,7 +501,7 @@ fn preview_from_generated(
                 _ => message.clone(),
             })
             .collect();
-        keep_gap_bounds(shifted, now)
+        keep_gap_bounds(shifted, now, options.pace.as_ref())
     };
     let force_today = should_force_first_message_today(
         options.send_first_message_today,
@@ -1103,17 +1130,27 @@ mod tests {
         // Wednesday 2026-06-10, noon in the store.
         let now = super::super::dates::parse_iso("2026-06-10T16:00:00Z").unwrap();
         let day = MINUTES_PER_DAY;
-        // Day 4 is a Sunday: the second message goes Saturday; the 45-day
-        // wait becomes 30 (a Monday); a short later gap stays.
+        // The 45-day wait becomes 30, a Sunday, so the Saturday before; the
+        // other gaps stay.
         let bounded = keep_gap_bounds(
             vec![text(0.0), text(9.0 * day), text(45.0 * day), text(day)],
             now,
+            None,
         );
-        assert_eq!(delays(&bounded), [0.0, 3.0 * day, 30.0 * day, day]);
-        assert_eq!(bounded[1].delay_label, "+3 days");
-        // Too soon a second message waits two days; a 30-day mark on a
-        // Sunday goes the Saturday before.
-        let bounded = keep_gap_bounds(vec![text(0.0), text(day), text(40.0 * day)], now);
-        assert_eq!(delays(&bounded), [0.0, 2.0 * day, 29.0 * day]);
+        assert_eq!(delays(&bounded), [0.0, 9.0 * day, 29.0 * day, day]);
+        // We wrote twice, 12 days apart, the last 2 days ago: the first
+        // waits until 12 days after it and no later wait is shorter.
+        let pace = ConversationPace {
+            sent: 2,
+            last_gap_days: 12.0,
+            days_since_last: 2.0,
+        };
+        let kept = keep_gap_bounds(
+            vec![text(0.0), text(day), text(4.0 * day)],
+            now,
+            Some(&pace),
+        );
+        assert_eq!(delays(&kept), [10.0 * day, 12.0 * day, 14.0 * day]);
+        assert_eq!(kept[1].delay_label, "+12 days");
     }
 }

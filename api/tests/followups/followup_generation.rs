@@ -102,6 +102,7 @@ async fn lead(pool: &MySqlPool) -> (FollowupRequest, GatheredContext, Vec<Planne
         customer_state: None,
         unanswered_total: None,
         contact_pressure: Some(gathered.contact_pressure.clone()),
+        pace: None,
     };
     let steps = plan_ai_followup_cadence(None, now(), &options)
         .into_iter()
