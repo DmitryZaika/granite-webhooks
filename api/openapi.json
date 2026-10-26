@@ -36427,7 +36427,7 @@
           "schedule"
         ],
         "summary": "Get the schedule settings",
-        "description": "The day the company's schedule starts its weeks on (Sunday unless an\nadmin picked Monday).",
+        "description": "The day the company's schedule starts its weeks on (Sunday unless an\nadmin picked Monday) and the calendar estimates are booked on.",
         "operationId": "get_schedule_settings",
         "responses": {
           "200": {
@@ -36472,13 +36472,13 @@
           "schedule"
         ],
         "summary": "Set the schedule settings",
-        "description": "Saves the day the company's schedule starts its weeks on, for everyone.",
+        "description": "Saves the day the company's schedule starts its weeks on and the calendar\nestimates are booked on, for everyone.",
         "operationId": "set_schedule_settings",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ScheduleSettings"
+                "$ref": "#/components/schemas/ScheduleSettingsInput"
               }
             }
           },
@@ -36489,7 +36489,7 @@
             "description": "Saved"
           },
           "400": {
-            "description": "Not `sunday` or `monday`",
+            "description": "Not `sunday` or `monday`, or not a calendar of the company",
             "content": {
               "application/json": {
                 "schema": {
@@ -69061,7 +69061,7 @@
         "allOf": [
           {
             "$ref": "#/components/schemas/EventInput",
-            "description": "The event; `calendar_id` must be the Estimates calendar."
+            "description": "The event; `calendar_id` must be the company's estimates calendar\n(`GET /v1/schedule/settings`)."
           },
           {
             "type": "object",
@@ -84281,7 +84281,7 @@
       },
       "ScheduleSettings": {
         "type": "object",
-        "description": "`GET` and `PUT /v1/schedule/settings`.",
+        "description": "`GET /v1/schedule/settings`.",
         "required": [
           "week_starts_on"
         ],
@@ -84289,6 +84289,39 @@
           "week_starts_on": {
             "$ref": "#/components/schemas/WeekStart",
             "description": "The day the week and month views start their weeks on."
+          },
+          "estimates_calendar_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The calendar the deal page's Schedule estimate button books on: the\none an admin picked, else the built-in Estimates calendar (null when\nthere is neither)."
+          }
+        }
+      },
+      "ScheduleSettingsInput": {
+        "type": "object",
+        "description": "`PUT /v1/schedule/settings`: only the fields sent change.",
+        "properties": {
+          "week_starts_on": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WeekStart",
+                "description": "The day the week and month views start their weeks on."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "estimates_calendar_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A calendar of the caller's company."
           }
         }
       },

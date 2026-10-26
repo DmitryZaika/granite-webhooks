@@ -37,6 +37,7 @@ pub struct ScheduleSettings {
 /// `PUT /v1/schedule/settings`: only the fields sent change.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ScheduleSettingsInput {
+    /// The day the week and month views start their weeks on.
     #[serde(default)]
     pub week_starts_on: Option<WeekStart>,
     /// A calendar of the caller's company.
