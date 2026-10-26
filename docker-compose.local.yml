@@ -29,6 +29,11 @@ services:
       # Test copies keep ~200 tables each (test-db raises these too).
       - "--table-definition-cache=20000"
       - "--table-open-cache=20000"
+      # Making and refilling copies outruns the default 100 MB redo log
+      # ("unable to reserve space in redo log" stalls), and the copies'
+      # pages fit in a 1 GB buffer pool.
+      - "--innodb-redo-log-capacity=1073741824"
+      - "--innodb-buffer-pool-size=1073741824"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pgranite"]
       interval: 2s

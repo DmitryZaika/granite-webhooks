@@ -69,6 +69,8 @@ jobs:
           --innodb-flush-method=nosync
           --table-definition-cache=20000
           --table-open-cache=20000
+          --innodb-redo-log-capacity=1073741824
+          --innodb-buffer-pool-size=1073741824
 
       - uses: dtolnay/rust-toolchain@stable
 
