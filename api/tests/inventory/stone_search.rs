@@ -23,8 +23,8 @@ async fn search_ranks_and_filters(pool: MySqlPool) {
         // Hidden only on request; deleted and other companies never.
         ("?name=granite", vec![3006, 3009]),
         ("?name=granite&include_hidden=true", vec![3004, 3006, 3009]),
-        // Calacatta's only whole slab is sold: out unless sold out stones are asked for.
-        ("?name=cala", vec![]),
+        // Calacatta has only a remnant left: still found.
+        ("?name=cala", vec![3001]),
         ("?name=cala&include_sold_out=true", vec![3001]),
         ("?name=marble", vec![]),
         ("?name=marble&include_sold_out=true", vec![3002]),
