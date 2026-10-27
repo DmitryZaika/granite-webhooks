@@ -72,9 +72,22 @@ def lay_out(workspace: Path, tools_checkout: Path, runner: proc.Runner = proc.ru
     shutil.move(str(tools_checkout / ".github" / "posthog-autofix"), str(TOOLS))
     shutil.rmtree(tools_checkout)
     WORK.mkdir(exist_ok=True)
+    write_work_manifest(WORK)
     for repo in REPOS:
         if (workspace / repo).exists():
             shutil.move(str(workspace / repo), str(WORK / repo))
+
+
+# Claude Code's sandbox creates the files it guards (package.json,
+# bunfig.toml, .npmrc...) empty in the agent's working directory, WORK, to
+# mount them read-only, and keeps a file that exists. An empty package.json
+# above both repos broke the SPA build ("JSONError: File is empty"), so WORK
+# gets a valid one first.
+WORK_MANIFEST = '{"private": true}\n'
+
+
+def write_work_manifest(work: Path) -> None:
+    (work / "package.json").write_text(WORK_MANIFEST)
 
 
 def ipv4_addresses(host: str) -> list[str]:
