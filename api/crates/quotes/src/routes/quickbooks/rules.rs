@@ -280,7 +280,7 @@ pub fn header_value(rule: Option<&Outcome>, rep: Option<&str>) -> Option<String>
 /// Line outcomes read for rules.
 const LINE_HISTORY: u32 = 5000;
 /// Newest invoices a scan reads.
-const SCANNED: u32 = 100;
+const SCANNED: u32 = 200;
 
 /// The quote's sales rep.
 #[derive(Debug, Default, sqlx::FromRow)]
