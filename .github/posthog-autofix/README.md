@@ -59,8 +59,8 @@ api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
    failures); it is a toast that only tells the user what to fix
    (`hint_toast`); it is the browser's copy of an API 500 (`symptom`); or it
    is an API 4xx that enforced a business rule (`business_rule_4xx`; contract
-   rejections and empty-body 404s stay). A browser `GraniteApiError` 5xx whose
-   route has an api error in the same minutes becomes a `duplicate` of it,
+   rejections, empty-body 404s and 403s stay). A browser `GraniteApiError`
+   5xx whose route has an api error in the same minutes becomes a `duplicate` of it,
    and lifts its users (server errors carry no user).
 4. **Dispatch.** Within the caps (2 at once, 8 in any 24 hours by default),
    bugs seen in the last 24 hours first, then by users and occurrences. Rows

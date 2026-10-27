@@ -110,7 +110,8 @@ pub enum SkipReason {
     HintToast,
     /// A browser's generic copy of an API 500 that the api reports itself.
     Symptom,
-    /// An API 4xx that enforced a business rule (`{"error":"<sentence>"}`).
+    /// An API 4xx that enforced a business rule (`{"error":"<sentence>"}`); a
+    /// 403 is never one.
     BusinessRule4xx,
 }
 
