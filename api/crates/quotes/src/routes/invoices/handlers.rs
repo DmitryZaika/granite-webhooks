@@ -30,7 +30,11 @@ fn taken(number: i32) -> ApiError {
 
 /// The editor's invoice, checked, with its customer and quote checked to be
 /// the company's. A quote without a customer given bills the quote's.
-async fn checked(state: &AppState, company_id: i32, input: &InvoiceInput) -> ApiResult<CleanInvoice> {
+async fn checked(
+    state: &AppState,
+    company_id: i32,
+    input: &InvoiceInput,
+) -> ApiResult<CleanInvoice> {
     let mut invoice = clean(input, valid_address).map_err(ApiError::BadRequest)?;
     if let Some(quote_id) = invoice.quote_id {
         let Some(quote_customer) = quote_customer(&state.pool, company_id, quote_id).await? else {
