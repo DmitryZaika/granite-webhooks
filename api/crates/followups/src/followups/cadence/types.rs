@@ -5,7 +5,6 @@ use super::super::pressure::{
     CustomerFollowupState, FollowupAngle, FollowupContactPressure, FollowupPhase,
 };
 use super::super::send_window::FollowupChannel;
-use super::ramp::ConversationPace;
 use crate::str_enum;
 use serde::Serialize;
 
@@ -140,8 +139,6 @@ pub struct PlanAiFollowupCadenceOptions {
     pub customer_state: Option<CustomerFollowupState>,
     pub unanswered_total: Option<f64>,
     pub contact_pressure: Option<FollowupContactPressure>,
-    /// How fast we have been writing; no wait gets shorter than it.
-    pub pace: Option<ConversationPace>,
 }
 
 /// One message of a cadence preview (generated, maybe edited).

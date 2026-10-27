@@ -33,12 +33,12 @@ use super::entries::{
 };
 use super::ramp::{
     AI_MAX_DELAY_MINUTES, CadenceSlot, DECAY_GAPS, DELAYED_REACTIVATION_GAPS,
-    ESTABLISHED_CONVERSATION_GAPS, LONG_TERM_NURTURE_GAPS, MAX_CADENCE_GAP_DAYS, MINUTES_PER_DAY,
-    MONTHLY_RAMP_POSITION, NEW_CONVERSATION_GAPS, POST_HOLD_CHANNELS, POST_HOLD_GAPS,
-    WAITING_REACTIVATION_GAPS, cap_cadence_gap_days, classify_ai_cadence_mode,
-    delay_label_from_days, delay_label_from_minutes, interleave_emails,
-    is_established_conversation_customer, never_tried_sms_yet, offsets_from_gaps, phase_for_step,
-    ramp_position, sms_offsets_from_ramp, untested_sms_offsets, untested_sms_slots,
+    ESTABLISHED_CONVERSATION_GAPS, LONG_TERM_NURTURE_GAPS, MINUTES_PER_DAY, MONTHLY_RAMP_POSITION,
+    POST_HOLD_CHANNELS, POST_HOLD_GAPS, RECENT_UNANSWERED_GAPS, WAITING_REACTIVATION_GAPS,
+    cap_cadence_gap_days, classify_ai_cadence_mode, delay_label_from_days,
+    delay_label_from_minutes, interleave_emails, is_established_conversation_customer,
+    never_tried_sms_yet, offsets_from_gaps, phase_for_step, ramp_position, sms_offsets_from_ramp,
+    untested_sms_offsets, untested_sms_slots,
 };
 use super::shapes::{
     EARLY_SHAPE, EXISTING_OLD_LEAD_SHAPE, MONTHLY_SHAPE, NURTURE_PURPOSE, POST_HOLD_SHAPE,
@@ -1018,18 +1018,13 @@ pub fn conversation_plan(
         let time_sensitive = pressure
             .and_then(|p| p.pricing_change_valid_until)
             .is_some_and(|until| until > now);
-        // The conversation's ramp from where it is: the next day after our
-        // first message, 3 days after the second, then a week…
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let sent = (params.outbound_count as usize).clamp(1, NEW_CONVERSATION_GAPS.len());
         let first_gap = if time_sensitive {
             0.0
         } else {
-            (NEW_CONVERSATION_GAPS[sent - 1] - params.days_since.unwrap_or(0.0)).max(0.0)
+            (4.0 - params.days_since.unwrap_or(0.0)).max(1.0)
         };
         let mut gaps = vec![first_gap];
-        gaps.extend_from_slice(&NEW_CONVERSATION_GAPS[sent..]);
-        gaps.resize(8, MAX_CADENCE_GAP_DAYS);
+        gaps.extend_from_slice(&RECENT_UNANSWERED_GAPS[1..]);
         let mut offsets: Vec<f64> = Vec::with_capacity(gaps.len());
         for gap in gaps {
             let next = offsets.last().map_or(gap, |previous| previous + gap);
