@@ -7,8 +7,9 @@
 //! (`qbo_invoice_scans`). A change becomes a rule only when it wins at least
 //! 4 of 5 of the latest (up to [`WINDOW`]) outcomes, at least [`MIN_SEEN`]
 //! times, including the 2 newest: undoing it twice turns it off. Rules
-//! reword or leave out text lines and fill class, CC and product; they never
-//! touch an amount or leave out a priced line.
+//! reword or leave out text lines and fill class and CC; they never touch an
+//! amount or leave out a priced line. The product is learned from the
+//! invoices' words ([`super::products`]).
 
 use super::invoice::{EditableInvoice, Line, text};
 use crate::auth::EmployeeUser;

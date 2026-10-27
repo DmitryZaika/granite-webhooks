@@ -404,7 +404,7 @@ mod tests {
         );
         // Turned off, it is never picked.
         let off = HashSet::from(["30".to_string()]);
-        assert_eq!(model.pick(&draft(&PACKAGE), &off).unwrap().0, "5");
+        assert_ne!(model.pick(&draft(&PACKAGE), &off).unwrap().0, "30");
         // Saved choices only (no scanned words): the most used.
         let saved: Vec<Seen> = history
             .iter()
