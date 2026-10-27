@@ -199,12 +199,13 @@ impl PostHog<'_> {
             .posthog_key
             .as_deref()
             .ok_or_else(|| SourceError("POSTHOG_AUTOFIX_POSTHOG_KEY is not set".into()))?;
-        let response = self
+        // A read: safe to send again when the connection dropped.
+        let request = self
             .http
             .post(query_url(self.config))
             .bearer_auth(key)
-            .json(&query_body(hogql))
-            .send()
+            .json(&query_body(hogql));
+        let response = common::http::send_retrying(request)
             .await
             .map_err(|error| {
                 SourceError(format!("PostHog unreachable: {}", error.without_url()))
