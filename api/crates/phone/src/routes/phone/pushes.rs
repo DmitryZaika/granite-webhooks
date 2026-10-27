@@ -52,8 +52,9 @@ pub struct PushSent {
 /// Called by the `time-triggered` Lambda (job key) when an activity
 /// deadline reminder is due, as it sends the Telegram message. The
 /// notification is pushed to its user's signed-in phones as data
-/// `{granite: "1", type: "notification", notificationId}`: ids only. The app
-/// reads it with `GET /v1/notifications/{id}`. Nothing is pushed
+/// `{granite: "1", type: "notification", notificationId, heading}`: its id
+/// and heading ("Activity Reminder"). The app reads the rest with
+/// `GET /v1/notifications/{id}`. Nothing is pushed
 /// (`pushed: 0`) for an unknown notification or a deleted user. Calling it
 /// again pushes again.
 #[crate::openapi::path(
