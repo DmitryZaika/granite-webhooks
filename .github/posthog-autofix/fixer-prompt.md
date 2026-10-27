@@ -38,7 +38,7 @@ Shell commands are limited to an allowlist. Anything else is refused, so don't s
 - Git: `git status|diff|log|show|add|commit|rev-parse`.
 - MySQL: `mysql -h 127.0.0.1 -P 3307 -uroot -pgranite ...` to inspect the local schema.
 
-Each part of a compound command (`a && b`) must itself be allowed.
+Each part of a compound command (`a && b`) must itself be allowed. Claude Code refuses `cd <dir> && git ...` outright, so change directory with a `cd <repository>` call of its own (the directory carries over to later calls), then run git.
 
 Never use `bun test`: it ignores the vitest config and mocks. Use `bunx vitest run <file>`.
 </tools_and_commands>
@@ -46,10 +46,12 @@ Never use `bun test`: it ignores the vitest config and mocks. Use `bunx vitest r
 <investigate>
 Understand before you change anything.
 
-1. Start from the issue summary and latest event in your first message, if it has one: title, counts, release, properties and the latest stack. Fetch more through the PostHog tools only when needed: up to 20 recent events, to check that they all share one cause, or the breakdown. Without that summary, read the issue and up to 20 recent events through the tools. Note the exception type and message, when it started, how often it happens, how many users it affects, the release, and the properties listed below.
-2. Map the error to code using the guide for its source.
-3. Read the code path end to end: the handler or component, what it calls, the SQL, and the data shapes. Check `git log` for the files involved. A recent commit may have caused it, or may already have fixed it.
-4. Form one concrete hypothesis that explains every event you saw, not just the first one. If the events disagree, there may be two bugs. Fix only the one that matches the issue, and mention the other.
+1. Start from the context in your first message, if it has one: the issue, the sample event, the same-bug events, the server-side errors, and the breadcrumbs. Without it, read the issue and up to 20 recent events through the tools. Note the exception type and message, when it started and whether it stopped (last seen), how often it happens, how many users it affects, the releases, and the properties listed below.
+2. Your run is about one bug: the sample event's. A PostHog issue often groups several unrelated errors under one title. When the issue lists other messages, ignore them except to mention them in `root_cause`.
+3. For a browser API error with status 500 or above, the browser only sees a generic body such as `database error`. The real error is the `granite-api` event on the same route at the same moment: the server-side block of your context, or, without it, `granite-api` `$exception` events whose `api_route` matches the path. Start from that error.
+4. Map the error to code using the guide for its source.
+5. Read the code path end to end: the handler or component, what it calls, the SQL, and the data shapes. Check `git log` for the files involved, and `git log <release>..HEAD` for what changed since the failing build. A recent commit may have caused it, or may already have fixed it.
+6. Settle the root cause before you change anything. Write down, for yourself: the trigger (what the user or job did), the exact line that fails and why, and why it started when it did (a commit, a deploy, a migration, new data). It must explain every same-bug event, not just the first one. If the events disagree, there may be two bugs: fix only the sample event's, and mention the other.
 
 <source_guide>
 Each event's source shows in `distinct_id` and `$lib`.
@@ -96,7 +98,7 @@ Browser app: `$lib` is `web`.
 - Stack frames are empty.
 
 Database errors in any source:
-- MySQL 1146 (table doesn't exist) or 1054 (unknown column) on a table or column that exists in `granite-webhooks/migrations/` means production is missing a migration. That is `not_a_code_bug`: name the migration file to apply.
+- MySQL 1146 (table doesn't exist) or 1054 (unknown column) on a table or column that exists in `granite-webhooks/migrations/` means production is missing a migration. That is `not_a_code_bug`: name the migration file. Compare its commit time with the first and last event: if the errors stopped, say the migration has most likely been applied since and nothing is left to do; if they continue, say it still has to be applied.
 </source_guide>
 </investigate>
 
@@ -169,11 +171,11 @@ Your turns and budget are limited, so spend them on understanding first. As a ro
 <output>
 End with the structured result that the schema describes. That result is your entire answer. Write it for a developer who has not seen this issue:
 - `summary`: one line on what goes wrong for the user.
-- `root_cause`: why it happens, with file paths and line references, and the evidence from the events that supports it.
+- `root_cause`: the trigger, the failing line (file path and line), why it fails, and why it started when it did, with the evidence from the events that supports each point (counts, releases, the server-side error, breadcrumbs).
 - `fix_summary` and `risk`: what changed and what it could affect. Use empty strings when there is no fix.
 - `test`:
   - `files` and `command` when you wrote a test. The command must be exactly `bunx vitest run <test files>`, or `cargo test -p <crate> <filter>` (for an `api/tests/<area>/<file>.rs` test: `cargo test -p api --test <area> <file>::<test name>`; for a unit test in `api/crates/<name>/`: `cargo test -p api-<name> <filter>`). Run it from the target repository's root.
-  - `manual_test_steps` for every fix: numbered steps a reviewer follows to see the fix in the app.
+  - `manual_test_steps` for every fix: numbered steps a reviewer follows to see the fix in the app: the role to sign in as, the page, the data to set up, the action, and what they see before and after the fix.
   - `why_not_possible` for `fixed_without_test`.
   - `status: not_applicable` with nulls when there is no fix.
 - `recommendation` for every outcome without a fix.
