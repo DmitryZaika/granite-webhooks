@@ -33,6 +33,7 @@ pub async fn sale_exists(
 struct SaleRow {
     id: i32,
     customer_id: i32,
+    deal_id: Option<i64>,
     seller_id: Option<i32>,
     project_address: Option<String>,
     notes: Option<String>,
@@ -79,7 +80,8 @@ pub async fn find_contract(
     sale_id: i32,
 ) -> Result<Option<SaleContract>, sqlx::Error> {
     let sale = sqlx::query_as::<_, SaleRow>(
-        "SELECT sales.id, sales.customer_id, sales.seller_id, sales.project_address,
+        "SELECT sales.id, sales.customer_id, CAST(sales.deal_id AS SIGNED) AS deal_id,
+            sales.seller_id, sales.project_address,
             sales.notes, CAST(sales.price AS CHAR) AS price, customers.company_name,
             CAST(sales.extras AS CHAR) AS extras
          FROM sales
@@ -160,6 +162,7 @@ pub async fn find_contract(
     Ok(Some(SaleContract {
         id: sale.id,
         customer_id: sale.customer_id,
+        deal_id: sale.deal_id,
         seller_id: sale.seller_id,
         project_address: sale.project_address,
         notes: sale.notes,
@@ -210,6 +213,22 @@ pub async fn validate(
             "customer {} not found",
             input.customer_id
         )));
+    }
+
+    if let Some(deal_id) = input.deal_id.filter(|id| *id > 0) {
+        let deal: Option<i64> = sqlx::query_scalar(
+            "SELECT CAST(id AS SIGNED) FROM deals
+              WHERE id = ? AND customer_id = ? AND deleted_at IS NULL",
+        )
+        .bind(deal_id)
+        .bind(input.customer_id)
+        .fetch_optional(&mut *conn)
+        .await?;
+        if deal.is_none() {
+            return Err(ApiError::BadRequest(
+                "That deal was deleted or belongs to another customer. Pick another deal.".into(),
+            ));
+        }
     }
 
     if let Some(seller_id) = input.seller_id {
@@ -516,11 +535,12 @@ pub async fn sell(
     let seller_id = input.seller_id.unwrap_or(user_id);
     let address = project_address(&mut *conn, company_id, input).await?;
     let result = sqlx::query(
-        "INSERT INTO sales (customer_id, seller_id, company_id, sale_date, notes, status,
-            square_feet, cancelled_date, installed_date, price, project_address, extras)
-         VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, 'pending', ?, NULL, NULL, ?, ?, ?)",
+        "INSERT INTO sales (customer_id, deal_id, seller_id, company_id, sale_date, notes,
+            status, square_feet, cancelled_date, installed_date, price, project_address, extras)
+         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 'pending', ?, NULL, NULL, ?, ?, ?)",
     )
     .bind(input.customer_id)
+    .bind(input.deal_id.filter(|id| *id > 0))
     .bind(seller_id)
     .bind(company_id)
     .bind(non_empty(input.notes.as_deref()))
@@ -607,10 +627,17 @@ pub async fn edit(
 ) -> Result<(), ApiError> {
     let address = project_address(&mut *conn, company_id, input).await?;
     sqlx::query(
-        "UPDATE sales SET customer_id = ?, seller_id = COALESCE(?, seller_id), notes = ?,
+        // deal_id first: MySQL assigns left to right, so customer_id is still the old one.
+        "UPDATE sales SET
+            deal_id = CASE WHEN ? IS NOT NULL THEN NULLIF(?, 0)
+                           WHEN customer_id = ? THEN deal_id END,
+            customer_id = ?, seller_id = COALESCE(?, seller_id), notes = ?,
             square_feet = ?, price = ?, project_address = ?, extras = ?
          WHERE id = ?",
     )
+    .bind(input.deal_id)
+    .bind(input.deal_id)
+    .bind(input.customer_id)
     .bind(input.customer_id)
     .bind(input.seller_id)
     .bind(non_empty(input.notes.as_deref()))

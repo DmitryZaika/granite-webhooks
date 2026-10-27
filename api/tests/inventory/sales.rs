@@ -127,6 +127,47 @@ async fn sale_count(pool: &MySqlPool) -> i64 {
 // ---- POST /v1/sales
 
 #[test_db::test(seed)]
+async fn a_sale_belongs_to_the_deal_picked(pool: MySqlPool) {
+    let server = server(pool.clone());
+    let rooms = json!([room(ROOM_A, json!([{ "id": 6074, "is_full": true }]), 30.0)]);
+    let mut body = sale(1000, rooms);
+    // Erin's deal is not Alice's.
+    body["deal_id"] = json!(8002);
+    expect_400(&server, "POST", "/v1/sales", &body, "That deal").await;
+    body["deal_id"] = json!(8000);
+    let id = create(&server, &body).await;
+    let deal = || async {
+        sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT CAST(deal_id AS SIGNED) FROM sales WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(deal().await, Some(8000));
+
+    // Editing without a deal keeps it; 0 takes the sale out of the deal.
+    body.as_object_mut().unwrap().remove("deal_id");
+    let path = format!("/v1/sales/{id}");
+    server
+        .put(&path)
+        .with_session(sessions::REP)
+        .json(&body)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(deal().await, Some(8000));
+    body["deal_id"] = json!(0);
+    server
+        .put(&path)
+        .with_session(sessions::REP)
+        .json(&body)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(deal().await, None);
+}
+
+#[test_db::test(seed)]
 async fn sells_part_of_a_slab_and_leaves_a_remnant(pool: MySqlPool) {
     let server = server(pool.clone());
     let id = create(
@@ -440,6 +481,7 @@ async fn get_returns_the_sale_as_the_form_shows_it(pool: MySqlPool) {
         json!({
             "id": 7010,
             "customer_id": 1000,
+            "deal_id": null,
             "seller_id": 100,
             "project_address": "1 Main St",
             "notes": "Deliver after 5pm",

@@ -62,6 +62,39 @@ pub struct ProjectCustomer {
     /// Sales to the customer.
     #[sqlx(skip)]
     pub sales: Vec<ProjectSale>,
+    /// The customer's jobs, oldest first: each won deal (or deal with a sale)
+    /// with its sales, then each sale that is not part of such a deal.
+    #[sqlx(skip)]
+    pub projects: Vec<Project>,
+}
+
+/// One job of a customer: a deal and its sales, or a sale on its own.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Project {
+    /// The deal; null for a sale that is not part of a deal.
+    pub deal_id: Option<i64>,
+    /// The deal's title.
+    pub title: Option<String>,
+    /// The deal's amount, else the sales' total, a decimal string.
+    pub price: Option<String>,
+    /// Address of the job: its first sale's, else its newest quote's.
+    pub address: Option<String>,
+    /// The first sale's date, else when the deal was made.
+    #[serde(serialize_with = "js_date")]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub date: Option<DateTime<Utc>>,
+    /// The sales of the job.
+    pub sale_ids: Vec<i32>,
+}
+
+#[derive(FromRow)]
+struct ProjectDeal {
+    id: i64,
+    customer_id: i32,
+    title: Option<String>,
+    amount: Option<String>,
+    quote_address: Option<String>,
+    created_at: Option<DateTime<Utc>>,
 }
 
 /// A sale to a customer of the family.
@@ -71,6 +104,8 @@ pub struct ProjectSale {
     pub id: i32,
     /// Customer.
     pub customer_id: i32,
+    /// The deal the sale is part of.
+    pub deal_id: Option<i64>,
     /// Price, a decimal string.
     pub price: Option<String>,
     /// Address of the job.
@@ -162,13 +197,29 @@ pub async fn projects(
          ORDER BY ce.customer_id, ce.id = c.email_id DESC, ce.created_at, ce.id"
     )));
     let mut sales_query = sqlx::query_as::<_, ProjectSale>(AssertSqlSafe(format!(
-        "SELECT id, customer_id, CAST(price AS CHAR) AS price, project_address, sale_date
+        "SELECT id, customer_id, CAST(deal_id AS SIGNED) AS deal_id,
+                CAST(price AS CHAR) AS price, project_address, sale_date
          FROM sales WHERE customer_id IN ({marks}) ORDER BY sale_date, id"
+    )));
+    // Won deals, and deals a sale belongs to.
+    let mut deals_query = sqlx::query_as::<_, ProjectDeal>(AssertSqlSafe(format!(
+        "SELECT CAST(d.id AS SIGNED) AS id, d.customer_id, d.title,
+                CAST(d.amount AS CHAR) AS amount,
+                (SELECT q.address FROM quotes q
+                  WHERE q.deal_id = d.id AND q.deleted_at IS NULL
+                  ORDER BY q.id DESC LIMIT 1) AS quote_address,
+                d.created_at
+         FROM deals d
+         WHERE d.customer_id IN ({marks}) AND d.deleted_at IS NULL
+           AND (d.is_won = 1 OR EXISTS (SELECT 1 FROM sales s WHERE s.deal_id = d.id))
+         ORDER BY d.created_at, d.id"
     )));
     for customer in &customers {
         emails_query = emails_query.bind(customer.id);
         sales_query = sales_query.bind(customer.id);
+        deals_query = deals_query.bind(customer.id);
     }
+    let deals = deals_query.fetch_all(pool).await?;
     let mut emails: HashMap<i32, Vec<String>> = HashMap::new();
     for (customer_id, email) in emails_query.fetch_all(pool).await? {
         emails.entry(customer_id).or_default().push(email);
@@ -182,11 +233,65 @@ pub async fn projects(
             .remove(&customer.id)
             .unwrap_or_else(|| customer.email.clone().into_iter().collect());
         customer.sales = sales.remove(&customer.id).unwrap_or_default();
+        customer.projects = projects_of(customer.id, &deals, &customer.sales);
     }
     Ok(Json(CustomerProjects {
         parent_id,
         customers,
     }))
+}
+
+/// A customer's jobs: each of its deals with the sales made for it, then the
+/// sales of no listed deal; oldest first.
+fn projects_of(customer_id: i32, deals: &[ProjectDeal], sales: &[ProjectSale]) -> Vec<Project> {
+    let mut projects: Vec<Project> = deals
+        .iter()
+        .filter(|deal| deal.customer_id == customer_id)
+        .map(|deal| {
+            let own: Vec<&ProjectSale> = sales
+                .iter()
+                .filter(|sale| sale.deal_id == Some(deal.id))
+                .collect();
+            let sales_total = own
+                .iter()
+                .filter_map(|sale| sale.price.as_deref()?.parse::<f64>().ok())
+                .sum::<f64>();
+            Project {
+                deal_id: Some(deal.id),
+                title: deal.title.clone().filter(|title| !title.trim().is_empty()),
+                price: deal
+                    .amount
+                    .clone()
+                    .or_else(|| (!own.is_empty()).then(|| format!("{sales_total:.2}"))),
+                address: own
+                    .iter()
+                    .find_map(|sale| sale.project_address.clone().filter(|a| !a.is_empty()))
+                    .or_else(|| deal.quote_address.clone().filter(|a| !a.is_empty())),
+                date: own
+                    .iter()
+                    .find_map(|sale| sale.sale_date)
+                    .or(deal.created_at),
+                sale_ids: own.iter().map(|sale| sale.id).collect(),
+            }
+        })
+        .collect();
+    for sale in sales {
+        let listed = sale
+            .deal_id
+            .is_some_and(|id| projects.iter().any(|p| p.deal_id == Some(id)));
+        if !listed {
+            projects.push(Project {
+                deal_id: None,
+                title: None,
+                price: sale.price.clone(),
+                address: sale.project_address.clone(),
+                date: sale.sale_date,
+                sale_ids: vec![sale.id],
+            });
+        }
+    }
+    projects.sort_by_key(|project| project.date);
+    projects
 }
 
 /// Link a customer under a parent

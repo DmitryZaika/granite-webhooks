@@ -10,6 +10,8 @@ pub struct SaleContract {
     pub id: i32,
     /// Customer who bought.
     pub customer_id: i32,
+    /// The customer's deal this sale is part of; null if none.
+    pub deal_id: Option<i64>,
     /// User credited with the sale; null if unknown.
     pub seller_id: Option<i32>,
     /// Address of the job; null or empty means the customer's address.
@@ -93,6 +95,10 @@ pub struct SaleFixture {
 pub struct SaleInput {
     /// Customer who buys; must be a live customer of the company.
     pub customer_id: i32,
+    /// The customer's deal the sale is part of; 0 for none. Missing keeps
+    /// the edited sale's deal (none when selling, or when the customer changes).
+    #[serde(default)]
+    pub deal_id: Option<i64>,
     /// User credited with the sale. Defaults to the caller when selling;
     /// left unchanged when editing.
     #[serde(default)]

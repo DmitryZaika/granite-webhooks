@@ -29,8 +29,8 @@ use crate::openapi::{IntoParams, ToSchema};
 use crate::openapi::{OpenApiRouter, routes};
 use crate::quote_pricing::doc::QuoteDoc;
 use crate::quote_pricing::{
-    self, SaleDeal, load_company_quote, mark_quote_sold, pricing_for_quote, quote_for_contract_file,
-    with_current_sink_models,
+    self, SaleDeal, load_company_quote, mark_quote_sold, pricing_for_quote,
+    quote_for_contract_file, with_current_sink_models,
 };
 use crate::routes::created::CreatedId;
 use crate::routes::customers::service::IMPORT_PLACEHOLDER;

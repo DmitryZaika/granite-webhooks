@@ -899,7 +899,15 @@ pub async fn sell_quote_for_signed_contract(
         .color_options
         .len();
     let option_index = quote.2.or_else(|| (options == 1).then_some(0));
-    mark_quote_sold(pool, quote.0, company_id, option_index, None, SaleDeal::Auto).await?;
+    mark_quote_sold(
+        pool,
+        quote.0,
+        company_id,
+        option_index,
+        None,
+        SaleDeal::Auto,
+    )
+    .await?;
     Ok(())
 }
 

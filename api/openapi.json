@@ -80062,13 +80062,68 @@
           }
         }
       },
+      "Project": {
+        "type": "object",
+        "description": "One job of a customer: a deal and its sales, or a sale on its own.",
+        "required": [
+          "sale_ids"
+        ],
+        "properties": {
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The deal; null for a sale that is not part of a deal."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The deal's title."
+          },
+          "price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The deal's amount, else the sales' total, a decimal string."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address of the job: its first sale's, else its newest quote's."
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The first sale's date, else when the deal was made."
+          },
+          "sale_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The sales of the job."
+          }
+        }
+      },
       "ProjectCustomer": {
         "type": "object",
         "description": "One customer of the family.",
         "required": [
           "id",
           "emails",
-          "sales"
+          "sales",
+          "projects"
         ],
         "properties": {
           "id": {
@@ -80173,6 +80228,13 @@
               "$ref": "#/components/schemas/ProjectSale"
             },
             "description": "Sales to the customer."
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            },
+            "description": "The customer's jobs, oldest first: each won deal (or deal with a sale)\nwith its sales, then each sale that is not part of such a deal."
           }
         }
       },
@@ -80193,6 +80255,14 @@
             "type": "integer",
             "format": "int32",
             "description": "Customer."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The deal the sale is part of."
           },
           "price": {
             "type": [
@@ -83399,6 +83469,18 @@
             "type": "integer",
             "format": "int32",
             "description": "Index of the color option sold."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The customer's deal to mark won (none: the quote's own deal, else the\ncustomer's latest open or won one)."
+          },
+          "new_deal": {
+            "type": "boolean",
+            "description": "Make a new won deal instead of using an existing one."
           }
         },
         "additionalProperties": false
@@ -83421,6 +83503,14 @@
             "type": "integer",
             "format": "int32",
             "description": "Customer who bought."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The customer's deal this sale is part of; null if none."
           },
           "seller_id": {
             "type": [
@@ -83568,6 +83658,14 @@
             "type": "integer",
             "format": "int32",
             "description": "Customer who buys; must be a live customer of the company."
+          },
+          "deal_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The customer's deal the sale is part of; 0 for none. Missing keeps\nthe edited sale's deal (none when selling, or when the customer changes)."
           },
           "seller_id": {
             "type": [
