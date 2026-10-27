@@ -19,13 +19,15 @@ done
 
 # --- The CLI's subprocess sandbox -----------------------------------------------
 # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB runs each command of the agent in bubblewrap
-# (its own user and PID namespaces, the token variables unset). Ubuntu 24.04's
-# AppArmor blocks unprivileged user namespaces; the runner is thrown away
-# after the job. check-isolation proves the sandbox starts as the user.
-if ! command -v bwrap >/dev/null; then
+# (its own user and PID namespaces, the token variables unset), with socat for
+# the sandbox's network proxy and ripgrep for its file scan: without socat
+# every command fails ("socat not installed"). Ubuntu 24.04's AppArmor blocks
+# unprivileged user namespaces; the runner is thrown away after the job.
+# check-isolation proves the sandbox starts as the user.
+if ! command -v bwrap >/dev/null || ! command -v socat >/dev/null || ! command -v rg >/dev/null; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get -qq -o Acquire::Retries=3 update
-  apt-get -qq -o Acquire::Retries=3 install -y --no-install-recommends bubblewrap
+  apt-get -qq -o Acquire::Retries=3 install -y --no-install-recommends bubblewrap socat ripgrep
 fi
 if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
   sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0

@@ -379,6 +379,7 @@ mod tests {
         RunView {
             id: 1,
             posthog_issue_id: ISSUE.into(),
+            event_uuid: None,
             issue_created_at: Utc::now(),
             issue_name: name.into(),
             issue_description: description.into(),

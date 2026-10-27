@@ -104,8 +104,14 @@ pub enum SkipReason {
     LegacyRuntime,
     /// Raised outside production (localhost, a dev host).
     NonProduction,
-    /// No events were found for the issue.
+    /// PostHog no longer has the issue of the bug's events (deleted or merged).
     NoEvents,
+    /// A browser toast that tells the user what to fix, not a failure.
+    HintToast,
+    /// A browser's generic copy of an API 500 that the api reports itself.
+    Symptom,
+    /// An API 4xx that enforced a business rule (`{"error":"<sentence>"}`).
+    BusinessRule4xx,
 }
 
 impl SkipReason {
@@ -117,6 +123,9 @@ impl SkipReason {
             Self::LegacyRuntime => "legacy_runtime",
             Self::NonProduction => "non_production",
             Self::NoEvents => "no_events",
+            Self::HintToast => "hint_toast",
+            Self::Symptom => "symptom",
+            Self::BusinessRule4xx => "business_rule_4xx",
         }
     }
 }
@@ -379,6 +388,8 @@ pub struct RunReport {
 pub struct RunView {
     pub id: u64,
     pub posthog_issue_id: String,
+    /// The bug's latest `$exception` event; `None` on rows of the issue intake.
+    pub event_uuid: Option<String>,
     pub issue_created_at: DateTime<Utc>,
     pub issue_name: String,
     pub issue_description: String,
@@ -399,7 +410,7 @@ pub struct RunView {
 
 impl RunView {
     /// The columns [`RunView`] reads, for `SELECT {RUN_VIEW_COLUMNS} FROM posthog_autofix_runs`.
-    pub const COLUMNS: &'static str = "id, posthog_issue_id, issue_created_at, issue_name, \
+    pub const COLUMNS: &'static str = "id, posthog_issue_id, event_uuid, issue_created_at, issue_name, \
         issue_description, CAST(source AS CHAR) AS source, occurrences, users, signature, \
         CAST(status AS CHAR) AS status, CAST(outcome AS CHAR) AS outcome, \
         CAST(target_repo AS CHAR) AS target_repo, pr_url, github_run_url, attempts, \

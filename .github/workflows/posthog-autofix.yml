@@ -36,12 +36,18 @@ on:
         description: PostHog issue UUID
         type: string
         required: true
+      event_id:
+        description: Sample $exception event uuid of the bug to fix (may be empty)
+        type: string
+        required: false
+        default: ""
 
 permissions: {}
 
 env:
   RUN_ID: ${{ inputs.run_id }}
   ISSUE_ID: ${{ inputs.issue_id }}
+  EVENT_ID: ${{ inputs.event_id }}
   CARGO_TERM_COLOR: never
 
 jobs:

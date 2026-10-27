@@ -8,9 +8,8 @@
 //! the change, e.g. sends its email.
 
 use super::model::{RunView, SkipReason, Source, Status};
-use super::posthog::Issue;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use sqlx::{MySql, MySqlExecutor, QueryBuilder};
+use sqlx::MySqlExecutor;
 
 /// `status IN ('a', 'b')`: the statuses a row may leave to become `next`.
 /// The values are the enum's constants, never input.
@@ -93,6 +92,8 @@ const NAME_CHARS: usize = 255;
 const DESCRIPTION_CHARS: usize = 2000;
 const LIB_CHARS: usize = 64;
 const ISSUE_STATUS_CHARS: usize = 16;
+const ROUTE_CHARS: usize = 255;
+const ERROR_SOURCE_CHARS: usize = 32;
 const ERROR_CHARS: usize = 512;
 
 fn clip(text: &str, max_chars: usize) -> String {
@@ -103,41 +104,182 @@ fn count(rows: i64) -> u32 {
     u32::try_from(rows).unwrap_or(u32::MAX)
 }
 
-/// The newest `issue_created_at` recorded: where discovery resumes.
-pub async fn watermark(db: impl MySqlExecutor<'_>) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
-    let newest: Option<NaiveDateTime> =
-        sqlx::query_scalar("SELECT MAX(issue_created_at) FROM posthog_autofix_runs")
+/// The read cursor's notice kind: one row per successful read of events.
+const CURSOR: &str = "events_read";
+
+/// Where the next read of events starts: the end of the last one.
+pub async fn cursor(db: impl MySqlExecutor<'_>) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
+    let end: Option<NaiveDateTime> =
+        sqlx::query_scalar("SELECT MAX(window_start) FROM posthog_autofix_notices WHERE kind = ?")
+            .bind(CURSOR)
             .fetch_one(db)
             .await?;
-    Ok(newest.map(|at| at.and_utc()))
+    Ok(end.map(|at| at.and_utc()))
 }
 
-/// Records issues as `discovered` and returns how many were new; an issue
-/// already in the ledger is left as it is.
-pub async fn record_discovered(
+/// Records that events before `to` (whole seconds) were read.
+pub async fn advance_cursor(
     db: impl MySqlExecutor<'_>,
-    issues: &[&Issue],
+    to: DateTime<Utc>,
     now: DateTime<Utc>,
-) -> Result<usize, sqlx::Error> {
-    if issues.is_empty() {
-        return Ok(0);
-    }
-    let mut insert: QueryBuilder<MySql> = QueryBuilder::new(
-        "INSERT IGNORE INTO posthog_autofix_runs \
-         (posthog_issue_id, issue_created_at, issue_name, issue_description, discovered_at) ",
-    );
-    insert.push_values(issues, |mut row, issue| {
-        row.push_bind(issue.id.clone())
-            .push_bind(issue.created_at.naive_utc())
-            .push_bind(clip(&issue.name, NAME_CHARS))
-            .push_bind(clip(&issue.description, DESCRIPTION_CHARS))
-            .push_bind(now.naive_utc());
-    });
-    let inserted = insert.build().execute(db).await?.rows_affected();
-    Ok(usize::try_from(inserted).unwrap_or(usize::MAX))
+) -> Result<(), sqlx::Error> {
+    claim_notice(db, CURSOR, to.naive_utc(), now)
+        .await
+        .map(|_| ())
 }
 
-/// Issues created at or after `since`.
+/// One bug's events of one read, merged by signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sighting {
+    pub signature: String,
+    /// The issue and event of the latest event.
+    pub issue_id: String,
+    pub event_uuid: Option<String>,
+    pub exception_type: String,
+    pub message: String,
+    pub source: Source,
+    pub lib: Option<String>,
+    pub api_route: Option<String>,
+    pub api_status: Option<u16>,
+    pub error_source: Option<String>,
+    pub occurrences: u64,
+    pub users: u64,
+    pub first_seen: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+}
+
+/// The row that counts the events of the bug with `signature`; `None` when
+/// the bug needs a new row (and a new judgement).
+///
+/// A row still waiting or in flight always counts them. A run that reported
+/// its outcome holds its bug until `since` passes its end, so a fix has time
+/// to ship before the bug runs again; one that failed or never reported only
+/// until `failed_since` does, so a broken run is retried while the bug keeps
+/// happening. A skipped or folded row holds its bug while its events keep
+/// coming within `since`, so noise is not judged again. A row folded into
+/// another is only taken when it is the bug's only row.
+pub async fn bug_row(
+    db: impl MySqlExecutor<'_>,
+    signature: &str,
+    since: DateTime<Utc>,
+    failed_since: DateTime<Utc>,
+) -> Result<Option<u64>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT id FROM posthog_autofix_runs
+          WHERE signature = ?
+            AND (status IN ('discovered', 'queued', 'dispatched', 'running')
+                 OR (status = 'succeeded' AND finished_at >= ?)
+                 OR (status IN ('failed', 'timed_out') AND finished_at >= ?)
+                 OR (status IN ('skipped', 'duplicate', 'previewed')
+                     AND COALESCE(last_seen_at, discovered_at) >= ?))
+          ORDER BY status = 'duplicate', id DESC LIMIT 1",
+    )
+    .bind(signature)
+    .bind(since.naive_utc())
+    .bind(failed_since.naive_utc())
+    .bind(since.naive_utc())
+    .fetch_optional(db)
+    .await
+}
+
+/// Adds a read's events to row `id`. A row not yet started takes the latest
+/// event as its sample, so the fix run starts from the freshest evidence.
+pub async fn count_sighting(
+    db: impl MySqlExecutor<'_>,
+    id: u64,
+    sighting: &Sighting,
+) -> Result<(), sqlx::Error> {
+    // MySQL assigns left to right: both samples compare against the old
+    // last_seen_at, before it moves.
+    const NEWER: &str = "status IN ('discovered', 'queued') \
+        AND ? >= COALESCE(last_seen_at, issue_created_at)";
+    let last_seen = sighting.last_seen.naive_utc();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE posthog_autofix_runs
+            SET posthog_issue_id = IF({NEWER}, ?, posthog_issue_id),
+                event_uuid = IF({NEWER}, COALESCE(?, event_uuid), event_uuid),
+                occurrences = COALESCE(occurrences, 0) + ?,
+                users = GREATEST(COALESCE(users, 0), ?),
+                first_seen_at = LEAST(COALESCE(first_seen_at, ?), ?),
+                last_seen_at = GREATEST(COALESCE(last_seen_at, ?), ?)
+          WHERE id = ?"
+    )))
+    .bind(last_seen)
+    .bind(&sighting.issue_id)
+    .bind(last_seen)
+    .bind(sighting.event_uuid.as_deref())
+    .bind(sighting.occurrences)
+    .bind(sighting.users)
+    .bind(sighting.first_seen.naive_utc())
+    .bind(sighting.first_seen.naive_utc())
+    .bind(last_seen)
+    .bind(last_seen)
+    .bind(id)
+    .execute(db)
+    .await
+    .map(|_| ())
+}
+
+/// Records a new bug as `discovered`; its first event starts the settle clock.
+pub async fn record_sighting(
+    db: impl MySqlExecutor<'_>,
+    sighting: &Sighting,
+    now: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO posthog_autofix_runs
+           (posthog_issue_id, event_uuid, issue_created_at, first_seen_at, last_seen_at,
+            issue_name, issue_description, source, lib, api_route, api_status, error_source,
+            occurrences, users, signature, discovered_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&sighting.issue_id)
+    .bind(sighting.event_uuid.as_deref())
+    .bind(sighting.first_seen.naive_utc())
+    .bind(sighting.first_seen.naive_utc())
+    .bind(sighting.last_seen.naive_utc())
+    .bind(clip(&sighting.exception_type, NAME_CHARS))
+    .bind(clip(&sighting.message, DESCRIPTION_CHARS))
+    .bind(sighting.source.as_str())
+    .bind(sighting.lib.as_deref().map(|lib| clip(lib, LIB_CHARS)))
+    .bind(
+        sighting
+            .api_route
+            .as_deref()
+            .map(|route| clip(route, ROUTE_CHARS)),
+    )
+    .bind(sighting.api_status)
+    .bind(
+        sighting
+            .error_source
+            .as_deref()
+            .map(|source| clip(source, ERROR_SOURCE_CHARS)),
+    )
+    .bind(u32::try_from(sighting.occurrences).unwrap_or(u32::MAX))
+    .bind(u32::try_from(sighting.users).unwrap_or(u32::MAX))
+    .bind(&sighting.signature)
+    .bind(now.naive_utc())
+    .execute(db)
+    .await
+    .map(|_| ())
+}
+
+/// Lifts the users of the row that row `id` was folded into to `id`'s own:
+/// a server error has no user id, so its reach is that of its browser copy.
+pub async fn lift_folded_users(db: impl MySqlExecutor<'_>, id: u64) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE posthog_autofix_runs target
+           JOIN posthog_autofix_runs copy ON copy.duplicate_of_run_id = target.id
+            SET target.users = GREATEST(COALESCE(target.users, 0), COALESCE(copy.users, 0))
+          WHERE copy.id = ? AND copy.status = 'duplicate'",
+    )
+    .bind(id)
+    .execute(db)
+    .await
+    .map(|_| ())
+}
+
+/// Bugs first seen at or after `since`.
 pub async fn count_created_since(
     db: impl MySqlExecutor<'_>,
     since: DateTime<Utc>,
@@ -151,7 +293,7 @@ pub async fn count_created_since(
 }
 
 /// The most common `name: description` (description cut to 80 characters)
-/// among issues created at or after `since`, with their issue counts.
+/// among bugs first seen at or after `since`, with their counts.
 pub async fn top_groups(
     db: impl MySqlExecutor<'_>,
     since: DateTime<Utc>,
@@ -204,25 +346,77 @@ pub async fn time_out(
     Ok(changed == 1)
 }
 
-/// Discovered rows created at or before `created_by`, oldest first.
+/// A discovered row, as the judge reads it.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SettledRow {
+    pub id: u64,
+    pub posthog_issue_id: String,
+    pub issue_name: String,
+    pub issue_description: String,
+    pub source: Option<String>,
+    pub occurrences: Option<u32>,
+    pub users: Option<u32>,
+    pub api_route: Option<String>,
+    pub api_status: Option<u16>,
+    pub error_source: Option<String>,
+    pub first_seen_at: Option<DateTime<Utc>>,
+    pub last_seen_at: Option<DateTime<Utc>>,
+}
+
+impl SettledRow {
+    pub fn source(&self) -> Source {
+        self.source
+            .as_deref()
+            .and_then(Source::parse)
+            .unwrap_or(Source::Unknown)
+    }
+}
+
+/// Discovered rows first seen at or before `created_by`, server rows first.
+///
+/// Then oldest first. A browser 5xx waits for the API error of its route to
+/// be judged, so that error must never queue behind a full batch of them.
 pub async fn settled(
     db: impl MySqlExecutor<'_>,
     created_by: DateTime<Utc>,
     limit: u32,
-) -> Result<Vec<RunView>, sqlx::Error> {
-    sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {} FROM posthog_autofix_runs
+) -> Result<Vec<SettledRow>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT id, posthog_issue_id, issue_name, issue_description,
+                CAST(source AS CHAR) AS source, occurrences, users, api_route, api_status,
+                error_source, first_seen_at, last_seen_at
+           FROM posthog_autofix_runs
           WHERE status = 'discovered' AND issue_created_at <= ?
-          ORDER BY issue_created_at, id LIMIT ?",
-        RunView::COLUMNS
-    )))
+          ORDER BY source = 'web', issue_created_at, id LIMIT ?",
+    )
     .bind(created_by.naive_utc())
     .bind(limit)
     .fetch_all(db)
     .await
 }
 
-/// Where a settled issue goes.
+/// API rows (`granite-api`) not skipped or folded whose events span reaches
+/// into `[from, to]`, with their routes and whether they still wait to be
+/// judged: where a browser 5xx of that time may come from.
+pub async fn api_rows_seen_between(
+    db: impl MySqlExecutor<'_>,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<Vec<(u64, String, bool)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT id, api_route, status = 'discovered' FROM posthog_autofix_runs
+          WHERE source = 'granite-api' AND api_route IS NOT NULL
+            AND status NOT IN ('skipped', 'duplicate')
+            AND first_seen_at <= ? AND last_seen_at >= ?
+          ORDER BY id",
+    )
+    .bind(to.naive_utc())
+    .bind(from.naive_utc())
+    .fetch_all(db)
+    .await
+}
+
+/// Where a settled bug goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     Queued,
@@ -243,88 +437,38 @@ impl Verdict {
     }
 }
 
-/// A settled issue's verdict and what was read about it.
-#[derive(Debug, Clone, Copy)]
-pub struct Judgement<'a> {
-    pub verdict: Verdict,
-    pub source: Source,
-    pub lib: Option<&'a str>,
-    pub occurrences: u64,
-    pub users: u64,
-    /// `None` when the issue was skipped before its signature was computed.
-    pub signature: Option<&'a str>,
-    /// The issue's PostHog status; `None` when PostHog no longer has it.
-    pub issue_status: Option<&'a str>,
-}
-
-/// `discovered` -> the verdict's status, storing what was read.
+/// `discovered` -> the verdict's status, storing the issue's PostHog status
+/// (`None` when PostHog no longer has it).
 pub async fn record_judgement(
     db: impl MySqlExecutor<'_>,
     id: u64,
-    judgement: &Judgement<'_>,
+    verdict: Verdict,
+    issue_status: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<bool, sqlx::Error> {
-    let next = judgement.verdict.status();
-    let (skip_reason, duplicate_of) = match judgement.verdict {
+    let next = verdict.status();
+    let (skip_reason, duplicate_of) = match verdict {
         Verdict::Queued => (None, None),
         Verdict::Skipped(reason) => (Some(reason.as_str()), None),
         Verdict::Duplicate { of } => (None, Some(of)),
     };
     let changed = sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE posthog_autofix_runs
-            SET status = ?, skip_reason = ?, duplicate_of_run_id = ?, source = ?, lib = ?,
-                occurrences = ?, users = ?, signature = ?, last_issue_status = ?, enriched_at = ?
+            SET status = ?, skip_reason = ?, duplicate_of_run_id = ?, last_issue_status = ?,
+                enriched_at = ?
           WHERE id = ? AND {}",
         moves(Status::Discovered, next)
     )))
     .bind(next.as_str())
     .bind(skip_reason)
     .bind(duplicate_of)
-    .bind(judgement.source.as_str())
-    .bind(judgement.lib.map(|lib| clip(lib, LIB_CHARS)))
-    .bind(u32::try_from(judgement.occurrences).unwrap_or(u32::MAX))
-    .bind(u32::try_from(judgement.users).unwrap_or(u32::MAX))
-    .bind(judgement.signature)
-    .bind(
-        judgement
-            .issue_status
-            .map(|status| clip(status, ISSUE_STATUS_CHARS)),
-    )
+    .bind(issue_status.map(|status| clip(status, ISSUE_STATUS_CHARS)))
     .bind(now.naive_utc())
     .bind(id)
     .execute(db)
     .await?
     .rows_affected();
     Ok(changed == 1)
-}
-
-/// The run that row `id`, with `signature`, duplicates.
-///
-/// The oldest other row of that bug that is waiting or in flight, or ended
-/// at or after `since`, or (with `previewed`, a dry run) was previewed at or
-/// after it.
-pub async fn anchor(
-    db: impl MySqlExecutor<'_>,
-    signature: &str,
-    id: u64,
-    since: DateTime<Utc>,
-    previewed: bool,
-) -> Result<Option<u64>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT id FROM posthog_autofix_runs
-          WHERE signature = ? AND id <> ?
-            AND (status IN ('queued', 'dispatched', 'running')
-                 OR (status IN ('succeeded', 'failed', 'timed_out') AND finished_at >= ?)
-                 OR (? AND status = 'previewed' AND enriched_at >= ?))
-          ORDER BY id LIMIT 1",
-    )
-    .bind(signature)
-    .bind(id)
-    .bind(since.naive_utc())
-    .bind(previewed)
-    .bind(since.naive_utc())
-    .fetch_optional(db)
-    .await
 }
 
 /// A fixed run and the issue status PostHog last had.
@@ -453,7 +597,8 @@ pub async fn count_dispatched_since(
     Ok(count(rows))
 }
 
-/// Queued rows whose backoff has passed, the most widespread first.
+/// Queued rows whose backoff has passed: bugs seen in the last day first,
+/// then the most widespread.
 pub async fn due_queued(
     db: impl MySqlExecutor<'_>,
     now: DateTime<Utc>,
@@ -462,16 +607,19 @@ pub async fn due_queued(
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {} FROM posthog_autofix_runs
           WHERE status = 'queued' AND (retry_at IS NULL OR retry_at <= ?)
-          ORDER BY users DESC, occurrences DESC, id LIMIT ?",
+          ORDER BY last_seen_at >= ? DESC, users DESC, occurrences DESC, id LIMIT ?",
         RunView::COLUMNS
     )))
     .bind(now.naive_utc())
+    .bind((now - chrono::Duration::days(1)).naive_utc())
     .bind(limit)
     .fetch_all(db)
     .await
 }
 
-/// `queued` -> `dispatched`, counting the attempt.
+/// `queued` -> `dispatched`, counting the attempt. A row queued again by
+/// hand keeps its last run's `started_at`, which the watchdog would take for
+/// this run's: it is cleared.
 pub async fn claim_dispatch(
     db: impl MySqlExecutor<'_>,
     id: u64,
@@ -479,7 +627,8 @@ pub async fn claim_dispatch(
 ) -> Result<bool, sqlx::Error> {
     let changed = sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE posthog_autofix_runs
-            SET status = 'dispatched', dispatched_at = ?, attempts = attempts + 1, retry_at = NULL
+            SET status = 'dispatched', dispatched_at = ?, started_at = NULL,
+                attempts = attempts + 1, retry_at = NULL
           WHERE id = ? AND {}",
         may_become(Status::Dispatched)
     )))

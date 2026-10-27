@@ -1,6 +1,7 @@
 """The sandbox's pure parts: pins, PATH, argv, probes, the outbox copy, and
 the paths the workflow and isolate.sh share with isolation.py."""
 
+import json
 import os
 import re
 import subprocess
@@ -114,6 +115,15 @@ class ProbeTest(unittest.TestCase):
             allowed, [["tcp", "127.0.0.1", "3307"], ["tcp", "api.anthropic.com", "443"]]
         )
 
+    def test_the_workspace_root_has_a_valid_package_json(self) -> None:
+        # Without it the CLI sandbox leaves an empty one above both repos,
+        # and the SPA build fails on it.
+        work = Path(tempfile.mkdtemp())
+        isolation.write_work_manifest(work)
+        manifest = json.loads((work / "package.json").read_text())
+        self.assertEqual(manifest, {"private": True})
+        self.assertNotIn("workspaces", manifest)
+
     def test_the_cli_sandbox_must_start_as_the_agent_user(self) -> None:
         # The agent runs with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, so the CLI
         # needs bubblewrap with user namespaces; isolate.sh provides both.
@@ -121,8 +131,11 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual(isolation.SANDBOX_PROBE[0], "bwrap")
         self.assertIn("--unshare-user", isolation.SANDBOX_PROBE)
         self.assertNotIn("--unshare-net", isolation.SANDBOX_PROBE)
+        # Without socat the CLI runs but refuses every command (runs 7347/7348).
+        self.assertIn((True, ["socat", "-V"]), isolation.TOOL_PROBES)
+        self.assertIn((True, ["rg", "--version"]), isolation.TOOL_PROBES)
         script = (TOOLS_DIR / "isolate.sh").read_text()
-        self.assertIn("install -y --no-install-recommends bubblewrap", script)
+        self.assertIn("install -y --no-install-recommends bubblewrap socat ripgrep", script)
         self.assertIn("kernel.apparmor_restrict_unprivileged_userns=0", script)
         sandbox_at = script.index("bubblewrap")
         self.assertLess(sandbox_at, script.index("iptables -N AUTOFIX_EGRESS"))

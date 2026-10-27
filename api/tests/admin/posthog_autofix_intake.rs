@@ -4,11 +4,12 @@ use api::posthog_autofix::config::{Config, Mode};
 use api::posthog_autofix::github::{Dispatch, DispatchError, Dispatcher};
 use api::posthog_autofix::intake::{Deps, TickReport, tick};
 use api::posthog_autofix::notify::{Email, Mailer};
-use api::posthog_autofix::posthog::{Issue, IssueEvents, IssueSource, SourceError};
+use api::posthog_autofix::posthog::{EventGroup, Issue, IssueEvents, IssueSource, SourceError};
 use api::posthog_autofix::writeback::IssueWriter;
 use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
-use serde_json::json;
+use serde_json::{Value, json};
 use sqlx::MySqlPool;
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -25,40 +26,264 @@ fn issue_id(n: u32) -> String {
     format!("01a158ec-0000-4000-8000-{n:012x}")
 }
 
+/// One `$exception` event, as PostHog stores it.
+#[derive(Debug, Clone)]
+struct Event {
+    uuid: String,
+    issue_id: String,
+    at: DateTime<Utc>,
+    distinct_id: String,
+    bug: Bug,
+}
+
+/// An error as one event reports it.
+#[derive(Debug, Clone)]
+struct Bug {
+    name: &'static str,
+    message: String,
+    /// The browser's user, or the server's fixed id.
+    distinct_id: String,
+    lib: Option<&'static str>,
+    /// A symbolicated top frame (`function`, `file`); `None` is minified.
+    frame: Option<(&'static str, &'static str)>,
+    api_status: Option<u16>,
+    route: Option<String>,
+    error_source: Option<&'static str>,
+    host: Option<&'static str>,
+}
+
+impl Bug {
+    fn is_server(&self) -> bool {
+        matches!(
+            self.distinct_id.as_str(),
+            "granite-api" | "server-webhooks" | "server-time-triggered"
+        )
+    }
+
+    fn exception_list(&self) -> Value {
+        let frame = self.frame.map_or_else(
+            || json!({ "function": "a", "source": "https://granite-manager.com/assets/index-3f2a.js", "in_app": true, "resolved": false }),
+            |(function, file)| json!({ "function": function, "source": file, "in_app": true, "resolved": true }),
+        );
+        json!([{
+            "type": self.name,
+            "value": self.message,
+            "stacktrace": { "type": "resolved", "frames": [frame] },
+        }])
+    }
+}
+
+fn web(name: &'static str, message: &str) -> Bug {
+    Bug {
+        name,
+        message: message.into(),
+        distinct_id: "user-1".into(),
+        lib: Some("web"),
+        frame: None,
+        api_status: None,
+        route: None,
+        error_source: Some("client"),
+        host: Some("acme.granite-manager.com"),
+    }
+}
+
+fn web_api(status: u16, path: &str, body: &str) -> Bug {
+    Bug {
+        api_status: Some(status),
+        route: Some(path.into()),
+        ..web(
+            "GraniteApiError",
+            &format!("Granite API {status} on {path}: {body}"),
+        )
+    }
+}
+
+fn api(message: &str, route: &str) -> Bug {
+    Bug {
+        name: "ApiError",
+        message: message.into(),
+        distinct_id: "granite-api".into(),
+        lib: None,
+        frame: None,
+        api_status: Some(500),
+        route: Some(route.into()),
+        error_source: Some("api"),
+        host: None,
+    }
+}
+
+fn user(bug: Bug, distinct_id: &str) -> Bug {
+    Bug {
+        distinct_id: distinct_id.into(),
+        ..bug
+    }
+}
+
+fn schedule_bug() -> Bug {
+    api(
+        "Database(Database(MySqlDatabaseError { code: Some(\"42S02\"), number: 1146, \
+         message: \"Table 'main.schedule_notification_flows' doesn't exist\" }))",
+        "/v1/schedule/notifications",
+    )
+}
+
+const UNKNOWN_COLUMN: &str = "Database(Database(MySqlDatabaseError { code: Some(\"42S22\"), \
+    number: 1054, message: \"Unknown column 'co.estimates_calendar_id' in 'where clause'\" }))";
+const DATABASE_ERROR: &str = r#"{"error":"database error"}"#;
+
+fn slabs_bug(id: u32) -> Bug {
+    web_api(500, &format!("/v1/slabs?id={id}"), DATABASE_ERROR)
+}
+
+fn field_state_bug() -> Bug {
+    Bug {
+        frame: Some(("useFormField", "app/components/ui/form.tsx")),
+        ..web(
+            "TypeError",
+            "Cannot read properties of undefined (reading 'getFieldState')",
+        )
+    }
+}
+
+/// A distinct bug for each `n` (the quoted name is kept by the signature).
+fn numbered_bug(n: u32) -> Bug {
+    let letter = |k: u32| char::from_u32('a' as u32 + k % 26).unwrap();
+    web(
+        "TypeError",
+        &format!(
+            "Cannot read properties of undefined (reading 'field{}{}')",
+            letter(n / 26),
+            letter(n)
+        ),
+    )
+}
+
 #[derive(Default)]
 struct FakeSource {
     issues: Mutex<Vec<Issue>>,
-    events: Mutex<Vec<IssueEvents>>,
+    events: Mutex<Vec<Event>>,
+    /// The spans `event_groups` was asked for.
+    reads: Mutex<Vec<(DateTime<Utc>, DateTime<Utc>)>>,
+    fail: AtomicBool,
     calls: AtomicUsize,
 }
 
 impl FakeSource {
-    fn add(&self, (issue, events): (Issue, IssueEvents)) {
-        self.issues.lock().unwrap().push(issue);
-        self.events.lock().unwrap().push(events);
+    /// A PostHog issue whose title is `bug`'s, created at `created_at`.
+    fn issue(&self, n: u32, created_at: DateTime<Utc>, bug: &Bug) {
+        self.issues.lock().unwrap().push(Issue {
+            id: issue_id(n),
+            created_at,
+            status: "active".into(),
+            name: bug.name.into(),
+            description: bug.message.clone(),
+        });
+    }
+
+    /// An event of `bug` in issue `n` at `at` (the issue is made on its
+    /// first event); returns the event's uuid.
+    fn event(&self, n: u32, at: DateTime<Utc>, bug: &Bug) -> String {
+        let id = issue_id(n);
+        if !self
+            .issues
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|issue| issue.id == id)
+        {
+            self.issue(n, at, bug);
+        }
+        let mut events = self.events.lock().unwrap();
+        let uuid = format!("01a17880-0000-7000-8000-{:012x}", events.len() + 1);
+        events.push(Event {
+            uuid: uuid.clone(),
+            issue_id: id,
+            at,
+            distinct_id: bug.distinct_id.clone(),
+            bug: bug.clone(),
+        });
+        uuid
     }
 
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
+
+    fn reads(&self) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
+        self.reads.lock().unwrap().clone()
+    }
 }
 
+type GroupKey = (
+    String,
+    &'static str,
+    String,
+    Option<String>,
+    Option<&'static str>,
+    Option<u16>,
+    Option<String>,
+    Option<&'static str>,
+);
+
 impl IssueSource for FakeSource {
-    async fn issues_since(
+    async fn event_groups(
         &self,
-        since: DateTime<Utc>,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
         limit: u32,
-    ) -> Result<Vec<Issue>, SourceError> {
+    ) -> Result<Vec<EventGroup>, SourceError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        let mut found: Vec<Issue> = self
-            .issues
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|issue| issue.created_at >= since)
-            .cloned()
+        if self.fail.load(Ordering::SeqCst) {
+            return Err(SourceError("PostHog query failed: 503".into()));
+        }
+        self.reads.lock().unwrap().push((from, to));
+        let mut groups: BTreeMap<GroupKey, Vec<Event>> = BTreeMap::new();
+        for event in self.events.lock().unwrap().iter() {
+            if event.at < from || event.at >= to {
+                continue;
+            }
+            let bug = &event.bug;
+            let key = (
+                event.issue_id.clone(),
+                bug.name,
+                bug.message.clone(),
+                bug.is_server().then(|| bug.distinct_id.clone()),
+                bug.lib,
+                bug.api_status,
+                bug.route.clone(),
+                bug.error_source,
+            );
+            groups.entry(key).or_default().push(event.clone());
+        }
+        let mut found: Vec<EventGroup> = groups
+            .into_iter()
+            .map(|(key, events)| {
+                let latest = events.iter().max_by_key(|event| event.at).unwrap();
+                let mut users: Vec<&str> = events.iter().map(|e| e.distinct_id.as_str()).collect();
+                users.sort_unstable();
+                users.dedup();
+                EventGroup {
+                    issue_id: key.0,
+                    exception_type: key.1.into(),
+                    message: key.2,
+                    sender: key.3,
+                    lib: key.4.map(Into::into),
+                    api_status: key.5,
+                    route: key.6,
+                    error_source: key.7.map(Into::into),
+                    occurrences: events.len() as u64,
+                    users: users.len() as u64,
+                    first_seen: events.iter().map(|event| event.at).min().unwrap(),
+                    last_seen: latest.at,
+                    event_uuid: Some(latest.uuid.clone()),
+                    host: latest.bug.host.map(Into::into),
+                    exception_list: Some(latest.bug.exception_list()),
+                    url: None,
+                    method: None,
+                }
+            })
             .collect();
-        found.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        found.sort_by_key(|group| std::cmp::Reverse(group.occurrences));
         found.truncate(limit as usize);
         Ok(found)
     }
@@ -76,34 +301,64 @@ impl IssueSource for FakeSource {
     async fn events(
         &self,
         ids: &[String],
-        _since: DateTime<Utc>,
+        since: DateTime<Utc>,
     ) -> Result<Vec<IssueEvents>, SourceError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let events = self.events.lock().unwrap();
-        Ok(events
+        Ok(ids
             .iter()
-            .filter(|events| ids.contains(&events.issue_id))
-            .cloned()
+            .filter_map(|id| {
+                let of_issue: Vec<&Event> = events
+                    .iter()
+                    .filter(|event| &event.issue_id == id && event.at >= since)
+                    .collect();
+                let latest = of_issue.iter().max_by_key(|event| event.at)?;
+                let web = latest.bug.lib == Some("web");
+                Some(IssueEvents {
+                    issue_id: id.clone(),
+                    occurrences: of_issue.len() as u64,
+                    users: 1,
+                    distinct_id: Some(latest.distinct_id.clone()),
+                    lib: latest.bug.lib.map(Into::into),
+                    host: latest.bug.host.map(Into::into),
+                    exception_list: Some(latest.bug.exception_list()),
+                    url: web.then(|| "https://granite-manager.com/employee/deals/7".into()),
+                    request: latest
+                        .bug
+                        .route
+                        .as_ref()
+                        .map(|route| format!("GET {route}")),
+                })
+            })
             .collect())
     }
 }
 
 #[derive(Default)]
 struct FakeDispatcher {
-    /// Run ids of every dispatch attempt.
-    attempts: Mutex<Vec<u64>>,
+    /// `(run id, issue id, event id)` of every dispatch attempt.
+    attempts: Mutex<Vec<(u64, String, Option<String>)>>,
     fail: AtomicBool,
 }
 
 impl FakeDispatcher {
     fn attempts(&self) -> Vec<u64> {
-        self.attempts.lock().unwrap().clone()
+        self.attempts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(run, _, _)| *run)
+            .collect()
     }
 }
 
 impl Dispatcher for FakeDispatcher {
     async fn dispatch(&self, dispatch: &Dispatch<'_>) -> Result<(), DispatchError> {
-        self.attempts.lock().unwrap().push(dispatch.run_id);
+        self.attempts.lock().unwrap().push((
+            dispatch.run_id,
+            dispatch.issue_id.to_string(),
+            dispatch.event_id.map(Into::into),
+        ));
         if self.fail.load(Ordering::SeqCst) {
             return Err(DispatchError("GitHub dispatch failed: 500 boom".into()));
         }
@@ -189,7 +444,7 @@ impl World {
         tick(&deps, now).await.unwrap()
     }
 
-    /// Ticks once per poll window from `from` until every issue is judged.
+    /// Ticks once per poll window from `from` until every bug is judged.
     async fn drain(&self, pool: &MySqlPool, config: &Config, from: i64) {
         for poll in 0..10 {
             if count(pool, "status = 'discovered'").await == 0 {
@@ -197,7 +452,7 @@ impl World {
             }
             self.tick(pool, config, minutes(from + poll * 5)).await;
         }
-        panic!("issues left undiscovered");
+        panic!("bugs left unjudged");
     }
 }
 
@@ -212,98 +467,6 @@ fn live() -> Config {
     }
 }
 
-/// An error as PostHog reports it.
-struct Bug<'a> {
-    name: &'a str,
-    description: &'a str,
-    distinct_id: &'a str,
-    lib: &'a str,
-    /// A symbolicated top frame (`function`, `file`); `None` is minified.
-    frame: Option<(&'a str, &'a str)>,
-}
-
-fn web<'a>(name: &'a str, description: &'a str, frame: Option<(&'a str, &'a str)>) -> Bug<'a> {
-    Bug {
-        name,
-        description,
-        distinct_id: "user-1",
-        lib: "web",
-        frame,
-    }
-}
-
-fn issue(n: u32, created_at: DateTime<Utc>, bug: &Bug<'_>) -> (Issue, IssueEvents) {
-    let frame = bug.frame.map_or_else(
-        || json!({ "function": "a", "source": "https://granite-manager.com/assets/index-3f2a.js", "in_app": true, "resolved": false }),
-        |(function, file)| json!({ "function": function, "source": file, "in_app": true, "resolved": true }),
-    );
-    let id = issue_id(n);
-    let events = IssueEvents {
-        issue_id: id.clone(),
-        occurrences: 4,
-        users: 2,
-        distinct_id: Some(bug.distinct_id.into()),
-        lib: Some(bug.lib.into()),
-        host: (bug.lib == "web").then(|| "granite-manager.com".into()),
-        exception_list: Some(json!([{
-            "type": bug.name,
-            "value": bug.description,
-            "stacktrace": { "type": "resolved", "frames": [frame] },
-        }])),
-        url: (bug.lib == "web").then(|| "https://granite-manager.com/employee/deals/7".into()),
-        request: (bug.lib != "web").then(|| "GET /v1/schedule".into()),
-    };
-    let issue = Issue {
-        id,
-        created_at,
-        status: "active".into(),
-        name: bug.name.into(),
-        description: bug.description.into(),
-    };
-    (issue, events)
-}
-
-const SLABS: &str = r#"Granite API 500 on /v1/slabs?id=6074: {"error":"database error"}"#;
-
-fn schedule_bug() -> Bug<'static> {
-    Bug {
-        name: "ApiError",
-        description: "Database(Database(MySqlDatabaseError { code: Some(\"42S02\"), \
-            message: \"Table 'main.schedule_notification_flows' doesn't exist\" }))",
-        distinct_id: "granite-api",
-        lib: "posthog-rs",
-        frame: Some(("schedule_notifications::list", "api/src/routes/schedule.rs")),
-    }
-}
-
-fn slabs_bug(description: &str) -> Bug<'_> {
-    web(
-        "GraniteApiError",
-        description,
-        Some(("fetchSlabs", "app/lib/api/slabs.ts")),
-    )
-}
-
-fn field_state_bug() -> Bug<'static> {
-    web(
-        "TypeError",
-        "Cannot read properties of undefined (reading 'getFieldState')",
-        Some(("useFormField", "app/components/ui/form.tsx")),
-    )
-}
-
-/// 110 issues of one network error, split by PostHog.
-fn add_failed_to_fetch(source: &FakeSource, created_from: DateTime<Utc>) {
-    for n in 1..=110 {
-        let bug = web("TypeError", "Failed to fetch", None);
-        source.add(issue(
-            n,
-            created_from + Duration::seconds(i64::from(n)),
-            &bug,
-        ));
-    }
-}
-
 async fn count(pool: &MySqlPool, condition: &str) -> i64 {
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT COUNT(*) FROM posthog_autofix_runs WHERE {condition}"
@@ -313,14 +476,24 @@ async fn count(pool: &MySqlPool, condition: &str) -> i64 {
     .unwrap()
 }
 
-async fn run_of(pool: &MySqlPool, n: u32) -> (u64, String) {
+/// `(id, status, skip_reason)` of the row of the bug whose message starts so.
+async fn row_of(pool: &MySqlPool, message: &str) -> (u64, String, Option<String>) {
     sqlx::query_as(
-        "SELECT id, CAST(status AS CHAR) FROM posthog_autofix_runs WHERE posthog_issue_id = ?",
+        "SELECT id, CAST(status AS CHAR), skip_reason FROM posthog_autofix_runs \
+         WHERE issue_description LIKE CONCAT(?, '%')",
     )
-    .bind(issue_id(n))
+    .bind(message)
     .fetch_one(pool)
     .await
     .unwrap()
+}
+
+async fn counters(pool: &MySqlPool, id: u64) -> (u32, u32) {
+    sqlx::query_as("SELECT occurrences, users FROM posthog_autofix_runs WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 async fn insert_run(pool: &MySqlPool, n: u32, columns: &str, values: &str) -> u64 {
@@ -337,7 +510,7 @@ async fn insert_run(pool: &MySqlPool, n: u32, columns: &str, values: &str) -> u6
 }
 
 #[test_db::test]
-async fn a_storm_of_one_error_starts_one_run_per_real_bug(pool: MySqlPool) {
+async fn one_bug_split_over_many_issues_is_one_row(pool: MySqlPool) {
     let config = Config {
         max_concurrent: 3,
         max_per_day: 5,
@@ -345,27 +518,29 @@ async fn a_storm_of_one_error_starts_one_run_per_real_bug(pool: MySqlPool) {
     };
     let world = World::default();
     let source = &world.source;
-    source.add(issue(900, t0() - Duration::hours(1), &schedule_bug()));
-    source.add(issue(200, t0() + Duration::seconds(1), &schedule_bug()));
-    source.add(issue(201, t0() + Duration::seconds(2), &slabs_bug(SLABS)));
-    source.add(issue(202, t0() + Duration::seconds(3), &field_state_bug()));
-    source.add(issue(203, t0() + Duration::seconds(4), &slabs_bug(SLABS)));
-    let other_slab = SLABS.replace("6074", "6081");
-    source.add(issue(
-        204,
-        t0() + Duration::seconds(5),
-        &slabs_bug(&other_slab),
-    ));
-    add_failed_to_fetch(source, t0() + Duration::minutes(1));
+    // Before the cutover: never read.
+    source.event(900, t0() - Duration::hours(1), &schedule_bug());
+    source.event(200, t0() + Duration::seconds(1), &schedule_bug());
+    for (n, id) in [(201, 6074), (203, 6074), (204, 6081)] {
+        source.event(
+            n,
+            t0() + Duration::seconds(i64::from(n - 195)),
+            &slabs_bug(id),
+        );
+    }
+    source.event(202, t0() + Duration::seconds(3), &field_state_bug());
+    // 110 issues of one network error, split by PostHog.
+    for n in 1..=110 {
+        let at = minutes(1) + Duration::seconds(i64::from(n));
+        source.event(n, at, &web("TypeError", "Failed to fetch"));
+    }
 
     let first = world.tick(&pool, &config, minutes(5)).await;
-    assert_eq!(first.discovered, 115);
-    assert!(first.storm_digest);
+    assert_eq!(first.discovered, 4);
     assert_eq!(first.dispatched, 0, "nothing has settled yet");
 
     let second = world.tick(&pool, &config, minutes(40)).await;
     assert_eq!(second.dispatched, 3);
-    assert!(!second.storm_digest);
     let calls = source.calls();
     let same_window = world.tick(&pool, &config, minutes(41)).await;
     assert_eq!(
@@ -375,68 +550,23 @@ async fn a_storm_of_one_error_starts_one_run_per_real_bug(pool: MySqlPool) {
     );
     assert_eq!(same_window.discovered + same_window.dispatched, 0);
 
-    world.drain(&pool, &config, 45).await;
-    let dispatched = world.dispatcher.attempts();
-    assert_eq!(dispatched.len(), 3);
-    let real = [
-        run_of(&pool, 200).await,
-        run_of(&pool, 201).await,
-        run_of(&pool, 202).await,
-    ];
-    for (id, status) in &real {
-        assert!(dispatched.contains(id));
-        assert_eq!(status, "dispatched");
-    }
-    let backlog: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM posthog_autofix_runs WHERE posthog_issue_id = ?")
-            .bind(issue_id(900))
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(backlog, 0, "the backlog never enters the ledger");
+    assert_eq!(count(&pool, "1").await, 4);
+    assert_eq!(count(&pool, "status = 'dispatched'").await, 3);
+    let (_, status, reason) = row_of(&pool, "Failed to fetch").await;
     assert_eq!(
-        count(&pool, "status = 'skipped' AND skip_reason = 'excluded'").await,
-        110
+        (status.as_str(), reason.as_deref()),
+        ("skipped", Some("excluded"))
     );
-    let slabs_run = real[1].0;
-    assert_eq!(
-        count(
-            &pool,
-            &format!("status = 'duplicate' AND duplicate_of_run_id = {slabs_run}")
-        )
-        .await,
-        2
-    );
-    assert_eq!(count(&pool, "status = 'duplicate'").await, 2);
-    let subjects = world.mailer.subjects();
-    assert_eq!(subjects.len(), 1, "{subjects:?}");
-    assert!(subjects[0].contains("storm"), "{subjects:?}");
-}
-
-/// `count` issues of one network error created from `from` on, ids from `first`.
-fn add_burst(source: &FakeSource, first: u32, count: u32, from: DateTime<Utc>) {
-    for n in first..first + count {
-        let bug = web("TypeError", "Failed to fetch", None);
-        let at = from + Duration::seconds(i64::from(n));
-        source.add(issue(n, at, &bug));
-    }
-}
-
-#[test_db::test]
-async fn a_storm_across_a_window_boundary_sends_one_digest(pool: MySqlPool) {
-    let config = live();
-    let world = World::default();
-    add_burst(&world.source, 1, 25, minutes(20));
-
-    // 00:29 is in window 00:00, 00:31 in window 00:30: the same 25 issues.
-    assert!(world.tick(&pool, &config, minutes(29)).await.storm_digest);
-    assert!(!world.tick(&pool, &config, minutes(31)).await.storm_digest);
-    assert_eq!(world.mailer.subjects().len(), 1);
-
-    // A new storm more than a storm window after the first digest is a new digest.
-    add_burst(&world.source, 101, 25, minutes(100));
-    assert!(world.tick(&pool, &config, minutes(101)).await.storm_digest);
-    assert_eq!(world.mailer.subjects().len(), 2);
+    let (slabs, _, _) = row_of(&pool, "Granite API 500 on /v1/slabs").await;
+    assert_eq!(counters(&pool, slabs).await.0, 3);
+    let fetch_events: (u32,) = sqlx::query_as(
+        "SELECT occurrences FROM posthog_autofix_runs WHERE issue_description = 'Failed to fetch'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(fetch_events.0, 110);
+    assert!(world.mailer.subjects().is_empty());
 }
 
 #[test_db::test]
@@ -446,42 +576,444 @@ async fn without_the_exclusions_one_error_split_110_ways_is_one_run(pool: MySqlP
         ..live()
     };
     let world = World::default();
-    add_failed_to_fetch(&world.source, t0());
+    for n in 1..=110 {
+        let at = t0() + Duration::seconds(i64::from(n));
+        world
+            .source
+            .event(n, at, &web("TypeError", "Failed to fetch"));
+    }
+    world.tick(&pool, &config, minutes(5)).await;
+    world.drain(&pool, &config, 40).await;
+    assert_eq!(world.dispatcher.attempts().len(), 1);
+    assert_eq!(count(&pool, "1").await, 1);
+}
+
+#[test_db::test]
+async fn a_storm_across_a_window_boundary_sends_one_digest(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    for n in 0..25 {
+        let at = minutes(20) + Duration::seconds(i64::from(n));
+        world.source.event(n, at, &numbered_bug(n));
+    }
+
+    // 00:29 is in window 00:00, 00:31 in window 00:30: the same 25 bugs.
+    assert!(world.tick(&pool, &config, minutes(29)).await.storm_digest);
+    assert!(!world.tick(&pool, &config, minutes(31)).await.storm_digest);
+    assert_eq!(world.mailer.subjects().len(), 1);
+
+    // A new storm more than a storm window after the first digest is a new digest.
+    for n in 100..125 {
+        let at = minutes(100) + Duration::seconds(i64::from(n));
+        world.source.event(n, at, &numbered_bug(n));
+    }
+    assert!(world.tick(&pool, &config, minutes(105)).await.storm_digest);
+    assert_eq!(world.mailer.subjects().len(), 2);
+}
+
+#[test_db::test]
+async fn a_catch_all_issue_titled_401_holds_a_500_that_gets_its_own_run(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let source = &world.source;
+    let signed_out = web_api(401, "/v1/me", r#"{"error":"unauthorized"}"#);
+    // The issue predates the cutover and its title is a signed-out 401.
+    source.issue(1, t0() - Duration::days(9), &signed_out);
+    source.event(1, minutes(1), &signed_out);
+    let customers = web_api(500, "/v1/customers", DATABASE_ERROR);
+    source.event(1, minutes(2), &customers);
+    source.event(1, minutes(2), &user(customers.clone(), "user-2"));
+    // A developer's browser: never recorded.
+    let local = Bug {
+        host: Some("localhost:5173"),
+        ..web("TypeError", "x is not a function")
+    };
+    source.event(5, minutes(2), &local);
+
     world.tick(&pool, &config, minutes(5)).await;
     world.drain(&pool, &config, 40).await;
 
-    let dispatched = world.dispatcher.attempts();
-    assert_eq!(dispatched.len(), 1);
-    let run = dispatched[0];
-    assert_eq!(count(&pool, "status IN ('queued', 'dispatched')").await, 1);
+    assert_eq!(count(&pool, "1").await, 2);
+    let (_, status, reason) = row_of(&pool, "Granite API 401 on /v1/me").await;
     assert_eq!(
-        count(
-            &pool,
-            &format!("status = 'duplicate' AND duplicate_of_run_id = {run}")
-        )
-        .await,
-        109
+        (status.as_str(), reason.as_deref()),
+        ("skipped", Some("excluded"))
+    );
+    let (id, status, _) = row_of(&pool, "Granite API 500 on /v1/customers").await;
+    assert_eq!(status, "dispatched");
+    assert_eq!(counters(&pool, id).await, (2, 2));
+    let attempts = world.dispatcher.attempts.lock().unwrap().clone();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(
+        attempts[0].1,
+        issue_id(1),
+        "the catch-all issue is the sample"
     );
 }
 
 #[test_db::test]
-async fn a_run_over_the_daily_cap_waits_in_the_queue(pool: MySqlPool) {
+async fn a_new_message_in_an_issue_from_before_the_cutover_is_queued(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let source = &world.source;
+    source.issue(2, t0() - Duration::days(6), &schedule_bug());
+    source.event(2, t0() - Duration::days(6), &schedule_bug());
+    let unknown_column = api(UNKNOWN_COLUMN, "/v1/schedule/settings");
+    source.event(2, minutes(1), &unknown_column);
+
+    world.tick(&pool, &config, minutes(5)).await;
+    let report = world.tick(&pool, &config, minutes(40)).await;
+    assert_eq!((report.queued, report.dispatched), (1, 1));
+    assert_eq!(count(&pool, "1").await, 1, "the old message is never read");
+    let (_, status, _) = row_of(
+        &pool,
+        "Database(Database(MySqlDatabaseError { code: Some(\"42S22\")",
+    )
+    .await;
+    assert_eq!(status, "dispatched");
+}
+
+#[test_db::test]
+async fn a_web_500_folds_into_the_api_error_of_its_route(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let source = &world.source;
+    // The api's issue is old; the browser's errors split over two issues.
+    source.issue(3, t0() - Duration::days(6), &schedule_bug());
+    let server = api(UNKNOWN_COLUMN, "/v1/schedule/settings");
+    let browser = web_api(500, "/v1/schedule/settings", DATABASE_ERROR);
+    for (n, who) in ["101", "102", "103", "104"].into_iter().enumerate() {
+        let at = minutes(1) + Duration::seconds(i64::try_from(n).unwrap() * 30);
+        source.event(3, at, &server);
+        let issue = if n < 2 { 10 } else { 11 };
+        source.event(
+            issue,
+            at + Duration::milliseconds(400),
+            &user(browser.clone(), who),
+        );
+    }
+
+    world.tick(&pool, &config, minutes(5)).await;
+    let report = world.tick(&pool, &config, minutes(40)).await;
+    assert_eq!(
+        (report.queued, report.duplicates, report.dispatched),
+        (1, 1, 1)
+    );
+
+    let (api_row, status, _) = row_of(&pool, "Database(Database(").await;
+    assert_eq!(status, "dispatched");
+    let (web_row, status, _) = row_of(&pool, "Granite API 500 on /v1/schedule/settings").await;
+    assert_eq!(status, "duplicate");
+    // Two issues of two users each: users is the widest group's.
+    assert_eq!(counters(&pool, web_row).await, (4, 2));
+    assert_eq!(
+        counters(&pool, api_row).await,
+        (4, 2),
+        "users lifted to the browser's"
+    );
+    assert_eq!(
+        count(
+            &pool,
+            &format!("id = {web_row} AND duplicate_of_run_id = {api_row}")
+        )
+        .await,
+        1
+    );
+    assert_eq!(world.dispatcher.attempts(), [api_row]);
+
+    // A later 500 on another route stands on its own.
+    source.event(
+        12,
+        minutes(41),
+        &web_api(500, "/v1/deals?group_id=1", DATABASE_ERROR),
+    );
+    world.tick(&pool, &config, minutes(45)).await;
+    world.drain(&pool, &config, 80).await;
+    let (_, status, _) = row_of(&pool, "Granite API 500 on /v1/deals").await;
+    assert_eq!(status, "dispatched");
+}
+
+#[test_db::test]
+async fn a_web_500_waits_for_its_api_error_to_be_judged(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let source = &world.source;
+    // The browser's 500s start 24 minutes before the api reports its error,
+    // so the browser's bug settles first.
+    let browser = web_api(500, "/v1/schedule/settings", DATABASE_ERROR);
+    source.event(10, minutes(1), &browser);
+    source.event(10, minutes(25), &browser);
+    source.event(
+        3,
+        minutes(25),
+        &api(UNKNOWN_COLUMN, "/v1/schedule/settings"),
+    );
+    // An api error that is skipped never absorbs the browser's bug.
+    let refused = web_api(500, "/v1/ai/design", DATABASE_ERROR);
+    source.event(11, minutes(1), &refused);
+    source.event(11, minutes(25), &refused);
+    source.event(
+        4,
+        minutes(25),
+        &api(
+            "Upstream(\"OpenAI request failed: error sending request\")",
+            "/v1/ai/design",
+        ),
+    );
+
+    world.tick(&pool, &config, minutes(30)).await;
+    world.tick(&pool, &config, minutes(35)).await;
+    let (_, status, _) = row_of(&pool, "Granite API 500 on /v1/schedule/settings").await;
+    assert_eq!(status, "discovered", "waits for its api error");
+    let (_, status, _) = row_of(&pool, "Granite API 500 on /v1/ai/design").await;
+    assert_eq!(status, "discovered");
+
+    world.tick(&pool, &config, minutes(60)).await;
+    let (api_row, _, _) = row_of(&pool, "Database(Database(").await;
+    let (web_row, status, _) = row_of(&pool, "Granite API 500 on /v1/schedule/settings").await;
+    assert_eq!(status, "duplicate");
+    assert_eq!(
+        count(
+            &pool,
+            &format!("id = {web_row} AND duplicate_of_run_id = {api_row}")
+        )
+        .await,
+        1
+    );
+    let (_, status, reason) = row_of(&pool, "Upstream(").await;
+    assert_eq!(
+        (status.as_str(), reason.as_deref()),
+        ("skipped", Some("excluded"))
+    );
+    let (_, status, _) = row_of(&pool, "Granite API 500 on /v1/ai/design").await;
+    assert_ne!(status, "duplicate", "judged on its own");
+    assert_ne!(status, "skipped");
+}
+
+#[test_db::test]
+async fn a_full_batch_of_browser_500s_never_holds_up_their_api_errors(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let source = &world.source;
+    // 20 routes (a whole judge batch): each browser 500 settles before the
+    // api error of its route, and waits for it.
+    for n in 0..20 {
+        let letter = |k: u32| char::from_u32('a' as u32 + k % 26).unwrap();
+        let name = format!("{}{}", letter(n / 26), letter(n));
+        let route = format!("/v1/route{name}");
+        let browser = web_api(500, &route, DATABASE_ERROR);
+        source.event(100 + n, minutes(1), &browser);
+        source.event(100 + n, minutes(25), &browser);
+        let error = format!(
+            "Database(Database(MySqlDatabaseError {{ code: Some(\"42S22\"), number: 1054, \
+             message: \"Unknown column 'co.column_{name}' in 'field list'\" }}))"
+        );
+        source.event(200 + n, minutes(25), &api(&error, &route));
+    }
+
+    world.tick(&pool, &config, minutes(30)).await;
+    world.drain(&pool, &config, 60).await;
+    assert_eq!(count(&pool, "status = 'duplicate'").await, 20);
+}
+
+#[test_db::test]
+async fn a_bug_whose_run_failed_runs_again_a_day_later(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let source = &world.source;
+    let bug = field_state_bug();
+    source.event(1, minutes(1), &bug);
+    world.tick(&pool, &config, minutes(5)).await;
+    world.tick(&pool, &config, minutes(40)).await;
+    let (id, status, _) = row_of(&pool, "Cannot read properties").await;
+    assert_eq!(status, "dispatched");
+    // The workflow broke before the agent could conclude.
+    sqlx::query("UPDATE posthog_autofix_runs SET status = 'failed', finished_at = ? WHERE id = ?")
+        .bind(minutes(60).naive_utc())
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    source.event(1, minutes(120), &bug);
+    world.tick(&pool, &config, minutes(125)).await;
+    assert_eq!(
+        count(&pool, "1").await,
+        1,
+        "within a day it counts on the run"
+    );
+    assert_eq!(counters(&pool, id).await.0, 2);
+
+    let next_day = minutes(60) + Duration::hours(25);
+    source.event(1, next_day, &bug);
+    world
+        .tick(&pool, &config, next_day + Duration::minutes(5))
+        .await;
+    assert_eq!(count(&pool, "1").await, 2);
+    assert_eq!(
+        count(&pool, "status = 'discovered'").await,
+        1,
+        "judged again"
+    );
+}
+
+#[test_db::test]
+async fn a_finished_run_holds_its_bug_for_the_window_after_it_ended(pool: MySqlPool) {
+    let config = Config {
+        signature_window_days: 2,
+        ..live()
+    };
+    let world = World::default();
+    let source = &world.source;
+    let bug = field_state_bug();
+    source.event(1, minutes(1), &bug);
+    world.tick(&pool, &config, minutes(5)).await;
+    world.tick(&pool, &config, minutes(40)).await;
+    let (id, _, _) = row_of(&pool, "Cannot read properties").await;
+    sqlx::query(
+        "UPDATE posthog_autofix_runs SET status = 'succeeded', outcome = 'needs_human', \
+         finished_at = ? WHERE id = ?",
+    )
+    .bind(minutes(60).naive_utc())
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // The bug keeps happening every day; the run ended at 01:00 on day 0.
+    for hours in [21, 45] {
+        let at = t0() + Duration::hours(hours);
+        source.event(1, at, &bug);
+        world.tick(&pool, &config, at + Duration::minutes(5)).await;
+        assert_eq!(count(&pool, "1").await, 1, "{hours} h: within the window");
+    }
+    let at = t0() + Duration::hours(69);
+    source.event(1, at, &bug);
+    world.tick(&pool, &config, at + Duration::minutes(5)).await;
+    assert_eq!(count(&pool, "1").await, 2, "two days after the run ended");
+    assert_eq!(counters(&pool, id).await.0, 3);
+}
+
+#[test_db::test]
+async fn polls_count_each_event_once_and_a_failed_read_is_read_again(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let source = &world.source;
+    let bug = field_state_bug();
+    let at = |minute: i64, second: i64| minutes(minute) + Duration::seconds(second);
+    source.event(1, at(1, 0), &bug);
+    // Within the last two minutes of the first poll: left for the next one.
+    source.event(1, at(3, 30), &bug);
+    world.tick(&pool, &config, minutes(5)).await;
+    let (id, _, _) = row_of(&pool, "Cannot read properties").await;
+    assert_eq!(counters(&pool, id).await.0, 1);
+
+    source.event(2, at(6, 0), &user(bug.clone(), "user-2"));
+    world.tick(&pool, &config, minutes(10)).await;
+    assert_eq!(counters(&pool, id).await, (3, 1));
+
+    source.fail.store(true, Ordering::SeqCst);
+    source.event(2, at(9, 0), &bug);
+    let failed = world.tick(&pool, &config, minutes(15)).await;
+    assert_eq!(failed.errors.len(), 1, "{:?}", failed.errors);
+    source.fail.store(false, Ordering::SeqCst);
+    world.tick(&pool, &config, minutes(20)).await;
+    assert_eq!(counters(&pool, id).await.0, 4);
+
+    let reads = source.reads();
+    let spans: Vec<(i64, i64)> = reads
+        .iter()
+        .map(|(from, to)| ((*from - t0()).num_minutes(), (*to - t0()).num_minutes()))
+        .collect();
+    assert_eq!(spans, [(0, 3), (3, 8), (8, 18)], "no gap, no overlap");
+    assert_eq!(count(&pool, "1").await, 1);
+}
+
+#[test_db::test]
+async fn a_first_read_goes_back_one_day_at_most(pool: MySqlPool) {
+    let config = Config {
+        start_at: Some(t0() - Duration::days(3)),
+        ..live()
+    };
+    let world = World::default();
+    world
+        .source
+        .event(1, t0() - Duration::days(2), &numbered_bug(1));
+    world
+        .source
+        .event(2, t0() - Duration::hours(1), &numbered_bug(2));
+    let report = world.tick(&pool, &config, minutes(5)).await;
+    assert_eq!(report.discovered, 1);
+    assert_eq!(world.source.reads()[0].0, minutes(5) - Duration::days(1));
+}
+
+#[test_db::test]
+async fn a_dispatch_names_the_latest_event_of_the_bug(pool: MySqlPool) {
+    let config = live();
+    let world = World::default();
+    let bug = field_state_bug();
+    world.source.event(1, minutes(1), &bug);
+    let latest = world.source.event(2, minutes(2), &bug);
+    world.tick(&pool, &config, minutes(5)).await;
+    world.tick(&pool, &config, minutes(40)).await;
+    let attempts = world.dispatcher.attempts.lock().unwrap().clone();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].1, issue_id(2));
+    assert_eq!(attempts[0].2.as_deref(), Some(latest.as_str()));
+}
+
+#[test_db::test]
+async fn the_queue_starts_bugs_seen_today_before_older_ones(pool: MySqlPool) {
     let config = Config {
         max_per_day: 1,
         ..live()
     };
     let world = World::default();
-    world.source.add(issue(200, t0(), &schedule_bug()));
-    world
-        .source
-        .add(issue(202, t0() + Duration::seconds(1), &field_state_bug()));
+    let source = &world.source;
+    for who in ["user-1", "user-2", "user-3"] {
+        source.event(1, minutes(1), &user(field_state_bug(), who));
+    }
+    for who in ["user-1", "user-2"] {
+        source.event(2, minutes(1), &user(numbered_bug(2), who));
+    }
+    source.event(3, minutes(1), &schedule_bug());
     world.tick(&pool, &config, minutes(5)).await;
     for at in [40, 45, 50, 60, 90] {
         world.tick(&pool, &config, minutes(at)).await;
     }
     assert_eq!(world.dispatcher.attempts().len(), 1);
-    assert_eq!(count(&pool, "status = 'dispatched'").await, 1);
-    assert_eq!(count(&pool, "status = 'queued'").await, 1, "never dropped");
+    let (widest, _, _) = row_of(
+        &pool,
+        "Cannot read properties of undefined (reading 'getFieldState')",
+    )
+    .await;
+    assert_eq!(
+        world.dispatcher.attempts(),
+        [widest],
+        "three users before two or one"
+    );
+    assert_eq!(count(&pool, "status = 'queued'").await, 2, "never dropped");
+
+    // The one-user bug happens again while the day's run is spent: it goes
+    // next, ahead of a wider bug that stopped.
+    world.tick(&pool, &config, t0() + Duration::hours(12)).await;
+    source.event(3, t0() + Duration::hours(20), &schedule_bug());
+    let capped = world
+        .tick(&pool, &config, t0() + Duration::minutes(20 * 60 + 5))
+        .await;
+    assert_eq!(capped.dispatched, 0);
+    let next = world
+        .tick(&pool, &config, t0() + Duration::minutes(24 * 60 + 45))
+        .await;
+    assert_eq!(next.dispatched, 1);
+    let (_, status, _) = row_of(&pool, "Database(Database(").await;
+    assert_eq!(status, "dispatched");
+    let (_, status, _) = row_of(
+        &pool,
+        "Cannot read properties of undefined (reading 'fieldac')",
+    )
+    .await;
+    assert_eq!(status, "queued");
 }
 
 async fn retry_at(pool: &MySqlPool) -> DateTime<Utc> {
@@ -499,7 +1031,7 @@ async fn a_refused_dispatch_backs_off_then_fails_with_one_email(pool: MySqlPool)
     let config = live();
     let world = World::default();
     world.dispatcher.fail.store(true, Ordering::SeqCst);
-    world.source.add(issue(200, t0(), &schedule_bug()));
+    world.source.event(200, t0(), &schedule_bug());
     world.tick(&pool, &config, minutes(5)).await;
     let first = world.tick(&pool, &config, minutes(40)).await;
     assert_eq!(first.dispatched, 0);
@@ -590,21 +1122,20 @@ async fn a_dry_run_previews_instead_of_dispatching(pool: MySqlPool) {
         ..live()
     };
     let world = World::default();
-    world.source.add(issue(200, t0(), &schedule_bug()));
+    world.source.event(200, t0(), &schedule_bug());
     world.tick(&pool, &config, minutes(5)).await;
     let report = world.tick(&pool, &config, minutes(40)).await;
     assert_eq!((report.queued, report.previewed), (1, 1));
-    assert_eq!(run_of(&pool, 200).await.1, "previewed");
+    let (id, status, _) = row_of(&pool, "Database(Database(").await;
+    assert_eq!(status, "previewed");
     assert_eq!(world.mailer.subjects().len(), 1);
 
-    world.source.add(issue(203, minutes(10), &schedule_bug()));
+    // The same bug again, in another issue: counted, not previewed twice.
+    world.source.event(203, minutes(41), &schedule_bug());
     world.tick(&pool, &config, minutes(45)).await;
-    world.tick(&pool, &config, minutes(50)).await;
-    assert_eq!(
-        run_of(&pool, 203).await.1,
-        "duplicate",
-        "a previewed bug is not previewed twice"
-    );
+    world.tick(&pool, &config, minutes(80)).await;
+    assert_eq!(count(&pool, "1").await, 1);
+    assert_eq!(counters(&pool, id).await.0, 2);
     assert!(world.dispatcher.attempts().is_empty());
     assert_eq!(
         world.mailer.subjects().len(),
@@ -622,11 +1153,9 @@ async fn a_dry_run_email_names_the_page_the_user_and_the_company(pool: MySqlPool
     };
     let world = World::default();
     // The seed's user 103 is Sam Super, of company 101.
-    let bug = Bug {
-        distinct_id: "103",
-        ..field_state_bug()
-    };
-    world.source.add(issue(204, t0(), &bug));
+    world
+        .source
+        .event(204, t0(), &user(field_state_bug(), "103"));
     world.tick(&pool, &config, minutes(5)).await;
     let report = world.tick(&pool, &config, minutes(40)).await;
     assert_eq!(report.previewed, 1);
@@ -673,9 +1202,9 @@ async fn a_reopened_fix_is_emailed_once(pool: MySqlPool) {
         "'succeeded', 'fixed_with_test', '2026-10-20 00:00:00', 'resolved'",
     )
     .await;
-    let (mut reopened, events) = issue(1, t0() - Duration::days(2), &field_state_bug());
-    reopened.status = "active".into();
-    world.source.add((reopened, events));
+    world
+        .source
+        .issue(1, t0() - Duration::days(2), &field_state_bug());
 
     let report = world.tick(&pool, &config, minutes(10)).await;
     assert_eq!(report.regressions, 1);
@@ -726,7 +1255,7 @@ async fn an_opened_fix_is_assigned_in_posthog_once(pool: MySqlPool) {
 #[test_db::test]
 async fn off_and_unconfigured_ticks_touch_nothing(pool: MySqlPool) {
     let world = World::default();
-    world.source.add(issue(200, t0(), &schedule_bug()));
+    world.source.event(200, t0(), &schedule_bug());
     let off = world.tick(&pool, &Config::default(), minutes(5)).await;
     assert_eq!(off, TickReport::default());
     let unconfigured = Config {

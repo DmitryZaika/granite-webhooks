@@ -4,18 +4,18 @@
 use super::config::{Config, Mode};
 use super::emails;
 use super::github::{Dispatch, DispatchError, Dispatcher};
-use super::ledger::{self, Judgement, Verdict};
+use super::ledger::{self, SettledRow, Sighting, Verdict};
 use super::model::{LastSeen, RunView, SkipReason, Source};
 use super::notify::{self, Email, Mailer};
 use super::policy::{self, Candidate};
-use super::posthog::{Issue, IssueEvents, IssueSource};
+use super::posthog::{EventGroup, Issue, IssueSource};
 use super::signature::{self, Fingerprint};
 use super::writeback::IssueWriter;
 use crate::openapi::ToSchema;
 use chrono::{DateTime, Duration, Utc};
 use lambda_http::tracing;
 use serde::Serialize;
-use sqlx::{MySqlConnection, MySqlPool};
+use sqlx::{Connection, MySqlConnection, MySqlPool};
 use std::collections::HashMap;
 use std::fmt::Display;
 
@@ -34,13 +34,13 @@ pub struct Deps<'a, S, D, M, W> {
 pub struct TickReport {
     /// Ledger rows this tick changed (the time-triggered Lambda logs it).
     pub processed: usize,
-    /// New issues recorded.
+    /// New bugs recorded (a bug is one signature of `$exception` events).
     pub discovered: usize,
-    /// Issues judged eligible and queued.
+    /// Bugs judged eligible and queued.
     pub queued: usize,
-    /// Issues skipped as noise, resolved, suppressed or not production.
+    /// Bugs skipped as noise, resolved, suppressed or not production.
     pub skipped: usize,
-    /// Issues folded into an earlier run of the same bug.
+    /// Browser errors folded into the API error of the same request.
     pub duplicates: usize,
     /// Fix runs started.
     pub dispatched: usize,
@@ -60,14 +60,24 @@ pub struct TickReport {
     pub errors: Vec<String>,
 }
 
-/// Issues read from PostHog per poll.
-const DISCOVER_LIMIT: u32 = 200;
-/// Discovery re-reads this far behind the newest recorded issue, for ties
-/// and rows PostHog made visible late.
-const DISCOVER_OVERLAP_MINUTES: i64 = 10;
-/// Settled issues judged per poll.
+/// Event groups read from PostHog per query; a full page is read again over
+/// a shorter span.
+const GROUP_LIMIT: u32 = 500;
+/// A full page halves the span this many times at most.
+const GROUP_SPLITS: u32 = 4;
+/// Events this recent are left for the next poll: PostHog makes events
+/// visible up to this late.
+const INGESTION_LAG_MINUTES: i64 = 2;
+/// One query reads at most this far, and a first read starts this far back.
+const MAX_READ_HOURS: i64 = 24;
+/// Settled bugs judged per poll.
 const JUDGE_BATCH: u32 = 20;
-/// Events are read from this long before the oldest issue of a batch.
+/// A bug whose run failed or never reported runs again this long after the
+/// run ended, if it keeps happening.
+const FAILED_RUN_RETRY_HOURS: i64 = 24;
+/// A browser 5xx and the API error of its request are this close in time.
+const LINK_SLACK_MINUTES: i64 = 10;
+/// Events of previewed issues are read from this long before the oldest.
 const EVENTS_LOOKBACK_HOURS: i64 = 1;
 const STORM_TOP: u32 = 5;
 /// A fix is watched for a regression this long after it finished.
@@ -240,42 +250,65 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         Ok(())
     }
 
-    /// Records issues created since the newest one recorded.
+    /// Reads the `$exception` events since the cursor and records them as
+    /// bugs: counted on the bug's row, or a new row.
     async fn discover(&mut self) -> Result<(), sqlx::Error> {
-        let watermark = ledger::watermark(&mut *self.conn)
+        let config = self.deps.config;
+        let first = (self.now - Duration::hours(MAX_READ_HOURS)).max(self.start_at);
+        let from = ledger::cursor(&mut *self.conn)
             .await?
-            .unwrap_or(self.start_at);
-        let since = (watermark - Duration::minutes(DISCOVER_OVERLAP_MINUTES)).max(self.start_at);
-        // A full page of known issues would be read again on every poll and
-        // never reach newer ones.
-        if self.discover_from(since).await? && since < watermark {
-            self.discover_from(watermark).await?;
+            .unwrap_or(first)
+            .max(self.start_at);
+        let mut to = whole_second(self.now - Duration::minutes(INGESTION_LAG_MINUTES))
+            .min(from + Duration::hours(MAX_READ_HOURS));
+        if to <= from {
+            return Ok(());
         }
+        let mut groups;
+        let mut splits = 0;
+        loop {
+            groups = match self.deps.source.event_groups(from, to, GROUP_LIMIT).await {
+                Ok(groups) => groups,
+                Err(error) => {
+                    self.failed("discover", &error);
+                    return Ok(());
+                }
+            };
+            let half = whole_second(from + (to - from) / 2);
+            if groups.len() < GROUP_LIMIT as usize || splits == GROUP_SPLITS || half <= from {
+                break;
+            }
+            to = half;
+            splits += 1;
+        }
+        if groups.len() >= GROUP_LIMIT as usize {
+            tracing::warn!(%from, %to, "PostHog event groups cut at the limit");
+        }
+        let sightings = sightings(&groups);
+        let since = self.now - Duration::days(config.signature_window_days);
+        let failed_since = self.now - Duration::hours(FAILED_RUN_RETRY_HOURS);
+        // Rows and cursor move together: a read is never counted twice.
+        let mut tx = self.conn.begin().await?;
+        let mut discovered = 0;
+        for sighting in &sightings {
+            let row = ledger::bug_row(&mut *tx, &sighting.signature, since, failed_since).await?;
+            if let Some(id) = row {
+                ledger::count_sighting(&mut *tx, id, sighting).await?;
+                ledger::lift_folded_users(&mut *tx, id).await?;
+            } else {
+                ledger::record_sighting(&mut *tx, sighting, self.now).await?;
+                discovered += 1;
+            }
+        }
+        ledger::advance_cursor(&mut *tx, to, self.now).await?;
+        tx.commit().await?;
+        self.report.discovered += discovered;
+        self.report.processed += discovered;
         Ok(())
     }
 
-    /// Records issues created at or after `since` (never before the cutover);
-    /// true when PostHog returned a full page and none of it was new.
-    async fn discover_from(&mut self, since: DateTime<Utc>) -> Result<bool, sqlx::Error> {
-        let issues = match self.deps.source.issues_since(since, DISCOVER_LIMIT).await {
-            Ok(issues) => issues,
-            Err(error) => {
-                self.failed("discover", &error);
-                return Ok(false);
-            }
-        };
-        let new: Vec<&Issue> = issues
-            .iter()
-            .filter(|issue| issue.created_at >= self.start_at)
-            .collect();
-        let inserted = ledger::record_discovered(&mut *self.conn, &new, self.now).await?;
-        self.report.discovered += inserted;
-        self.report.processed += inserted;
-        Ok(inserted == 0 && issues.len() >= DISCOVER_LIMIT as usize)
-    }
-
-    /// One digest email when more new issues than the threshold arrived in
-    /// the last storm window, and none sooner than a window after the last.
+    /// One digest email when more new bugs than the threshold arrived in the
+    /// last storm window, and none sooner than a window after the last.
     async fn storm(&mut self) -> Result<(), sqlx::Error> {
         let config = self.deps.config;
         let since = self.now - Duration::minutes(config.storm_window_minutes);
@@ -308,28 +341,24 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         Ok(())
     }
 
-    /// Judges the oldest settled issues: queued, skipped or duplicate.
+    /// Judges the oldest settled bugs: queued, skipped or folded.
     async fn judge_settled(&mut self) -> Result<(), sqlx::Error> {
         let config = self.deps.config;
         let settled_by = self.now - Duration::minutes(config.settle_minutes);
+        // Server rows come first: a browser 5xx of this batch folds into its
+        // API error.
         let rows = ledger::settled(&mut *self.conn, settled_by, JUDGE_BATCH).await?;
-        let Some(oldest) = rows.first().map(|row| row.issue_created_at) else {
+        if rows.is_empty() {
             return Ok(());
-        };
-        let ids: Vec<String> = rows
+        }
+        let mut ids: Vec<String> = rows
             .iter()
             .map(|row| row.posthog_issue_id.clone())
             .collect();
+        ids.sort();
+        ids.dedup();
         let issues = match self.deps.source.issues(&ids).await {
             Ok(issues) => issues,
-            Err(error) => {
-                self.failed("settle", &error);
-                return Ok(());
-            }
-        };
-        let since = oldest - Duration::hours(EVENTS_LOOKBACK_HOURS);
-        let events = match self.deps.source.events(&ids, since).await {
-            Ok(events) => events,
             Err(error) => {
                 self.failed("settle", &error);
                 return Ok(());
@@ -339,43 +368,36 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
             .iter()
             .map(|issue| (issue.id.as_str(), issue))
             .collect();
-        let events: HashMap<&str, &IssueEvents> = events
-            .iter()
-            .map(|events| (events.issue_id.as_str(), events))
-            .collect();
-        // One by one: the second issue of a bug in this batch duplicates the first.
         for row in &rows {
-            let id = row.posthog_issue_id.as_str();
-            self.judge(row.id, issues.get(id).copied(), events.get(id).copied())
-                .await?;
+            let status = issues
+                .get(row.posthog_issue_id.as_str())
+                .map(|issue| issue.status.as_str());
+            self.judge(row, status).await?;
         }
         Ok(())
     }
 
     async fn judge(
         &mut self,
-        run_id: u64,
-        issue: Option<&Issue>,
-        events: Option<&IssueEvents>,
+        row: &SettledRow,
+        issue_status: Option<&str>,
     ) -> Result<(), sqlx::Error> {
-        let lib = events.and_then(|events| events.lib.as_deref());
-        let source =
-            policy::source_of(events.and_then(|events| events.distinct_id.as_deref()), lib);
-        let (verdict, signature) = match issue {
-            Some(issue) => self.verdict(run_id, issue, source, events).await?,
-            None => (Verdict::Skipped(SkipReason::NoEvents), None),
+        let verdict = match issue_status {
+            Some(status) => self.verdict(row, status).await?,
+            None => Some(Verdict::Skipped(SkipReason::NoEvents)),
         };
-        let judgement = Judgement {
-            verdict,
-            source,
-            lib,
-            occurrences: events.map_or(0, |events| events.occurrences),
-            users: events.map_or(0, |events| events.users),
-            signature: signature.as_deref(),
-            issue_status: issue.map(|issue| issue.status.as_str()),
-        };
-        if !ledger::record_judgement(&mut *self.conn, run_id, &judgement, self.now).await? {
+        // Its API error is not judged yet: folding into a row that may still
+        // be skipped would lose the bug, so it waits for the next poll.
+        let Some(verdict) = verdict else {
             return Ok(());
+        };
+        if !ledger::record_judgement(&mut *self.conn, row.id, verdict, issue_status, self.now)
+            .await?
+        {
+            return Ok(());
+        }
+        if let Verdict::Duplicate { .. } = verdict {
+            ledger::lift_folded_users(&mut *self.conn, row.id).await?;
         }
         self.report.processed += 1;
         match verdict {
@@ -386,41 +408,55 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         Ok(())
     }
 
-    /// The verdict on an issue PostHog still has, and its signature when it
-    /// was eligible.
+    /// The gates on the bug's own events, then the fold of a browser 5xx
+    /// into the API error of the same request; `None` while that API error
+    /// waits to be judged.
     async fn verdict(
         &mut self,
-        run_id: u64,
-        issue: &Issue,
-        source: Source,
-        events: Option<&IssueEvents>,
-    ) -> Result<(Verdict, Option<String>), sqlx::Error> {
-        let config = self.deps.config;
+        row: &SettledRow,
+        issue_status: &str,
+    ) -> Result<Option<Verdict>, sqlx::Error> {
+        let source = row.source();
         let candidate = Candidate {
-            issue_status: &issue.status,
+            issue_status,
             source,
-            exception_type: &issue.name,
-            message: &issue.description,
-            host: events.and_then(|events| events.host.as_deref()),
-            occurrences: events.map_or(0, |events| events.occurrences),
+            exception_type: &row.issue_name,
+            message: &row.issue_description,
+            // Discovery drops browser events of other hosts.
+            host: None,
+            occurrences: row.occurrences.map_or(0, u64::from),
+            error_source: row.error_source.as_deref(),
+            api_status: row.api_status,
         };
-        if let Err(reason) = policy::eligibility(&candidate, &config.exclude) {
-            return Ok((Verdict::Skipped(reason), None));
+        if let Err(reason) = policy::eligibility(&candidate, &self.deps.config.exclude) {
+            return Ok(Some(Verdict::Skipped(reason)));
         }
-        let top_frame = events
-            .and_then(|events| events.exception_list.as_ref())
-            .and_then(signature::top_frame);
-        let signature = signature::signature(&Fingerprint {
-            exception_type: &issue.name,
-            message: &issue.description,
+        let path = policy::web_5xx_path(
             source,
-            top_frame: top_frame.as_deref(),
-        });
-        let since = self.now - Duration::days(config.signature_window_days);
-        let dry_run = config.mode == Mode::DryRun;
-        let anchor = ledger::anchor(&mut *self.conn, &signature, run_id, since, dry_run).await?;
-        let verdict = anchor.map_or(Verdict::Queued, |of| Verdict::Duplicate { of });
-        Ok((verdict, Some(signature)))
+            &row.issue_name,
+            &row.issue_description,
+            row.api_status,
+            row.api_route.as_deref(),
+        );
+        let (Some(path), Some(first), Some(last)) = (path, row.first_seen_at, row.last_seen_at)
+        else {
+            return Ok(Some(Verdict::Queued));
+        };
+        let slack = Duration::minutes(LINK_SLACK_MINUTES);
+        let api_rows =
+            ledger::api_rows_seen_between(&mut *self.conn, first - slack, last + slack).await?;
+        let matching: Vec<_> = api_rows
+            .iter()
+            .filter(|(_, route, _)| policy::route_matches(route, path))
+            .collect();
+        if matching.iter().any(|&&(_, _, waiting)| waiting) {
+            return Ok(None);
+        }
+        Ok(Some(
+            matching
+                .first()
+                .map_or(Verdict::Queued, |&&(of, _, _)| Verdict::Duplicate { of }),
+        ))
     }
 
     /// Emails once when PostHog reopens an issue a run fixed.
@@ -488,7 +524,8 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         Ok(())
     }
 
-    /// Starts the most widespread queued runs the caps allow.
+    /// Starts the queued runs the caps allow: bugs seen in the last day
+    /// first, then the most widespread.
     async fn dispatch(&mut self) -> Result<(), sqlx::Error> {
         let config = self.deps.config;
         let in_flight = ledger::count_in_flight(&mut *self.conn).await?;
@@ -509,6 +546,7 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
             let dispatch = Dispatch {
                 run_id: run.id,
                 issue_id: &run.posthog_issue_id,
+                event_id: run.event_uuid.as_deref(),
             };
             match self.deps.dispatcher.dispatch(&dispatch).await {
                 Ok(()) => self.report.dispatched += 1,
@@ -614,4 +652,69 @@ impl<S: IssueSource, D: Dispatcher, M: Mailer, W: IssueWriter> Tick<'_, S, D, M,
         }
         Ok(seen)
     }
+}
+
+/// `at` without its fraction of a second: the cursor is stored in whole
+/// seconds, so every read ends on one.
+fn whole_second(at: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_timestamp(at.timestamp(), 0).unwrap_or(at)
+}
+
+/// A read's groups as bugs: browser groups of other hosts dropped (never
+/// recorded), the rest merged by signature. The latest event's group gives
+/// the sample issue, event and request; counts add up, users take the
+/// largest (the same person may be in several groups).
+fn sightings(groups: &[EventGroup]) -> Vec<Sighting> {
+    let mut bugs: Vec<Sighting> = Vec::new();
+    for group in groups {
+        let source = policy::source_of(group.sender.as_deref(), group.lib.as_deref());
+        if source == Source::Web
+            && group
+                .host
+                .as_deref()
+                .is_some_and(policy::is_non_production_host)
+        {
+            continue;
+        }
+        let top_frame = group.exception_list.as_ref().and_then(signature::top_frame);
+        let signature = signature::signature(&Fingerprint {
+            exception_type: &group.exception_type,
+            message: &group.message,
+            source,
+            top_frame: top_frame.as_deref(),
+        });
+        let sighting = Sighting {
+            signature,
+            issue_id: group.issue_id.clone(),
+            event_uuid: group.event_uuid.clone(),
+            exception_type: group.exception_type.clone(),
+            message: group.message.clone(),
+            source,
+            lib: group.lib.clone(),
+            api_route: group.route.clone(),
+            api_status: group.api_status,
+            error_source: group.error_source.clone(),
+            occurrences: group.occurrences,
+            users: group.users,
+            first_seen: group.first_seen,
+            last_seen: group.last_seen,
+        };
+        let Some(bug) = bugs
+            .iter_mut()
+            .find(|bug| bug.signature == sighting.signature)
+        else {
+            bugs.push(sighting);
+            continue;
+        };
+        let occurrences = bug.occurrences.saturating_add(sighting.occurrences);
+        let users = bug.users.max(sighting.users);
+        let first_seen = bug.first_seen.min(sighting.first_seen);
+        if sighting.last_seen > bug.last_seen {
+            *bug = sighting;
+        }
+        bug.occurrences = occurrences;
+        bug.users = users;
+        bug.first_seen = first_seen;
+    }
+    bugs
 }

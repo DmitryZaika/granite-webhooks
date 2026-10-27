@@ -22,7 +22,8 @@ class ArgvTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.run = run_context(self.tmp, self.tmp / "out")
         self.files = AgentFiles.in_dir(TOOLS_DIR)
-        self.argv = agent.build_argv(self.run, self.files, Limits("high", 80, 7.5))
+        self.mcp = agent.mcp_config(self.files.mcp_config, "phx_secret")
+        self.argv = agent.build_argv(self.run, self.files, Limits("high", 80, 7.5), self.mcp)
 
     def test_core_flags(self) -> None:
         argv = self.argv
@@ -47,7 +48,7 @@ class ArgvTest(unittest.TestCase):
     def test_tool_files_and_schema(self) -> None:
         argv = self.argv
         self.assertEqual(flag_value(argv, "--settings"), str(TOOLS_DIR / "settings.json"))
-        self.assertEqual(flag_value(argv, "--mcp-config"), str(TOOLS_DIR / "mcp.json"))
+        self.assertEqual(flag_value(argv, "--mcp-config"), self.mcp)
         self.assertEqual(
             flag_value(argv, "--append-system-prompt-file"), str(TOOLS_DIR / "fixer-prompt.md")
         )
@@ -55,6 +56,20 @@ class ArgvTest(unittest.TestCase):
         self.assertEqual(schema["title"], "PostHog auto-fix result")
         # The CLI rejects a draft 2020-12 "$schema": every run ended with no result.
         self.assertNotIn("$schema", schema)
+
+    def test_the_mcp_config_carries_the_key_itself(self) -> None:
+        # The CLI expands no ${VAR} under CLAUDE_CODE_SUBPROCESS_ENV_SCRUB:
+        # the server got an empty bearer and answered 401 (runs 7347/7348).
+        (server,) = json.loads(self.mcp)["mcpServers"].values()
+        self.assertEqual(server["headers"]["Authorization"], "Bearer phx_secret")
+        self.assertEqual(server["headers"]["x-posthog-project-id"], "141685")
+        self.assertEqual(server["headers"]["x-posthog-read-only"], "true")
+        self.assertNotIn("${", self.mcp)
+        template = json.loads(self.files.mcp_config.read_text())
+        self.assertEqual(
+            template["mcpServers"]["posthog"]["headers"]["Authorization"],
+            "Bearer ${POSTHOG_AUTOFIX_MCP_KEY}",
+        )
 
     def test_allowed_tools_are_one_argument_each_and_end_before_the_next_flag(self) -> None:
         start = self.argv.index("--allowedTools") + 1
@@ -109,18 +124,21 @@ class EnvTest(unittest.TestCase):
         secrets = agent.agent_secrets(
             {"CLAUDE_CODE_OAUTH_TOKEN": "oauth", "ANTHROPIC_API_KEY": "key", **MCP, "OTHER": "x"}
         )
-        self.assertEqual(secrets, {"CLAUDE_CODE_OAUTH_TOKEN": "oauth", **MCP})
+        self.assertEqual(secrets, {"CLAUDE_CODE_OAUTH_TOKEN": "oauth"})
 
     def test_falls_back_to_the_api_key(self) -> None:
         secrets = agent.agent_secrets(
             {"CLAUDE_CODE_OAUTH_TOKEN": "", "ANTHROPIC_API_KEY": "k", **MCP}
         )
-        self.assertEqual(secrets, {"ANTHROPIC_API_KEY": "k", **MCP})
+        self.assertEqual(secrets, {"ANTHROPIC_API_KEY": "k"})
 
     def test_needs_a_credential_and_the_mcp_key(self) -> None:
-        for env in ({}, MCP, {"CLAUDE_CODE_OAUTH_TOKEN": "oauth"}):
+        for env in ({}, MCP):
             with self.subTest(env=env), self.assertRaises(ConfigError):
                 agent.agent_secrets(env)
+        with self.assertRaises(ConfigError):
+            agent.mcp_key({"CLAUDE_CODE_OAUTH_TOKEN": "oauth"})
+        self.assertEqual(agent.mcp_key(MCP), "mcp-secret")
 
     def test_plain_variables(self) -> None:
         variables = agent.agent_variables(TOOLS_DIR, Path("/srv/autofix/work"))
@@ -164,10 +182,15 @@ class RunAgentTest(unittest.TestCase):
         cli, kill = runner.calls
         self.assertEqual(cli["cwd"], self.tmp)
         self.assertEqual(cli["run_as"].user, "autofix")
-        self.assertEqual(cli["run_as"].secrets, {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret", **MCP})
+        self.assertEqual(cli["run_as"].secrets, {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret"})
         self.assertEqual(cli["env"]["ENABLE_CLAUDEAI_MCP_SERVERS"], "false")
         wrapped = cli["run_as"].wrap(cli["argv"], cli["env"])
-        self.assertFalse(any("secret" in word for word in wrapped))
+        self.assertFalse(any("oauth-secret" in word for word in wrapped))
+        # The PostHog key is in the MCP config argument only (see mcp_config).
+        mcp_at = cli["argv"].index("--mcp-config") + 1
+        self.assertIn("Bearer mcp-secret", cli["argv"][mcp_at])
+        others = cli["argv"][:mcp_at] + cli["argv"][mcp_at + 1 :]
+        self.assertFalse(any("mcp-secret" in word for word in others))
         self.assertEqual(kill["argv"], ["sudo", "-n", "pkill", "-KILL", "-u", "autofix"])
 
     def test_saves_output_and_never_raises_on_agent_errors(self) -> None:

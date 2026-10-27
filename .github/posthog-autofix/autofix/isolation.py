@@ -72,9 +72,22 @@ def lay_out(workspace: Path, tools_checkout: Path, runner: proc.Runner = proc.ru
     shutil.move(str(tools_checkout / ".github" / "posthog-autofix"), str(TOOLS))
     shutil.rmtree(tools_checkout)
     WORK.mkdir(exist_ok=True)
+    write_work_manifest(WORK)
     for repo in REPOS:
         if (workspace / repo).exists():
             shutil.move(str(workspace / repo), str(WORK / repo))
+
+
+# Claude Code's sandbox creates the files it guards (package.json,
+# bunfig.toml, .npmrc...) empty in the agent's working directory, WORK, to
+# mount them read-only, and keeps a file that exists. An empty package.json
+# above both repos broke the SPA build ("JSONError: File is empty"), so WORK
+# gets a valid one first.
+WORK_MANIFEST = '{"private": true}\n'
+
+
+def write_work_manifest(work: Path) -> None:
+    (work / "package.json").write_text(WORK_MANIFEST)
 
 
 def ipv4_addresses(host: str) -> list[str]:
@@ -200,6 +213,8 @@ def network_probes(blocked_ip: str) -> list[tuple[bool, list[str]]]:
 
 # What the CLI runs each agent command in under CLAUDE_CODE_SUBPROCESS_ENV_SCRUB
 # (its flags, from 2.1.302): without it the CLI exits before the first turn.
+# socat and rg are the sandbox's other dependencies: without socat the agent
+# runs, but every one of its commands fails.
 SANDBOX_PROBE = [
     "bwrap",
     *("--new-session", "--die-with-parent"),
@@ -211,6 +226,8 @@ SANDBOX_PROBE = [
 
 TOOL_PROBES: list[tuple[bool, list[str]]] = [
     (True, SANDBOX_PROBE),
+    (True, ["socat", "-V"]),
+    (True, ["rg", "--version"]),
     (True, ["claude", "--version"]),
     (True, ["cargo", "--version"]),
     (True, ["cargo", "clippy", "--version"]),

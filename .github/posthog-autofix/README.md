@@ -7,9 +7,9 @@ An error that needs no code change gets a short report instead.
 
 ```
 time-triggered (every minute) ── POST /v1/jobs/posthog-autofix ──▶ api: intake
-  watchdog · discover new issues · settle 30 min · skip noise · fold duplicates
+  watchdog · read new events as bugs · settle 30 min · skip noise · fold copies
   · dispatch within the caps (or, in dry run, email what it would dispatch)
-                                     │ workflow_dispatch(run_id, issue_id)
+                                     │ workflow_dispatch(run_id, issue_id, event_id)
                                      ▼
 GitHub Actions: posthog-autofix.yml, three jobs
   prepare  trusted: warms and saves the Rust build cache, never runs agent code
@@ -38,28 +38,34 @@ api: POST /v1/posthog-autofix/runs/{id}/started and /result ◀─┘
 
 ## How an issue is handled
 
-1. **Discover.** Each poll (every 5 minutes) reads issues created since the
-   newest one in the ledger, never before `POSTHOG_AUTOFIX_START_AT`. The
-   backlog from before the cutover never starts a run. One PostHog issue gives
-   one ledger row (`posthog_issue_id` is unique), so a reopened issue never
-   starts a second run.
-2. **Settle.** The issue waits 30 minutes, so its first burst of events and
-   any duplicates arrive first.
-3. **Judge.** The issue is skipped when it is:
-   - resolved or suppressed;
-   - without events;
-   - from the removed Remix server;
-   - from outside production;
-   - matching the exclude list (network noise, browser extensions).
-
-   Otherwise its **signature** is computed: exception type, normalized message,
-   source and, once source maps work, the symbolicated top frame. An issue whose
-   signature matches a run still in flight, or one finished in the last 14 days,
-   becomes a `duplicate` of that run. One "Failed to fetch" was 110 PostHog
-   issues: it has one signature.
-4. **Dispatch.** Within the caps (2 at once, 3 in any 24 hours by default),
-   ordered by users, then occurrences. Rows over a cap stay `queued` for later
-   ticks, never dropped.
+1. **Discover.** Each poll (every 5 minutes) reads the `$exception` events
+   since the last read, up to 2 minutes ago, never before
+   `POSTHOG_AUTOFIX_START_AT` (a first read goes back one day at most). Events
+   are grouped by their **signature**: exception type, normalized message,
+   source and, once source maps work, the symbolicated top frame. A bug is a
+   signature, not a PostHog issue: one "Failed to fetch" split over 110
+   issues is one bug, and a catch-all issue titled with a 401 that also holds
+   a 500 gives the 500 its own row. A signature's events add to its row
+   while that row waits or runs, for 14 days after a run reported its
+   outcome (one day after a run failed or never reported, so a broken run
+   is retried), or while a skipped bug keeps happening within 14 days;
+   otherwise the bug gets a new row. Browser events from outside production
+   are dropped.
+2. **Settle.** A bug waits 30 minutes after its first event, so its first
+   burst of events and the api error behind a browser one arrive first.
+3. **Judge.** On the bug's own events, the bug is skipped when its issue is
+   resolved or suppressed; it is from the removed Remix server; it matches
+   the exclude list (network noise, browser extensions, third-party
+   failures); it is a toast that only tells the user what to fix
+   (`hint_toast`); it is the browser's copy of an API 500 (`symptom`); or it
+   is an API 4xx that enforced a business rule (`business_rule_4xx`; contract
+   rejections and empty-body 404s stay). A browser `GraniteApiError` 5xx whose
+   route has an api error in the same minutes becomes a `duplicate` of it,
+   and lifts its users (server errors carry no user).
+4. **Dispatch.** Within the caps (2 at once, 8 in any 24 hours by default),
+   bugs seen in the last 24 hours first, then by users and occurrences. Rows
+   over a cap stay `queued` for later ticks, never dropped. The workflow gets
+   the run, the issue and the bug's latest event.
 5. **Fix.** The workflow runs the agent with `fixer-prompt.md`. The agent
    either makes two commits in one repository (`test: reproduce …`, then
    `fix: …`), one commit (`fixed_without_test`, with manual test steps), or
@@ -131,13 +137,13 @@ sent after it releases the database lock.
 | `POSTHOG_AUTOFIX_CALLBACK_SECRET` | none | Shared with the workflow (`AUTOFIX_CALLBACK_SECRET`). Callbacks are refused without it. |
 | `POSTHOG_AUTOFIX_RECIPIENTS` | none | Comma-separated developer emails. |
 | `POSTHOG_AUTOFIX_MAX_CONCURRENT` | `2` | Runs in flight at once. |
-| `POSTHOG_AUTOFIX_MAX_PER_DAY` | `3` | Runs dispatched in any rolling 24 hours. |
-| `POSTHOG_AUTOFIX_SETTLE_MINUTES` | `30` | Wait before an issue is judged. |
+| `POSTHOG_AUTOFIX_MAX_PER_DAY` | `8` | Runs dispatched in any rolling 24 hours. |
+| `POSTHOG_AUTOFIX_SETTLE_MINUTES` | `30` | Wait after a bug's first event before it is judged. |
 | `POSTHOG_AUTOFIX_POLL_MINUTES` | `5` | PostHog is read at most this often. |
-| `POSTHOG_AUTOFIX_SIGNATURE_WINDOW_DAYS` | `14` | How long a finished run absorbs duplicates. |
+| `POSTHOG_AUTOFIX_SIGNATURE_WINDOW_DAYS` | `14` | How long after a run reported its outcome (or after a skipped bug's last event) its row counts the bug's new events before the bug gets a new row. |
 | `POSTHOG_AUTOFIX_RUN_TIMEOUT_MINUTES` | `120` | The watchdog gives up on a silent run after this. |
 | `POSTHOG_AUTOFIX_MAX_ATTEMPTS` | `3` | Dispatch failures and usage-limit retries before a run fails. |
-| `POSTHOG_AUTOFIX_STORM_THRESHOLD` | `20` | More new issues than this in one storm window send one digest. |
+| `POSTHOG_AUTOFIX_STORM_THRESHOLD` | `20` | More new bugs than this in one storm window send one digest. |
 | `POSTHOG_AUTOFIX_STORM_WINDOW_MINUTES` | `30` | The storm window. |
 | `POSTHOG_AUTOFIX_EXCLUDE` | see `config.rs` `DEFAULT_EXCLUDE` | Newline- or `;`-separated, case-insensitive substrings of `<type>: <message>`. Replaces the defaults. |
 | `POSTHOG_AUTOFIX_WRITE_KEY` | none | Optional write-back: PostHog personal API key with `error_tracking:write`, project 141685. |
@@ -187,14 +193,20 @@ one back to `queued` to fix it (below).
 
 ## Run one issue by hand
 
-Re-run an issue that already has a ledger row; the next tick dispatches it,
-within the caps:
+Re-run a bug that already has a ledger row; the next tick dispatches it,
+within the caps. One issue can hold several bugs, so pick the row by its id:
 
 ```sql
+SELECT id, CAST(status AS CHAR), issue_name, LEFT(issue_description, 80)
+  FROM posthog_autofix_runs WHERE posthog_issue_id = '<issue uuid>';
 UPDATE posthog_autofix_runs
-   SET status = 'queued', retry_at = NULL, attempts = 0
- WHERE posthog_issue_id = '<issue uuid>';
+   SET status = 'queued', retry_at = NULL, attempts = 0,
+       started_at = NULL, finished_at = NULL, notified_at = NULL
+ WHERE id = <row id>;
 ```
+
+Clear `started_at`: the watchdog times a run from it, and a row that ran
+before keeps the old one.
 
 First end-to-end check of the workflow, without waiting for the intake. Insert
 a row the callbacks will accept, then start the workflow with its id:
@@ -207,7 +219,8 @@ SELECT LAST_INSERT_ID();
 ```
 
 Then go to Actions, then PostHog auto-fix, then Run workflow, with `run_id` =
-that id and `issue_id` = the uuid. The `started` callback refuses any run the
+that id, `issue_id` = the uuid and, optionally, `event_id` = the uuid of one
+`$exception` event of the bug (the run is then about that event's error). The `started` callback refuses any run the
 ledger did not dispatch, so a typo stops the run before the agent starts.
 
 ## Reading the ledger
@@ -262,10 +275,16 @@ could reach.
   - `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` keeps the model token out of the
     environment of the commands the agent runs. On Linux the CLI runs each
     command in bubblewrap for it (user and PID namespaces, the filesystem and
-    network as they are); `isolate.sh` installs it and lifts Ubuntu's AppArmor
-    block on user namespaces, and `check-isolation` starts it as the agent
-    user, so a missing sandbox fails the job before the agent runs. Recheck
-    the probe's flags when the pinned CLI version changes.
+    network as they are), with socat for its network proxy and ripgrep;
+    `isolate.sh` installs all three and lifts Ubuntu's AppArmor block on user
+    namespaces, and `check-isolation` starts bubblewrap as the agent user and
+    checks the other two, so a missing sandbox fails the job before the agent
+    runs (without socat the agent ran, but every command it tried failed).
+    Recheck the probe's flags when the pinned CLI version changes.
+  - Under that variable the CLI expands no `${VAR}` in `mcp.json` (the
+    PostHog server got an empty key and answered 401), so `agent.py` fills
+    the key in and passes the config as one argument. The agent's commands
+    cannot read it: each runs in its own PID namespace and `/proc`.
   - The account's claude.ai connectors are switched off
     (`ENABLE_CLAUDEAI_MCP_SERVERS=false`).
 - **The build cache stays clean.** Only the trusted `prepare` job saves it;
