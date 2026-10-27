@@ -200,9 +200,13 @@ within the caps. One issue can hold several bugs, so pick the row by its id:
 SELECT id, CAST(status AS CHAR), issue_name, LEFT(issue_description, 80)
   FROM posthog_autofix_runs WHERE posthog_issue_id = '<issue uuid>';
 UPDATE posthog_autofix_runs
-   SET status = 'queued', retry_at = NULL, attempts = 0
+   SET status = 'queued', retry_at = NULL, attempts = 0,
+       started_at = NULL, finished_at = NULL, notified_at = NULL
  WHERE id = <row id>;
 ```
+
+Clear `started_at`: the watchdog times a run from it, and a row that ran
+before keeps the old one.
 
 First end-to-end check of the workflow, without waiting for the intake. Insert
 a row the callbacks will accept, then start the workflow with its id:

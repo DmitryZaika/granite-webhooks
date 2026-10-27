@@ -616,7 +616,9 @@ pub async fn due_queued(
     .await
 }
 
-/// `queued` -> `dispatched`, counting the attempt.
+/// `queued` -> `dispatched`, counting the attempt. A row queued again by
+/// hand keeps its last run's `started_at`, which the watchdog would take for
+/// this run's: it is cleared.
 pub async fn claim_dispatch(
     db: impl MySqlExecutor<'_>,
     id: u64,
@@ -624,7 +626,8 @@ pub async fn claim_dispatch(
 ) -> Result<bool, sqlx::Error> {
     let changed = sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE posthog_autofix_runs
-            SET status = 'dispatched', dispatched_at = ?, attempts = attempts + 1, retry_at = NULL
+            SET status = 'dispatched', dispatched_at = ?, started_at = NULL,
+                attempts = attempts + 1, retry_at = NULL
           WHERE id = ? AND {}",
         may_become(Status::Dispatched)
     )))
