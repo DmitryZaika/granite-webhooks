@@ -25,9 +25,10 @@ pub async fn find_invoice(
     company_id: i32,
     id: i32,
 ) -> Result<Option<InvoiceRow>, sqlx::Error> {
-    sqlx::query_as::<_, InvoiceRow>(&format!(
+    // A constant plus a literal: nothing from the request is in the SQL.
+    sqlx::query_as::<_, InvoiceRow>(sqlx::AssertSqlSafe(format!(
         "{INVOICE_SELECT} WHERE i.company_id = ? AND i.id = ?"
-    ))
+    )))
     .bind(company_id)
     .bind(id)
     .fetch_optional(pool)
