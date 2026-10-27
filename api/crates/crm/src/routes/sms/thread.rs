@@ -281,7 +281,7 @@ pub(super) async fn thread_unread(
                LEFT JOIN {reads} r
                  ON r.user_id = ? AND r.company_id = s.company_id AND r.customer_phone_digits = ?
               WHERE s.company_id = ? AND s.phone_digits = ? AND s.is_echo = 0
-                AND s.direction = 'inbound' AND s.agent IS NULL AND s.sender10 = s.phone_digits{extra}
+                AND s.direction = 'inbound' AND s.sender10 = s.phone_digits{extra}
                 AND ({manual}
                   OR ((r.last_read_at IS NULL OR s.created_date > r.last_read_at)
                       AND s.created_date > COALESCE(
@@ -289,7 +289,8 @@ pub(super) async fn thread_unread(
                           WHERE response.company_id = s.company_id AND response.phone_digits = ?
                             AND response.is_echo = 0
                             AND ((response.direction = 'outbound' AND response.status IN ('sent', 'pending'))
-                              OR (response.direction = 'inbound' AND response.agent IS NOT NULL))),
+                              OR (response.direction = 'inbound' AND response.agent IS NOT NULL
+                                AND response.sender10 <> response.phone_digits))),
                         '1970-01-01 00:00:00')))"
         ),
         &params,
